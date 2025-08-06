@@ -194,6 +194,7 @@ target_sources(
             tilize/device/kernels/compute/tilize_wh.cpp
             untilize/device/kernels/compute/pack_untilize.cpp
             untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
+            untilize/device/kernels/compute/pack_untilize_wh.cpp
 )
 
 install(
