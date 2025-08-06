@@ -244,7 +244,7 @@ def run_mesh_partition_test(
     "device_params",
     [
         {
-            "trace_region_size": 10000,
+            "trace_region_size": 18432,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
         }
     ],
@@ -300,7 +300,7 @@ def test_mesh_partition(
     "device_params",
     [
         {
-            "trace_region_size": 16384,
+            "trace_region_size": 18432,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
         }
     ],
