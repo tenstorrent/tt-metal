@@ -1194,7 +1194,6 @@ struct test_traffic_t {
             uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], TT_FABRIC_CYCLES_INDEX);
             double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
             total_tx_bw += tx_bw;
-            uint64_t iter = get_64b_result(tx_results[i], TT_FABRIC_ITER_INDEX);
             max_tx_elapsed_cycles = std::max(max_tx_elapsed_cycles, tx_elapsed_cycles);
             // uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
             // uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
@@ -1419,10 +1418,6 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    uint32_t tx_x = test_args::get_command_option_uint32(input_args, "--tx_x", default_tx_x);
-    uint32_t tx_y = test_args::get_command_option_uint32(input_args, "--tx_y", default_tx_y);
-    uint32_t rx_x = test_args::get_command_option_uint32(input_args, "--rx_x", default_rx_x);
-    uint32_t rx_y = test_args::get_command_option_uint32(input_args, "--rx_y", default_rx_y);
     uint32_t prng_seed = test_args::get_command_option_uint32(input_args, "--prng_seed", default_prng_seed);
     uint32_t data_kb_per_tx =
         test_args::get_command_option_uint32(input_args, "--data_kb_per_tx", default_data_kb_per_tx);
@@ -1436,9 +1431,8 @@ int main(int argc, char **argv) {
     uint32_t test_results_size = test_args::get_command_option_uint32(input_args, "--test_results_size", default_test_results_size);
     uint32_t tunneler_test_results_addr = test_args::get_command_option_uint32(input_args, "--tunneler_test_results_addr", default_tunneler_test_results_addr);
     uint32_t tunneler_test_results_size = test_args::get_command_option_uint32(input_args, "--tunneler_test_results_size", default_tunneler_test_results_size);
-    uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
-    uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
-    uint32_t rx_disable_header_check = test_args::get_command_option_uint32(input_args, "--rx_disable_header_check", default_rx_disable_header_check);
+    uint32_t timeout_mcycles =
+        test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
     bool tx_skip_pkt_content_gen = test_args::has_command_option(input_args, "--tx_skip_pkt_content_gen");
     std::string output_dir = test_args::get_command_option(input_args, "--output_dir", std::string(default_output_dir));
     bool disable_txrx_timeout = test_args::has_command_option(input_args, "--disable_txrx_timeout");
