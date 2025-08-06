@@ -50,7 +50,7 @@ def test_uniad_query_interaction(
 
     torch_output = torch_model(data)
 
-    tt_track_instances = TtInstances((1, 1))
+    tt_track_instances = TtInstances((1, 1), ttnn_device=device)
 
     tt_track_instances.ref_pts = ttnn.from_torch(ref_pts, device=device)
     tt_track_instances.query = ttnn.from_torch(query, device=device, layout=ttnn.TILE_LAYOUT)
@@ -67,4 +67,6 @@ def test_uniad_query_interaction(
 
     ttnn_output = tt_model(data)
     ttnn_query = ttnn.to_torch(ttnn_output.query)
+    ttnn_ref_pts = ttnn.to_torch(ttnn_output.ref_pts)
     assert_with_pcc(torch_output.query, ttnn_query, 0.99)
+    assert_with_pcc(torch_output.ref_pts, ttnn_ref_pts, 0.99)
