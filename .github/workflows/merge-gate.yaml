@@ -17,21 +17,24 @@ on:
       - synchronize
       - ready_for_review
   merge_group:
+    types:
+      - checks_requested
+      - destroyed
   push:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
 
 concurrency:
   # Groups to control cancelling of obsolete runs.
-  # main (or any protected branch): run_id (read: never cancel other jobs)
+  # main (or any protected branch): run_id (ie: never cancel other jobs)
   # PRs: PR #
-  # Merge Queue: A value unique to each PR (merge_group.head_ref)
-  # All others: commit ID (read: never cancel other jobs)
+  # Merge Queue: branch name; will be paired with the 'destroyed' trigger to cause a cancel when it leaves or moves in the queue.
+  #              See https://github.com/orgs/community/discussions/137976#discussioncomment-14004793
+  # All others: branch name (ie: one run per branch)
   group: >-
     ${{ github.workflow }}-
-    ${{ github.ref_protected && github.run_id
+    ${{ (github.ref_protected && github.run_id)
         || github.event.pull_request.number
-        || github.event.merge_group.head_ref
         || github.ref }}
   cancel-in-progress: true
 
@@ -46,7 +49,7 @@ jobs:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
-    if: github.event_name != 'pull_request'
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
 
@@ -54,14 +57,14 @@ jobs:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
-    if: github.event_name != 'pull_request'
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
       version: 22.04
 
   find-changes:
-    if: github.event_name != 'pull_request'
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
