@@ -110,6 +110,10 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, intermediate_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
+    if (topology == ccl::Topology::Ring) {
+        num_targets_forward = ring_size - 1;
+        num_targets_backward = 0;
+    }
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
