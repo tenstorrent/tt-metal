@@ -50,7 +50,6 @@ class QueryInteractionModule(nn.Module):
         self.activation = F.relu
 
     def _update_track_embedding(self, track_instances: Instances) -> Instances:
-        print("track_instancestrack_instances", type(track_instances))
         dim = track_instances.query.shape[1]
         out_embed = track_instances.output_embedding
         query_pos = track_instances.query[:, : dim // 2]
@@ -89,141 +88,13 @@ class QueryInteractionModule(nn.Module):
 
     def _select_active_tracks(self, data: dict) -> Instances:
         track_instances: Instances = data["track_instances"]
-        print("Else is working")
         active_track_instances = track_instances[track_instances.obj_idxes >= 0]
 
         return active_track_instances
 
     def forward(self, data) -> Instances:
-        # print("QueryInteractionModule forward", data)
-        # print("data Query interaction", print(data["init_track_instances"].get_fields()))
-        # print("init_track_instances",data["init_track_instances"], type(data["init_track_instances"]))
-        print("data ref_pts", data["init_track_instances"].ref_pts.shape)
-        print("data query", data["init_track_instances"].query.shape)
-        print("data output_embedding - zero tensors", data["init_track_instances"].output_embedding.shape)
-        # print("data obj_idxes -1 tensors", data["init_track_instances"].obj_idxes.shape)
-        # print("data matched_gt_idxes -1 tensor", data["init_track_instances"].matched_gt_idxes.shape)
-        # print("data disappear_time - 0 tensors", data["init_track_instances"].disappear_time.shape)
-        # print("data iou - 0 float tensor", data["init_track_instances"].iou.shape)
-        # print("data scores - 0 float tensor", data["init_track_instances"].scores.shape)
-        # print("data track_scores - 0 float tensor", data["init_track_instances"].track_scores.shape)
-        # print("data pred_boxes - 0 float tensor", data["init_track_instances"].pred_boxes.shape)
-        # print("data pred_logits: 0 float tensor", data["init_track_instances"].pred_logits.shape)
-        # print("data mem_bank: 0 float tensor", data["init_track_instances"].mem_bank.shape)
-        # print("data mem_padding_mask: bool True", data["init_track_instances"].mem_padding_mask.shape)
-        # print("data save_period: 0 float tensor", data["init_track_instances"].save_period.shape)
-
         active_track_instances = self._select_active_tracks(data)
         active_track_instances = self._update_track_embedding(active_track_instances)
-        init_track_instances: Inescalationstances = data["init_track_instances"]
+        init_track_instances: Instances = data["init_track_instances"]
         merged_track_instances = Instances.cat([init_track_instances, active_track_instances])
-        return active_track_instances
-
-
-# class QueryInteractionModule(nn.Module):
-#     # def __init__(self, args, dim_in, hidden_dim, dim_out):
-#     def __init__(self,
-#     dim_in=256,
-#     hidden_dim=256,
-#     dim_out=256,
-#     random_drop=0.1,
-#     fp_ratio=0.3,
-#     update_query_pos=True,
-#     merger_dropout = 0,
-# ):
-#         super().__init__()
-#         self.random_drop = random_drop
-#         self.fp_ratio = fp_ratio
-#         self.update_query_pos = update_query_pos
-#         dropout = merger_dropout
-
-#         self.self_attn = nn.MultiheadAttention(dim_in, 8, dropout)
-#         self.linear1 = nn.Linear(dim_in, hidden_dim)
-#         self.linear2 = nn.Linear(hidden_dim, dim_in)
-#         self.dropout1 = nn.Dropout(dropout)
-#         self.dropout2 = nn.Dropout(dropout)
-#         self.norm1 = nn.LayerNorm(dim_in)
-#         self.norm2 = nn.LayerNorm(dim_in)
-
-#         self.activation = F.relu
-
-#         if self.update_query_pos:
-#             self.linear_pos1 = nn.Linear(dim_in, hidden_dim)
-#             self.linear_pos2 = nn.Linear(hidden_dim, dim_in)
-#             self.dropout_pos1 = nn.Dropout(dropout)
-#             self.dropout_pos2 = nn.Dropout(dropout)
-#             self.norm_pos = nn.LayerNorm(dim_in)
-
-#         self.linear_feat1 = nn.Linear(dim_in, hidden_dim)
-#         self.linear_feat2 = nn.Linear(hidden_dim, dim_in)
-#         self.dropout_feat1 = nn.Dropout(dropout)
-#         self.dropout_feat2 = nn.Dropout(dropout)
-#         self.norm_feat = nn.LayerNorm(dim_in)
-
-#     def _select_active_tracks(self, obj_idxes: torch.Tensor, ious: torch.Tensor, training: bool):
-#         if training:
-#             mask = (obj_idxes >= 0) & (ious > 0.5)
-#         else:
-#             mask = obj_idxes >= 0
-#         return mask
-
-#     def _update_track_embedding(self, query: torch.Tensor, output_embedding: torch.Tensor) -> torch.Tensor:
-#         if query.shape[0] == 0:
-#             return query
-
-#         dim = query.shape[1]
-#         query_pos = query[:, :dim // 2]
-#         query_feat = query[:, dim // 2:]
-
-#         q = k = query_pos + output_embedding
-#         tgt = output_embedding
-#         tgt2, _ = self.self_attn(q.unsqueeze(1), k.unsqueeze(1), tgt.unsqueeze(1))
-#         tgt2 = tgt2.squeeze(1)
-#         tgt = tgt + self.dropout1(tgt2)
-#         tgt = self.norm1(tgt)
-
-#         tgt2 = self.linear2(self.dropout2(self.activation(self.linear1(tgt))))
-#         tgt = tgt + self.dropout2(tgt2)
-#         tgt = self.norm2(tgt)
-
-#         if self.update_query_pos:
-#             query_pos2 = self.linear_pos2(self.dropout_pos1(self.activation(self.linear_pos1(tgt))))
-#             query_pos = query_pos + self.dropout_pos2(query_pos2)
-#             query_pos = self.norm_pos(query_pos)
-
-#         query_feat2 = self.linear_feat2(self.dropout_feat1(self.activation(self.linear_feat1(tgt))))
-#         query_feat = query_feat + self.dropout_feat2(query_feat2)
-#         query_feat = self.norm_feat(query_feat)
-
-#         updated_query = torch.cat([query_pos, query_feat], dim=1)
-#         return updated_query
-
-#     def forward(
-#         self,
-#         query: torch.Tensor,
-#         output_embedding: torch.Tensor,
-#         obj_idxes: torch.Tensor,
-#         ious: torch.Tensor,
-#         training: bool = False,
-#     ) -> torch.Tensor:
-#         """
-#         Args:
-#             query: Tensor of shape [N, C]
-#             output_embedding: Tensor of shape [N, C]
-#             obj_idxes: Tensor of shape [N]
-#             ious: Tensor of shape [N]
-#         Returns:
-#             updated_query: Tensor of shape [N, C] after updating valid ones
-#         """
-#         mask = self._select_active_tracks(obj_idxes, ious, training)
-
-#         if mask.sum() == 0:
-#             return query  # no active tracks
-
-#         # update only active queries
-#         updated_query = self._update_track_embedding(query[mask], output_embedding[mask])
-
-#         # clone and update the active indices only
-#         final_query = query.clone()
-#         final_query[mask] = updated_query
-#         return final_query
+        return merged_track_instances

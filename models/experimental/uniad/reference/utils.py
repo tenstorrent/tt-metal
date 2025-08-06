@@ -16,6 +16,87 @@ from typing import Any, Dict, List, Sequence, Tuple, Union
 import numpy as np
 import numpy.typing as npt
 from casadi import DM, Opti, sumsqr, vertcat, exp
+from abc import ABCMeta, abstractmethod
+
+
+# taken from mmdet.models.task_modules import BaseBBoxCoder
+class BaseBBoxCoder(metaclass=ABCMeta):
+    """Base bounding box coder.
+
+    Args:
+        use_box_type (bool): Whether to warp decoded boxes with the
+            box type data structure. Defaults to False.
+    """
+
+    # The size of the last of dimension of the encoded tensor.
+    encode_size = 4
+
+    def __init__(self, use_box_type: bool = False, **kwargs):
+        self.use_box_type = use_box_type
+
+    @abstractmethod
+    def encode(self, bboxes, gt_bboxes):
+        """Encode deltas between bboxes and ground truth boxes."""
+
+    @abstractmethod
+    def decode(self, bboxes, bboxes_pred):
+        """Decode the predicted bboxes according to prediction and base
+        boxes."""
+
+
+# taken from  mmdet3d.structures.bbox_3d.utils import limit_period
+def limit_period(
+    val: Union[np.ndarray, Tensor], offset: float = 0.5, period: float = np.pi
+) -> Union[np.ndarray, Tensor]:
+    # """Limit the value into a period for periodic function.
+
+    # Args:
+    #     val (np.ndarray or Tensor): The value to be converted.
+    #     offset (float): Offset to set the value range. Defaults to 0.5.
+    #     period (float): Period of the value. Defaults to np.pi.
+
+    # Returns:
+    #     np.ndarray or Tensor: Value in the range of
+    #     [-offset * period, (1-offset) * period].
+    # """
+    limited_val = val - torch.floor(val / period + offset) * period
+    return limited_val
+
+
+# taken from projects/DETR3D/detr3d/util import denormalize_bbox
+def denormalize_bbox(normalized_bboxes, pc_range):
+    # rotation
+    rot_sine = normalized_bboxes[..., 6:7]
+
+    rot_cosine = normalized_bboxes[..., 7:8]
+    rot = torch.atan2(rot_sine, rot_cosine)
+
+    rot = -rot - np.pi / 2
+    rot = limit_period(rot, period=np.pi * 2)
+
+    # center in the bev
+    cx = normalized_bboxes[..., 0:1]
+    cy = normalized_bboxes[..., 1:2]
+    cz = normalized_bboxes[..., 4:5]
+
+    # size
+    length = normalized_bboxes[..., 2:3]
+    width = normalized_bboxes[..., 3:4]
+    height = normalized_bboxes[..., 5:6]
+
+    width = width.exp()
+    length = length.exp()
+    height = height.exp()
+    if normalized_bboxes.size(-1) > 8:
+        # velocity
+        vx = normalized_bboxes[:, 8:9]
+        vy = normalized_bboxes[:, 9:10]
+        denormalized_bboxes = torch.cat([cx, cy, cz, length, width, height, rot, vx, vy], dim=-1)
+    else:
+        denormalized_bboxes = torch.cat([cx, cy, cz, length, width, height, rot], dim=-1)
+
+    return denormalized_bboxes
+
 
 Pose = Tuple[float, float, float]  # (x, y, yaw)
 
@@ -293,7 +374,8 @@ class Instances:
                 ret.set(k, ret_list)
 
             else:
-                ret.set(k, v)
+                ret.set(k, v[item])
+
         return ret
 
     def __len__(self) -> int:
@@ -326,7 +408,9 @@ class Instances:
             values = [i.get(k) for i in instance_lists]
             v0 = values[0]
             if isinstance(v0, torch.Tensor):
+                print("values for torch concat", len(values), values[0].shape, values[1].shape)
                 values = torch.cat(values, dim=0)
+                print("After concat torch", values.shape)
             elif isinstance(v0, list):
                 values = list(itertools.chain(*values))
             elif hasattr(type(v0), "cat"):

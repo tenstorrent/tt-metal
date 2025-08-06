@@ -7,6 +7,87 @@ import torch
 import ttnn
 from torch import Tensor
 import numpy as np
+from abc import ABCMeta, abstractmethod
+
+
+# taken from mmdet.models.task_modules import BaseBBoxCoder
+class TtBaseBBoxCoder(metaclass=ABCMeta):
+    """Base bounding box coder.
+
+    Args:
+        use_box_type (bool): Whether to warp decoded boxes with the
+            box type data structure. Defaults to False.
+    """
+
+    # The size of the last of dimension of the encoded tensor.
+    encode_size = 4
+
+    def __init__(self, use_box_type: bool = False, **kwargs):
+        self.use_box_type = use_box_type
+
+    @abstractmethod
+    def encode(self, bboxes, gt_bboxes):
+        """Encode deltas between bboxes and ground truth boxes."""
+
+    @abstractmethod
+    def decode(self, bboxes, bboxes_pred):
+        """Decode the predicted bboxes according to prediction and base
+        boxes."""
+
+
+# taken from  mmdet3d.structures.bbox_3d.utils import limit_period
+def limit_period(val, offset: float = 0.5, period: float = np.pi, device=None):
+    temp = ttnn.div(val, period)
+    temp = temp + offset
+    limited_val = val - (ttnn.floor(temp) * period)
+    return limited_val
+
+
+# taken from projects/DETR3D/detr3d/util import denormalize_bbox
+def denormalize_bbox(normalized_bboxes, pc_range, device=None):
+    # rotation
+    rot_sine = normalized_bboxes[..., 6:7]
+    rot_cosine = normalized_bboxes[..., 7:8]
+
+    rot_sine = ttnn.typecast(rot_sine, ttnn.bfloat16)
+    rot_cosine = ttnn.typecast(rot_cosine, ttnn.bfloat16)
+
+    rot = ttnn.atan2(rot_sine, rot_cosine)  # Does not support float32
+
+    rot = -1 * rot
+    rot = rot - np.pi / 2
+
+    rot = limit_period(rot, period=np.pi * 2, device=device)
+    # center in the bev
+    cx = normalized_bboxes[..., 0:1]
+    cy = normalized_bboxes[..., 1:2]
+    cz = normalized_bboxes[..., 4:5]
+
+    # size
+    length = normalized_bboxes[..., 2:3]
+    width = normalized_bboxes[..., 3:4]
+    height = normalized_bboxes[..., 5:6]
+
+    width = ttnn.exp(width)
+    length = ttnn.exp(length)
+    height = ttnn.exp(height)
+
+    if normalized_bboxes.shape[-1] > 8:
+        # velocity
+        vx = normalized_bboxes[:, 8:9]
+        vy = normalized_bboxes[:, 9:10]
+
+        if ttnn.to_torch(cx).numel() == 0:
+            denormalized_bboxes = ttnn.from_torch(
+                torch.empty(0, 9), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            )
+            print("Tensor is empty, Creating empty ttnn tensor")
+        else:
+            denormalized_bboxes = ttnn.concat([cx, cy, cz, length, width, height, rot, vx, vy], dim=-1)
+    else:
+        denormalized_bboxes = ttnn.concat([cx, cy, cz, length, width, height, rot], dim=-1)
+
+    return denormalized_bboxes
 
 
 def bivariate_gaussian_activation(ip):
@@ -46,7 +127,7 @@ class Instances:
           confident_detections = instances[instances.scores > 0.9]
     """
 
-    def __init__(self, image_size: Tuple[int, int], **kwargs: Any):
+    def __init__(self, image_size: Tuple[int, int], ttnn_device=None, **kwargs: Any):
         print("image_size in init", image_size)
         """
         Args:
@@ -57,6 +138,7 @@ class Instances:
         self._fields: Dict[str, Any] = {}
         for k, v in kwargs.items():
             self.set(k, v)
+        self.device = ttnn_device
 
     @property
     def image_size(self) -> Tuple[int, int]:
@@ -66,8 +148,8 @@ class Instances:
         """
         return self._image_size
 
-    def __setattr__(self, name: str, val: Any) -> None:
-        if name.startswith("_"):
+    def __setattr__(self, name, val):
+        if name.startswith("_") or name in {"device", "device_id", "dtype"}:
             super().__setattr__(name, val)
         else:
             self.set(name, val)
@@ -159,7 +241,15 @@ class Instances:
                 ret.set(k, ret_list)
 
             else:
-                ret.set(k, v)
+                if isinstance(v, ttnn.Tensor):
+                    v = ttnn.to_torch(v)
+                    if isinstance(item, ttnn.Tensor):
+                        item = ttnn.to_torch(item).bool()
+                    v = v[item]
+                    v = ttnn.from_torch(v, device=self.device, layout=ttnn.TILE_LAYOUT)
+                    ret.set(k, v)
+                else:
+                    ret.set(k, v)
         return ret
 
     def __len__(self) -> int:
@@ -203,21 +293,10 @@ class Instances:
                 print("Here 3")
                 # values = type(v0).cat(values)
             else:
-                print("values for ttnn concat", len(values), values[0].shape, values[1].shape)
-                if len(values[0].shape) == 1:
-                    values[0] = ttnn.add(values[0], 0, dtype=ttnn.bfloat16)
-                    values[1] = ttnn.add(values[1], 0, dtype=ttnn.bfloat16)
-                    values[0] = ttnn.unsqueeze(values[0], 0)
-                    values[1] = ttnn.unsqueeze(values[1], 0)
-                    print(
-                        values[0].shape,
-                        values[1].shape,
-                        values[0].get_dtype(),
-                        values[1].get_dtype(),
-                    )
+                if values[1].shape[0] > 0:
                     values = ttnn.concat(values, dim=1)
                 else:
-                    values = ttnn.concat(values, dim=0)
+                    values = values[0]
                 print("After concat ttnn", values.shape)
 
             ret.set(k, values)

@@ -12,7 +12,6 @@ from models.experimental.uniad.tt.utils import Instances as TtInstances
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.tt.model_preprocessing_encoder import (
     create_uniad_model_parameters_encoder,
-    create_uniad_FPN_parameters,
 )
 
 
@@ -40,23 +39,23 @@ def test_uniad_memory_bank(
 
     ref_pts = torch.rand(num_instances, 3)
     query = torch.rand(num_instances, 512)
-    output_embedding = torch.zeros(num_instances, 256)
-    mem_padding_mask = torch.randint(0, 2, (901, 4), dtype=torch.bool)
+    output_embedding = torch.rand(num_instances, 256)
+    mem_padding_mask = torch.ones((901, 4), dtype=torch.bool)
     mem_bank = torch.zeros((901, 4, 256))
     obj_idxes = torch.full((num_instances,), -1, dtype=torch.long)
-    scores = torch.rand(901)
-    save_period = torch.rand(901)
-    track_instances.ref_pts = ref_pts
-    track_instances.query = query
-    track_instances.output_embedding = output_embedding
-    track_instances.obj_idxes = obj_idxes
-    track_instances.mem_padding_mask = mem_padding_mask
-    track_instances.mem_bank = mem_bank
-    track_instances.scores = scores
-    track_instances.save_period = save_period
+    scores = torch.randn(901)
+    save_period = torch.zeros(901)
+
+    track_instances.ref_pts = ref_pts.clone()
+    track_instances.query = query.clone()
+    track_instances.output_embedding = output_embedding.clone()
+    track_instances.obj_idxes = obj_idxes.clone()
+    track_instances.mem_padding_mask = mem_padding_mask.clone()
+    track_instances.mem_bank = mem_bank.clone()
+    track_instances.scores = scores.clone()
+    track_instances.save_period = save_period.clone()
     data = track_instances
 
-    torch_output = torch_model(data)
     tt_track_instances = TtInstances((1, 1))
 
     tt_track_instances.ref_pts = ttnn.from_torch(ref_pts, device=device)
@@ -68,20 +67,19 @@ def test_uniad_memory_bank(
     tt_track_instances.mem_padding_mask = mem_padding_mask
     tt_track_instances.mem_bank = ttnn.from_torch(mem_bank, dtype=ttnn.bfloat16, device=device)
 
-    data = tt_track_instances
+    tt_data = tt_track_instances
 
     parameter = create_uniad_model_parameters_encoder(torch_model, device=device)
-
+    torch_output = torch_model(data)
     tt_model = TtMemoryBank(
         params=parameter,
         device=device,
     )
-    print("tt_model", tt_model)
-    print(dir(tt_model))
-
-    ttnn_output = tt_model.forward(data)
-    ttnn_output_embedding = ttnn_output.output_embedding
+    ttnn_output = tt_model.forward(tt_data)
+    ttnn_output_embedding = ttnn.to_torch(ttnn_output.output_embedding)
     ttnn_mem_bank = ttnn.to_torch(ttnn_output.mem_bank)
     ttnn_save_period = ttnn.to_torch(ttnn_output.save_period)
 
     assert_with_pcc(torch_output.output_embedding, ttnn_output_embedding, 0.99)
+    assert_with_pcc(torch_output.mem_bank, ttnn_mem_bank, 0.99)
+    assert_with_pcc(torch_output.save_period, ttnn_save_period, 0.99)
