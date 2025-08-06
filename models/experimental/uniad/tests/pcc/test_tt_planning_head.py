@@ -82,7 +82,7 @@ def test_TtPlanningHeadSingleMode(device, reset_seeds):
     reference_model.eval()
 
     bev_embed = torch.rand(2500, 1, 256)
-    occ_mask = torch.rand(1, 5, 1, 200, 200)
+    occ_mask = torch.rand(1, 5, 1, 50, 50)
     bev_pos = torch.rand(1, 256, 50, 50)
     sdc_traj_query = torch.rand(3, 1, 6, 256)
     sdc_track_query = torch.rand(1, 256)
@@ -114,4 +114,4 @@ def test_TtPlanningHeadSingleMode(device, reset_seeds):
         ttnn_bev_embed, ttnn_occ_mask, ttnn_bev_pos, ttnn_sdc_traj_query, ttnn_sdc_track_query, command
     )
 
-    logger.info(assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output), pcc=0.99))
+    logger.info(assert_with_pcc(torch_output["sdc_traj"], ttnn.to_torch(ttnn_output["sdc_traj"]), pcc=0.99))

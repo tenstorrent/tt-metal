@@ -160,7 +160,7 @@ class PansegformerHead(nn.Module):
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
         if not self.as_two_stag:
-            self.bev_embedding = nn.Embedding(200 * 200, self.embed_dims)
+            self.bev_embedding = nn.Embedding(50 * 50, self.embed_dims)
             # self.bev_embedding = nn.Embedding(self.bev_h * self.bev_w, self.embed_dims)
 
         fc_cls = nn.Linear(self.embed_dims, self.cls_out_channels)

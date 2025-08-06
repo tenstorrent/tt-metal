@@ -47,6 +47,7 @@ class TtMapInteraction:
         # mem = key.expand(B * A, -1, -1)
         mem = ttnn.clone(key)
         query = self.interaction_transformer(query, mem)
+        ttnn.deallocate(mem)
         query = ttnn.reshape(query, (B, A, P, D))
         return query
 
@@ -96,6 +97,7 @@ class TtTrackAgentInteraction:
         # N, A, P, D -> N*A, P, D
         query = ttnn.reshape(query, (query.shape[0] * query.shape[1], query.shape[2], query.shape[3]))
         query = self.interaction_transformer(query, mem)
+        ttnn.deallocate(mem)
         query = ttnn.reshape(query, (B, A, P, D))
         return query
 
