@@ -1054,8 +1054,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
     uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
-    uint32_t output_log_base_2_of_page_size =
-        output_stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
     uint32_t output_element_size = output.element_size();
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
     uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;

@@ -973,9 +973,6 @@ struct test_traffic_t {
             tx_core = std::get<2>(tx_workers[i]);
             rx_core = std::get<2>(rx_workers[tx_to_rx_map[i]]);
 
-            auto routing_plane =
-                tx_device->board_handle->get_routing_plane_from_chan(tx_device->physical_chip_id, eth_chan);
-
             // setup runtime args
             std::vector<uint32_t> runtime_args = {
                 time_seed,                                           // 0: time based seed
@@ -1433,9 +1430,8 @@ int main(int argc, char **argv) {
         input_args, "--routing_table_start_addr", default_routing_table_start_addr);
     uint32_t tx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--tx_queue_start_addr", default_tx_queue_start_addr);
     uint32_t tx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tx_queue_size_bytes", default_tx_queue_size_bytes);
-    uint32_t rx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--rx_queue_start_addr", default_rx_queue_start_addr);
-    uint32_t rx_queue_size_bytes =
-        test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
+    uint32_t rx_queue_start_addr =
+        test_args::get_command_option_uint32(input_args, "--rx_queue_start_addr", default_rx_queue_start_addr);
     uint32_t tunneler_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tunneler_queue_size_bytes", default_tunneler_queue_size_bytes);
     uint32_t test_results_addr = test_args::get_command_option_uint32(input_args, "--test_results_addr", default_test_results_addr);
     uint32_t test_results_size = test_args::get_command_option_uint32(input_args, "--test_results_size", default_test_results_size);

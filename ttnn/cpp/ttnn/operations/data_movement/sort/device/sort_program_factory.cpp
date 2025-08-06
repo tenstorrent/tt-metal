@@ -425,8 +425,6 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const tt::DataFormat physical_core_lookup_table_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(physical_core_lookup_table_tensor.dtype());
     const uint32_t physical_core_lookup_table_tile_size = tile_size(physical_core_lookup_table_cb_data_format);
-    const bool physical_core_lookup_table_is_dram =
-        physical_core_lookup_table_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // Circular buffers
     constexpr uint32_t cb_scale_factor = 2;

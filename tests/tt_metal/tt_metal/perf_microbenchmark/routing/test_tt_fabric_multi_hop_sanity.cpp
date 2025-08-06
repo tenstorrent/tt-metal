@@ -195,10 +195,6 @@ int main(int argc, char** argv) {
         test_args::get_command_option_uint32(input_args, "--tx_queue_start_addr", default_tx_queue_start_addr);
     uint32_t tx_queue_size_bytes =
         test_args::get_command_option_uint32(input_args, "--tx_queue_size_bytes", default_tx_queue_size_bytes);
-    uint32_t rx_queue_start_addr =
-        test_args::get_command_option_uint32(input_args, "--rx_queue_start_addr", default_rx_queue_start_addr);
-    uint32_t rx_queue_size_bytes =
-        test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
     uint32_t tunneler_queue_size_bytes = test_args::get_command_option_uint32(
         input_args, "--tunneler_queue_size_bytes", default_tunneler_queue_size_bytes);
     uint32_t test_results_addr =
@@ -211,14 +207,10 @@ int main(int argc, char** argv) {
         input_args, "--tunneler_test_results_size", default_tunneler_test_results_size);
     uint32_t timeout_mcycles =
         test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
-    uint32_t rx_disable_data_check =
-        test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
     uint32_t rx_disable_header_check =
         test_args::get_command_option_uint32(input_args, "--rx_disable_header_check", default_rx_disable_header_check);
     uint32_t tx_skip_pkt_content_gen =
         test_args::get_command_option_uint32(input_args, "--tx_skip_pkt_content_gen", default_tx_skip_pkt_content_gen);
-    uint32_t dump_stat_json =
-        test_args::get_command_option_uint32(input_args, "--dump_stat_json", default_dump_stat_json);
     std::string output_dir = test_args::get_command_option(input_args, "--output_dir", std::string(default_output_dir));
     uint32_t check_txrx_timeout =
         test_args::get_command_option_uint32(input_args, "--check_txrx_timeout", default_check_txrx_timeout);

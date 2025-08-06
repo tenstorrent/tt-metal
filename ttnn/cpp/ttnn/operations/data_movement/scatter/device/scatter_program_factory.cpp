@@ -84,14 +84,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t is_output_stick_size_bytes_pow2_min_32 = is_pow2_min32(output_stick_size_bytes);
 
     // for InterleavedAddrGen
-    const uint32_t input_stick_size_bytes_log2 =
-        is_input_stick_size_bytes_pow2_min_32 ? std::log2(input_stick_size_bytes) : 0;
-    const uint32_t index_stick_size_bytes_log2 =
-        is_index_stick_size_bytes_pow2_min_32 ? std::log2(index_stick_size_bytes) : 0;
-    const uint32_t source_stick_size_bytes_log2 =
-        is_source_stick_size_bytes_pow2_min_32 ? std::log2(source_stick_size_bytes) : 0;
-    const uint32_t output_stick_size_bytes_log2 =
-        is_output_stick_size_bytes_pow2_min_32 ? std::log2(output_stick_size_bytes) : 0;
 
     // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
     // BH available L1 mem size of nearly 1.5 MB...
