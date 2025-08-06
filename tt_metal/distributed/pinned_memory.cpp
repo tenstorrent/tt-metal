@@ -144,12 +144,20 @@ const tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) c
     return *buffer_it->second;
 }
 
-void* PinnedMemoryImpl::get_host_ptr(chip_id_t device_id) {
-    return get_buffer(device_id).get_buffer_va();
+void* PinnedMemoryImpl::get_host_ptr() {
+    if (device_buffers_.empty()) {
+        throw std::runtime_error("No buffers available in PinnedMemory");
+    }
+    // Return host pointer from any buffer since they all map the same memory
+    return device_buffers_.begin()->second->get_buffer_va();
 }
 
-const void* PinnedMemoryImpl::get_host_ptr(chip_id_t device_id) const {
-    return get_buffer(device_id).get_buffer_va();
+const void* PinnedMemoryImpl::get_host_ptr() const {
+    if (device_buffers_.empty()) {
+        throw std::runtime_error("No buffers available in PinnedMemory");
+    }
+    // Return host pointer from any buffer since they all map the same memory
+    return device_buffers_.begin()->second->get_buffer_va();
 }
 
 uint64_t PinnedMemoryImpl::get_device_addr(chip_id_t device_id) const {
@@ -194,12 +202,12 @@ const tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) const
     return pImpl->get_buffer(device_id);
 }
 
-void* PinnedMemory::get_host_ptr(chip_id_t device_id) {
-    return pImpl->get_host_ptr(device_id);
+void* PinnedMemory::get_host_ptr() {
+    return pImpl->get_host_ptr();
 }
 
-const void* PinnedMemory::get_host_ptr(chip_id_t device_id) const {
-    return pImpl->get_host_ptr(device_id);
+const void* PinnedMemory::get_host_ptr() const {
+    return pImpl->get_host_ptr();
 }
 
 uint64_t PinnedMemory::get_device_addr(chip_id_t device_id) const {

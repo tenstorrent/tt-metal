@@ -52,12 +52,11 @@ public:
     const tt::umd::SysmemBuffer& get_buffer(chip_id_t device_id) const;
 
     /**
-     * @brief Get host pointer for a specific device's buffer
-     * @param device_id The device ID to get the host pointer for
-     * @return Host pointer to the buffer
+     * @brief Get host pointer to the shared pinned memory
+     * @return Host pointer to the buffer (same for all devices)
      */
-    void* get_host_ptr(chip_id_t device_id);
-    const void* get_host_ptr(chip_id_t device_id) const;
+    void* get_host_ptr();
+    const void* get_host_ptr() const;
 
     /**
      * @brief Get device address for a specific device's buffer
