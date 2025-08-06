@@ -4,56 +4,74 @@
 
 import pytest
 import torch
-from ttnn.model_preprocessing import (
-    preprocess_layernorm_parameter,
-    preprocess_linear_bias,
-    preprocess_linear_weight,
-    preprocess_model_parameters,
-)
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_efficient_selfattention import SegformerEfficientSelfAttention
+from models.demos.segformer.tt.common import (
+    get_mesh_mappers,
+    preprocess_layernorm_parameter,
+    preprocess_linear_bias,
+    preprocess_linear_weight,
+)
 from models.demos.segformer.tt.ttnn_segformer_efficient_selfattention import TtSegformerEfficientSelfAttention
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
         parameters = {}
         if isinstance(model, SegformerEfficientSelfAttention):
             parameters["query"] = {}
-            parameters["query"]["weight"] = preprocess_linear_weight(model.query.weight, dtype=ttnn.bfloat8_b)
-            parameters["query"]["bias"] = preprocess_linear_bias(model.query.bias, dtype=ttnn.bfloat8_b)
+            parameters["query"]["weight"] = preprocess_linear_weight(
+                model.query.weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
+            parameters["query"]["bias"] = preprocess_linear_bias(
+                model.query.bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
 
             parameters["key"] = {}
-            parameters["key"]["weight"] = preprocess_linear_weight(model.key.weight, dtype=ttnn.bfloat8_b)
-            parameters["key"]["bias"] = preprocess_linear_bias(model.key.bias, dtype=ttnn.bfloat8_b)
+            parameters["key"]["weight"] = preprocess_linear_weight(
+                model.key.weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
+            parameters["key"]["bias"] = preprocess_linear_bias(
+                model.key.bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
 
             parameters["value"] = {}
-            parameters["value"]["weight"] = preprocess_linear_weight(model.value.weight, dtype=ttnn.bfloat8_b)
-            parameters["value"]["bias"] = preprocess_linear_bias(model.value.bias, dtype=ttnn.bfloat8_b)
+            parameters["value"]["weight"] = preprocess_linear_weight(
+                model.value.weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
+            parameters["value"]["bias"] = preprocess_linear_bias(
+                model.value.bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
 
             if model.sr_ratio > 1:
                 parameters["sr"] = {}
 
-                parameters["sr"]["weight"] = ttnn.from_torch(model.sr.weight, dtype=ttnn.bfloat16)
+                parameters["sr"]["weight"] = ttnn.from_torch(
+                    model.sr.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+                )
                 parameters["sr"]["bias"] = ttnn.from_torch(
-                    torch.reshape(model.sr.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
+                    torch.reshape(model.sr.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
                 )
 
                 parameters["layer_norm"] = {}
                 parameters["layer_norm"]["weight"] = preprocess_layernorm_parameter(
-                    model.layer_norm.weight, dtype=ttnn.bfloat8_b
+                    model.layer_norm.weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
                 )
                 parameters["layer_norm"]["bias"] = preprocess_layernorm_parameter(
-                    model.layer_norm.bias, dtype=ttnn.bfloat8_b
+                    model.layer_norm.bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
                 )
 
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -107,9 +125,11 @@ def test_segformer_efficient_selfattention(
 
     torch_input_tensor = torch.reshape(torch_input_tensor, (batch_size, seq_len, hidden_size))
     torch_output = reference_model(torch_input_tensor, height, width)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=device
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
     if "sr" in parameters:
         parameters["sr"]["weight"] = ttnn.from_device(parameters["sr"]["weight"])

@@ -5,7 +5,6 @@
 import glob
 import os
 
-import torch
 from datasets import load_dataset
 from PIL import Image
 
@@ -33,17 +32,14 @@ def get_label(image_path):
 
 def get_batch(data_loader):
     loaded_images = next(data_loader)
-    images = None
+    images = []
     labels = []
     for image in loaded_images:
         img = image.image
         labels.append(image.label)
         if img.mode == "L":
             img = img.convert(mode="RGB")
-        if images is None:
-            images = img
-        else:
-            images = torch.cat((images, img), dim=0)
+        images.append(img)
     return images, labels
 
 

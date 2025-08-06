@@ -4,57 +4,56 @@
 
 import pytest
 import torch
-from ttnn.model_preprocessing import (
-    ParameterDict,
-    ParameterList,
-    preprocess_layernorm_parameter,
-    preprocess_model_parameters,
-)
+from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
 
 import ttnn
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_layer import SegformerLayer
 from models.demos.segformer.tests.pcc.test_segformer_attention import (
-    create_custom_preprocessor as create_custom_preprocessor_attention,
+    create_custom_mesh_preprocessor as create_custom_preprocessor_attention,
 )
 from models.demos.segformer.tests.pcc.test_segformer_mix_ffn import (
-    create_custom_preprocessor as create_custom_preprocessor_mix_ffn,
+    create_custom_mesh_preprocessor as create_custom_preprocessor_mix_ffn,
 )
+from models.demos.segformer.tt.common import get_mesh_mappers, preprocess_layernorm_parameter
 from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
         parameters = {}
         if isinstance(model, SegformerLayer):
             parameters["layer_norm_1"] = {}
             parameters["layer_norm_1"]["weight"] = preprocess_layernorm_parameter(
-                model.layer_norm_1.weight, dtype=ttnn.bfloat8_b
+                model.layer_norm_1.weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
             )
             parameters["layer_norm_1"]["bias"] = preprocess_layernorm_parameter(
-                model.layer_norm_1.bias, dtype=ttnn.bfloat8_b
+                model.layer_norm_1.bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
             )
 
-            attention_preprocess = create_custom_preprocessor_attention(device)
+            attention_preprocess = create_custom_preprocessor_attention(mesh_mapper)
             parameters["attention"] = {}
-            parameters["attention"] = attention_preprocess(model.attention, None, None)
+            parameters["attention"] = attention_preprocess(model.attention, None, None, None)
 
-            mix_ffn_preprocess = create_custom_preprocessor_mix_ffn(device)
+            mix_ffn_preprocess = create_custom_preprocessor_mix_ffn(mesh_mapper)
             parameters["mlp"] = {}
-            parameters["mlp"] = mix_ffn_preprocess(model.mlp, None, None)
+            parameters["mlp"] = mix_ffn_preprocess(model.mlp, None, None, None)
 
             parameters["layer_norm_2"] = {}
             parameters["layer_norm_2"]["weight"] = preprocess_layernorm_parameter(
-                model.layer_norm_2.weight, dtype=ttnn.bfloat8_b
+                model.layer_norm_2.weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
             )
             parameters["layer_norm_2"]["bias"] = preprocess_layernorm_parameter(
-                model.layer_norm_2.bias, dtype=ttnn.bfloat8_b
+                model.layer_norm_2.bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
             )
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 def move_to_device(object, device):
@@ -128,9 +127,11 @@ def test_segformer_layer(
 
     torch_input_tensor = torch.reshape(torch_input_tensor, (batch_size, seq_len, hidden_size))
     torch_output = reference_model(torch_input_tensor, height=height, width=width)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=None,
     )
 
     parameters = move_to_device(parameters, device)

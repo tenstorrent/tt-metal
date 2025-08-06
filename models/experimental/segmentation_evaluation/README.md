@@ -39,8 +39,15 @@ pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::te
 ```
 
 **Segformer-b0 (512x512):**
+
+**_Single-Device (BS-1):_**<br>
 ```sh
-pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer[res0-tt_model-device_params0]
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval[res0-1-tt_model-device_params0]
+```
+
+**_Multi-Device (DP-2,N300):_**<br>
+```sh
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp[wormhole_b0-res0-1-tt_model-device_params0]
 ```
 
 ## To run the test of torch vs ground truth, please follow the following commands:
@@ -67,8 +74,15 @@ pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::te
 ```
 
 **Segformer-b0 (512x512):**
+
+**_Single-Device (BS-1):_**<br>
 ```sh
-pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer[res0-torch_model-device_params0]
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval[res0-1-torch_model-device_params0]
+```
+
+**_Multi-Device (DP-2,N300):_**<br>
+```sh
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp[wormhole_b0-res0-1-torch_model-device_params0]
 ```
 
 ## Evaluation Table
