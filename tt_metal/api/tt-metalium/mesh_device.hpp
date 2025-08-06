@@ -316,14 +316,14 @@ public:
     void wait_for_thread_pool();
 
     /**
-     * @brief Create a PinnedMemory instance by mapping existing host memory for a specific set of mesh coordinates
-     * @param coordinate_range_set Set of mesh coordinates to create pinned memory for
+     * @brief Pin existing host memory for a specific set of mesh coordinates
+     * @param coordinate_range_set Set of mesh coordinates to pin memory for
      * @param host_buffer Existing host memory to map (must not be null)
      * @param buffer_size Size of buffer to map to each device
      * @param map_to_noc Whether to map the buffer to the NOC
      * @return Unique pointer to the created PinnedMemory instance
      */
-    std::unique_ptr<PinnedMemory> create_pinned_memory(
+    std::unique_ptr<PinnedMemory> pin_memory(
         const MeshCoordinateRangeSet& coordinate_range_set,
         void* host_buffer,
         size_t buffer_size,
