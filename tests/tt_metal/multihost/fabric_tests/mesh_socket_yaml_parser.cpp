@@ -90,9 +90,6 @@ MeshSocketTestConfiguration MeshSocketYamlParser::parse_file(const std::string& 
     // Parse YAML -> TestConfig (no expansion at parse time)
     config.tests = parse_raw_test_configs(root["tests"]);
 
-    // Validate the complete configuration
-    validate_configuration(config);
-
     log_info(tt::LogTest, "Successfully parsed {} test configurations", config.tests.size());
     return config;
 }
@@ -261,15 +258,12 @@ std::vector<ParsedMemoryConfig> MeshSocketYamlParser::expand_memory_config(const
 
 PhysicalMeshConfig MeshSocketYamlParser::parse_physical_mesh(const YAML::Node& node) {
     PhysicalMeshConfig config;
+    TT_FATAL(
+        node["mesh_descriptor_path"].IsDefined() && node["eth_coord_mapping"].IsDefined(),
+        "PhysicalMeshConfig missing required 'mesh_descriptor_path' or 'eth_coord_mapping' field");
 
-    if (node["mesh_descriptor_path"]) {
-        config.mesh_descriptor_path = node["mesh_descriptor_path"].as<std::string>();
-    }
-
-    if (node["eth_coord_mapping"]) {
-        config.eth_coord_mapping = parse_eth_coord_mapping(node["eth_coord_mapping"]);
-    }
-
+    config.mesh_descriptor_path = node["mesh_descriptor_path"].as<std::string>();
+    config.eth_coord_mapping = parse_eth_coord_mapping(node["eth_coord_mapping"]);
     return config;
 }
 
@@ -308,18 +302,19 @@ FabricConfig MeshSocketYamlParser::parse_fabric_config(const YAML::Node& node) {
 TestConfig MeshSocketYamlParser::parse_test_config(const YAML::Node& node) {
     TestConfig test;
 
-    TT_FATAL(node["name"], "Test configuration missing required 'name' field");
+    TT_FATAL(node["name"].IsDefined(), "Test configuration missing required 'name' field");
     test.name = node["name"].as<std::string>();
+    TT_FATAL(!test.name.empty(), "Test name cannot be empty");
 
-    if (node["num_iterations"]) {
+    if (node["num_iterations"].IsDefined()) {
         test.num_iterations = node["num_iterations"].as<uint32_t>();
     }
 
-    TT_FATAL(node["memory_config"], "Test configuration missing required 'memory_config' field");
+    TT_FATAL(node["memory_config"].IsDefined(), "Test configuration missing required 'memory_config' field");
     test.memory_config = parse_memory_config(node["memory_config"]);
-
+    validate_memory_config(test.memory_config);
     // Parse explicit sockets (optional)
-    if (node["sockets"]) {
+    if (node["sockets"].IsDefined()) {
         TT_FATAL(node["sockets"].IsSequence(), "'sockets' must be a list");
         std::vector<TestSocketConfig> sockets;
         for (const auto& socket_node : node["sockets"]) {
@@ -329,7 +324,7 @@ TestConfig MeshSocketYamlParser::parse_test_config(const YAML::Node& node) {
     }
 
     // Parse pattern expansions (optional)
-    if (node["pattern_expansions"]) {
+    if (node["pattern_expansions"].IsDefined()) {
         TT_FATAL(node["pattern_expansions"].IsSequence(), "'pattern_expansions' must be a list");
         std::vector<PatternExpansionConfig> patterns;
         for (const auto& pattern_node : node["pattern_expansions"]) {
@@ -350,22 +345,19 @@ TestSocketConfig MeshSocketYamlParser::parse_socket_config(const YAML::Node& nod
     TestSocketConfig socket;
 
     // Parse connections
-    if (node["connections"]) {
+    if (node["connections"].IsDefined()) {
         // Multi-connection socket
         TT_FATAL(node["connections"].IsSequence(), "'connections' must be a list");
         for (const auto& conn_node : node["connections"]) {
             socket.connections.push_back(parse_connection_config(conn_node));
         }
-    } else if (node["sender"] && node["receiver"]) {
-        // Single connection socket
-        socket.connections.push_back(parse_connection_config(node));
     } else {
-        throw_parse_error("Socket must define either 'connections' or 'sender'/'receiver' pair", node);
+        throw_parse_error("Socket must define either 'connections'", node);
     }
 
     // Parse sender and receiver ranks (required)
-    TT_FATAL(node["sender_rank"], "Socket missing required 'sender_rank' field");
-    TT_FATAL(node["receiver_rank"], "Socket missing required 'receiver_rank' field");
+    TT_FATAL(node["sender_rank"].IsDefined(), "Socket missing required 'sender_rank' field");
+    TT_FATAL(node["receiver_rank"].IsDefined(), "Socket missing required 'receiver_rank' field");
     socket.sender_rank = Rank{node["sender_rank"].as<uint32_t>()};
     socket.receiver_rank = Rank{node["receiver_rank"].as<uint32_t>()};
 
@@ -373,16 +365,16 @@ TestSocketConfig MeshSocketYamlParser::parse_socket_config(const YAML::Node& nod
 }
 
 SocketConnectionConfig MeshSocketYamlParser::parse_connection_config(const YAML::Node& node) {
-    TT_FATAL(node["sender"], "Connection missing required 'sender' field");
-    TT_FATAL(node["receiver"], "Connection missing required 'receiver' field");
+    TT_FATAL(node["sender"].IsDefined(), "Connection missing required 'sender' field");
+    TT_FATAL(node["receiver"].IsDefined(), "Connection missing required 'receiver' field");
 
     return SocketConnectionConfig{
         .sender = parse_endpoint_config(node["sender"]), .receiver = parse_endpoint_config(node["receiver"])};
 }
 
 EndpointConfig MeshSocketYamlParser::parse_endpoint_config(const YAML::Node& node) {
-    TT_FATAL(node["mesh_coord"], "Endpoint missing required 'mesh_coord' field");
-    TT_FATAL(node["core_coord"], "Endpoint missing required 'core_coord' field");
+    TT_FATAL(node["mesh_coord"].IsDefined(), "Endpoint missing required 'mesh_coord' field");
+    TT_FATAL(node["core_coord"].IsDefined(), "Endpoint missing required 'core_coord' field");
 
     return EndpointConfig{parse_mesh_coordinate(node["mesh_coord"]), parse_core_coordinate(node["core_coord"])};
 }
@@ -391,7 +383,7 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
     MemoryConfig memory;
 
     // Parse fifo_size - can be single value or array
-    if (node["fifo_size"]) {
+    if (node["fifo_size"].IsDefined()) {
         if (node["fifo_size"].IsSequence()) {
             memory.fifo_size = node["fifo_size"].as<std::vector<uint32_t>>();
         } else {
@@ -400,7 +392,7 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
     }
 
     // Parse page_size - can be single value or array
-    if (node["page_size"]) {
+    if (node["page_size"].IsDefined()) {
         if (node["page_size"].IsSequence()) {
             memory.page_size = node["page_size"].as<std::vector<uint32_t>>();
         } else {
@@ -409,7 +401,7 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
     }
 
     // Parse data_size - can be single value or array
-    if (node["data_size"]) {
+    if (node["data_size"].IsDefined()) {
         if (node["data_size"].IsSequence()) {
             memory.data_size = node["data_size"].as<std::vector<uint32_t>>();
         } else {
@@ -418,7 +410,7 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
     }
 
     // Parse num_transactions - can be single value or array
-    if (node["num_transactions"]) {
+    if (node["num_transactions"].IsDefined()) {
         if (node["num_transactions"].IsSequence()) {
             memory.num_transactions = node["num_transactions"].as<std::vector<uint32_t>>();
         } else {
@@ -434,13 +426,12 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
 PatternExpansionConfig MeshSocketYamlParser::parse_pattern_expansion(const YAML::Node& node) {
     PatternExpansionConfig pattern;
 
-    TT_FATAL(node["type"], "Pattern expansion missing required 'type' field");
+    TT_FATAL(node["type"].IsDefined(), "Pattern expansion missing required 'type' field");
 
-    std::string type_str = node["type"].as<std::string>();
-    pattern.type = parse_pattern_type(type_str);
+    pattern.type = parse_pattern_type(node["type"].as<std::string>());
 
     // Parse core_coord field (required)
-    TT_FATAL(node["core_coord"], "Pattern expansion missing required 'core_coord' field");
+    TT_FATAL(node["core_coord"].IsDefined(), "Pattern expansion missing required 'core_coord' field");
     pattern.core_coord = parse_core_coordinate(node["core_coord"]);
 
     return pattern;
@@ -498,70 +489,6 @@ std::vector<std::vector<eth_coord_t>> MeshSocketYamlParser::parse_eth_coord_mapp
     return array;
 }
 
-void MeshSocketYamlParser::validate_configuration(const MeshSocketTestConfiguration& config) {
-    // Validate that we have at least one test
-    TT_FATAL(!config.tests.empty(), "Configuration must define at least one test");
-
-    // Validate fabric config
-    validate_fabric_config(config.fabric_config);
-
-    // Validate physical mesh config if present
-    if (config.physical_mesh_config.has_value()) {
-        validate_physical_mesh_config(config.physical_mesh_config.value());
-    }
-
-    // Validate each test config
-    for (const auto& test : config.tests) {
-        validate_test_config(test);
-    }
-
-    log_info(tt::LogTest, "Configuration validation passed");
-}
-
-void MeshSocketYamlParser::validate_test_config(const TestConfig& test) {
-    TT_FATAL(!test.name.empty(), "Test name cannot be empty");
-
-    // Validate memory config
-    validate_memory_config(test.memory_config);
-
-    // Validate explicit sockets if present
-    if (test.sockets.has_value()) {
-        for (const auto& socket : test.sockets.value()) {
-            validate_socket_config(socket);
-        }
-    }
-
-    // Validate pattern expansions if present
-    if (test.pattern_expansions.has_value()) {
-        for (const auto& pattern : test.pattern_expansions.value()) {
-            validate_pattern_expansion_config(pattern);
-        }
-    }
-}
-
-void MeshSocketYamlParser::validate_parsed_test_config(const ParsedTestConfig& test) {
-    TT_FATAL(!test.name.empty(), "Test name cannot be empty");
-
-    TT_FATAL(!test.sockets.empty(), "Parsed test '{}' must have at least one socket", test.name);
-
-    // Validate memory config
-    validate_parsed_memory_config(test.memory_config);
-
-    // Validate all sockets
-    for (const auto& socket : test.sockets) {
-        validate_socket_config(socket);
-    }
-}
-
-void MeshSocketYamlParser::validate_socket_config(const TestSocketConfig& socket) {
-    TT_FATAL(!socket.connections.empty(), "Socket must have at least one connection");
-
-    for (const auto& connection : socket.connections) {
-        validate_endpoint_config(connection.sender);
-        validate_endpoint_config(connection.receiver);
-    }
-}
-
 void MeshSocketYamlParser::validate_memory_config(const MemoryConfig& memory) {
     TT_FATAL(!memory.fifo_size.empty(), "fifo_size must have at least one value");
     TT_FATAL(!memory.page_size.empty(), "page_size must have at least one value");
@@ -579,44 +506,6 @@ void MeshSocketYamlParser::validate_memory_config(const MemoryConfig& memory) {
     }
     for (uint32_t num_transactions : memory.num_transactions) {
         TT_FATAL(num_transactions > 0, "All num_transactions values must be greater than 0");
-    }
-}
-
-void MeshSocketYamlParser::validate_parsed_memory_config(const ParsedMemoryConfig& memory) {
-    TT_FATAL(memory.fifo_size > 0, "fifo_size must be greater than 0");
-    TT_FATAL(memory.page_size > 0, "page_size must be greater than 0");
-    TT_FATAL(memory.data_size > 0, "data_size must be greater than 0");
-    TT_FATAL(memory.num_transactions > 0, "num_transactions must be greater than 0");
-}
-
-void MeshSocketYamlParser::validate_endpoint_config(const EndpointConfig& endpoint) {
-    // Basic validation - more detailed validation will happen at runtime
-    // when we know the actual mesh dimensions
-    (void)endpoint;  // Suppress unused parameter warning
-}
-
-void MeshSocketYamlParser::validate_pattern_expansion_config(const PatternExpansionConfig& pattern) {
-    // Pattern type is validated during parsing via enum
-    // Core coordinate validation could be added here if needed
-    // (For now, we trust that valid core coordinates are provided in YAML)
-    (void)pattern;  // pattern is used in other functions, but validation can be added here in the future
-}
-
-void MeshSocketYamlParser::validate_fabric_config(const FabricConfig& fabric_config) {
-    // Topology is validated during parsing via enum
-    // Routing type is optional and validated during parsing if present
-    (void)fabric_config;  // Suppress unused parameter warning
-}
-
-void MeshSocketYamlParser::validate_physical_mesh_config(const PhysicalMeshConfig& physical_mesh_config) {
-    if (!physical_mesh_config.mesh_descriptor_path.empty()) {
-        // Could add file existence check here
-        log_debug(tt::LogTest, "Physical mesh descriptor path: {}", physical_mesh_config.mesh_descriptor_path);
-    }
-
-    if (!physical_mesh_config.eth_coord_mapping.empty()) {
-        log_debug(
-            tt::LogTest, "Ethernet coordinate mapping has {} rows", physical_mesh_config.eth_coord_mapping.size());
     }
 }
 

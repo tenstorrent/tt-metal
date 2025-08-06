@@ -5,7 +5,6 @@
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_runner.hpp"
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 
-#include <stdexcept>
 #include <algorithm>
 #include <map>
 
@@ -206,11 +205,7 @@ void MeshSocketTestRunner::initialize_mesh_device() {
     // Create MeshDevice using the mesh shape obtained from control plane
     mesh_device_ =
         tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(mesh_shape_));
-
-    if (!mesh_device_) {
-        throw std::runtime_error("Failed to create MeshDevice");
-    }
-
+    TT_FATAL(mesh_device_, "Failed to create MeshDevice");
     log_info(tt::LogTest, "MeshDevice created successfully with shape: {}", mesh_device_->shape());
 }
 
@@ -224,10 +219,10 @@ void MeshSocketTestRunner::setup_fabric_configuration() {
         case tt::tt_fabric::Topology::Mesh:
             switch (config_.fabric_config.routing_type) {
                 case RoutingType::Dynamic: fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC; break;
-                default: throw std::runtime_error("Unsupported fabric routing type, must be Dynamic");
+                default: TT_THROW("Unsupported fabric routing type, must be Dynamic");
             }
             break;
-        default: throw std::runtime_error("Unsupported fabric topology, must be Mesh");
+        default: TT_THROW("Unsupported fabric topology, must be Mesh");
     }
 
     // Set the fabric configuration
@@ -238,8 +233,7 @@ void MeshSocketTestRunner::expand_test_configurations() {
     log_info(tt::LogTest, "Expanding test configurations...");
 
     // Use the parser's expand_test_configs method, passing the test runner
-    MeshSocketYamlParser parser;
-    expanded_tests_ = parser.expand_test_configs(config_.tests, *this);
+    expanded_tests_ = MeshSocketYamlParser::expand_test_configs(config_.tests, *this);
 
     log_info(
         tt::LogTest, "Expanded {} tests into {} test configurations", config_.tests.size(), expanded_tests_.size());
