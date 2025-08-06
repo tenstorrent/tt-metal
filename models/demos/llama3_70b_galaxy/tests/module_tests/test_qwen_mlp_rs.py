@@ -21,17 +21,17 @@ def test_qwen_mlp_rs(mesh_device):
     global_semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3)]
     # global_semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0)]
 
-    # persistent_interim_buffers = (
-    #     # 512 = 4 devices * 4 pages per packet * 32 tile_width
-    #     ttnn.from_torch(
-    #         torch.zeros((*(8, 4), 32, 512 * model_config["REDUCE_SCATTER_INTERIM_MEMCFG"].shard_spec.num_cores())),
-    #         device=mesh_device,
-    #         layout=ttnn.TILE_LAYOUT,
-    #         dtype=ttnn.bfloat8_b,
-    #         memory_config=model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
-    #         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
-    #     )
-    # )
+    persistent_interim_buffers = (
+        # 512 = 4 devices * 4 pages per packet * 32 tile_width
+        ttnn.from_torch(  # We need to be able to fit 2*3840 into the second dimension
+            torch.zeros((*(8, 4), 32, 512 * model_config["REDUCE_SCATTER_INTERIM_MEMCFG"].shard_spec.num_cores())),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
+        )
+    )
     persistent_output_buffers = ttnn.from_torch(
         torch.zeros((*(8, 4), 32, 32 * model_config["REDUCE_SCATTER_OUT_MEMCFG"].shard_spec.num_cores())),
         device=mesh_device,
@@ -40,6 +40,8 @@ def test_qwen_mlp_rs(mesh_device):
         memory_config=model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
     )
+
+    breakpoint()
 
     w1_out = ttnn.from_torch(
         torch.randn(
@@ -53,17 +55,19 @@ def test_qwen_mlp_rs(mesh_device):
 
     logger.info(f"Starting RS")
 
+    # w1_out = ttnn.to_memory_config(w1_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     w1_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
         input_tensor=w1_out,  # [1, 1, 32, 3840]
-        persistent_output_buffers=[persistent_output_buffers],
+        persistent_output_buffers=[persistent_interim_buffers, persistent_output_buffers],
         dim=3,
         multi_device_global_semaphore=global_semaphores,
-        num_links=3,
+        num_links=1,
         memory_config=model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         topology=model_config["CCL_TOPOLOGY"],
-        # subdevice_id=worker_sub_device_id,
         cluster_axis=1,
     )
+
+    # w1_out_reduced = ttnn.to_memory_config(w1_out_reduced, memory_config=model_config["REDUCE_SCATTER_OUT_MEMCFG"])
 
     logger.info(f"w1_out_reduced: {w1_out_reduced}")
     breakpoint()

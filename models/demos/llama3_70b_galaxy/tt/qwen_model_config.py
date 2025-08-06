@@ -1291,6 +1291,8 @@ class TtQwenModelArgs(TtModelArgs):
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
                     ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 6), ttnn.CoreCoord(2, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),
                 ]
             )
             self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
