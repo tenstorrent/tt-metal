@@ -2,15 +2,20 @@
  * main.cpp
  * tt-telemetry main server app.
  * 
- * TODO
- * ----
- * - Add the logic that test_system_health.cpp uses to determine number of connections and write
- *   a loop that iterates them all and prints health.
- * - cluster.get_ethernet_connections() <-- Does this return chips on other hosts in a cluster?
- *   What about the remote side of each connection? Need to test on a multi-host system.
- * - Need to handle other cluster types (including N300, etc., which have most of their Ethernet
- *   cores unused), ensuring we don't mark legitimately unused connections as "down".
- * - Simple REST exporter and web GUI.  
+ * Notes
+ * -----
+ * - Ethernet connections returned by tt::Cluster::get_ethernet_connections() are discovered in
+ *   TopologyDiscovery::discover_remote_chips() in topology_discovery.cpp. This function seems to
+ *   exclude connections that are not active. So if a link is inactive at the time topology 
+ *   discovery runs, it will never be known. test_system_health.cpp checks that an expected number
+ *   of active connections per chip are present (without identifying their specific channel). We
+ *   will eventually have to use a system descriptor file to discover required connections rather
+ *   than just calling get_ethernet_connections(). ScaleoutTopologyManager at this time is
+ *   proposing a cabling spec, which should make it possible to construct a set of intended
+ *   external connections. Internal (chip to chip) connections should be possible to infer from the
+ *   system type and number of chips found on the host.
+ * - For now, lacking a mechanism to obtain a list of desired connections, we simply report on the
+ *   discovered ones to proceed with a telemtry PoC. Eventually, this must be fixed.
  */
 
 #include <algorithm>
