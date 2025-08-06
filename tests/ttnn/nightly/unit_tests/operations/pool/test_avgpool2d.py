@@ -95,6 +95,7 @@ def run_avg_pool2d(
     run_twice=False,
     dtype=ttnn.bfloat16,
     nightly_skips=True,
+    test_even_if_trivial=False,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -116,15 +117,18 @@ def run_avg_pool2d(
     else:
         raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
 
-    # skips to avoid unimportant combinations
-    if divisor_override is not None:
-        if count_include_pad or ceil_mode:
-            pytest.skip("divisor_override paired with count_include_pad or ceil_mode is trivial and not useful to test")
-    # if count_include_pad and padding == (0, 0):
-    #     pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
-    if ceil_mode:
-        if stride == (1, 1):
-            pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
+    if not test_even_if_trivial:
+        # skips to avoid unimportant combinations
+        if divisor_override is not None:
+            if count_include_pad or ceil_mode:
+                pytest.skip(
+                    "divisor_override paired with count_include_pad or ceil_mode is trivial and not useful to test"
+                )
+        if count_include_pad and padding == (0, 0):
+            pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
+        if ceil_mode:
+            if stride == (1, 1):
+                pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
 
     # skips to speed up nightly test
     if nightly_skips:
