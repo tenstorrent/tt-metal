@@ -11,16 +11,16 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t num_writes = get_compile_time_arg_val(1);
-    constexpr uint32_t padding_val_packed = get_compile_time_arg_val(2);
-    constexpr uint32_t needs_padding = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t swap_hw = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t H = get_compile_time_arg_val(5);
-    constexpr uint32_t W = get_compile_time_arg_val(6);
-    constexpr uint32_t accumulated_outer_dims = get_compile_time_arg_val(7);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(8);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(9);
+    constexpr uint32_t num_writes = get_compile_time_arg_val(0);
+    constexpr uint32_t padding_val_packed = get_compile_time_arg_val(1);
+    constexpr uint32_t needs_padding = get_compile_time_arg_val(2) == 1;
+    constexpr uint32_t swap_hw = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t H = get_compile_time_arg_val(4);
+    constexpr uint32_t W = get_compile_time_arg_val(5);
+    constexpr uint32_t accumulated_outer_dims = get_compile_time_arg_val(6);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(7);
+    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(8);
+    constexpr auto src_args = TensorAccessorArgs<9>();
 
     constexpr uint32_t H_p = tt::data_movement::common::round_up<H, TILE_HEIGHT>();
     constexpr uint32_t W_p = tt::data_movement::common::round_up<W, TILE_WIDTH>();
@@ -35,10 +35,7 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat data_format = get_dataformat(cb_id_in0);
-
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
