@@ -301,6 +301,11 @@ auto make_tensor_accessor_tuple(
         std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
 
+/**
+ * @brief AbstractTensorAccessorWrapper provides a unified interface over templated tensor accessors.
+ *
+ * The wrapper allows to use and iterate over different kinds of tensor accessors in a unified way.
+ */
 class AbstractTensorAccessorWrapper {
 public:
     AbstractTensorAccessorWrapper() = default;
@@ -330,6 +335,8 @@ auto make_abstract_tensor_accessor_wrappers(
 }
 }  // namespace tensor_accessor::detail
 
+// Wraps a tuple of templated tensor accessors into an array of AbstractTensorAccessorWrapper,
+// allowing for easy iteration and runtime dispatch.
 template <typename... Accessors>
 auto make_abstract_tensor_accessor_wrappers(const std::tuple<Accessors...>& accessors) {
     return tensor_accessor::detail::make_abstract_tensor_accessor_wrappers(
