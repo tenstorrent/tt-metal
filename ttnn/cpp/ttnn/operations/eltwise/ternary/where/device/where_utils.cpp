@@ -71,8 +71,9 @@ std::string get_kernel_file_path(KernelName kernel_name) {
             return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
                    "writer_unary_interleaved_start_id.cpp";
         case KernelName::WriterColBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
-                   "ternary_writer_no_bcast_ttt.cpp";
+            // Use unary writer (simple and works with 3 args: dst_addr, num_tiles, start_id)
+            return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                   "writer_unary_interleaved_start_id.cpp";
 
         case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "where_sfpu_no_bcast_ttt.cpp");
         case KernelName::ComputeNoBcastTST: return fmt::format(compute, root, "where_sfpu_no_bcast_tst.cpp");
