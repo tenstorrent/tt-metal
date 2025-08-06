@@ -179,7 +179,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 }
 
 operation::ProgramWithCallbacks reshard_multi_core_generic(const std::vector<Tensor>& inputs, Tensor& output) {
-    auto input = inputs.at(0);
+    const auto& input = inputs.at(0);
     auto device = input.device();
 
     tt::tt_metal::Program program{};
@@ -274,8 +274,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const std::vector<Ten
     CBHandle cb_rt_args_0 = 0;
     CBHandle cb_rt_args_1 = 0;
     if (rt_gt_256) {
-        auto device_runtime_args_0 = inputs.at(1);
-        auto device_runtime_args_1 = inputs.at(2);
+        const auto& device_runtime_args_0 = inputs.at(1);
+        const auto& device_runtime_args_1 = inputs.at(2);
         constexpr uint32_t rt_args_cb_index_0 = 17;
         constexpr uint32_t rt_args_cb_index_1 = 18;
 
@@ -501,7 +501,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
 }
 
 operation::ProgramWithCallbacks reshard_multi_core(const std::vector<Tensor>& inputs, Tensor& output) {
-    auto input = inputs.at(0);
+    const auto& input = inputs.at(0);
     if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
         output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         if (output.memory_config().buffer_type() == BufferType::L1) {
