@@ -629,7 +629,6 @@ operation::ProgramWithCallbacks joint_sdpa(
 
             auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
             auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-            auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
 
             for (uint32_t i = 0; i < num_cores; ++i) {
                 CoreCoord core = {i % grid_size.x, i / grid_size.x};

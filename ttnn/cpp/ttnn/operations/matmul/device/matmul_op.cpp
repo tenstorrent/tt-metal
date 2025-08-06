@@ -1944,10 +1944,6 @@ void Matmul::validate(
                         TT_FATAL(
                             this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                             "Error: Output memory layout must be HEIGHT_SHARDED.");
-                        uint32_t M = (program_config.fuse_batch
-                                          ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
-                                          : input_tensor_a.padded_shape()[-2]) /
-                                     in0_tile_shape[0];
                         uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                         uint32_t per_core_N = program_config.per_core_N;
 

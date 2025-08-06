@@ -205,7 +205,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
     segregated_list.erase(it);
 
     size_t offset = start_address - block_address_[target_block_index];
-    size_t alloc_block_index = allocate_in_block(target_block_index, alloc_size, offset);
+    allocate_in_block(target_block_index, alloc_size, offset);
     update_lowest_occupied_address(start_address);
     return absolute_start_address;
 }

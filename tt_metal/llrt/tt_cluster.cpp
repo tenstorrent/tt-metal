@@ -1036,7 +1036,7 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
     std::unordered_set<chip_id_t> device_ids;
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
-        for (const auto &eth_core : eth_cores) {
+        for ([[maybe_unused]] const auto& eth_core : eth_cores) {
             device_ids.insert(other_chip_id);
         }
     }

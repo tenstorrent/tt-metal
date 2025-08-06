@@ -214,7 +214,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             (uint32_t) 0,
             (uint32_t) num_output_tiles});
 
-        CoreCoord debug_core = {1, 1};
+        [[maybe_unused]] CoreCoord debug_core = {1, 1};
 
         tt_metal::detail::LaunchProgram(device, program);
 

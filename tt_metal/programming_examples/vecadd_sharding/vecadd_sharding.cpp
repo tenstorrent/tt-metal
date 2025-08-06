@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
     size_t print_per_core = std::min((size_t)10, element_per_core);
 
     int core_idx = 0;
-    for (auto& core : cores) {
+    for ([[maybe_unused]] auto& core : cores) {
         const auto core_offset = core_idx * element_per_core;
         fmt::print("Core {}:\n", core_idx);
         for (int index = 0; index < print_per_core; index++) {

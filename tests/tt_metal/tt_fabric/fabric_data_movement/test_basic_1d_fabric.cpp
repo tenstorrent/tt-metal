@@ -1579,8 +1579,6 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     log_debug(tt::LogTest, "Control plane found");
 
-    std::pair<MeshId, chip_id_t> src_mesh_chip_id;
-    std::pair<MeshId, chip_id_t> dst_mesh_chip_id;
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     std::optional<MeshId> mesh_id;
