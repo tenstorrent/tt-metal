@@ -59,21 +59,6 @@ permissions:
   packages: write
 
 jobs:
-  debug-concurrency:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Debug
-        run: |
-          echo "github.ref_protected: ${{ github.ref_protected }}"
-          echo "github.run_id: ${{ github.run_id }}"
-          echo "github.event.pull_request.number: ${{ github.event.pull_request.number }}"
-          echo "github.event.merge_group.head_ref: ${{ github.event.merge_group.head_ref }}"
-          echo "github.ref: ${{ github.ref }}"
-          echo "inputs.build-type: ${{ inputs.build-type }}"
-          echo "github.workflow: ${{ github.workflow }}"
-          echo "github.event_name: ${{ github.event_name }}"
-          # echo "github context: ${{ toJSON(github) }}"
-
   asan-build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-artifact.yaml
