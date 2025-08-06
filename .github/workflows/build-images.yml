@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 200
 
       - name: Log in to Docker registry
         uses: docker/login-action@v3

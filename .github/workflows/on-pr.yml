@@ -44,7 +44,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history so 'origin/main' is available
+          fetch-depth: 200
 
       - name: Detect which directories changed
         uses: dorny/paths-filter@v3
