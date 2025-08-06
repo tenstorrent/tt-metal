@@ -585,9 +585,9 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
         cb_ids[input_id] = input_id;
     }
 
-    bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {num_input_tensors};
-    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, std::uint32_t(dst_is_dram)};
+    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -751,7 +751,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     uint32_t num_dims = output.padded_shape().rank();
 
     std::vector<uint32_t> src_addr(num_input_tensors);
-    std::vector<bool> is_dram(num_input_tensors);
     std::vector<uint32_t> num_pages_per_block(num_input_tensors);
     std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
     // Only used for RM
@@ -790,7 +789,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
-            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM;
             page_size_per_tensor[i] = buffer->page_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
@@ -807,7 +805,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
-            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM;
             uint32_t dim_pages = input_tensors[i].padded_shape()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
@@ -815,7 +812,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     }
     std::vector<uint32_t> common_reader_kernel_args = {0, 0, 0};
     common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.begin(), src_addr.end());
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), is_dram.begin(), is_dram.end());
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_pages_per_block.begin(), num_pages_per_block.end());
     if (rm_layout) {
@@ -825,12 +821,14 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)num_input_tensors,
     };
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        TensorAccessorArgs(*input_tensors[i].buffer()).append_to(reader_compile_time_args);
+    }
 
     std::map<std::string, std::string> concat_defines;
 
@@ -841,11 +839,10 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     std::vector<uint32_t> writer_compile_time_args;
     if (rm_layout) {
         writer_compile_time_args = {(std::uint32_t)src0_cb_index, dst_buffer->page_size()};
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     } else {
         writer_compile_time_args = {(std::uint32_t)src0_cb_index};
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     }
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(

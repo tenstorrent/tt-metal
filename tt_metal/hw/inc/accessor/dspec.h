@@ -321,7 +321,7 @@ private:
  * bank coordinates if needed, and passes to DSpec constructor.
  */
 template <typename Args>
-auto make_dspec_from_args(const Args& args) {
+constexpr auto make_dspec_from_args(const Args& args) {
     // Dispatch to the appropriate ShapeWrapper and BankCoordsWrapper types based on the "staticness"
     using TensorShapeType =
         typename ArrayWrapperTypeSelectorU32<!Args::tensor_shape_is_crta, Args::TensorShapeCTAOffset, Args::RankCT>::

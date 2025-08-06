@@ -14,6 +14,10 @@
 #include "dataflow_api_addrgen.h"
 #endif
 
+// Forward declared from dataflow_api.h
+template <typename T>
+T get_arg_val(int arg_idx);
+
 namespace tensor_accessor {
 // This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
 //      Adds proper xy coordinates for NOC address
@@ -271,3 +275,96 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
     -> TensorAccessor<decltype(tensor_accessor::make_dspec_from_args(args))>;
+
+namespace tensor_accessor::detail {
+template <typename... Args, uint32_t... Indexes>
+auto make_tensor_accessor_tuple(
+    const std::tuple<Args...>& args,
+    uint32_t page_size,
+    uint32_t address_arg_index_start,
+    uint32_t address_arg_index_stride,
+    std::integer_sequence<uint32_t, Indexes...>) {
+    return std::make_tuple(TensorAccessor(
+        std::get<Indexes>(args),
+        get_arg_val<uint32_t>(address_arg_index_start + Indexes * address_arg_index_stride),
+        page_size)...);
+}
+template <typename... Args, uint32_t... Indexes>
+auto make_tensor_accessor_tuple(
+    const std::tuple<Args...>& args,
+    uint32_t page_size_index_start,
+    uint32_t page_size_index_stride,
+    uint32_t address_arg_index_start,
+    uint32_t address_arg_index_stride,
+    std::integer_sequence<uint32_t, Indexes...>) {
+    return std::make_tuple(TensorAccessor(
+        std::get<Indexes>(args),
+        get_arg_val<uint32_t>(address_arg_index_start + Indexes * address_arg_index_stride),
+        get_arg_val<uint32_t>(page_size_index_start + Indexes * page_size_index_stride))...);
+}
+}  // namespace tensor_accessor::detail
+
+template <typename... Args>
+auto make_tensor_accessor_tuple(
+    const std::tuple<Args...>& args,
+    uint32_t page_size,
+    uint32_t address_arg_index_start,
+    uint32_t address_arg_index_stride) {
+    return tensor_accessor::detail::make_tensor_accessor_tuple(
+        args,
+        page_size,
+        address_arg_index_start,
+        address_arg_index_stride,
+        std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+}
+
+template <typename... Args>
+auto make_tensor_accessor_tuple(
+    const std::tuple<Args...>& args,
+    uint32_t page_size_index_start,
+    uint32_t page_size_index_stride,
+    uint32_t address_arg_index_start,
+    uint32_t address_arg_index_stride) {
+    return tensor_accessor::detail::make_tensor_accessor_tuple(
+        args,
+        page_size_index_start,
+        page_size_index_stride,
+        address_arg_index_start,
+        address_arg_index_stride,
+        std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+}
+
+class AbstractTensorAccessor {
+public:
+    AbstractTensorAccessor() = default;
+
+    template <typename Accessor>
+    AbstractTensorAccessor(const Accessor& accessor) : accessor_ptr(&accessor) {
+        get_addr_fn = [](const void* accessor, uint32_t page_idx) {
+            return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx);
+        };
+    }
+
+    uint64_t get_addr(uint32_t page_idx) const { return get_addr_fn(accessor_ptr, page_idx); }
+
+private:
+    using AddressGeneratorFn = uint64_t (*)(const void*, uint32_t);
+
+    const void* accessor_ptr = nullptr;
+    AddressGeneratorFn get_addr_fn = nullptr;
+};
+
+namespace tensor_accessor::detail {
+template <typename... Accessors, uint32_t... Indexes>
+auto make_abstract_tensor_accessors(
+    const std::tuple<Accessors...>& accessors, std::integer_sequence<uint32_t, Indexes...>)
+    -> std::array<AbstractTensorAccessor, sizeof...(Accessors)> {
+    return {AbstractTensorAccessor(std::get<Indexes>(accessors))...};
+}
+}  // namespace tensor_accessor::detail
+
+template <typename... Accessors>
+auto make_abstract_tensor_accessors(const std::tuple<Accessors...>& accessors) {
+    return tensor_accessor::detail::make_abstract_tensor_accessors(
+        accessors, std::make_integer_sequence<uint32_t, sizeof...(Accessors)>());
+}
