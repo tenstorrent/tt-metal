@@ -9,22 +9,17 @@
 void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
 
-    const uint32_t total_num_rows = get_compile_time_arg_val(3);
-    const uint32_t ncores = get_compile_time_arg_val(4);
-    const uint32_t third_dim = get_compile_time_arg_val(5);
-    const uint32_t tile_width = get_compile_time_arg_val(6);
+    constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);
+    constexpr uint32_t ncores = get_compile_time_arg_val(1);
+    constexpr uint32_t third_dim = get_compile_time_arg_val(2);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(3);
+    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(4);
+    constexpr auto dst_args = TensorAccessorArgs<5>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t unpadded_X_size = get_arg_val<uint32_t>(1);
-    const uint32_t core_number = get_arg_val<uint32_t>(2);
+    const uint32_t core_number = get_arg_val<uint32_t>(1);
 
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(0) == 1;
-
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-
-    const auto s =
-        get_interleaved_addr_gen<dst0_is_dram, stick_size_is_pow2>(dst_addr, unpadded_X_size, log_base_2_of_page_size);
+    const auto s = TensorAccessor(dst_args, dst_addr, unpadded_X_size);
 
     auto write_block = [&](uint32_t num_rows,
                            uint32_t mul,
