@@ -30,6 +30,8 @@ jobs:
           { name: "Galaxy Llama3 frequent tests", arch: wormhole_b0, model: llama3, timeout: 90, owner_id: U053W15B6JF}, # Djordje Ivanovic
           { name: "Galaxy resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90, owner_id: U052J2QDDKQ}, # Pavle Josipovic
           { name: "Galaxy unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90, owner_id: UBHPP2NDP}, # Joseph Chu
+          { name: "Galaxy SD3.5 frequent tests", arch: wormhole_b0, model: sd35, timeout: 90, owner_id: U03FJB5TM5Y}, # Colman Glagovich
+
         ]
     runs-on:
       - arch-wormhole_b0
