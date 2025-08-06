@@ -503,7 +503,6 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     const tt::tt_metal::DataType output_dtype) {
     const auto& ashape = input_tensor_a.padded_shape();
     const auto& bshape = input_tensor_b.padded_shape();
-    uint32_t batch_size_a = get_batch_size(ashape);
 
     auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
@@ -2614,7 +2613,6 @@ void SparseMatmul::validate(
     auto in1_tile = input_tensor_b.tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();
     auto in1_tile_shape = in1_tile.get_tile_shape();
-    auto output_tile = this->output_tile.value();
 
     TT_FATAL(
         ashape[-1] == bshape[-2],

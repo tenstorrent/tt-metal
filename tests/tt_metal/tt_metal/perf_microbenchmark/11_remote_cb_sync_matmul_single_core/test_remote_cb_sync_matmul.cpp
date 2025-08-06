@@ -700,8 +700,6 @@ int main(int argc, char** argv) {
         uint32_t mt = m / 32;
         uint32_t kt = k / 32;
         uint32_t nt = n / 32;
-        uint32_t block_ht = kt / num_blocks;
-        uint32_t block_wt = nt;
 
         uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
 

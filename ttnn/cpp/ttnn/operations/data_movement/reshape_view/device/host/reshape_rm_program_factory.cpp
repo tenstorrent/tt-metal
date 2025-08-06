@@ -81,8 +81,6 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
         tt::tt_metal::CircularBufferConfig(cb_size1, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, cb_size1);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-    bool source_page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(source_page_size_bytes);
-    bool dest_page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(dest_page_size_bytes);
     std::vector<uint32_t> compile_time_args = {
         (std::uint32_t)(source_page_size_bytes % 64 == 0) ? 1 : 0,
         (std::uint32_t)(source_page_size_bytes % 16 == 0) ? 1 : 0,

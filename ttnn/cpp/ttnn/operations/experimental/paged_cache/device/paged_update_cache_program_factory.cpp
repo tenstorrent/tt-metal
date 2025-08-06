@@ -163,7 +163,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
         create_cb(cb_pagetable_id, program, all_cores, page_table_stick_size, 1, page_table_data_format);
     }
 
-    auto src_buffer = input_tensor.buffer();
     auto dst_buffer = cache_tensor.buffer();
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;

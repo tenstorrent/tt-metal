@@ -53,8 +53,6 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
             .set_page_size(batch_cb_index, batch_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, batch_cb_config);
 
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
-
     // Create Kernels
     // reader
     std::vector<uint32_t> reader_compile_time_args = {

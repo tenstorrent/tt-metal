@@ -629,8 +629,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     // tensor shape
     const auto shard_orient = input_tensor.shard_spec().value().orientation;
     const auto& shape = input_tensor.padded_shape();
-    uint32_t M = shape[2] * shape[0];
-    uint32_t K = shape[3] * shape[1];
     uint32_t num_cores_per_batch = (shape[1] * shape[2] * shape[3]) / (input_tensor.shard_spec().value().shape[0] *
                                                                        input_tensor.shard_spec().value().shape[1]);
 

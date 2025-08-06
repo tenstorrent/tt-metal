@@ -1931,7 +1931,7 @@ void configure_for_single_chip(
     const uint32_t prefetch_d_upstream_cb_sem = prefetch_d_core_sem_1_id;
     const uint32_t prefetch_d_downstream_cb_sem = prefetch_d_core_sem_2_id;
 
-    const uint32_t dispatch_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+    tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
 
     const uint32_t dispatch_core_sem_1_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);  // 1
     const uint32_t dispatch_cb_sem = dispatch_core_sem_1_id;

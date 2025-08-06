@@ -218,7 +218,6 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         create_cb(cb_pagetable_id, program, all_cores_bb, page_table_stick_size, 1, page_table_data_format);
     }
 
-    auto src1_buffer = input_tensor1.buffer();
     auto dst1_buffer = cache_tensor1.buffer();
 
     auto dst2_buffer = cache_tensor2.buffer();
@@ -680,7 +679,6 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         create_cb(cb_pagetable_id, program, all_cores_bb, page_table_stick_size, 1, page_table_data_format);
     }
 
-    const auto src1_buffer = input_tensor1.buffer();
     const auto dst1_buffer = cache_tensor1.buffer();
 
     const auto dst2_buffer = cache_tensor2.buffer();
