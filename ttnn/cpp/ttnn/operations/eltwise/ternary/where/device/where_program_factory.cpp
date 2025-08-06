@@ -427,7 +427,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_false_tensor_cb = cb;
         value_false_tensor_cb_handle = cb_handle;
     } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // TTT with column broadcast: binary_ng style - only create CB for value_true (ignore value_false for mul test)
+        // TTT with column broadcast: create CBs for both value_true and value_false
         auto [cb1, cb1_handle] = create_cb(
             tt::CBIndex::c_1,
             program,
@@ -438,7 +438,16 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_true_tensor_cb = cb1;
         value_true_tensor_cb_handle = cb1_handle;
 
-        // For multiplication test, we don't need value_false CB
+        // Create CB for value_false (use same tensor as value_true for now)
+        auto [cb2, cb2_handle] = create_cb(
+            tt::CBIndex::c_2,
+            program,
+            all_device_cores,
+            value_true_single_tile_size,
+            num_tiles_per_cb,
+            value_true_data_format);
+        value_false_tensor_cb = cb2;
+        value_false_tensor_cb_handle = cb2_handle;
     } else {
         // TTT: c_1 = value_true tensor, c_2 = value_false tensor
         auto [cb1, cb1_handle] = create_cb(
@@ -462,10 +471,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_false_tensor_cb_handle = cb2_handle;
     }
 
-    // Output buffer - use c_2 for binary_ng compatibility (TTT col bcast), c_3 for other cases
-    auto output_cb_index = (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST)
-                               ? tt::CBIndex::c_2
-                               : tt::CBIndex::c_3;
+    // Output buffer - use c_3 for all cases now
+    auto output_cb_index = tt::CBIndex::c_3;
     auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
         output_cb_index,
         program,
@@ -513,6 +520,16 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
 
+    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+        // TTT with column broadcast: pass all 3 CB handles like regular TTT case
+        reader_config = tt_metal::ReaderDataMovementConfig(
+            {predicate_is_dram,
+             predicate_tensor_cb,
+             value_true_is_dram,
+             value_true_tensor_cb,
+             value_true_is_dram,  // Use same DRAM flag for false_cb since it's the same tensor
+             value_false_tensor_cb},
+            reader_defines);
     } else {
         // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
         std::vector<uint32_t> reader_compile_time_args = {

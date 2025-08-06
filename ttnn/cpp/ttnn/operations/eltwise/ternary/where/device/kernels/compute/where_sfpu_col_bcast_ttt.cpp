@@ -4,20 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/binary_bitwise_sfpu.h"
-#include "compute_kernel_api/binary_shift.h"
-#include "compute_kernel_api/add_int_sfpu.h"
-#include "compute_kernel_api/sub_int_sfpu.h"
-#include "compute_kernel_api/mul_int_sfpu.h"
-#include "compute_kernel_api/mul_int32_sfpu.h"
-#include "compute_kernel_api/quantization.h"
-#include "compute_kernel_api/binary_max_min.h"
-#include "compute_kernel_api/gcd.h"
-#include "compute_kernel_api/lcm.h"
 #include "compute_kernel_api/eltwise_unary/where.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
@@ -25,10 +12,9 @@
 namespace NAMESPACE {
 
 ALWI void process_tile(
-    tt::CBIndex cb_pre_lhs,
-    tt::CBIndex cb_post_lhs,
-    tt::CBIndex cb_pre_rhs,
-    tt::CBIndex cb_post_rhs,
+    tt::CBIndex predicate_cb,
+    tt::CBIndex true_cb,
+    tt::CBIndex false_cb,
     tt::CBIndex cb_out,
     uint32_t freq,
     uint32_t tile_start,
@@ -36,53 +22,57 @@ ALWI void process_tile(
     using namespace ckernel;
 
 #if BCAST_INPUT
-#define CB_PRE_BCAST cb_pre_rhs
-#define CB_POST_BCAST cb_post_rhs
-#define CB_PRE_OTHER cb_pre_lhs
-#define CB_POST_OTHER cb_post_lhs
+#define CB_BCAST true_cb
+#define CB_OTHER predicate_cb
 #else
-#define CB_PRE_BCAST cb_pre_lhs
-#define CB_POST_BCAST cb_post_lhs
-#define CB_PRE_OTHER cb_pre_rhs
-#define CB_POST_OTHER cb_post_rhs
+#define CB_BCAST predicate_cb
+#define CB_OTHER true_cb
 #endif
 
-    PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, num_tiles_per_cycle);
-    cb_wait_front(CB_POST_BCAST, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, CB_BCAST, CB_BCAST, cb_out, num_tiles_per_cycle);
+    cb_wait_front(CB_BCAST, num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        PREPROCESS(OTHER_OP, CB_PRE_OTHER, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
-        cb_wait_front(CB_POST_OTHER, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, CB_OTHER, CB_OTHER, cb_out, num_tiles_per_cycle);
+        cb_wait_front(CB_OTHER, num_tiles_per_cycle);
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
-        BINARY_SFPU_INIT
-#endif
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
+
+        // Copy all 3 inputs to destination registers
+        copy_tile_to_dst_init_short(predicate_cb);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_lhs, i, i * 2);
+            copy_tile(predicate_cb, i, i * 3);  // predicate to reg 0, 3, 6, ...
         }
-        copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
+
+        copy_tile_to_dst_init_short(true_cb);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_rhs, i, i * 2 + 1);
-            where_fp32_tile(cb_post_lhs, cb_post_rhs, cb_post_rhs);
-            // BINARY_SFPU_OP(i * 2, i * 2 + 1);
-            PROCESS_POST_ACTIVATIONS(i * 2);
+            copy_tile(true_cb, i, i * 3 + 1);  // true to reg 1, 4, 7, ...
+        }
+
+        copy_tile_to_dst_init_short(false_cb);
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            copy_tile(false_cb, i, i * 3 + 2);  // false to reg 2, 5, 8, ...
+        }
+
+        // Perform the where operation
+        where_tile_init();
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            WHERE_LLK(i * 3, i * 3 + 1, i * 3 + 2);  // where(predicate, true, false)
         }
         tile_regs_commit();
 
         tile_regs_wait();
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 2, cb_out);
+            pack_tile(i * 3, cb_out);  // result is stored in predicate register
         }
         tile_regs_release();
 
         cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
+        cb_pop_front(CB_OTHER, num_tiles_per_cycle);
     }
-    cb_pop_front(CB_POST_BCAST, num_tiles_per_cycle);
+    cb_pop_front(CB_BCAST, num_tiles_per_cycle);
 }
 
 void MAIN {
@@ -96,40 +86,22 @@ void MAIN {
         return;
     }
 
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto predicate_cb = tt::CBIndex::c_0;
+    constexpr auto true_cb = tt::CBIndex::c_1;
+    constexpr auto false_cb = tt::CBIndex::c_2;
+    constexpr auto cb_out = tt::CBIndex::c_3;
 
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
-
-    unary_op_init_common(cb_post_lhs, cb_out);
-#ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
-#endif
-
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
-    // BINARY_SFPU_INIT
-#endif
+    unary_op_init_common(predicate_cb, cb_out);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
-            cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
+        process_tile(predicate_cb, true_cb, false_cb, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
-            cb_pre_lhs,
-            cb_post_lhs,
-            cb_pre_rhs,
-            cb_post_rhs,
-            cb_out,
-            remaining_iterations,
-            tile_start,
-            num_tiles_per_cycle);
+        process_tile(predicate_cb, true_cb, false_cb, cb_out, remaining_iterations, tile_start, num_tiles_per_cycle);
     }
 }
 }  // namespace NAMESPACE
