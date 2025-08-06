@@ -68,4 +68,5 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         divisor_override=None,
         count_include_pad=count_include_pad,
         shard_scheme=None,
+        test_even_if_trivial=True,
     )
