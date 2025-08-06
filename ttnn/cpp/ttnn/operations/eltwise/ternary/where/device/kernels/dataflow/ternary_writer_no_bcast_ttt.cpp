@@ -37,7 +37,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_id_dst = tt::CBIndex::c_2;
+    constexpr auto cb_id_dst = tt::CBIndex::c_3;
 #if !DST_SHARDED
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
