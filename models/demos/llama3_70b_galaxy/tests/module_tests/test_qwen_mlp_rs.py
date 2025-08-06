@@ -65,6 +65,8 @@ def test_qwen_mlp_rs(mesh_device):
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
     )
 
+    breakpoint()
+
     w1_out = ttnn.from_torch(
         torch.randn(
             (1, 1, 32, 3200),
