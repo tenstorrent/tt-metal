@@ -285,6 +285,14 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
+      - name: yolov5x tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "yolov5x"
+          commands: |
+            pytest models/experimental/yolov5x/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: Merge test reports
         id: generate-device-perf-report
