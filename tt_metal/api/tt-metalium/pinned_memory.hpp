@@ -7,19 +7,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <unordered_map>
 #include <vector>
-
-
 
 namespace tt::umd {
 class SysmemBuffer;
-class SysmemManager;
 }
 
 namespace tt::tt_metal {
 
 class IDevice;
+class PinnedMemoryImpl;
 
 namespace distributed {
 class MeshDevice;
@@ -35,52 +32,37 @@ using chip_id_t = int;
  * mapping, and access to pinned system memory that can be accessed by the devices.
  */
 class PinnedMemory {
-    // MeshDevice is responsible for creating PinnedMemory instances
-    friend class distributed::MeshDevice;
-
 public:
     ~PinnedMemory();
 
-    // Delete copy constructor and assignment operator
-    PinnedMemory(const PinnedMemory&) = delete;
-    PinnedMemory& operator=(const PinnedMemory&) = delete;
-
-    // Move constructor and assignment operator
+    // Move semantics
     PinnedMemory(PinnedMemory&& other) noexcept;
     PinnedMemory& operator=(PinnedMemory&& other) noexcept;
 
-    /**
-     * @brief Get the SysmemBuffer for a specific device
-     * @param device_id The device ID to get the buffer for
-     * @return Reference to the SysmemBuffer for the device
-     */
-    tt::umd::SysmemBuffer& get_buffer(chip_id_t device_id);
+    // Delete copy semantics  
+    PinnedMemory(const PinnedMemory&) = delete;
+    PinnedMemory& operator=(const PinnedMemory&) = delete;
 
     /**
-     * @brief Get the SysmemBuffer for a specific device (const version)
+     * @brief Get the underlying SysmemBuffer for a specific device
      * @param device_id The device ID to get the buffer for
-     * @return Const reference to the SysmemBuffer for the device
+     * @return Reference to the SysmemBuffer
      */
+    tt::umd::SysmemBuffer& get_buffer(chip_id_t device_id);
     const tt::umd::SysmemBuffer& get_buffer(chip_id_t device_id) const;
 
     /**
      * @brief Get host pointer for a specific device's buffer
-     * @param device_id The device ID to get the pointer for
-     * @return Host pointer to the buffer for the device
+     * @param device_id The device ID to get the host pointer for
+     * @return Host pointer to the buffer
      */
     void* get_host_ptr(chip_id_t device_id);
-
-    /**
-     * @brief Get host pointer for a specific device's buffer (const version)
-     * @param device_id The device ID to get the pointer for
-     * @return Const host pointer to the buffer for the device
-     */
     const void* get_host_ptr(chip_id_t device_id) const;
 
     /**
      * @brief Get device address for a specific device's buffer
-     * @param device_id The device ID to get the address for
-     * @return Device address of the buffer for the device
+     * @param device_id The device ID to get the device address for
+     * @return Device address of the buffer
      */
     uint64_t get_device_addr(chip_id_t device_id) const;
 
@@ -88,13 +70,13 @@ public:
      * @brief Get the buffer size per device
      * @return Size of each device's buffer in bytes
      */
-    size_t get_buffer_size() const { return buffer_size_; }
+    size_t get_buffer_size() const;
 
     /**
      * @brief Get the number of devices this PinnedMemory manages
      * @return Number of devices
      */
-    size_t get_num_devices() const { return device_buffers_.size(); }
+    size_t get_num_devices() const;
 
     /**
      * @brief Get all device IDs managed by this PinnedMemory
@@ -128,6 +110,8 @@ public:
     void read_from_device(chip_id_t device_id, void* dest, size_t size, size_t offset = 0);
 
 private:
+    friend class distributed::MeshDevice;
+
     /**
      * @brief Construct PinnedMemory by mapping existing host memory to devices
      * @param devices Vector of devices to map buffers for
@@ -141,22 +125,7 @@ private:
         size_t buffer_size,
         bool map_to_noc = false);
 
-    void initialize_from_devices(
-        const std::vector<IDevice*>& devices,
-        void* host_buffer,
-        size_t buffer_size,
-        bool map_to_noc);
-
-    size_t buffer_size_;
-    bool map_to_noc_;
-    bool owns_host_memory_;
-    void* host_memory_base_;
-    
-    // Map from device ID to SysmemBuffer (keyed by MMIO device ID)
-    std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;
-    
-    // Map from logical device ID to its associated MMIO device ID
-    std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_map_;
+    std::unique_ptr<PinnedMemoryImpl> pImpl;
 };
 
 }  // namespace tt::tt_metal 
