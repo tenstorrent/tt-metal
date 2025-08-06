@@ -113,6 +113,10 @@ def run_max_pool(
     if ceil_mode:
         out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
         out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        if ((out_h - 1) * stride_h) >= (in_h + pad_t):
+            out_h -= 1
+        if ((out_w - 1) * stride_w) >= (in_w + pad_l):
+            out_w -= 1
     else:
         out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
         out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
