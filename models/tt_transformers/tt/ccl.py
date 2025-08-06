@@ -75,7 +75,10 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
+    is_galaxy=False,
 ):
+    rs_topology = ttnn.Topology.Linear if is_galaxy else topology
+
     # N150
     if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
@@ -113,7 +116,7 @@ def tt_all_reduce(
                 num_links=num_reduce_scatter_links,
                 memory_config=memory_config,
                 intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=topology,
+                topology=rs_topology,
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
@@ -205,7 +208,7 @@ def tt_all_reduce(
                 cluster_axis=cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
                 intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=topology,
+                topology=rs_topology,
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
