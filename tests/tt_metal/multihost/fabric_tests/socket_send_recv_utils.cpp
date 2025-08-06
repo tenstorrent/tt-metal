@@ -77,7 +77,7 @@ void test_socket_send_recv(
     if (distributed_context->rank() == sender_rank) {
         seed = std::chrono::steady_clock::now().time_since_epoch().count();
         if (sender_rank != recv_rank) {
-            log_info(tt::LogTest, "Sending seed to rank {}", recv_rank);
+            log_info(tt::LogTest, "Sending seed to rank {}", *recv_rank);
             distributed_context->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 recv_rank,                                    // send to receiver host
@@ -85,7 +85,7 @@ void test_socket_send_recv(
             );
         }
     } else if (distributed_context->rank() == recv_rank) {
-        log_info(tt::LogTest, "Receiving seed from rank {}", sender_rank);
+        log_info(tt::LogTest, "Receiving seed from rank {}", *sender_rank);
         distributed_context->recv(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
             sender_rank,                                  // recv from sender host

@@ -192,8 +192,8 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(
     // Get mesh graph from test runner
     const auto& mesh_graph = test_runner.get_mesh_graph();
 
-    // Create rank to mesh mapping using distributed allgather
-    auto rank_to_mesh_id = create_rank_to_mesh_mapping(test_runner);
+    // Get rank to mesh mapping from test runner
+    const auto& rank_to_mesh_id = test_runner.get_rank_to_mesh_mapping();
 
     // Use core coordinate from pattern configuration
     const CoreCoord& core_coord = pattern.core_coord;
@@ -257,40 +257,6 @@ std::vector<ParsedMemoryConfig> MeshSocketYamlParser::expand_memory_config(const
     }
 
     return expanded_configs;
-}
-
-std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketYamlParser::create_rank_to_mesh_mapping(
-    const MeshSocketTestRunner& test_runner) {
-    const auto& local_mesh_id = test_runner.get_local_mesh_id();
-
-    // Use distributed context allgather to share mesh_ids across ranks
-    // Since rank to mesh is 1-to-1, each rank sends its mesh_id and we receive all mesh_ids
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
-    auto world_size = *distributed_context.size();
-
-    // Send this rank's mesh_id
-    uint32_t local_mesh_id_val = *local_mesh_id;
-    std::vector<std::byte> send_buffer(sizeof(uint32_t));
-    std::memcpy(send_buffer.data(), &local_mesh_id_val, sizeof(uint32_t));
-
-    // Receive all ranks' mesh_ids
-    std::vector<std::byte> recv_buffer(sizeof(uint32_t) * world_size);
-    distributed_context.all_gather(tt::stl::Span<std::byte>(send_buffer), tt::stl::Span<std::byte>(recv_buffer));
-
-    // Build rank_to_mesh_id mapping (rank i has mesh_id at position i)
-    std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_id;
-    for (uint32_t rank = 0; rank < world_size; ++rank) {
-        uint32_t mesh_id_val;
-        std::memcpy(&mesh_id_val, recv_buffer.data() + rank * sizeof(uint32_t), sizeof(uint32_t));
-        rank_to_mesh_id[Rank{rank}] = tt::tt_fabric::MeshId{mesh_id_val};
-    }
-
-    // Log the mapping for debugging
-    for (const auto& [rank, mesh_id] : rank_to_mesh_id) {
-        log_info(tt::LogTest, "Rank {} is in mesh {}", *rank, *mesh_id);
-    }
-
-    return rank_to_mesh_id;
 }
 
 PhysicalMeshConfig MeshSocketYamlParser::parse_physical_mesh(const YAML::Node& node) {

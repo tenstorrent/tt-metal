@@ -91,6 +91,13 @@ public:
      */
     const tt::tt_fabric::MeshId& get_local_mesh_id() const;
 
+    /**
+     * @brief Get the rank to mesh mapping
+     *
+     * @return const std::unordered_map<Rank, tt::tt_fabric::MeshId>&
+     */
+    const std::unordered_map<Rank, tt::tt_fabric::MeshId>& get_rank_to_mesh_mapping() const;
+
 private:
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config);
 
@@ -175,11 +182,17 @@ private:
      */
     void log_test_execution(const ParsedTestConfig& test, size_t socket_index, size_t total_sockets) const;
 
+    /**
+     * @brief Create rank to mesh mapping using distributed allgather
+     *
+     * @return std::unordered_map<Rank, tt::tt_fabric::MeshId>
+     */
+    std::unordered_map<Rank, tt::tt_fabric::MeshId> create_rank_to_mesh_mapping();
+
     // Configuration and state
     MeshSocketTestConfiguration config_;
     std::vector<ParsedTestConfig> expanded_tests_;
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
-    bool is_initialized_;
     tt::tt_metal::distributed::multihost::Rank local_rank_;
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context_;
 
@@ -190,6 +203,7 @@ private:
     ControlPlane* control_plane_ptr_;
     MeshId local_mesh_id_;
     MeshShape mesh_shape_;
+    std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_mapping_;
 
     // Default test parameters
     static constexpr uint32_t DEFAULT_NUM_ITERATIONS = 1;

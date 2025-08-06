@@ -167,10 +167,6 @@ private:
     // Memory config expansion methods
     std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);
 
-    // Distributed communication helpers
-    std::unordered_map<Rank, tt::tt_fabric::MeshId> create_rank_to_mesh_mapping(
-        const MeshSocketTestRunner& test_runner);
-
     // Utility parsing methods
     MeshCoordinate parse_mesh_coordinate(const YAML::Node& node);
     CoreCoord parse_core_coordinate(const YAML::Node& node);
