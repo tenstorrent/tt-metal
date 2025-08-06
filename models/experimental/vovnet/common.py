@@ -7,6 +7,8 @@ import os
 import torch
 import timm
 
+VOVNET_L1_SMALL_SIZE = 16384
+
 
 def load_torch_model(reference_model, target_prefix="", model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
