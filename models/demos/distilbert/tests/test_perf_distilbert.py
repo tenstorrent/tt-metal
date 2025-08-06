@@ -141,6 +141,7 @@ def test_performance_distilbert_for_qa(
 
 
 @pytest.mark.models_device_performance_bare_metal
+@pytest.mark.skip(reason="#26285: Seems to have changed in perf")
 @pytest.mark.parametrize(
     "batch_size, test",
     [

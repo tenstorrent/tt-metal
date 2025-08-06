@@ -332,6 +332,7 @@ jobs:
 
       - name: Merge test reports
         id: generate-device-perf-report
+        if: ${{ !cancelled() }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
@@ -347,7 +348,7 @@ jobs:
         id: check-device-perf-report
         if: ${{ !cancelled() }}
         run: |
-          ls -hal ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
+          test -f ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - name: Clean test name for artifact
         run: |
