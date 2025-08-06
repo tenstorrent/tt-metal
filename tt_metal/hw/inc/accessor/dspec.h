@@ -128,35 +128,6 @@ struct DistributionSpec {
         return *this;
     }
 
-private:
-    void swap(DistributionSpec& other) noexcept {
-        std::swap(rank_rt, other.rank_rt);
-        std::swap(num_banks_rt, other.num_banks_rt);
-        std::swap(tensor_shape_rt, other.tensor_shape_rt);
-        std::swap(shard_shape_rt, other.shard_shape_rt);
-        std::swap(bank_coords_rt, other.bank_coords_rt);
-        std::swap(shard_grid_rt, other.shard_grid_rt);
-        std::swap(shard_grid_strides_rt, other.shard_grid_strides_rt);
-        std::swap(tensor_strides_rt, other.tensor_strides_rt);
-        std::swap(shard_strides_rt, other.shard_strides_rt);
-        std::swap(tensor_volume_rt, other.tensor_volume_rt);
-        std::swap(shard_volume_rt, other.shard_volume_rt);
-
-        if constexpr (!has_static_rank) {
-            std::swap_ranges(shard_grid_rt_buf.value, shard_grid_rt_buf.value + rank_rt, other.shard_grid_rt_buf.value);
-            std::swap_ranges(
-                shard_grid_strides_rt_buf.value,
-                shard_grid_strides_rt_buf.value + rank_rt,
-                other.shard_grid_strides_rt_buf.value);
-            std::swap_ranges(
-                tensor_strides_rt_buf.value, tensor_strides_rt_buf.value + rank_rt, other.tensor_strides_rt_buf.value);
-            std::swap_ranges(
-                shard_strides_rt_buf.value, shard_strides_rt_buf.value + rank_rt, other.shard_strides_rt_buf.value);
-            update_spans_pointers();
-            other.update_spans_pointers();
-        }
-    }
-
 public:
     template <
         typename TensorShape = Shape,
@@ -288,6 +259,34 @@ public:
 #undef getter_helper
 
 private:
+    void swap(DistributionSpec& other) noexcept {
+        std::swap(rank_rt, other.rank_rt);
+        std::swap(num_banks_rt, other.num_banks_rt);
+        std::swap(tensor_shape_rt, other.tensor_shape_rt);
+        std::swap(shard_shape_rt, other.shard_shape_rt);
+        std::swap(bank_coords_rt, other.bank_coords_rt);
+        std::swap(shard_grid_rt, other.shard_grid_rt);
+        std::swap(shard_grid_strides_rt, other.shard_grid_strides_rt);
+        std::swap(tensor_strides_rt, other.tensor_strides_rt);
+        std::swap(shard_strides_rt, other.shard_strides_rt);
+        std::swap(tensor_volume_rt, other.tensor_volume_rt);
+        std::swap(shard_volume_rt, other.shard_volume_rt);
+
+        if constexpr (!has_static_rank) {
+            std::swap_ranges(shard_grid_rt_buf.value, shard_grid_rt_buf.value + rank_rt, other.shard_grid_rt_buf.value);
+            std::swap_ranges(
+                shard_grid_strides_rt_buf.value,
+                shard_grid_strides_rt_buf.value + rank_rt,
+                other.shard_grid_strides_rt_buf.value);
+            std::swap_ranges(
+                tensor_strides_rt_buf.value, tensor_strides_rt_buf.value + rank_rt, other.tensor_strides_rt_buf.value);
+            std::swap_ranges(
+                shard_strides_rt_buf.value, shard_strides_rt_buf.value + rank_rt, other.shard_strides_rt_buf.value);
+            update_spans_pointers();
+            other.update_spans_pointers();
+        }
+    }
+
     static constexpr ShapeStatic precompute_shard_grid_ct(
         const ShapeStatic& tensor_shape, const ShapeStatic& shard_shape) {
         // If shapes are dynamic, we cannot compute shard grid at compile time
