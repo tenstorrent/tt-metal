@@ -6,6 +6,7 @@
 #include "topk_program_factory.hpp"
 #include "topk_constants.hpp"
 #include "topk_utils.hpp"
+#include "tt-metalium/allocator.hpp"
 
 using namespace tt::tt_metal;
 
@@ -52,7 +53,7 @@ void TopK::validate_with_output_tensors(
             input_shape[this->dim] / 2,
             this->k,
             core_range,
-            device->l1_size_per_core(),
+            device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).largest_free_block_bytes,
             value_tile_size,
             index_tile_size);
 
