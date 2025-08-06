@@ -64,8 +64,8 @@ class EfficientNetb0Conv2D:
         return ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -121,9 +121,23 @@ class Conv2dDynamicSamePadding:
         oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)  # change the output size according to stride ! ! !
         self.pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
         self.pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
+
         if self.pad_h > 0 or self.pad_w > 0:
-            conv_params.input_width = conv_params.input_width + self.pad_w // 2 + self.pad_w - self.pad_w // 2
-            conv_params.input_height = conv_params.input_height + self.pad_h // 2 + self.pad_h - self.pad_h // 2
+            if (self.pad_h, self.pad_w) != (3, 3) and (self.pad_h, self.pad_w) != (2, 2):
+                conv_params.input_width = conv_params.input_width + self.pad_w // 2 + self.pad_w - self.pad_w // 2
+                conv_params.input_height = conv_params.input_height + self.pad_h // 2 + self.pad_h - self.pad_h // 2
+            else:
+                pad_offset_width = self.pad_w // 2 + self.pad_w - self.pad_w // 2
+                pad_offset_height = self.pad_h // 2 + self.pad_h - self.pad_h // 2
+                if pad_offset_width % 2 == 0 and pad_offset_height % 2 == 0:
+                    conv_params.padding = (pad_offset_height // 2, pad_offset_width // 2)
+                else:
+                    pad_top = pad_offset_height // 2
+                    pad_bottom = pad_top + pad_offset_height % 2
+                    pad_left = pad_offset_width // 2
+                    pad_right = pad_left + pad_offset_width % 2
+                    conv_params.padding = (pad_top, pad_bottom, pad_left, pad_right)
+
         if is_width_sharded:
             self.dynamic_conv = EfficientNetb0Conv2D(
                 parameters,
@@ -147,19 +161,20 @@ class Conv2dDynamicSamePadding:
             input_height = int(math.sqrt((x.shape[2] // self.batch)))
             input_width = int(math.sqrt((x.shape[2] // self.batch)))
 
-            x = ttnn.sharded_to_interleaved(x)
-            x = ttnn.reshape(x, (self.batch, input_height, input_width, x.shape[3]))
-            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.pad(
-                x,
-                padding=[
-                    (0, 0),
-                    ((padded_shape[1] - x.shape[1]) // 2, (padded_shape[1] - x.shape[1] + 1) // 2),
-                    ((padded_shape[2] - x.shape[2]) // 2, (padded_shape[2] - x.shape[2] + 1) // 2),
-                    (0, 0),
-                ],
-                value=0.0,
-            )
+            if (self.pad_h, self.pad_w) != (3, 3) and (self.pad_h, self.pad_w) != (2, 2):
+                x = ttnn.sharded_to_interleaved(x)
+                x = ttnn.reshape(x, (self.batch, input_height, input_width, x.shape[3]))
+                x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+                x = ttnn.pad(
+                    x,
+                    padding=[
+                        (0, 0),
+                        ((padded_shape[1] - x.shape[1]) // 2, (padded_shape[1] - x.shape[1] + 1) // 2),
+                        ((padded_shape[2] - x.shape[2]) // 2, (padded_shape[2] - x.shape[2] + 1) // 2),
+                        (0, 0),
+                    ],
+                    value=0.0,
+                )
 
         return self.dynamic_conv(x)
 
@@ -201,7 +216,7 @@ class MBConvBlock:
             device=device,
             parameters=parameters["_se_reduce"],
             conv_params=conv_params._se_reduce,
-            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
 
         self._se_expand = Conv2dDynamicSamePadding(
@@ -383,8 +398,21 @@ class Efficientnetb0:
         self.l1_bias = parameters["l1"]["bias"]
 
     def __call__(self, x):
+        N, C, H, W = x.shape
+        min_channels = 16  # Padding from image channels (3) to min channels (16)
+        if C < min_channels:
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        else:
+            nchw = x
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))
+        ttnn.deallocate(nchw)
+        ttnn.deallocate(x)
+        nhwc = ttnn.reallocate(nhwc)
+        x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
+
         x = self._conv_stem(x)
-        x = x * ttnn.sigmoid_accurate(x)
+        x = ttnn.swish(x)
 
         x = self._blocks0(x)
 
