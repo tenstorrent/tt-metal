@@ -92,3 +92,8 @@ def ccl(mesh_device):
     This is used to test distributed operations in DeepSeek modules.
     """
     return CCL1D(mesh_device)
+
+
+@pytest.fixture(scope="session")
+def deepseek_cache_path():
+    return Path(os.getenv("DEEPSEEK_V3_CACHE", "/localdev/kpaigwar/deepseek-v3-cache"))

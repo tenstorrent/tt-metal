@@ -15,6 +15,7 @@ NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 MAX_BATCH_SIZE = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
+TILE_SIZE = 32
 
 
 # Compute kernel configurations
