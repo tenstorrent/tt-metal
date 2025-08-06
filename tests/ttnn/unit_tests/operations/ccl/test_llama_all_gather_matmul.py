@@ -120,6 +120,7 @@ def run_llama_all_gather_matmul_impl(
     num_iters=1,
     trace_mode=False,
     validate_all=True,
+    global_cb=None,
 ):
     cluster_shape = (8, 4)
 
@@ -222,6 +223,7 @@ def run_llama_all_gather_matmul_impl(
         mcast_in0=False,
         gather_in0=True,
         hop_cores=HOP_GRID,
+        num_global_cb_receivers=24,
         untilize_out=False,
     )
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -391,6 +393,7 @@ def run_llama_all_gather_matmul_impl(
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
+                global_cb=global_cb,
             )
 
             # TODO: Change when actual output is integrated

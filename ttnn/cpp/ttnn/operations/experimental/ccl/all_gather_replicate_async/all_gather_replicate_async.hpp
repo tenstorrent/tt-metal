@@ -29,7 +29,8 @@ struct ExecuteAllGatherMatmulAsync {
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const DataType> dtype = std::nullopt);
+        const std::optional<const DataType> dtype = std::nullopt,
+        const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

@@ -26,7 +26,8 @@ ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const DataType> dtype) {
+    const std::optional<const DataType> dtype,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     return ttnn::operations::experimental::ccl::llama_all_gather_matmul_async(
         input_tensor,
         input_tensor_b,
@@ -43,7 +44,8 @@ ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
         subdevice_id,
         program_config,
         compute_kernel_config,
-        dtype);
+        dtype,
+        global_cb);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

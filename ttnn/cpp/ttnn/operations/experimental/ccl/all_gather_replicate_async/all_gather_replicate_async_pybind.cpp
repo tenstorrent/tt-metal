@@ -41,7 +41,8 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const DataType> dtype) -> ttnn::Tensor {
+               const std::optional<const DataType> dtype,
+               const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
                 return self(
                     input_tensor,    // in0 for matmul, need AG first
                     input_tensor_b,  // in1 for matmul
@@ -59,7 +60,8 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
                     // MM optional params
                     program_config,         // = std::nullopt
                     compute_kernel_config,  // = std::nullopt
-                    dtype);                 // = std::nullopt
+                    dtype,                  // = std::nullopt
+                    global_cb);             // = std::nullopt
             },
             py::arg("input_tensor"),
             py::arg("input_tensor_b"),
@@ -77,7 +79,8 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
             py::arg("subdevice_id") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt});
+            py::arg("dtype") = std::nullopt,
+            py::arg("global_cb") = std::nullopt});
 }
 
 }  // namespace

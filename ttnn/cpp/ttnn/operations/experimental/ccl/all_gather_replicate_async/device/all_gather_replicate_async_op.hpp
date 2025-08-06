@@ -208,7 +208,8 @@ Tensor llama_all_gather_matmul_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const DataType> dtype = std::nullopt);
+    const std::optional<const DataType> dtype = std::nullopt,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 
 LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
     const ttnn::AllGatherReplicateAsync& all_gather_replicate_async_struct,

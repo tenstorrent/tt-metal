@@ -578,7 +578,8 @@ Tensor llama_all_gather_matmul_async_impl(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const DataType> dtype) {
+    const std::optional<const DataType> dtype,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     const auto mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
@@ -644,7 +645,7 @@ Tensor llama_all_gather_matmul_async_impl(
             /*transpose_a=*/false,
             /*transpose_b=*/false,
             /*output_tile=*/std::nullopt,
-            /*global_cb=*/std::nullopt});
+            /*global_cb=*/global_cb});
 
     ttnn::LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct =
         ttnn::LlamaAllGatherMatmulAsync{all_gather_struct, matmul_struct, devices};
@@ -676,7 +677,8 @@ Tensor llama_all_gather_matmul_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const DataType> dtype) {
+    const std::optional<const DataType> dtype,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     return llama_all_gather_matmul_async_impl(
         input_tensor,
         input_tensor_b,
@@ -693,7 +695,8 @@ Tensor llama_all_gather_matmul_async(
         sub_device_id,
         program_config,
         compute_kernel_config,
-        dtype);
+        dtype,
+        global_cb);
 }
 
 }  // namespace ccl
