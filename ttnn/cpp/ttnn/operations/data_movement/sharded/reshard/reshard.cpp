@@ -511,8 +511,8 @@ ttnn::Tensor ReshardOperation::invoke(
         } else {
             output_core_to_page_range_pair = get_core_page_ranges(input_tensor.buffer(), output_tensor.buffer());
         }
-        auto input = input_tensor;
-        auto output = output_tensor;
+        const auto& input = input_tensor;
+        const auto& output = output_tensor;
         auto input_shard_spec = input.shard_spec().value();
         auto output_shard_spec = output.shard_spec().value();
         auto all_cores = output_shard_spec.grid;
@@ -529,7 +529,7 @@ ttnn::Tensor ReshardOperation::invoke(
         if (input.layout() == Layout::TILE) {
             page_size = tt::tt_metal::detail::TileSize(data_format);
             unit_size = page_size;
-            total_size = output_shard_spec.numel() / TILE_HW * unit_size;
+            total_size = output_shard_spec.numel() / tt::constants::TILE_HW * unit_size;
         } else {
             // For ROW_MAJOR, use base page size from GCD calculation
             uint32_t input_page_size = input.buffer()->page_size();
