@@ -45,9 +45,7 @@ void MAIN {
 
     constexpr uint32_t tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t groups = get_compile_time_arg_val(12);
-
-    uint32_t input_elem_size_bytes = tile_size / 32 / 32;
-    uint32_t MAX_BATCH_SIZE = 16 / input_elem_size_bytes;
+    constexpr uint32_t MAX_BATCH_SIZE = get_compile_time_arg_val(13);
 
     transpose_wh_init(input0_cb, input0_transpose_cb);
 
@@ -56,14 +54,14 @@ void MAIN {
     for (uint32_t i = 0; i < input0_num_tiles_height; i++) {
         reconfig_data_format_srca(input0_cb);
         pack_reconfig_data_format(input0_transpose_cb);
-        if (input0_num_tiles_width <= MAX_BATCH_SIZE) {
+        if constexpr (input0_num_tiles_width <= MAX_BATCH_SIZE) {
             transpose<input0_num_tiles_width>(input0_cb, input0_transpose_cb);
         } else {
             for (uint32_t j = 0; j < input0_num_tiles_width; j++) {
                 transpose(input0_cb, input0_transpose_cb);
             }
         }
-        if (input1_num_tiles_width <= MAX_BATCH_SIZE) {
+        if constexpr (input1_num_tiles_width <= MAX_BATCH_SIZE) {
             transpose<input1_num_tiles_width>(input1_cb, input1_transpose_cb);
         } else {
             for (uint32_t j = 0; j < input1_num_tiles_width; j++) {

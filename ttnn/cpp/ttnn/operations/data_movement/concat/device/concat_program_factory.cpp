@@ -193,6 +193,9 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     // TODO: Skip the tile transpose in compute kernel if the following condition is true:
     // >> (input_tensors[0].padded_shape()[-1] / groups % TILE_WIDTH == 0
     // >> && input_tensors[1].padded_shape()[-1] / groups % TILE_WIDTH == 0)
+    constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
+    uint32_t BatchSize = MAX_1_BYTE_TILES_PER_BATCH / input_tensors[0].element_size();
+    compile_time_args_0.push_back(BatchSize);
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/compute/"
