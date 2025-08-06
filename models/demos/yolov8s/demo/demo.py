@@ -11,14 +11,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.utils.common_demo_utils import LoadImages, load_coco_class_names
 from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov8s.demo.demo_utils import (
-    LoadImages,
-    get_mesh_mappers,
-    load_coco_class_names,
-    postprocess,
-    preprocess,
-)
+from models.demos.yolov8s.demo.demo_utils import get_mesh_mappers, postprocess, preprocess
 from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
 from models.utility_functions import disable_persistent_kernel_cache
 
