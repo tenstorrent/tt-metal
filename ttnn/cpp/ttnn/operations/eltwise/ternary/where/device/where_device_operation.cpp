@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "where_device_operation.hpp"
+#include "where_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -56,16 +57,28 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
 
     // Validate tensor shapes based on variant
     if (args.where_variant == WhereVariant::TTT) {
-        TT_FATAL(
-            predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
-            "Where TTT operation requires predicate and value_true to have same shape. Predicate: {}, Value true: {}",
+        // For TTT, allow exact shape match or broadcast-compatible shapes
+        auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
             predicate_tensor.logical_shape(),
-            value_true_tensor.value().logical_shape());
-        TT_FATAL(
-            predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
-            "Where TTT operation requires predicate and value_false to have same shape. Predicate: {}, Value false: {}",
-            predicate_tensor.logical_shape(),
+            value_true_tensor.value().logical_shape(),
             value_false_tensor.value().logical_shape());
+
+        if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::NONE) {
+            // Check for exact shape match as fallback
+            TT_FATAL(
+                predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
+                "Where TTT operation requires predicate and value_true to have same shape or broadcast-compatible "
+                "shapes. Predicate: {}, Value true: {}",
+                predicate_tensor.logical_shape(),
+                value_true_tensor.value().logical_shape());
+            TT_FATAL(
+                predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
+                "Where TTT operation requires predicate and value_false to have same shape or broadcast-compatible "
+                "shapes. Predicate: {}, Value false: {}",
+                predicate_tensor.logical_shape(),
+                value_false_tensor.value().logical_shape());
+        }
+        // If broadcast_type is not NONE, then shapes are broadcast-compatible, validation passes
     } else if (args.where_variant == WhereVariant::TTS) {
         TT_FATAL(
             predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
