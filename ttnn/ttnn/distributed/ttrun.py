@@ -97,15 +97,6 @@ def get_rank_environment(
         "TT_HOST_RANK": str(mesh_to_host_rank_id[binding.mesh_id]),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
     }
-    gtest_output_str = os.environ.get("GTEST_OUTPUT")
-    if gtest_output_str is not None:
-        gtest_output_path = Path(gtest_output_str)
-
-        # Check if path ends with a separator or has no extension
-        is_dir_like = gtest_output_str.endswith(os.sep) or gtest_output_path.suffix == ""
-        if is_dir_like:
-            gtest_output_path = gtest_output_path / str(binding.rank)
-        env["GTEST_OUTPUT"] = f"{gtest_output_path}/"
     mesh_to_host_rank_id[binding.mesh_id] += 1
 
     # Apply environment variables with expansion and proper precedence
