@@ -73,12 +73,6 @@ public:
     size_t get_buffer_size() const;
 
     /**
-     * @brief Get the number of devices this PinnedMemory manages
-     * @return Number of devices
-     */
-    size_t get_num_devices() const;
-
-    /**
      * @brief Get all device IDs managed by this PinnedMemory
      * @return Vector of device IDs
      */
@@ -90,24 +84,6 @@ public:
      * @return True if the device is managed, false otherwise
      */
     bool has_device(chip_id_t device_id) const;
-
-    /**
-     * @brief Write data to a specific device's buffer
-     * @param device_id The device ID to write to
-     * @param src Source data pointer
-     * @param size Size of data to write
-     * @param offset Offset within the device buffer to write to
-     */
-    void write_to_device(chip_id_t device_id, const void* src, size_t size, size_t offset = 0);
-
-    /**
-     * @brief Read data from a specific device's buffer
-     * @param device_id The device ID to read from
-     * @param dest Destination data pointer
-     * @param size Size of data to read
-     * @param offset Offset within the device buffer to read from
-     */
-    void read_from_device(chip_id_t device_id, void* dest, size_t size, size_t offset = 0);
 
 private:
     friend class distributed::MeshDevice;
