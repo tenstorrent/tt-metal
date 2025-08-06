@@ -40,10 +40,8 @@ jobs:
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
-        env:
-          CONTAINER_HOME: "/home/ansible"
         with:
-          docker_image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:c2417bb0778b77d3092bd2f4a4c4269123d25b05
+          docker_image: ${{ needs.build-artifact.outputs.build-artifact-name }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
@@ -60,6 +58,7 @@ jobs:
             --pid=host
           install_wheel: true
           run_args: |
+            sudo apt update && sudo apt install -y openmpi-bin libopenmpi-dev openmpi-common
             # mpirun --allow-run-as-root --hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output hostname
             # mpirun --allow-run-as-root --hostfile /etc/mpirun/hostfile --mca btl_base_warn_component_unused 0 --mca btl tcp,self  --mca btl_tcp_if_include cnx1 --mca oob_tcp_if_include cnx1  --tag-output bash -c "export TT_MESH_ID=0; export TT_HOST_RANK=0; export LD_LIBRARY_PATH=${{ github.workspace }}/build/lib; export TT_METAL_HOME=${{ github.workspace }}; export PYTHONPATH=${{ github.workspace }}; export ARCH_NAME=wormhole_b0; ${{ github.workspace }}/build/test/tt_metal/multi_host_fabric_tests"
             tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
