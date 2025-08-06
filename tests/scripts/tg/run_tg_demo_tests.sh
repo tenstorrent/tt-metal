@@ -97,6 +97,17 @@ run_tg_falcon7b_tests() {
   fi
 }
 
+run_tg_sd35_demo_tests() {
+  fail=0
+
+  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/stable_diffusion_35_large/fun_demo.py -k "tg_cfg2_sp4_tp4" --timeout=1500 ; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_sd35_demo_tests failed"
+    exit 1
+  fi
+}
+
 run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
@@ -109,6 +120,8 @@ run_tg_demo_tests() {
     run_tg_llama3_8b_dp_tests
   elif [[ "$1" == "llama3_70b_dp" ]]; then
     run_tg_llama3_70b_dp_tests
+  elif [[ "$1" == "sd35" ]]; then
+    run_tg_sd35_demo_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
