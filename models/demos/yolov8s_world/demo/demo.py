@@ -11,14 +11,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.utils.common_demo_utils import LoadImages, load_coco_class_names
 from models.demos.yolov8s_world.common import YOLOV8SWORLD_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov8s_world.demo.demo_utils import (
-    LoadImages,
-    load_coco_class_names,
-    postprocess,
-    preprocess,
-    save_yolo_predictions_by_model,
-)
+from models.demos.yolov8s_world.demo.demo_utils import postprocess, preprocess, save_yolo_predictions_by_model
 from models.demos.yolov8s_world.reference import yolov8s_world
 from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import get_mesh_mappers
