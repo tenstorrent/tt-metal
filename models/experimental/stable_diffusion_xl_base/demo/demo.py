@@ -357,6 +357,7 @@ def run_demo_inference(
     ],
     ids=("with_trace", "no_trace"),
 )
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_demo(
     mesh_device,
     is_ci_env,
