@@ -37,11 +37,6 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-bool is_all_zeros(const tt::tt_metal::Tensor& tensor) {
-    auto vec = tensor.to_vector<int32_t>();
-    return std::all_of(vec.begin(), vec.end(), [](int32_t val) { return val == 0; });
-}
-
 using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>;
 
 using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
