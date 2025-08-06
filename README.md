@@ -136,7 +136,7 @@
 
 ## Model Updates
 
-For the latest model updates and features, please see [MODEL_UPDATES.md](models/MODEL_UPDATES.md)
+For the latest model updates and features, please see [MODEL_UPDATES.md](models/docs/MODEL_UPDATES.md)
 
 ## Model Bring-Up and Testing
 
