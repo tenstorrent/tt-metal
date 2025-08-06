@@ -38,14 +38,6 @@ std::vector<std::shared_ptr<distributed::MeshDevice>> get_line_devices(distribut
         mesh_device->create_submesh(MeshShape(1, 1), distributed::MeshCoordinate(0, 3)),
     };
 }
-std::vector<IDevice*> get_line_devices(distributed::MeshDevice* mesh_device) {
-    const auto& view = mesh_device->get_view();
-    return {
-        view.get_device(distributed::MeshCoordinate(0, 0)),
-        view.get_device(distributed::MeshCoordinate(0, 1)),
-        view.get_device(distributed::MeshCoordinate(0, 2)),
-        view.get_device(distributed::MeshCoordinate(0, 3))};
-}
 
 std::vector<IDevice*> get_line_devices_as_idevice(std::vector<std::shared_ptr<distributed::MeshDevice>> mesh_devices) {
     std::vector<IDevice*> devices;
