@@ -55,31 +55,30 @@ using namespace tt::tt_metal::distributed;
 static const auto KB = 1024;
 static const auto MB = 1024 * KB;
 
+static const int64_t TRANSFER_SIZE = 64 * MB;
+
 static const std::vector<int64_t> PAGE_SIZE_ARGS = benchmark::CreateRange(32, 2048, 2);
-static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {64 * MB};
 
 static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
 static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
 
 static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
-    auto transfer_size = state.range(1);
-    auto buffer_type = BUFFER_TYPES[state.range(2)];
-    [[maybe_unused]] auto device_id = state.range(3);
+    auto buffer_type = BUFFER_TYPES[state.range(1)];
+    auto device_id = state.range(2);
 
     log_debug(
         LogTest,
-        "Running Write Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        "Running Write Benchmark for Page Size: {}, Buffer Type: {}, Device ID: {}",
         page_size,
-        transfer_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         device_id);
 
     auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
-    auto host_buffer = create_random_vector_of_bfloat16(transfer_size, 1000, random_buffer_seed);
+    auto host_buffer = create_random_vector_of_bfloat16(TRANSFER_SIZE, 1000, random_buffer_seed);
 
     auto device_buffer = MeshBuffer::create(
-        ReplicatedBufferConfig{transfer_size},
+        ReplicatedBufferConfig{TRANSFER_SIZE},
         DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
         mesh_device.get());
 
@@ -87,25 +86,23 @@ static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_d
         EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), device_buffer, host_buffer, true);
     }
 
-    state.SetBytesProcessed(transfer_size * state.iterations());
+    state.SetBytesProcessed(TRANSFER_SIZE * state.iterations());
 }
 
 static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
-    auto transfer_size = state.range(1);
-    auto buffer_type = BUFFER_TYPES[state.range(2)];
-    [[maybe_unused]] auto device_id = state.range(3);
+    auto buffer_type = BUFFER_TYPES[state.range(1)];
+    auto device_id = state.range(2);
 
     log_debug(
         LogTest,
-        "Running Read Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        "Running Read Benchmark for Page Size: {}, Buffer Type: {}, Device ID: {}",
         page_size,
-        transfer_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         device_id);
 
     auto device_buffer = MeshBuffer::create(
-        ReplicatedBufferConfig{transfer_size},
+        ReplicatedBufferConfig{TRANSFER_SIZE},
         DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
         mesh_device.get());
     std::vector<uint32_t> host_buffer;
@@ -115,7 +112,7 @@ static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_de
         ReadShard(mesh_device->mesh_command_queue(), host_buffer, device_buffer, MeshCoordinate(0, 0), true);
     }
 
-    state.SetBytesProcessed(transfer_size * state.iterations());
+    state.SetBytesProcessed(TRANSFER_SIZE * state.iterations());
 }
 
 int main(int argc, char** argv) {
@@ -136,7 +133,7 @@ int main(int argc, char** argv) {
     auto devices = MeshDevice::create_unit_meshes(device_ids);
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
-        auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
+        auto benchmark_args = {PAGE_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
         // benchmark
         benchmark::RegisterBenchmark("Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();
