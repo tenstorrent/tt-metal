@@ -21,7 +21,7 @@ class TtConv2d:
         conv_pt,
         *,
         has_bias=True,
-        act_block_h=32,
+        act_block_h=None,
         reshard=False,
         deallocate=False,
         activation="relu",
@@ -227,6 +227,7 @@ class TtPlanningHeadSingleMode:
 
         navi_embed = ttnn.unsqueeze(navi_embed, 0)
         navi_embed = ttnn.expand(navi_embed, (-1, P, -1))
+        navi_embed = ttnn.to_layout(navi_embed, layout=ttnn.TILE_LAYOUT)
         plan_query = ttnn.concat([sdc_traj_query, sdc_track_query, navi_embed], dim=-1)
 
         # mlp_fuser
@@ -303,12 +304,19 @@ class TtPlanningHeadSingleMode:
             assert occ_mask is not None
             sdc_traj_all = self.collision_optimization(sdc_traj_all, occ_mask)
 
-        return sdc_traj_all
-
         return dict(
             sdc_traj=sdc_traj_all,
             sdc_traj_all=sdc_traj_all,
         )
+
+    def forward_test(self, bev_embed, outs_motion={}, outs_occflow={}, command=None):
+        sdc_traj_query = outs_motion["sdc_traj_query"]
+        sdc_track_query = outs_motion["sdc_track_query"]
+        bev_pos = outs_motion["bev_pos"]
+        occ_mask = outs_occflow["seg_out"]
+
+        outs_planning = self(bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command)
+        return outs_planning
 
     def collision_optimization_tt(self, sdc_traj_all, occ_mask):
         pos_xy_t = []
