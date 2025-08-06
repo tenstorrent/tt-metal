@@ -95,8 +95,8 @@ void kernel_main() {
                 reduced_l1_ptr[e] = 1;
             }
         }
-        const uint64_t output_noc_addr = get_noc_addr(bs, output_addrgen);
-        noc_async_write(output_l1_addr, output_noc_addr, output_page_size_bytes);
+        const uint64_t output_noc_addr = get_noc_addr(bs, output_mapping_addrgen);
+        noc_async_write(output_l1_addr, output_noc_addr, output_mapping_page_size_bytes);
 
         if (found) {
             cb_pop_front(data_cb_id, 1);
