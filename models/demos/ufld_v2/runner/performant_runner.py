@@ -37,6 +37,7 @@ class UFLDPerformantRunner:
             self.input_mem_config,
         ) = self.runner_infra.setup_dram_sharded_input(device)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
+        self._capture_ufldv2_trace_2cqs()
 
     def _capture_ufldv2_trace_2cqs(self):
         # Initialize the op event so we can write
