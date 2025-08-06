@@ -56,7 +56,7 @@ void TTProfiler::disable() {
     m_enabled = false;
 }
 
-TTProfiler::TTProfiler() {
+TTProfiler::TTProfiler() : m_enabled(false) {
     if (is_tracy_enabled) {
         enable();
 
