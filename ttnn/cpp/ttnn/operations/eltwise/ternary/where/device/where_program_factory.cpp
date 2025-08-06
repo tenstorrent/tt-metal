@@ -489,12 +489,12 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add binary_ng style sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
 
         // Add column broadcast specific defines (similar to binary_ng COL_B case)
-        reader_defines["SRC_BCAST"] = "0";    // predicate is not broadcast
-        reader_defines["SRC_BCAST_B"] = "1";  // value_true is broadcast (column)
+        reader_defines["SRC_BCAST_PREDICATE"] = "0";  // predicate is not broadcast
+        reader_defines["SRC_BCAST_TRUE"] = "1";       // value_true is broadcast (column)
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
         reader_defines["BCAST_LLK"] = "0";
