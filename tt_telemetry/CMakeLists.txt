@@ -1,17 +1,31 @@
 cmake_minimum_required(VERSION 3.22...3.30)
 
+# Find required packages
+find_package(Threads REQUIRED)
+
+# Fetch cpp-httplib (much simpler, no complex dependencies)
+include(FetchContent)
+FetchContent_Declare(
+    httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG v0.14.1
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(httplib)
+
 add_library(telemetry_libs INTERFACE)
 target_include_directories(telemetry_libs INTERFACE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 target_link_libraries(
     telemetry_libs
     INTERFACE
-        pthread
+        Threads::Threads
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
         small_vector
         Boost::algorithm
         Taskflow::Taskflow
         TT::Metalium
+        # httplib will be linked directly to the executable
 )
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/tt_telemetry")
@@ -40,4 +54,5 @@ target_link_libraries(
     PRIVATE
         tt_metal
         telemetry_libs
+        httplib::httplib  # Link httplib only to the server executable
 )
