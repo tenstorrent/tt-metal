@@ -111,7 +111,7 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_cur_max_value, uint32_t cb_c
     sub_bcast_cols_init_short(cb_qk_result, cb_cur_exp_sum_holder);
     tile_regs_acquire();
     sub_tiles_bcast_cols(
-        cb_qk_result, cb_cur_exp_sum_holder, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ exp_dst_idx);
+        cb_qk_result, cb_cur_max_value, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ exp_dst_idx);
     exp_tile<false>(exp_dst_idx);
     tile_regs_commit();
 
@@ -252,18 +252,19 @@ void update_cur_mm_out(uint32_t cb_prev_mm_out_holder, uint32_t cb_cur_mm_out_ho
     cb_push_back(cb_cur_mm_out_holder, q_chunk_size);
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t cb_identity_scaler>
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t cb_identity_scaler, bool fp32_transpose = false>
 void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     cb_wait_front(cb_in_idx, onetile);
     const uint32_t reduce_dst_idx = 0;
 
     reconfig_data_format(cb_in_idx, cb_identity_scaler);  // reconfig data format to precise
-    reduce_init<pool_type, reduce_dim>(cb_in_idx, cb_identity_scaler, cb_in_idx);
+    reduce_init<pool_type, reduce_dim, false>(cb_in_idx, cb_identity_scaler, cb_in_idx);
     tile_regs_acquire();
-    reduce_tile<pool_type, reduce_dim>(
+    reduce_tile<pool_type, reduce_dim, false>(
         cb_in_idx, cb_identity_scaler, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ reduce_dst_idx);
     reduce_uninit();
-
+    
+    // [Debug]: pack exp sum to cb_intermediates
     recip_tile_init();
     recip_tile(reduce_dst_idx);
     tile_regs_commit();
@@ -375,6 +376,9 @@ void MAIN {
 
             cb_push_back(cb_temp_accum, onetile);
 
+            // [Debug]: pack intermediate result to cb_intermediates
+            // pack_intermediate_result(cb_temp_accum, cb_intermediates);
+
             // pop key data to make space for next key chunk
             cb_pop_front(cb_key, kv_chunks_size);
 
@@ -460,9 +464,13 @@ void MAIN {
         cb_reserve_back(cb_output, q_chunk_size);
         pack_reconfig_data_format(cb_output);
 
-        reduce_and_recip_tile_inplace<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_reduction_scaler>(alias_cb_prev_sum_exp);
+        reduce_and_recip_tile_inplace<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_reduction_scaler, /* fp32_transpose */ true>(alias_cb_prev_sum_exp);
         cb_wait_front(alias_cb_prev_sum_exp, onetile);
+        // [Debug]: pack exp sum to cb_intermediates
+        // pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates);
         cb_wait_front(alias_cb_prev_mm_out, q_chunk_size);
+
+        pack_intermediate_result(alias_cb_prev_mm_out, cb_intermediates);
 
         reconfig_data_format(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
         mul_bcast_cols_init_short(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
@@ -480,7 +488,7 @@ void MAIN {
         }
         cb_push_back(cb_output, q_chunk_size);
 
-        pack_intermediate_result(alias_cb_prev_max, cb_intermediates);
+        // pack_intermediate_result(alias_cb_prev_max, cb_intermediates);
         cb_pop_front(alias_cb_prev_max, onetile);
 
         cb_pop_front(alias_cb_prev_mm_out, q_chunk_size);  // pop previous matmul output to make space for next row

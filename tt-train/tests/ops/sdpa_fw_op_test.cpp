@@ -235,11 +235,18 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
             none,
             false);
     }
-    auto mask_value = ttnn::max(qk_scaled, /* dim */ 3, /* keepdim */ true);
+
+    // test sum exp as intermediate result
+    auto max_value = ttnn::max(qk_scaled, /* dim */ 3, /* keepdim */ true);
+    auto qk_scaled_sub_max = ttnn::subtract(qk_scaled, max_value);
+    auto exp_qk_scaled = ttnn::exp(qk_scaled_sub_max);
+    // auto intm_result = ttnn_fixed::matmul(exp_qk_scaled, value, /*transpose_a=*/false, /*transpose_b=*/false);
+    auto sum_exp = ttnn::sum(exp_qk_scaled, /* dim */ 3, /* keepdim */ true);
+    
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
 
     auto attention_qkv = ttnn_fixed::matmul(attention_weights, value, /*transpose_a=*/false, /*transpose_b=*/false);
-    return {attention_qkv, mask_value};
+    return {attention_qkv, exp_qk_scaled};
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
@@ -256,14 +263,14 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     xt::xarray<float> attn_mask_tensor = xt::ones<float>({B, H, S, S});
     // xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
 
-    // for (uint32_t b = 0; b < B; ++b) {
-    //     for (uint32_t i = 0; i < S; ++i) {
-    //         for (uint32_t j = 0; j < d; ++j) {
-    //             query_tensor(b, 0, i, j) = static_cast<float>(1U);
-    //             key_tensor(b, 0, i, j) = static_cast<float>(4U - (i / 32U));
-    //         }
-    //     }
-    // }
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t i = 0; i < S; ++i) {
+            for (uint32_t j = 0; j < d; ++j) {
+                query_tensor(b, 0, i, j) = static_cast<float>(1U);
+                key_tensor(b, 0, i, j) = static_cast<float>(1U);
+            }
+        }
+    }
     // std::cout << '\n';
     // for (uint32_t i = 0; i < d; ++i) {
     //     std::cout << key_tensor(0, 0, 64, i) << ' ';
@@ -308,13 +315,25 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
             //               << baseline_result_xtensor(0, 0, i, j) << '\n';
             // }
 
-            if (std::abs(actual_value - baseline_value) >= 2e-2F + std::abs(baseline_value) * 3e-2F) {
-                std::cout << "Mismatch at (" << i << ", " << j << "): "
-                          << "baseline " << baseline_value << ", got " << actual_value << '\n';
-            }
+            // if (std::abs(actual_value - baseline_value) >= 2e-2F + std::abs(baseline_value) * 3e-2F) {
+            //     std::cout << "Mismatch at (" << i << ", " << j << "): "
+            //               << "baseline " << baseline_value << ", got " << actual_value << '\n';
+            // }
         }
     }
+    if (return_intermediates) {
+        for(size_t i = 0; i < S; ++i) {
+            float expected_interm_value = baseline_interm_xtensor(0, 0, i, 0);
+            float actual_interm_value = interm_xtensor(0, 0, i, 0);
 
+            if (std::abs(actual_interm_value - expected_interm_value) >= 1e-2F + std::abs(expected_interm_value) * 1e-2F) {
+                std::cout << "Mismatch in intermediate at (" << i << ", 0): "
+                          << "expected " << expected_interm_value << ", got " << actual_interm_value << '\n';
+            }
+        }
+
+        EXPECT_TRUE(xt::allclose(interm_xtensor, baseline_interm_xtensor, 1e-2F, 1e-2F));
+    }
     EXPECT_TRUE(xt::allclose(result_xtensor, baseline_result_xtensor, 3e-1F, 1e-2F));
 }
 

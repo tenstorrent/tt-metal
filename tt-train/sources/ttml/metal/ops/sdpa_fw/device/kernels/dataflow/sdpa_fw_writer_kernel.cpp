@@ -51,10 +51,10 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_output, Wt);
 
-        // cb_wait_front(cb_intermediates, onetile);
-        // uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        // noc_async_write_tile(idx, intermediates_addr_generator, l1_intermediates_read_addr);
-        // noc_async_write_barrier();
-        // cb_pop_front(cb_intermediates, onetile);
+        cb_wait_front(cb_intermediates, onetile);
+        uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
+        noc_async_write_tile(idx, intermediates_addr_generator, l1_intermediates_read_addr);
+        noc_async_write_barrier();
+        cb_pop_front(cb_intermediates, onetile);
     }
 }

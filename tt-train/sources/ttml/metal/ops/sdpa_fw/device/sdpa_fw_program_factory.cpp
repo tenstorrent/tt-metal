@@ -201,12 +201,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     //[DEBUG]:
     fmt::print(
-        "SDPA FW: NC={}, Ht_={}, Wt={}, block_size={}, num_cores={} ({}x{}), group1 cores={} rows/core={}, group2 "
+        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, num_cores={} ({}x{}), group1 cores={} rows/core={}, group2 "
         "cores={} "
         "rows/core={}\n",
         NC,
         Ht_,
         Wt,
+        1.0F / std::sqrt(static_cast<float>(Et)),
         block_size,
         num_cores,
         num_cores_x,
@@ -280,39 +281,39 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     TT_FATAL(
         query_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Query buffer must be in DRAM. Query buffer of type {}",
-        magic_enum::enum_name(query_buffer->buffer_type()));
+        enchantum::to_string(query_buffer->buffer_type()));
 
     auto* key_buffer = key.buffer();
     TT_FATAL(
         key_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Key buffer must be in DRAM. Key buffer of type {}",
-        magic_enum::enum_name(key_buffer->buffer_type()));
+        enchantum::to_string(key_buffer->buffer_type()));
 
     auto* value_buffer = value.buffer();
     TT_FATAL(
         value_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Value buffer must be in DRAM. Value buffer of type {}",
-        magic_enum::enum_name(value_buffer->buffer_type()));
+        enchantum::to_string(value_buffer->buffer_type()));
 
     auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
     if (mask_buffer != nullptr) {
         TT_FATAL(
             mask_buffer->buffer_type() == ttnn::BufferType::DRAM,
             "Mask buffer must be in DRAM. Mask buffer of type {}",
-            magic_enum::enum_name(mask_buffer->buffer_type()));
+            enchantum::to_string(mask_buffer->buffer_type()));
     }
 
     auto* output_buffer = output.front().buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        magic_enum::enum_name(output_buffer->buffer_type()));
+        enchantum::to_string(output_buffer->buffer_type()));
 
     auto* intermediates_buffer = output.back().buffer();
     TT_FATAL(
         intermediates_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Intermediates buffer must be in DRAM. Intermediates buffer of type {}",
-        magic_enum::enum_name(intermediates_buffer->buffer_type()));
+        enchantum::to_string(intermediates_buffer->buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;
