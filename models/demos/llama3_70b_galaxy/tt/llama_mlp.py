@@ -121,8 +121,6 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
-        breakpoint()
-
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -138,12 +136,27 @@ class TtLlamaMLP(LightweightModule):
 
         breakpoint()
 
-        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w1_out,
-            cluster_axis=1,
+        w1_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
+            input_tensor=w1_out,  # [1, 1, 32, 3200]
+            persistent_output_buffers=self.tt_ccl.reduce_scatter_buffers[1][self.tt_ccl.reduce_scatter_buffer_idx[1]],
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.gather_semaphore_handles[1][self.tt_ccl.gather_idx[1]],
             num_links=3,
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+            topology=self.model_config["CCL_TOPOLOGY"],
+            subdevice_id=self.tt_ccl.worker_sub_device_id,
+            cluster_axis=1,
         )
+        breakpoint()
+        self.tt_ccl.gather_idx[1] = (self.tt_ccl.gather_idx[1] + 1) % self.tt_ccl.num_cbs
+        self.tt_ccl.reduce_scatter_buffer_idx[1] = (self.tt_ccl.reduce_scatter_buffer_idx[1] + 1) % self.tt_ccl.num_cbs
+
+        # w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+        #     w1_out,
+        #     cluster_axis=1,
+        #     num_links=3,
+        #     memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+        # )
 
         breakpoint()
 
@@ -162,23 +175,23 @@ class TtLlamaMLP(LightweightModule):
 
         breakpoint()
 
-        w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
-            x,
-            self.w1,
-            self.w3,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_1_3,
-            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-            use_noc1_only=False,
-        )
+        # w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
+        #     x,
+        #     self.w1,
+        #     self.w3,
+        #     cluster_axis=1,
+        #     num_links=self.model_config["GALAXY_NUM_LINKS"],
+        #     RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+        #     compute_kernel_config=self.args.compute_kernel_config_lofi
+        #     if self.four_bit_mlp
+        #     else self.args.compute_kernel_config_hifi2,
+        #     dtype=ttnn.bfloat8_b,
+        #     program_config=pc_1_3,
+        #     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+        #     global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+        #     sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        #     use_noc1_only=False,
+        # )
         ttnn.deallocate(x)
 
         logger.info(f"w1_out_reduced: {w1_out_reduced}")
