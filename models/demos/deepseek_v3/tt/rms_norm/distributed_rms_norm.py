@@ -16,7 +16,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
     MeshDeviceStub,
     OpConfigBase,
-    ReshardConfig,
     RMSNormPostAllGatherConfig,
     RMSNormPreAllGatherConfig,
 )
@@ -43,7 +42,7 @@ class DistributedRMSNorm(RMSNormBase):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        torch_metaweight = get_state_dicts(state_dicts, "weight", shape=(hf_config.hidden_size,), dtype=torch.float32)
+        torch_metaweight = get_state_dicts(state_dicts, "weight", shape=(hf_config.hidden_size,), dtype=torch.bfloat16)
         num_shards = torch_metaweight.shape[0]
         assert num_shards == mesh_device.shape[0], "Number of state dictsdoes not match the number of rows."
 
@@ -122,12 +121,10 @@ class DistributedRMSNorm(RMSNormBase):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        input_reshard_decode = ReshardConfig(
-            memory_config=mem_cfg_decode,
-        )
+        input_memory_config_decode = mem_cfg_decode
 
         return {
-            "input_reshard_decode": input_reshard_decode,
+            "input_memory_config_decode": input_memory_config_decode,
             "rms_norm_pre_all_gather": RMSNormPreAllGatherConfig(
                 dtype=ttnn.bfloat16,
             ),

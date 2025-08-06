@@ -85,7 +85,7 @@ class DeepseekV3RMSNorm(nn.Module):
         DeepseekV3RMSNorm is equivalent to T5LayerNorm
         """
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.weight = nn.Parameter(torch.randn(hidden_size))
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
@@ -627,13 +627,6 @@ class DeepseekV3Attention(nn.Module):
                 mscale = yarn_get_mscale(scaling_factor, mscale_all_dim)
                 self.softmax_scale = self.softmax_scale * mscale * mscale
 
-    def init_weights_with_random(self):
-        for name, param in self.named_parameters():
-            if param.requires_grad:
-                print(f"Initializing {name} with torch.randn")
-                with torch.no_grad():
-                    param.copy_(torch.randn_like(param) * 0.1)
-
     def _init_rope(self):
         if self.config.rope_scaling is None:
             self.rotary_emb = DeepseekV3RotaryEmbedding(
@@ -1158,13 +1151,6 @@ class DeepseekV3DecoderLayer(nn.Module):
         )
         self.input_layernorm = DeepseekV3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = DeepseekV3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
-    def init_weights_with_random(self):
-        for name, param in self.named_parameters():
-            if param.requires_grad:
-                print(f"Initializing {name} with torch.randn")
-                with torch.no_grad():
-                    param.copy_(torch.randn_like(param) * 0.1)
 
     def forward(
         self,

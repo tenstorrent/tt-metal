@@ -51,7 +51,7 @@ class MLP1D(AbstractModule):
     NOTE: This is not the MLP we will use for DeepSeek-R1, but we do use it as a base class for the other MLPs.
     """
 
-    WEIGHT_TORCH_DTYPE = torch.float32
+    WEIGHT_TORCH_DTYPE = torch.bfloat16
     WEIGHT_DTYPE = ttnn.bfloat4_b
 
     @dataclass
@@ -188,9 +188,6 @@ class MLP1D(AbstractModule):
 
         # Construct the config
         return {
-            "input_reshard": ReshardConfig(
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=1,
@@ -268,24 +265,21 @@ class MLP1D(AbstractModule):
         ), "output_num_cores must divide the output tensor width evenly"
 
         # Calculate input and output memory configurations
-        input_memory_config = cls._get_decode_activation_memory_config(
-            even_int_div(dim, mesh_width), input_num_cores, mesh_device
-        )
         output_memory_config = cls._get_decode_activation_memory_config(
             even_int_div(dim, mesh_width), output_num_cores, mesh_device
         )
 
         # Construct the config
         return {
-            "input_reshard": ReshardConfig(
-                memory_config=input_memory_config,
-            ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=1,
                 dim=-1,
-                memory_config=cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+            ),
+            "all_gather_reshard": ReshardConfig(
+                memory_config=cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
             ),
             "w1": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -422,8 +416,6 @@ class MLP1D(AbstractModule):
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        assert x.memory_config() == cfg["input_reshard"]["memory_config"]
-
         num_layers, _, seq_len, _ = x.shape
 
         # All gather for efficient matmuls
@@ -469,10 +461,11 @@ class MLP1D(AbstractModule):
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        assert x.memory_config() == cfg["input_reshard"]["memory_config"]
-
         # All gather
         x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
+
+        # TODO: File issue on AG not being able to do this internally
+        x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])

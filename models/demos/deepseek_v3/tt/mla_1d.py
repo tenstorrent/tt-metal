@@ -103,7 +103,7 @@ class MLA1D(AbstractModule):
             if ttnn_name is None:
                 ttnn_name = cls.HF_TTNN_MAPPING[hf_name]
             if torch_weights is None:
-                torch_weights = get_state_dicts(state_dicts, f"{hf_name}.weight", shape, torch.float32)
+                torch_weights = get_state_dicts(state_dicts, f"{hf_name}.weight", shape, torch.bfloat16)
                 torch_weights = torch.transpose(torch_weights, -2, -1)
 
             ttnn_weight = ttnn.as_tensor(
@@ -173,7 +173,7 @@ class MLA1D(AbstractModule):
             state_dicts,
             f"{hf_name}.weight",
             shape=shape,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
         )
 
         # This weight needs to be split
@@ -266,9 +266,7 @@ class MLA1D(AbstractModule):
 
         mesh_shape = list(mesh_device.shape)
 
-        input_reshard = ReshardConfig(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -398,7 +396,7 @@ class MLA1D(AbstractModule):
 
         return {
             "hf_config": hf_config,
-            "input_reshard": input_reshard,
+            "input_memory_config": input_memory_config,
             "mesh_shape": mesh_shape,
             "wq_a": wq_a_config,
             "wq_b": wq_b_config,
@@ -450,9 +448,7 @@ class MLA1D(AbstractModule):
         mesh_shape = list(mesh_device.shape)
         num_heads_local = even_int_div(num_heads, mesh_shape[1])
 
-        input_reshard = ReshardConfig(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -707,7 +703,7 @@ class MLA1D(AbstractModule):
         return {
             "hf_config": hf_config,
             "mesh_shape": mesh_shape,
-            "input_reshard": input_reshard,
+            "input_memory_config": input_memory_config,
             "wq_a": wq_a_config,
             "wq_b": wq_b_config,
             "wkv_a": wkv_a_config,

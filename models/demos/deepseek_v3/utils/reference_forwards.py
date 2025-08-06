@@ -69,6 +69,8 @@ def reference_forward_mla(
         torch.Tensor: The output tensor from the model.
     """
 
+    reference_model = reference_model.to(torch.float32)
+
     bsz, q_len, dim = torch_input.shape
     torch_input = torch_input.to(dtype=torch.float32)
 
@@ -140,6 +142,8 @@ def reference_forward_decode(
     Returns:
         torch.Tensor: The output tensor from the model.
     """
+
+    reference_model = reference_model.to(torch.float32)
 
     bsz, q_len, dim = torch_input.shape
 

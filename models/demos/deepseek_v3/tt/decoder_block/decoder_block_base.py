@@ -12,6 +12,7 @@ from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.deepseek_v3.utils.config_dataclass import ReshardConfig
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dicts
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -73,10 +74,19 @@ class DecoderBlockBase(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
     ) -> ModelDecodeConfig:
+        mla_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
+        mlp_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
+
+        mla_config = MLA1D.decode_model_config(hf_config, mesh_device)
+
         return {
-            "mla_norm": DistributedRMSNorm.decode_model_config(hf_config, mesh_device),
-            "mla": MLA1D.decode_model_config(hf_config, mesh_device),
-            "mlp_norm": DistributedRMSNorm.decode_model_config(hf_config, mesh_device),
+            "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config_decode"]),
+            "mla_norm": mla_norm_config,
+            "mla_reshard": ReshardConfig(memory_config=mla_config["input_memory_config"]),
+            "mla": mla_config,
+            "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config_decode"]),
+            "mlp_norm": mlp_norm_config,
+            "mlp_reshard": ReshardConfig(memory_config=ttnn.DRAM_MEMORY_CONFIG),
             "mlp": cls.decode_mlp_config(hf_config, mesh_device),
         }
 
@@ -139,12 +149,12 @@ class DecoderBlockBase(AbstractModule):
         cfg: RunDecodeConfig,
     ) -> ttnn.Tensor:
         # MLA norm
-        mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm"]["input_reshard_decode"])
+        mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
         mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
         ttnn.deallocate(mla_norm_in)
 
         # MLA
-        mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla"]["input_reshard"])
+        mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
         mla_out = MLA1D.forward_decode(mla_norm_out, cfg["mla"], position_idxs, rope_tensors, page_table, row_idx)
         ttnn.deallocate(mla_norm_out)
 
@@ -153,12 +163,12 @@ class DecoderBlockBase(AbstractModule):
         ttnn.deallocate(mla_out)
 
         # MLP norm
-        mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm"]["input_reshard_decode"])
-        mlp_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mlp_norm"])
-        ttnn.deallocate(mla_norm_in)
+        mlp_norm_in = ttnn.to_memory_config(x, **cfg["mlp_norm_reshard"])
+        mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, cfg["mlp_norm"])
+        ttnn.deallocate(mlp_norm_in)
 
         # MLP
-        mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp"]["input_reshard"])
+        mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
         mlp_out = cls.forward_mlp_decode(mlp_norm_out, row_idx, cfg["mlp"])
         ttnn.deallocate(mlp_norm_out)
 

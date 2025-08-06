@@ -15,10 +15,12 @@ from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_decode as reference_forward
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import load_reference_io_tensors_for_module, load_state_dict
+from models.demos.deepseek_v3.utils.test_utils import (
+    MAX_START_POS,
+    load_reference_io_tensors_for_module,
+    load_state_dict,
+)
 from models.utility_functions import comp_pcc
-
-MAX_START_POS = 512
 
 
 @pytest.fixture
@@ -32,7 +34,6 @@ def load_reference_model(hf_config, layer_idx):
     """Load the reference model for testing."""
 
     model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval()
-    model.init_weights_with_random()  # Initialize weights with random values
 
     return model
 
@@ -85,7 +86,7 @@ def test_forward_pass(
     logger.info("Setting up reference model")
     if module_path is None:
         reference_model = load_reference_model(hf_config, reference_layer_idx)
-        state_dict = reference_model.state_dict()
+        state_dict = reference_model.to(torch.bfloat16).state_dict()
     else:
         state_dict = load_state_dict(model_path, module_path)
 
@@ -223,7 +224,7 @@ def test_forward_pass(
     ############################
     logger.info("Validating output")
     all_passing = True
-    pcc_required = 0.98
+    pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
     logger.info(f"PCC for {DecoderBlockClass.__name__} in {mode} mode: {pcc_message}")
 

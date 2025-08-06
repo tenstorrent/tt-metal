@@ -17,6 +17,9 @@ from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE
 from models.utility_functions import comp_pcc
 
+# Constant for testing
+MAX_START_POS = 512
+
 
 def load_state_dict(model_path: Path, module_path: str):
     if not not module_path:
@@ -30,11 +33,8 @@ def load_state_dict(model_path: Path, module_path: str):
             continue
         per_safetensor_weights.setdefault(weight_paths[weight_name], []).append(weight_name)
 
-    def cast_bf16_to_float32(x: torch.Tensor) -> torch.Tensor:
-        return x.to(torch.float32) if x.dtype == torch.bfloat16 else x
-
     return {
-        weight_name[len(module_path) :]: cast_bf16_to_float32(safetensor_state_dict[weight_name])
+        weight_name[len(module_path) :]: safetensor_state_dict[weight_name]
         for safetensor_file_path, weight_names in per_safetensor_weights.items()
         for safetensor_state_dict in [safetensors.torch.load_file(model_path / safetensor_file_path)]
         for weight_name in weight_names
@@ -65,8 +65,8 @@ def load_reference_io_tensors_for_module(
         assert set(io_module_paths) == {module}
         torch_input = torch.concat(torch_inputs, dim=concat_dim)
         reference_output = torch.concat(reference_outputs, dim=concat_dim)
-    torch_input.unsqueeze_(0).to(torch.float32)
-    reference_output.unsqueeze_(0).to(torch.float32)
+    torch_input.unsqueeze_(0)
+    reference_output.unsqueeze_(0)
     return pad_tensor(torch_input, mode, seq_len).expand(
         num_expand_rows, *(-1 for _ in range(torch_input.ndim - 1))
     ), reference_output.expand(num_expand_rows, *(-1 for _ in range(reference_output.ndim - 1)))

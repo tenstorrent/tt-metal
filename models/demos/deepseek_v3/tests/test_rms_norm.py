@@ -68,9 +68,10 @@ def test_forward_pass(
             hidden_size=hidden_size,
             eps=hf_config.rms_norm_eps,
         ).eval()
-        state_dict = reference_model.state_dict()
+        state_dict = reference_model.to(torch.bfloat16).state_dict()
 
         torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
+        reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
     else:
         state_dict = load_state_dict(model_path, reference_layernorm_path)
@@ -90,8 +91,7 @@ def test_forward_pass(
     if not (mode == "decode" and RMSNormClass is DistributedRMSNorm):
         memory_config = ttnn.DRAM_MEMORY_CONFIG
     else:
-        shard_core_grid = ttnn.CoreGrid(x=4, y=7)
-        memory_config = run_config["input_reshard_decode"]["memory_config"]
+        memory_config = run_config["input_memory_config_decode"]
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,

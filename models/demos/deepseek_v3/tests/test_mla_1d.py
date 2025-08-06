@@ -15,9 +15,8 @@ from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_mla as reference_forward
 from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.test_utils import MAX_START_POS
 from models.utility_functions import comp_pcc
-
-MAX_START_POS = 512
 
 
 @pytest.fixture
@@ -33,7 +32,6 @@ def reference(hf_config_short, reset_seeds):
     """Get the actual DeepSeek MLA model using local implementation."""
 
     model = DeepseekV3Attention(hf_config_short, layer_idx=0).eval()
-    model.init_weights_with_random()  # Initialize weights with random values
     return model
 
 
@@ -112,7 +110,9 @@ def test_forward_pass(
     ############################
     # Setup: Convert weights and get weight_config
     logger.info(f"Converting weights for MLA1D to {tmp_path}")
-    state_dicts = [reference_model.state_dict()] * mesh_shape[0]  # Duplicate state dicts for each row in the mesh
+    state_dicts = [reference_model.to(torch.bfloat16).state_dict()] * mesh_shape[
+        0
+    ]  # Duplicate state dicts for each row in the mesh
     weight_config = MLA1D.convert_weights(hf_config, state_dicts, tmp_path, mesh_device)
 
     # Generate appropriate configs

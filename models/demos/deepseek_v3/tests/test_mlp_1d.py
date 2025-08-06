@@ -147,8 +147,10 @@ def test_forward_pass(
     # Get the reference IO
     if not issubclass(MLPClass, MLP1DDequant):
         reference_model = DeepseekV3MLP(hf_config).eval()
-        state_dict = reference_model.state_dict()
+        state_dict = reference_model.to(torch.bfloat16).state_dict()
         torch_input = torch.randn(num_module_layers, 1, seq_len, hf_config.hidden_size)
+
+        reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
     else:
         state_dict = load_state_dict(model_path, module_path)
@@ -168,7 +170,7 @@ def test_forward_pass(
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, -1)),
         dtype=ttnn.bfloat16,
-        memory_config=run_config["input_reshard"]["memory_config"],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 

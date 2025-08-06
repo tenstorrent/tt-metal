@@ -19,7 +19,7 @@ class MLP1DDequant(MLP1D):
     """
 
     WEIGHT_TORCH_DTYPE = torch.float8_e4m3fn
-    WEIGHT_SCALE_INV_TORCH_DTYPE = torch.float32
+    WEIGHT_SCALE_INV_TORCH_DTYPE = torch.float16
 
     @classmethod
     def convert_weights(
@@ -79,7 +79,7 @@ class MLP1DDequant(MLP1D):
                                 state_dict,
                                 f"{hf_name}.weight",
                                 shape=(out_features, in_features),
-                                dtype=torch.float32,
+                                dtype=torch.bfloat16,
                             ),
                             mesh_device,
                             is_w2=is_w2,
