@@ -76,7 +76,7 @@ def test_uniad_memory_bank(
         device=device,
     )
 
-    ttnn_output = tt_model.forward(data)
+    ttnn_output = tt_model(data)
     ttnn_output_embedding = ttnn_output.output_embedding
     ttnn_mem_bank = ttnn.to_torch(ttnn_output.mem_bank)
     ttnn_save_period = ttnn.to_torch(ttnn_output.save_period)

@@ -154,7 +154,6 @@ class PlanningHeadSingleMode(nn.Module):
             assert occ_mask is not None
             sdc_traj_all = self.collision_optimization(sdc_traj_all, occ_mask)
 
-        return sdc_traj_all
         return dict(
             sdc_traj=sdc_traj_all,
             sdc_traj_all=sdc_traj_all,

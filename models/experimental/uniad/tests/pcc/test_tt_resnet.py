@@ -569,9 +569,7 @@ def test_uniad_resnet(device, reset_seeds):
         )
         ttnn_output_final = torch.permute(ttnn_output_final, (0, 3, 1, 2))
 
-        _, x = assert_with_pcc(torch_output[i], ttnn_output_final, 0)
+        # We have a issue on this, issue - https://github.com/tenstorrent/tt-metal/issues/26185
+        _, x = assert_with_pcc(torch_output[i], ttnn_output_final, 0.99)
 
         print("x", x)
-        # x 0.9532004417277097
-        # x 0.20905444097939213
-        # x 0.1601168754828453

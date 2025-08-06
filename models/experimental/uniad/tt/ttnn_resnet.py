@@ -134,7 +134,10 @@ class TtModulatedDeformConv2dPack:
         out = ttnn.sharded_to_interleaved(out)
         out = ttnn.reshape(out, (6, out_h, out_w, out.shape[3]))
         o1, o2, mask = ttnn.chunk(out, 3, dim=3)
+        ttnn.deallocate(out)
         offset = ttnn.concat((o1, o2), dim=3)
+        ttnn.deallocate(o1)
+        ttnn.deallocate(o2)
         mask = ttnn.to_torch(mask).to(dtype=torch.float)
         mask = torch.sigmoid(mask)  # low pcc if we use ttnn sigmoid for mask
         mask = mask.permute(0, 3, 1, 2)
@@ -273,7 +276,9 @@ class TtBottleneck:
         self.conv1 = TtnnConv2D(conv_args.conv1, conv_pth.conv1, device=device, activation="relu")
 
         if not self.with_dcn:
-            self.conv2 = TtnnConv2D(conv_args.conv2, conv_pth.conv2, device=device, activation="relu", act_block_h=32)
+            self.conv2 = TtnnConv2D(
+                conv_args.conv2, conv_pth.conv2, device=device, activation="relu", act_block_h=32, dealloc_act=True
+            )
         else:
             assert self.conv_cfg is None, "conv_cfg must be None for DCN"
             self.conv2 = TtModulatedDeformConv2dPack(
@@ -290,7 +295,9 @@ class TtBottleneck:
             )
             self.bn_parameters = conv_pth.bn2
 
-        self.conv3 = TtnnConv2D(conv_args.conv3, conv_pth.conv3, device=device, activation="", is_blk=conv3_blk_sharded)
+        self.conv3 = TtnnConv2D(
+            conv_args.conv3, conv_pth.conv3, device=device, activation="", is_blk=conv3_blk_sharded, dealloc_act=True
+        )
 
         if is_downsample:
             self.downsample = TtnnConv2D(
@@ -413,6 +420,7 @@ class TtResNet:
             activation="relu",
             activation_dtype=ttnn.bfloat16,
             act_block_h=64,
+            dealloc_act=True,
         )
 
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
