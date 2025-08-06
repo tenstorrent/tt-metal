@@ -50,10 +50,10 @@ void py_module(nb::module_& mod) {
     ccl::bind_common(mod);
     ccl::bind_all_gather(mod);
     ccl::bind_reduce_scatter(mod);
-    ccl::py_bind_mesh_partition(mod);
+    ccl::bind_mesh_partition(mod);
     ccl::bind_barrier(mod);
-    ccl::py_bind_all_to_all_combine(mod);
-    ccl::py_bind_all_to_all_dispatch(mod);
+    ccl::bind_all_to_all_combine(mod);
+    ccl::bind_all_to_all_dispatch(mod);
 }
 
 }  // namespace ttnn::operations::ccl

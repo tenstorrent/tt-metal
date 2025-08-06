@@ -219,7 +219,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
             nb::arg("output_padding") = std::array<uint32_t, 2>{0, 0},
             nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             nb::arg("groups") = 1,
-            py::arg("dtype") = std::nullopt,
+            nb::arg("dtype") = std::nullopt,
             nb::arg("bias_tensor") = std::nullopt,
             nb::arg("conv_config") = std::nullopt,
             nb::arg("compute_config") = std::nullopt,

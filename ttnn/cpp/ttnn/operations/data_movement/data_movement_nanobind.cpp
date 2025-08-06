@@ -45,7 +45,7 @@
 #include "ttnn/operations/data_movement/untilize/untilize_nanobind.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding_nanobind.hpp"
 #include "ttnn/operations/data_movement/sort/sort_nanobind.hpp"
-#include "ttnn/operations/data_movement/gather/gather_nanobindhpp"
+#include "ttnn/operations/data_movement/gather/gather_nanobind.hpp"
 #include "ttnn/operations/data_movement/gather/tosa/gather_tosa_nanobind.hpp"
 
 namespace ttnn::operations::data_movement {

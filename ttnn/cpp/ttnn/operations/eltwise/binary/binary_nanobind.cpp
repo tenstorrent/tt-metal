@@ -819,7 +819,7 @@ void bind_bitwise_binary_ops_operation(
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite(
+void bind_logical_binary_ops_operation(
     nb::module_& mod,
     const binary_operation_t& operation,
     const std::string& description,

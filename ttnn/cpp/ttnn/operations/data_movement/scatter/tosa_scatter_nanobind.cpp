@@ -52,7 +52,7 @@ void bind_tosa_scatter(nb::module_& mod) {
 
     using OperationType = decltype(ttnn::tosa_scatter);
     bind_registered_operation(
-        module,
+        mod,
         ttnn::tosa_scatter,
         doc,
         ttnn::nanobind_overload_t{

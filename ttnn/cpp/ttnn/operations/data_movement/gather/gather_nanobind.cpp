@@ -64,7 +64,7 @@ void bind_gather_operation(nb::module_& mod) {
 
     using OperationType = decltype(ttnn::gather);
     bind_registered_operation(
-        module,
+        mod,
         ttnn::gather,
         doc,
         ttnn::nanobind_overload_t{

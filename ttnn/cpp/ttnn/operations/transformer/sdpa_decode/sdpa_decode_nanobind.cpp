@@ -151,7 +151,7 @@ void bind_sdpa_decode(nb::module_& mod) {
 
     using MLAOperationType = decltype(ttnn::transformer::flash_multi_latent_attention_decode);
     ttnn::bind_registered_operation(
-        module,
+        mod,
         ttnn::transformer::flash_multi_latent_attention_decode,
         doc,
         ttnn::nanobind_overload_t{

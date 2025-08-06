@@ -14,8 +14,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "sort.hpp"
 
-#include "ttnn-pybind/decorators.hpp"
-
+namespace ttnn::operations::data_movement::detail {
 void bind_sort_operation(nb::module_& mod) {
     auto doc =
         R"doc(

@@ -60,7 +60,7 @@ void bind_scatter(nb::module_& mod) {
 
     using OperationType = decltype(ttnn::scatter);
     bind_registered_operation(
-        module,
+        mod,
         ttnn::scatter,
         doc,
         ttnn::nanobind_overload_t{
@@ -80,7 +80,7 @@ void bind_scatter(nb::module_& mod) {
             nb::arg("index").noconvert(),
             nb::arg("src").noconvert(),
             nb::kw_only(),
-            py::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = std::nullopt,
             nb::arg("reduce") = std::nullopt,
             nb::arg("queue_id") = DefaultQueueId});
 }

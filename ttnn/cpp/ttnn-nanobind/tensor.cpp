@@ -10,9 +10,7 @@
 #include <optional>
 #include <set>
 #include <string>
-#include <string_view>
 #include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -23,19 +21,19 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/set.h>
-#include <nanobind/stl/string_view.h>
 #include <nanobind/stl/tuple.h>
-#include <nanobind/stl/unordered_map.h>
 
 #include "ttnn-nanobind/json_class.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/base_types.hpp>
 #include "ttnn/tensor/serialization.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/distributed/types.hpp"
+
+#include <tt-metalium/bfloat16.hpp>
 
 namespace nanobind::detail {
 template <>
@@ -47,6 +45,26 @@ struct dtype_traits<::bfloat16> {
     };
     static constexpr auto name = const_name("bfloat16");
 };
+
+template <>
+struct dtype_traits<tt::tt_metal::tensor_impl::bfloat8_b> {
+    static constexpr dlpack::dtype value{
+        static_cast<uint8_t>(nanobind::dlpack::dtype_code::Bfloat),  // type code
+        8,                                                           // size in bits
+        1                                                            // lanes (simd), usually set to 1
+    };
+    static constexpr auto name = const_name("bfloat8_b");
+};
+
+template <>
+struct dtype_traits<tt::tt_metal::tensor_impl::bfloat4_b> {
+    static constexpr dlpack::dtype value{
+        static_cast<uint8_t>(nanobind::dlpack::dtype_code::Bfloat),  // type code
+        4,                                                           // size in bits
+        1                                                            // lanes (simd), usually set to 1
+    };
+    static constexpr auto name = const_name("bfloat4_b");
+};
 }  // namespace nanobind::detail
 
 using namespace tt::tt_metal;
@@ -57,12 +75,12 @@ using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 
-namespace detail {
-
-template <class T>
-struct DataTypeToFormatType {
-    using type = T;
-};
+// namespace detail {
+//
+// template <class T>
+// struct DataTypeToFormatType {
+//     using type = T;
+// };
 
 // https://github.com/wjakob/nanobind/blob/master/docs/ndarray.rst#nonstandard-arithmetic-types
 
@@ -70,8 +88,7 @@ struct DataTypeToFormatType {
 // struct DataTypeToFormatType<::bfloat16> {
 //     using type = uint16_t;
 // };
-
-}  // namespace detail
+//}  // namespace detail
 
 void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<Layout>(m_tensor);
@@ -171,7 +188,9 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     // def_buffer removed in nanobind. use nb::ndarray instead
     // note: ndarray has several gotchas. See for more information:
     // https://github.com/wjakob/nanobind/blob/master/docs/ndarray.rst
+    // TODO_NANOBIND: THIS WAS A PYBUFFER. MAKE INTO NDARRAY
     nb::class_<tt::tt_metal::HostBuffer>(m_tensor, "HostBuffer")
+        //.def(nb::init<nb::ndarray<>>())
         .def("__getitem__", [](const HostBuffer& self, std::size_t index) { return self.view_bytes()[index]; })
         .def("__len__", [](const HostBuffer& self) { return self.view_bytes().size(); })
         .def(
@@ -183,7 +202,12 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
                     self.view_bytes().begin(),
                     self.view_bytes().end());
             },
-            nb::keep_alive<0, 1>());
+            nb::keep_alive<0, 1>())
+        .def(
+            "buffer",  // TODO_NANOBIND: what is the interface/function name here?
+            [](HostBuffer& self) -> nb::ndarray<> {
+                return nb::ndarray(self.view_bytes().data(), {self.view_bytes().size()});
+            });
 }
 
 void tensor_mem_config_module(nb::module_& m_tensor) {
@@ -223,65 +247,71 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
     auto pyTensorSpec = static_cast<nb::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec
         .def(
-            py::init<>([](const ttnn::Shape& shape,
-                          DataType dtype,
-                          Layout layout,
-                          BufferType buffer_type,
-                          const std::optional<Tile>& tile) {
-                return TensorSpec(
+            "__init__",
+            [](TensorSpec* t,
+               const ttnn::Shape& shape,
+               DataType dtype,
+               Layout layout,
+               BufferType buffer_type,
+               const std::optional<Tile>& tile) {
+                new (t) TensorSpec(
                     shape,
                     TensorLayout(
                         dtype, PageConfig(layout, tile), MemoryConfig(TensorMemoryLayout::INTERLEAVED, buffer_type)));
-            }),
-            py::arg("shape"),
-            py::arg("dtype"),
-            py::arg("layout"),
-            py::arg("buffer_type") = BufferType::DRAM,
-            py::arg("tile") = std::nullopt,
+            },
+            nb::arg("shape"),
+            nb::arg("dtype"),
+            nb::arg("layout"),
+            nb::arg("buffer_type") = BufferType::DRAM,
+            nb::arg("tile") = std::nullopt,
             R"doc(
                 Create TensorSpec class.
                 This constructor is used to create TensorSpec for tensors that are not sharded.
             )doc")
         .def(
-            py::init<>([](const ttnn::Shape& shape,
-                          DataType dtype,
-                          Layout layout,
-                          TensorMemoryLayout memory_layout,
-                          const std::optional<ShardSpec>& shard_spec,
-                          BufferType buffer_type,
-                          const std::optional<Tile>& tile) {
-                return TensorSpec(
+            "__init__",
+            [](TensorSpec* t,
+               const ttnn::Shape& shape,
+               DataType dtype,
+               Layout layout,
+               TensorMemoryLayout memory_layout,
+               const std::optional<ShardSpec>& shard_spec,
+               BufferType buffer_type,
+               const std::optional<Tile>& tile) {
+                new (t) TensorSpec(
                     shape,
                     TensorLayout(
                         dtype, PageConfig(layout, tile), MemoryConfig(memory_layout, buffer_type, shard_spec)));
-            }),
-            py::arg("shape"),
-            py::arg("dtype"),
-            py::arg("layout"),
-            py::arg("memory_layout"),
-            py::arg("shard_spec") = std::nullopt,
-            py::arg("buffer_type") = BufferType::DRAM,
-            py::arg("tile") = std::nullopt,
+            },
+            nb::arg("shape"),
+            nb::arg("dtype"),
+            nb::arg("layout"),
+            nb::arg("memory_layout"),
+            nb::arg("shard_spec") = std::nullopt,
+            nb::arg("buffer_type") = BufferType::DRAM,
+            nb::arg("tile") = std::nullopt,
             R"doc(
                 Create TensorSpec class.
                 This constructor is used to create TensorSpec for tensors that are sharded.
             )doc")
         .def(
-            py::init<>([](const ttnn::Shape& shape,
-                          DataType dtype,
-                          Layout layout,
-                          const NdShardSpec& nd_shard_spec,
-                          BufferType buffer_type,
-                          const std::optional<Tile>& tile) {
-                return TensorSpec(
+            "__init__",
+            [](TensorSpec* t,
+               const ttnn::Shape& shape,
+               DataType dtype,
+               Layout layout,
+               const NdShardSpec& nd_shard_spec,
+               BufferType buffer_type,
+               const std::optional<Tile>& tile) {
+                new (t) TensorSpec(
                     shape, TensorLayout(dtype, PageConfig(layout, tile), MemoryConfig(buffer_type, nd_shard_spec)));
-            }),
-            py::arg("shape"),
-            py::arg("dtype"),
-            py::arg("layout"),
-            py::arg("nd_shard_spec"),
-            py::arg("buffer_type") = BufferType::DRAM,
-            py::arg("tile") = std::nullopt,
+            },
+            nb::arg("shape"),
+            nb::arg("dtype"),
+            nb::arg("layout"),
+            nb::arg("nd_shard_spec"),
+            nb::arg("buffer_type") = BufferType::DRAM,
+            nb::arg("tile") = std::nullopt,
             R"doc(
                 Create TensorSpec class.
                 This constructor is used to create TensorSpec for ND sharded tensors.
@@ -295,9 +325,9 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                ShardOrientation orientation) {
                 return self.sharded_across_dims(tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
-            py::arg("dims"),
-            py::arg("grid"),
-            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            nb::arg("dims"),
+            nb::arg("grid"),
+            nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
                 Shards TensorSpec across the specified dimensions.
                 This would result in the shard shape to be minimal (typically 1 or tile size) in the sharded dimensions.
@@ -312,9 +342,9 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 return self.sharded_across_dims_except(
                     tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
-            py::arg("dims"),
-            py::arg("grid"),
-            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            nb::arg("dims"),
+            nb::arg("grid"),
+            nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
                 Shards TensorSpec across all dimensions except for the specified ones.
                 This would result in the shard shape to be minimal (typically 1 or tile size) in all dimensions except for the specified ones.
@@ -323,8 +353,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(
             "height_sharded",
             &TensorSpec::height_sharded,
-            py::arg("grid"),
-            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            nb::arg("grid"),
+            nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
                 Performs 2D height sharding for TensorSpec.
                 This flattens the tensor into a 2D shape and splits it along the height to achieve as close to equal distribution as possible, while maintaining just 1 shard per core.
@@ -332,8 +362,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(
             "width_sharded",
             &TensorSpec::width_sharded,
-            py::arg("grid"),
-            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            nb::arg("grid"),
+            nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
                 Performs 2D width sharding for TensorSpec.
                 This flattens the tensor into a 2D shape and splits it along the width to achieve as close to equal distribution as possible, while maintaining just 1 shard per core.
@@ -341,8 +371,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(
             "block_sharded",
             &TensorSpec::block_sharded,
-            py::arg("grid"),
-            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            nb::arg("grid"),
+            nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
                 Performs 2D block sharding for TensorSpec.
                 This flattens the tensor into a 2D shape and splits it into 2D contiguous blocks, putting each block onto the corresponding core in the 2D grid.
@@ -353,8 +383,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 TT_FATAL(grid.ranges().size() == 1, "Block sharding requires a single CoreRange");
                 return self.block_sharded(grid.ranges()[0], orientation);
             },
-            py::arg("grid"),
-            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            nb::arg("grid"),
+            nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
                 Performs 2D block sharding for TensorSpec.
                 This flattens the tensor into a 2D shape and splits it into 2D contiguous blocks, putting each block onto the corresponding core in the 2D grid.
@@ -369,11 +399,11 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                ShardDistributionStrategy shard_distribution_strategy) {
                 return self.sharded(shard_shape, grid, shard_alignment, orientation, shard_distribution_strategy);
             },
-            py::arg("shard_shape"),
-            py::arg("grid"),
-            py::arg("shard_alignment") = TensorSpec::ShardShapeAlignment::RECOMMENDED,
-            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
-            py::arg("shard_distribution_strategy") = ShardDistributionStrategy::ROUND_ROBIN_1D,
+            nb::arg("shard_shape"),
+            nb::arg("grid"),
+            nb::arg("shard_alignment") = TensorSpec::ShardShapeAlignment::RECOMMENDED,
+            nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            nb::arg("shard_distribution_strategy") = ShardDistributionStrategy::ROUND_ROBIN_1D,
             R"doc(
                 Performs arbitrary sharding for TensorSpec using the specified shard shape, grid, shard shape alignment, and other optional parameters.
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
@@ -385,19 +415,19 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                TensorSpec::ShardShapeAlignment shard_alignment) {
                 return self.sharded(nd_shard_spec, shard_alignment);
             },
-            py::arg("nd_shard_spec"),
-            py::arg("shard_alignment") = TensorSpec::ShardShapeAlignment::RECOMMENDED,
+            nb::arg("nd_shard_spec"),
+            nb::arg("shard_alignment") = TensorSpec::ShardShapeAlignment::RECOMMENDED,
             R"doc(
                 Performs arbitrary sharding for TensorSpec using the specified shard spec and shard shape alignment.
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
             )doc")
-        .def_property_readonly("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
-        .def_property_readonly("layout", &TensorSpec::layout, "Layout of a tensor")
-        .def_property_readonly("dtype", &TensorSpec::data_type, "Dtype of a tensor")
-        .def_property_readonly("tile", &TensorSpec::tile, "Tile of a tensor")
-        .def_property_readonly("memory_config", &TensorSpec::memory_config, "Memory config of a tensor")
-        .def(py::self == py::self)
-        .def(py::self != py::self);
+        .def_prop_ro("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
+        .def_prop_ro("layout", &TensorSpec::layout, "Layout of a tensor")
+        .def_prop_ro("dtype", &TensorSpec::data_type, "Dtype of a tensor")
+        .def_prop_ro("tile", &TensorSpec::tile, "Tile of a tensor")
+        .def_prop_ro("memory_config", &TensorSpec::memory_config, "Memory config of a tensor")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     auto pyMemoryConfig = static_cast<nb::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig
@@ -548,8 +578,9 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const ttnn::Shape& shard_shape,
                const CoreRangeSet& grid,
                const ShardOrientation& orientation,
-               ShardDistributionStrategy shard_distribution_strategy
-            ) { new (t) NdShardSpec(shard_shape, grid, orientation, shard_distribution_strategy); },
+               ShardDistributionStrategy shard_distribution_strategy) {
+                new (t) NdShardSpec(shard_shape, grid, orientation, shard_distribution_strategy);
+            },
             nb::arg("shard_shape"),
             nb::arg("grid"),
             nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
@@ -575,7 +606,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
 
     m_tensor.def(
         "load_tensor",
-        nb::overload_cast<const std::string&, MeshDevice*>(&load_tensor),
+        nb::overload_cast<const std::string&, ttnn::MeshDevice*>(&load_tensor),
         nb::arg("file_name"),
         nb::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");

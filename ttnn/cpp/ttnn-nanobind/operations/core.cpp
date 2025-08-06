@@ -59,7 +59,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("math_approx_mode") = true,
             nb::arg("fp32_dest_acc_en") = false,
             nb::arg("packer_l1_acc") = false,
-            nb::arg("dst_full_sync_en") = false),
+            nb::arg("dst_full_sync_en") = false,
             nb::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
         .def_rw("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
         .def_rw("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
@@ -80,7 +80,7 @@ void py_module(nb::module_& mod) {
         nb::arg("math_approx_mode") = true,
         nb::arg("fp32_dest_acc_en") = false,
         nb::arg("packer_l1_acc") = false,
-        nb::arg("dst_full_sync_en") = false),
+        nb::arg("dst_full_sync_en") = false,
         nb::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
     mod.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, nb::arg("tensor"));
 

@@ -71,7 +71,7 @@ void py_module_types(nb::module_& mod) {
     nb::class_<MeshCoordinate>(mod, "MeshCoordinate", "Coordinate within a mesh device.");
     nb::class_<MeshCoordinateRange>(mod, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
     nb::class_<MeshCoordinateRangeSet>(mod, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
-    nb::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
+    nb::class_<SystemMeshDescriptor>(mod, "SystemMeshDescriptor");
 }
 
 void py_module(nb::module_& mod) {
@@ -329,7 +329,7 @@ void py_module(nb::module_& mod) {
                    1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
                    2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
            )doc")
-        .def("get_view", &MeshDevice::get_view, py::return_value_policy::reference_internal)
+        .def("get_view", &MeshDevice::get_view, nb::rv_policy::reference_internal)
         .def("__repr__", &MeshDevice::to_string)
         .def(
             "create_sub_device_manager",
@@ -419,10 +419,10 @@ void py_module(nb::module_& mod) {
             R"doc(Returns Infinity value for current architecture.)doc");
 
     auto py_mesh_device_view = static_cast<nb::class_<MeshDeviceView>>(mod.attr("MeshDeviceView"));
-    py_mesh_device_view.def("shape", &MeshDeviceView::shape, nb::rv_policy::ref_internal)
+    py_mesh_device_view.def("shape", &MeshDeviceView::shape, nb::rv_policy::reference_internal)
         .def("num_devices", &MeshDeviceView::num_devices)
         .def("fully_local", &MeshDeviceView::fully_local)
-        .def("is_local", &MeshDeviceView::is_local, py::arg("coord"));
+        .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"));
 
     auto py_tensor_to_mesh = static_cast<nb::class_<TensorToMesh>>(mod.attr("CppTensorToMesh"));
 
@@ -685,7 +685,6 @@ void py_module(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("tensors"),
         nb::arg("mesh_shape"),
-        nb::kw_only(),
         R"doc(
             Creates a multi-device host tensor from a set of individual host shards.
 

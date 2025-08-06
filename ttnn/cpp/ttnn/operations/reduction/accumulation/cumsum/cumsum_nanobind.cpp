@@ -7,7 +7,7 @@
 #include <optional>
 
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/optional>
+#include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"

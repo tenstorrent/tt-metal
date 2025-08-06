@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/operators.h>
 #include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -268,8 +269,16 @@ void py_module_types(nb::module_& mod) {
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
         .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
 
-    export_enum<tt::CBIndex>(mod, "CBIndex");
-    nb::implicitly_convertible<nb::int_, tt::CBIndex>();
+    [[maybe_unused]]
+    auto e_CBIndex = export_enum<tt::CBIndex>(mod, "CBIndex");
+    // e_CBIndex
+    //     .def("__init__",
+    //          [](CBIndex* t, nb::int_ i) {
+    //                 ;
+    //          });
+    //     .def(nb::init<>())
+    //     .def(nb::self == nb::self);
+    // nb::implicitly_convertible<nb::int_, tt::CBIndex>();
 }
 
 }  // namespace ttnn::program_descriptors

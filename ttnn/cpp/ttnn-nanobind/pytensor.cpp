@@ -12,20 +12,19 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
-#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/variant.h>
 
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -163,6 +162,7 @@ Tensor create_tt_tensor_from_py_data(
 }
 
 // Preprocess the python tensor, optionally performing dtype conversion.
+// TODO_NANOBIND: See if we can get rid of this in favor of ndarray
 struct PreprocessedPyTensor {
     DataType data_type = DataType::INVALID;
     nb::object contiguous_py_tensor;
@@ -170,9 +170,11 @@ struct PreprocessedPyTensor {
     std::size_t py_data_ptr = 0;
 };
 
+// TODO_NANOBIND: rather than a py_tensor handle, importing each library, and manually checking,
+// use a nb::ndarray. Does this function still need to exist?
 PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<DataType> optional_data_type) {
     const auto py_dtype = py_tensor.attr("dtype");
-    if (nb::object torch = nb::module_::import("torch"); nb::isinstance(py_tensor, torch.attr("Tensor"))) {
+    if (nb::object torch = nb::module_::import_("torch"); nb::isinstance(py_tensor, torch.attr("Tensor"))) {
         nb::object contiguous_py_tensor = py_tensor.attr("contiguous")();
         DataType data_type = DataType::INVALID;
 
@@ -195,7 +197,7 @@ PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<
         } else if (py_dtype.equal(torch.attr("uint8"))) {
             data_type = DataType::UINT8;
         } else {
-            TT_THROW("Unsupported DataType: {}", std::string(nb::repr(py_dtype)));
+            TT_THROW("Unsupported DataType: {}", std::string(nb::repr(py_dtype).c_str()));
         }
 
         auto maybe_convert_pytorch_tensor = [&contiguous_py_tensor, &py_dtype, &torch](const char* target_py_dtype) {
@@ -239,7 +241,7 @@ PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<
             .num_elements = nb::cast<std::size_t>(contiguous_py_tensor.attr("numel")()),
             .py_data_ptr = nb::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
         };
-    } else if (nb::object np = nb::module_::import("numpy"); nb::isinstance(py_tensor, np.attr("ndarray"))) {
+    } else if (nb::object np = nb::module_::import_("numpy"); nb::isinstance(py_tensor, np.attr("ndarray"))) {
         nb::object contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
         DataType data_type = DataType::INVALID;
 
@@ -261,7 +263,7 @@ PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<
         } else if (py_dtype.equal(np.attr("ubyte"))) {
             data_type = DataType::UINT8;
         } else {
-            TT_THROW("Unsupported DataType: {}", std::string(nb::repr(py_dtype)));
+            TT_THROW("Unsupported DataType: {}", std::string(nb::repr(py_dtype).c_str()));
         }
 
         auto maybe_convert_numpy_tensor = [&contiguous_py_tensor, &py_dtype, &np](const char* target_py_dtype) {
@@ -419,7 +421,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             return RowMajorHostBuffer::create_padded(std::move(host_buffer), tensor_spec);
         }
 
-        // No modifications needed; direclty return buffer
+        // No modifications needed; directly return buffer
         if (tensor_impl::logical_matches_physical(tensor_spec)) {
             return RowMajorHostBuffer::create_logical(std::move(host_buffer), tensor_spec);
         }
@@ -887,17 +889,18 @@ void pytensor_module(nb::module_& mod) {
                         mem_config
                     )
             )doc")
-        .def("__init__",
-             [](Tensor* t,
-                    const nb::object& python_tensor,
-                          std::optional<DataType> data_type,
-                          std::optional<MeshDevice*> device,
-                          std::optional<Layout> layout,
-                          const std::optional<MemoryConfig>& mem_config,
-                          const std::optional<Tile>& tile,
-                          ttnn::QueueId cq_id,
-                          std::optional<float> pad_value,
-                          const distributed::TensorToMesh* mesh_mapper) {
+        .def(
+            "__init__",
+            [](Tensor* t,
+               const nb::object& python_tensor,
+               std::optional<DataType> data_type,
+               std::optional<MeshDevice*> device,
+               std::optional<Layout> layout,
+               const std::optional<MemoryConfig>& mem_config,
+               const std::optional<Tile>& tile,
+               ttnn::QueueId cq_id,
+               std::optional<float> pad_value,
+               const distributed::TensorToMesh* mesh_mapper) {
                 new (t) Tensor(CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
                     python_tensor,
                     data_type,
@@ -1681,11 +1684,17 @@ void pytensor_module(nb::module_& mod) {
                     const auto& logical_shape = self.logical_shape();
                     std::vector<uint32_t> shape{logical_shape.cbegin(), logical_shape.cend()};
 
+                    // since to_vector will pull the data back from device->host implicitly, the extra copy here
+                    // is the more streamlined way of marshalling the data.
+
                     if constexpr (
                         std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> || std::is_same_v<T, bfloat16>) {
-                        return nb::array(shape, self.to_vector<float>().data()).attr("tolist")();
+                        return nb::cast(self.to_vector<float>()).attr("reshape")(nb::cast(shape)).attr("tolist");
+
+                        // return nb::ndarray(shape, self.to_vector<float>().data()).attr("tolist")();
                     } else {
-                        return nb::array(shape, self.to_vector<T>().data()).attr("tolist")();
+                        return nb::cast(self.to_vector<T>()).attr("reshape")(nb::cast(shape)).attr("tolist");
+                        // return nb::ndarray(self.to_vector<T>().data(), shape).attr("tolist")();
                     }
                 });
             },
@@ -1696,7 +1705,7 @@ void pytensor_module(nb::module_& mod) {
 
                     py_list = tt_tensor.to_list()
             )doc")
-        .def_property(
+        .def_prop_rw(
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
