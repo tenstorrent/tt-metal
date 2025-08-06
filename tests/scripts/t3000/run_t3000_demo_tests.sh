@@ -114,6 +114,7 @@ run_t3000_qwen25_vl_tests() {
   qwen25_vl_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-72B-Instruct/
 
   for qwen_dir in "$qwen25_vl_32b" "$qwen25_vl_72b"; do
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 900 || fail=1
     MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
     echo "LOG_METAL: Tests for $qwen_dir on T3K completed"
   done
