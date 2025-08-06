@@ -172,7 +172,8 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::MatmulProgramConfig& program_config);
+    const operations::matmul::MatmulProgramConfig& program_config,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb);
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,

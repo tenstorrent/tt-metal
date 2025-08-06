@@ -496,7 +496,8 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
                 this->all_gather_replicate_async_struct.sub_device_id,
                 // MM params
                 this->matmul_struct.compute_kernel_config.value(),
-                this->matmul_struct.program_config.value());
+                this->matmul_struct.program_config.value(),
+                this->matmul_struct.global_cb);
     }
 }
 
