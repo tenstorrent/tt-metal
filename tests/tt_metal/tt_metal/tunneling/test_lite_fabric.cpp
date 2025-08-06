@@ -171,8 +171,10 @@ TEST(Tunneling, LiteFabricReads) {
 
     auto allOnes = create_random_vector_of_bfloat16(
         payload_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
+    allOnes = std::vector<uint32_t>(payload_size_bytes / sizeof(uint32_t), 0x11111111);
     auto allTwos = create_random_vector_of_bfloat16(
         payload_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count(), 2.0f);
+    allTwos = std::vector<uint32_t>(payload_size_bytes / sizeof(uint32_t), 0x22222222);
 
     uint64_t onesNocAddr = dest_noc_addr;
     uint64_t twosNocAddr = dest_noc_addr + payload_size_bytes;
@@ -185,6 +187,8 @@ TEST(Tunneling, LiteFabricReads) {
     std::this_thread::sleep_for(std::chrono::seconds(2));
     log_info(tt::LogMetal, "Reading back ones data from Device 1 worker core {}", logical_worker.str());
     uint32_t receiver_channel_base = lite_fabric::LiteFabricMemoryMap::get_receiver_channel_addr();
+
+    log_info(tt::LogMetal, "Reading back ones data from Device 1 worker core {}", logical_worker.str());
     {
         // Read out
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
@@ -199,6 +203,7 @@ TEST(Tunneling, LiteFabricReads) {
         ASSERT_EQ(read_data, allOnes);
     }
 
+    log_info(tt::LogMetal, "Reading back twos data from Device 1 worker core {}", logical_worker.str());
     {
         // Read out
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));

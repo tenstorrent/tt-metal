@@ -171,24 +171,20 @@ struct HostToLiteFabricInterface {
     }
 
     uint32_t get_next_receiver_buffer_slot_address(uint32_t channel_address) const {
-        auto buffer_index = d2h.fabric_receiver_channel_index;
+        auto buffer_index = h2d.receiver_host_read_index;
         return channel_address + buffer_index * CHANNEL_BUFFER_SIZE;
-    }
-
-    void update_host_interface(tt_cxy_pair virtual_core_sender) {
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            (void*)(reinterpret_cast<uintptr_t>(this) + offsetof(HostToLiteFabricInterface, d2h)),
-            sizeof(DeviceToHost),
-            virtual_core_sender,
-            host_interface_on_device_addr + offsetof(HostToLiteFabricInterface, d2h));
     }
 
     void wait_for_empty_write_slot(tt_cxy_pair virtual_core_sender) {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-        // TODO: This can only process 1 item at a time right now
+        uint32_t offset =
+            offsetof(HostToLiteFabricInterface, d2h) + offsetof(DeviceToHost, fabric_sender_channel_index);
         do {
-            update_host_interface(virtual_core_sender);
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                (void*)(reinterpret_cast<uintptr_t>(this) + offset),
+                sizeof(uint32_t),
+                virtual_core_sender,
+                host_interface_on_device_addr + offset);
         } while ((h2d.sender_host_write_index + 1) % NUM_BUFFERS == d2h.fabric_sender_channel_index);
     }
 
@@ -324,6 +320,7 @@ struct HostToLiteFabricInterface {
         header.to_noc_read(tt::tt_fabric::NocReadCommandHeader{src_noc_addr, HostToLiteFabricReadEvent::get()}, size);
 
         uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
+        log_info(tt::LogMetal, "Reading data from {} {:#x}", receiver_core.str(), receiver_header_address);
         uint32_t receiver_data_address = receiver_header_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader);
 
         wait_for_empty_write_slot(receiver_core);
@@ -331,7 +328,6 @@ struct HostToLiteFabricInterface {
 
         wait_for_read_event(receiver_core, receiver_header_address);
 
-        log_info(tt::LogMetal, "Reading data from {}", receiver_core.str());
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             mem_ptr, size, receiver_core, receiver_data_address);
 
