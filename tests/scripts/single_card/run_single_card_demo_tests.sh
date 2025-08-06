@@ -1,5 +1,5 @@
-# #!/bin/bash
-# set -e
+#!/bin/bash
+set -e
 
 run_falcon7b_func() {
 
