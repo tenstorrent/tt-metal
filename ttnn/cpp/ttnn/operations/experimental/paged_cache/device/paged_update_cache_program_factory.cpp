@@ -249,7 +249,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; ++i) {
+    for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
         const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
         // Cache tile info
@@ -335,7 +335,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
             auto& reader_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
             auto& writer_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
 
-            for (uint32_t i = 0, num_tiles_read = 0; i < cores.size(); ++i) {
+            for (uint32_t i = 0; i < cores.size(); ++i) {
                 const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
                 // Cache tile info
                 const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
