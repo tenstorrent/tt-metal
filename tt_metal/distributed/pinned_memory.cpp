@@ -19,15 +19,6 @@ namespace tt::tt_metal {
 
 PinnedMemory::PinnedMemory(
     const std::vector<IDevice*>& devices,
-    size_t buffer_size,
-    bool map_to_noc)
-    : buffer_size_(buffer_size), map_to_noc_(map_to_noc), owns_host_memory_(true), host_memory_base_(nullptr) {
-    
-    initialize_from_devices(devices, nullptr, buffer_size, map_to_noc);
-}
-
-PinnedMemory::PinnedMemory(
-    const std::vector<IDevice*>& devices,
     void* host_buffer,
     size_t buffer_size,
     bool map_to_noc)
@@ -106,28 +97,22 @@ void PinnedMemory::initialize_from_devices(
         unique_mmio_devices.insert(mmio_device_id);
     }
     
-    // Create one buffer per unique MMIO device, then map logical devices to these buffers
+    if (!host_buffer) {
+        throw std::invalid_argument("PinnedMemory only supports mapping existing host memory. Use constructor with host_buffer parameter.");
+    }
+    
+    // Create one buffer per unique MMIO device, all mapping the same host memory
     std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> mmio_buffers;
-    size_t mmio_offset = 0;
     
     for (chip_id_t mmio_device_id : unique_mmio_devices) {
-        std::unique_ptr<tt::umd::SysmemBuffer> buffer;
-        
-        if (host_buffer) {
-            // Map existing host memory
-            void* mmio_buffer_ptr = static_cast<char*>(host_buffer) + mmio_offset;
-            buffer = cluster.map_sysmem_buffer(mmio_device_id, mmio_buffer_ptr, buffer_size, map_to_noc);
-        } else {
-            // Allocate new memory
-            buffer = cluster.allocate_sysmem_buffer(mmio_device_id, buffer_size, map_to_noc);
-        }
+        // Map the same host memory for each MMIO device
+        auto buffer = cluster.map_sysmem_buffer(mmio_device_id, host_buffer, buffer_size, map_to_noc);
         
         if (!buffer) {
             throw std::runtime_error("Failed to create SysmemBuffer for MMIO device " + std::to_string(mmio_device_id));
         }
         
         mmio_buffers[mmio_device_id] = std::move(buffer);
-        mmio_offset += buffer_size;
     }
     
     // Store the MMIO buffers and device mappings

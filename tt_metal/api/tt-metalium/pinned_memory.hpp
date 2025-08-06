@@ -129,21 +129,10 @@ public:
 
 private:
     /**
-     * @brief Construct PinnedMemory from a vector of devices
-     * @param devices Vector of devices to allocate buffers for
-     * @param buffer_size Size of buffer to allocate per device
-     * @param map_to_noc Whether to map the buffer to the NOC
-     */
-    PinnedMemory(
-        const std::vector<IDevice*>& devices,
-        size_t buffer_size,
-        bool map_to_noc = false);
-
-    /**
      * @brief Construct PinnedMemory by mapping existing host memory to devices
      * @param devices Vector of devices to map buffers for
-     * @param host_buffer Existing host memory to map (must be at least buffer_size * num_devices)
-     * @param buffer_size Size of buffer per device
+     * @param host_buffer Existing host memory to map (must not be null)
+     * @param buffer_size Size of buffer to map
      * @param map_to_noc Whether to map the buffer to the NOC
      */
     PinnedMemory(
