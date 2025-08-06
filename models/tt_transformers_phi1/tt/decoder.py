@@ -146,7 +146,8 @@ class TransformerBlock(LightweightModule):
         # if TG and mode == "decode":
         #     ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # # MLP takes replicated inputs and produces fractured outputs
-        # ff_out = self.feed_forward.forward(ff_in, mode)
+        # h_gather = ttnn.all_gather(h, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
+        # ff_out = self.feed_forward.forward(h_gather, mode)
         # # ff_out and h are both fractured across devices
         # activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
         #     decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
@@ -161,8 +162,8 @@ class TransformerBlock(LightweightModule):
         # )
         # return out  # fractured across devices
 
-        input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg)
+
+        x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
         # MLP takes replicated inputs and produces fractured outputs
         feed_forward_hidden_states = self.feed_forward.forward(x, mode)
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
