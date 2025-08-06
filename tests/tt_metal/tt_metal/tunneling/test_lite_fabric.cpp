@@ -19,17 +19,13 @@
 #include "allocator.hpp"
 #include "context/metal_context.hpp"
 #include "core_coord.hpp"
-#include "data_types.hpp"
-#include "fabric_edm_packet_header.hpp"
 #include "lite_fabric.hpp"
 #include "hal_types.hpp"
 #include "kernel.hpp"
-#include "kernel_types.hpp"
 #include "lite_fabric_constants.hpp"
 #include "rtoptions.hpp"
 #include "llrt/hal.hpp"
 #include "tt_cluster.hpp"
-#include "tt_memory.h"
 #include "build.hpp"
 #include "lite_fabric_host_util.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -53,22 +49,38 @@ TEST(Tunneling, LiteFabricInitWithMetal) {
     CHECK_TEST_REQS();
 
     auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(devices, 0, 1);
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
 
     auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
-
     lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
-
     tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
-
     tt::tt_metal::detail::CloseDevices(devices);
+}
+
+TEST(Tunneling, LiteFabricInit) {
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+
+    auto rtoptions = tt::llrt::RunTimeOptions();
+    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
+    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+
+    auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
+    auto output_directory = home_directory / "lite_fabric";
+    ASSERT_EQ(lite_fabric::CompileLiteFabric(cluster, home_directory, output_directory, {}), 0);
+    ASSERT_EQ(lite_fabric::LinkLiteFabric(home_directory, output_directory, output_directory / "lite_fabric.elf"), 0);
+
+    std::filesystem::path elf_path{output_directory / "lite_fabric.elf"};
+
+    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc, elf_path);
+    lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
+    lite_fabric::WaitForState(*cluster.get(), desc, lite_fabric::InitState::TERMINATED);
 }
 
 TEST(Tunneling, LiteFabricWrites) {
     CHECK_TEST_REQS();
 
     auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(devices, 0, 1);
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
 
     auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
@@ -133,7 +145,7 @@ TEST(Tunneling, LiteFabricReads) {
     CHECK_TEST_REQS();
 
     auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(devices, 0, 1);
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
 
     auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];

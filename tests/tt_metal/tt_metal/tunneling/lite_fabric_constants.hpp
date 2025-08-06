@@ -144,7 +144,7 @@ constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
 namespace tt::tt_fabric {
 
-constexpr uint8_t worker_handshake_noc = noc_index;
+constexpr uint8_t worker_handshake_noc = NOC_INDEX;
 constexpr uint8_t edm_to_downstream_noc = 0;                 // Used?
 constexpr bool local_chip_noc_equals_downstream_noc = true;  // Used?
 
