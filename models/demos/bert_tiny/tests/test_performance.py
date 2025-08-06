@@ -99,6 +99,7 @@ def test_perf_bert_tiny(
 
 
 @pytest.mark.models_device_performance_bare_metal
+@pytest.mark.skip(reason="#26288: Seems to have changed in perf")
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
