@@ -426,6 +426,7 @@ class Attention(LightweightModule):
             sharded=True,
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
+            is_galaxy=self.TG,
         )
 
         if self.TG:
@@ -661,6 +662,7 @@ class Attention(LightweightModule):
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
+                is_galaxy=self.TG,
             )
 
             if not self.TG:
@@ -714,6 +716,7 @@ class Attention(LightweightModule):
             num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
+            is_galaxy=self.TG,
         )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
@@ -917,6 +920,7 @@ class Attention(LightweightModule):
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
+                is_galaxy=self.TG,
             )
 
         return output_11SH

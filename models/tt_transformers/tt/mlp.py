@@ -212,6 +212,7 @@ class MLP(LightweightModule):
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+                    is_galaxy=TG,
                 )
                 w3_out = tt_all_reduce(
                     w3_out,
@@ -222,6 +223,7 @@ class MLP(LightweightModule):
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+                    is_galaxy=TG,
                 )
 
         w2_in = ttnn.mul(
@@ -301,6 +303,7 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
+            is_galaxy=TG,
         )
 
         # Ensure dim 0 and 1 are 1
