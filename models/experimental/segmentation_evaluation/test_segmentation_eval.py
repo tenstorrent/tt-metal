@@ -488,7 +488,6 @@ def evaluation(
             shift_gt_indices,
         )
         from torch.utils.data import DataLoader
-        import torch.nn.functional as F
 
         image_processor = AutoImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
 
@@ -496,62 +495,62 @@ def evaluation(
         mask_folder = "models/demos/segformer/demo/validation_data_ade20k/annotations"
 
         dataset = SemanticSegmentationDataset(image_folder, mask_folder, image_processor)
-        data_loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
+        data_loader = DataLoader(
+            dataset, batch_size=batch_size, shuffle=False, num_workers=0, collate_fn=custom_collate_fn
+        )
         logger.info(f"Evaluating on {len(dataset)} samples...")
 
         max_samples = 2000
         sample_count = 0
         iou_list, dice_list, acc_list, prec_list, recall_list, f1_list = [], [], [], [], [], []
         for batch in data_loader:
-            image = batch["input"]
-            mask = batch["gt_mask"].squeeze()
-            input = image["pixel_values"].squeeze(dim=0)
-            n, c, h, w = input.shape
-            torch_input_tensor = input.permute(0, 2, 3, 1)
-            torch_input_tensor = F.pad(torch_input_tensor, (0, 13))
+            masks = batch["gt_mask"]
+            input = batch["pixel_values"]
             if model_type == "tt_model":
-                tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-                ttnn_output = model.execute_segformer_trace_2cqs_inference(tt_inputs_host)
-                ttnn_output = ttnn.to_torch(ttnn_output)
+                ttnn_output = model.run(input)
+                ttnn_output = ttnn.to_torch(ttnn_output, mesh_composer=model.test_infra.output_mesh_composer)
                 ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
                 h = w = int(math.sqrt(ttnn_output.shape[-1]))
                 ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
-                ttnn_upsampled_logits2 = torch.nn.functional.interpolate(
-                    ttnn_final_output, size=mask.shape[-2:], mode="bilinear", align_corners=False
-                )
-                ttnn_pred_mask = ttnn_upsampled_logits2.argmax(dim=1).squeeze().numpy()
-                mask = shift_gt_indices(mask)
-                mask = np.array(mask)
+                for i in range(len(masks)):
+                    mask = masks[i]
+                    ttnn_up = torch.nn.functional.interpolate(
+                        ttnn_final_output[i : i + 1], size=mask.shape, mode="bilinear", align_corners=False
+                    )
+                    ttnn_pred_mask = ttnn_up.argmax(dim=1).squeeze().cpu().numpy()
+                    mask = shift_gt_indices(mask)
+                    mask = np.array(mask)
 
-                iou_list.append(iou(mask, ttnn_pred_mask) * 100)
-                dice_list.append(dice_score(mask, ttnn_pred_mask) * 100)
-                acc_list.append(pixel_accuracy(mask, ttnn_pred_mask) * 100)
-                prec_list.append(precision(mask, ttnn_pred_mask) * 100)
-                recall_list.append(recall(mask, ttnn_pred_mask) * 100)
-                f1_list.append(f1_score(mask, ttnn_pred_mask) * 100)
-                sample_count += 1
-                logger.info(f"sample_count: {sample_count}")
-                if sample_count == max_samples:
-                    break
+                    iou_list.append(iou(mask, ttnn_pred_mask) * 100)
+                    dice_list.append(dice_score(mask, ttnn_pred_mask) * 100)
+                    acc_list.append(pixel_accuracy(mask, ttnn_pred_mask) * 100)
+                    prec_list.append(precision(mask, ttnn_pred_mask) * 100)
+                    recall_list.append(recall(mask, ttnn_pred_mask) * 100)
+                    f1_list.append(f1_score(mask, ttnn_pred_mask) * 100)
+                    sample_count += 1
+                    logger.info(f"sample_count: {sample_count}")
+                    if sample_count == max_samples:
+                        break
             if model_type == "torch_model":
-                ref_logits = model(image["pixel_values"].squeeze(dim=0)).logits
-                ref_upsampled_logits = torch.nn.functional.interpolate(
-                    ref_logits, size=mask.shape[-2:], mode="bilinear", align_corners=False
-                )
-                ref_pred_mask = ref_upsampled_logits.argmax(dim=1).squeeze().numpy()
-                mask = shift_gt_indices(mask)
-                mask = np.array(mask)
-
-                iou_list.append(iou(mask, ref_pred_mask) * 100)
-                dice_list.append(dice_score(mask, ref_pred_mask) * 100)
-                acc_list.append(pixel_accuracy(mask, ref_pred_mask) * 100)
-                prec_list.append(precision(mask, ref_pred_mask) * 100)
-                recall_list.append(recall(mask, ref_pred_mask) * 100)
-                f1_list.append(f1_score(mask, ref_pred_mask) * 100)
-                sample_count += 1
-                logger.info(f"sample_count: {sample_count}")
-                if sample_count == max_samples:
-                    break
+                ref_logits = model(input).logits
+                for i in range(len(masks)):
+                    mask = masks[i]
+                    ref_up = torch.nn.functional.interpolate(
+                        ref_logits[i : i + 1], size=mask.shape, mode="bilinear", align_corners=False
+                    )
+                    ref_pred_mask = ref_up.argmax(dim=1).squeeze().cpu().numpy()
+                    mask = shift_gt_indices(mask)
+                    mask = np.array(mask)
+                    iou_list.append(iou(mask, ref_pred_mask) * 100)
+                    dice_list.append(dice_score(mask, ref_pred_mask) * 100)
+                    acc_list.append(pixel_accuracy(mask, ref_pred_mask) * 100)
+                    prec_list.append(precision(mask, ref_pred_mask) * 100)
+                    recall_list.append(recall(mask, ref_pred_mask) * 100)
+                    f1_list.append(f1_score(mask, ref_pred_mask) * 100)
+                    sample_count += 1
+                    logger.info(f"sample_count: {sample_count}")
+                    if sample_count == max_samples:
+                        break
         logger.info(f"IoU: {np.mean(iou_list):.2f}%")
         logger.info(f"Dice Score: {np.mean(dice_list):.2f}%")
         logger.info(f"Pixel Accuracy: {np.mean(acc_list):.2f}%")
@@ -771,31 +770,25 @@ def test_yolov9c(
     )
 
 
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
-)
-@pytest.mark.parametrize(
-    "model_type",
-    [
-        ("tt_model"),
-        ("torch_model"),
-    ],
-)
-@pytest.mark.parametrize("res", [(512, 512)])
-def test_segformer(device, model_location_generator, model_type, res):
-    from transformers import SegformerForSemanticSegmentation
+def run_segformer_eval(device, model_location_generator, model_type, res, device_batch_size):
     from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
         SegformerForSemanticSegmentationReference,
     )
     from models.demos.segformer.runner.performant_runner import SegformerTrace2CQ
+    from models.demos.segformer.common import load_config, load_torch_model
 
-    torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    reference_model = SegformerForSemanticSegmentationReference(config=torch_model.config)
-    reference_model.load_state_dict(torch_model.state_dict())
+    config = load_config("configs/segformer_semantic_config.json")
+    reference_model = SegformerForSemanticSegmentationReference(config)
+    target_prefix = f""
+    reference_model = load_torch_model(
+        reference_model, target_prefix, module="semantic_sub", model_location_generator=model_location_generator
+    )
     reference_model.eval()
-
+    batch_size = device_batch_size * device.get_num_devices()
     segformer_trace_2cq = SegformerTrace2CQ()
-    segformer_trace_2cq.initialize_segformer_trace_2cqs_inference(device, model_location_generator)
+    segformer_trace_2cq.initialize_segformer_trace_2cqs_inference(
+        device, model_location_generator=model_location_generator, device_batch_size=device_batch_size
+    )
 
     if not os.path.exists("models/demos/segformer/demo/validation_data_ade20k"):
         logger.info("downloading data")
@@ -814,4 +807,43 @@ def test_segformer(device, model_location_generator, model_type, res):
         input_memory_config=input_memory_config,
         model_name=model_name,
         config=reference_model.config,
+        batch_size=batch_size,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    ((1),),
+)
+@pytest.mark.parametrize("res", [(512, 512)])
+def test_segformer_eval(device, model_location_generator, model_type, res, batch_size):
+    return run_segformer_eval(device, model_location_generator, model_type, res, batch_size)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize(
+    "device_batch_size",
+    ((1),),
+)
+@pytest.mark.parametrize("res", [(512, 512)])
+def test_segformer_eval_dp(mesh_device, model_location_generator, model_type, res, device_batch_size):
+    return run_segformer_eval(mesh_device, model_location_generator, model_type, res, device_batch_size)

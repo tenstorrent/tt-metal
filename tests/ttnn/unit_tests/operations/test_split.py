@@ -68,3 +68,26 @@ def test_split_last_dim_kernel(device, dtype):
         ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
         assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", dtypes)
+@pytest.mark.parametrize("shape", [(1, 256, 512, 512)])
+@pytest.mark.parametrize("chunksize", [256])
+@pytest.mark.parametrize("dim", [2, 3])
+def test_split_large_inner_dims(device, layout, dtype, shape, chunksize, dim):
+    torch_input_tensor = torch.rand(shape)
+    torch_results = torch.split(torch_input_tensor, chunksize, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+
+    outputs = ttnn.split(input_tensor, chunksize, dim=dim)
+    outputs = [ttnn.to_torch(t) for t in outputs]
+
+    assert len(outputs) == len(torch_results)
+    for output, torch_result in zip(outputs, torch_results):
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+
+        assert_with_pcc(torch_result, output, 0.9999)
