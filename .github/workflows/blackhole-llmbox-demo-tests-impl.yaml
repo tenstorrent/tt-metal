@@ -1,4 +1,4 @@
-name: "[internal] Blackhole LLMBox Demo tests impl"
+name: "[internal] Blackhole Multi-card Demo tests impl"
 
 on:
   workflow_call:
@@ -26,7 +26,7 @@ on:
         default: 4
 
 jobs:
-  llmbox-demo-tests:
+  multi-card-demo-tests:
     strategy:
       fail-fast: false
       matrix:

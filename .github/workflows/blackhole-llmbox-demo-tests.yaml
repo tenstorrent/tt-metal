@@ -1,4 +1,4 @@
-name: "(Blackhole) LLMBox Demo tests"
+name: "(Blackhole) Multi-card Demo tests"
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  blackhole-llmbox-demo-tests:
+  blackhole-multi-card-demo-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/blackhole-llmbox-demo-tests-impl.yaml
