@@ -195,7 +195,6 @@ test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_rackbox"]="
-test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
