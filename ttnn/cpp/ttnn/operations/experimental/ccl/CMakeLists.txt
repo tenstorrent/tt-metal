@@ -71,26 +71,22 @@ target_link_libraries(
 
 install(TARGETS ttnn_op_experimental_ccl LIBRARY COMPONENT tar)
 
-add_library(ttnn_op_experimental_ccl_jit INTERFACE)
-target_sources(
-    ttnn_op_experimental_ccl_jit
-    INTERFACE
-        FILE_SET ttnn_op_experimental_ccl_jit
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            send_recv_async/send_async/device/kernels/sender_reader.cpp
-            send_recv_async/send_async/device/kernels/sender_writer.cpp
-            send_recv_async/recv_async/device/kernels/receiver_inplace_writer.cpp
-            send_recv_async/recv_async/device/kernels/receiver_writer.cpp
-            send_recv_async/recv_async/device/kernels/receiver_reader.cpp
+# List of specific JIT kernel files to be installed for runtime access.
+set(TTNN_OP_EXPERIMENTAL_CCL_JIT_FILES
+    send_recv_async/send_async/device/kernels/sender_reader.cpp
+    send_recv_async/send_async/device/kernels/sender_writer.cpp
+    send_recv_async/recv_async/device/kernels/receiver_inplace_writer.cpp
+    send_recv_async/recv_async/device/kernels/receiver_writer.cpp
+    send_recv_async/recv_async/device/kernels/receiver_reader.cpp
 )
 
-install(
-    TARGETS
-        ttnn_op_experimental_ccl_jit
-    FILE_SET
-    ttnn_op_experimental_ccl_jit
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl/
+# Install each file individually to preserve its directory structure.
+foreach(JIT_FILE ${TTNN_OP_EXPERIMENTAL_CCL_JIT_FILES})
+    get_filename_component(JIT_FILE_PATH ${JIT_FILE} DIRECTORY)
+    install(
+        FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/${JIT_FILE}
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl/${JIT_FILE_PATH}
         COMPONENT ttnn-runtime
-)
+    )
+endforeach()
