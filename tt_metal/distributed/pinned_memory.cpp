@@ -18,33 +18,12 @@
 namespace tt::tt_metal {
 
 PinnedMemory::PinnedMemory(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    size_t buffer_size,
-    bool map_to_noc)
-    : buffer_size_(buffer_size), map_to_noc_(map_to_noc), owns_host_memory_(true), host_memory_base_(nullptr) {
-    
-    std::vector<IDevice*> devices = mesh_device->get_devices();
-    initialize_from_devices(devices, nullptr, buffer_size, map_to_noc);
-}
-
-PinnedMemory::PinnedMemory(
     const std::vector<IDevice*>& devices,
     size_t buffer_size,
     bool map_to_noc)
     : buffer_size_(buffer_size), map_to_noc_(map_to_noc), owns_host_memory_(true), host_memory_base_(nullptr) {
     
     initialize_from_devices(devices, nullptr, buffer_size, map_to_noc);
-}
-
-PinnedMemory::PinnedMemory(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    void* host_buffer,
-    size_t buffer_size,
-    bool map_to_noc)
-    : buffer_size_(buffer_size), map_to_noc_(map_to_noc), owns_host_memory_(false), host_memory_base_(host_buffer) {
-    
-    std::vector<IDevice*> devices = mesh_device->get_devices();
-    initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc);
 }
 
 PinnedMemory::PinnedMemory(
