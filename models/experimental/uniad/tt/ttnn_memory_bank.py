@@ -22,7 +22,6 @@ class TtMemoryBank:
         eps=1e-05,
         model_args=None,
     ):
-        self.max_his_length = memory_bank_len
         self.device = device
         self.params = params
         self.dim_in = dim_in
@@ -36,6 +35,7 @@ class TtMemoryBank:
         self.save_period = 3
 
     def update(self, track_instances, memory_bank_score_thresh):
+        track_instances.output_embedding = ttnn.to_torch(track_instances.output_embedding)
         embed = track_instances.output_embedding[:, None]
 
         scores = track_instances.scores
@@ -51,92 +51,54 @@ class TtMemoryBank:
 
         decrement = ttnn.where(mask, save_period - 1, save_period)
         save_period = decrement
-
         save_period = ttnn.where(saved_idxes, self.save_period, save_period)
+        saved_idxes = ttnn.to_torch((saved_idxes)).to(dtype=torch.bool)
+        save_period = ttnn.to_torch(save_period)
+        save_period[saved_idxes] = self.save_period
+        track_instances.save_period = save_period
+        track_instances.save_period = ttnn.from_torch(
+            track_instances.save_period, dtype=ttnn.bfloat16, device=self.device
+        )
+        saved_embed = embed[saved_idxes]
+        if len(saved_embed) > 0:
+            track_instances.mem_bank = ttnn.to_torch(track_instances.mem_bank)
+            prev_embed = track_instances.mem_bank[saved_idxes]
+            saved_embed = ttnn.from_torch(saved_embed, dtype=ttnn.bfloat16, device=self.device)
+            saved_embed = ttnn.to_layout(saved_embed, layout=ttnn.TILE_LAYOUT)
+            save_embed = ttnn.linear(
+                saved_embed,
+                self.params.save_proj.weight,
+                bias=self.params.save_proj.bias,
+            )
+            saved_embed = ttnn.to_torch(saved_embed)
+            tensor1 = mem_padding_mask[saved_idxes, 1:]
+            tensor1 = ttnn.from_torch(tensor1, dtype=ttnn.bfloat16, device=self.device)
+            tensor2 = torch.zeros((len(saved_embed), 1), dtype=torch.bool)
+            tensor2 = ttnn.from_torch(tensor2, dtype=ttnn.bfloat16, device=self.device)
+            out = ttnn.concat(
+                [
+                    tensor1,
+                    tensor2,
+                ],
+                dim=1,
+            )
+            mem_padding_mask[saved_idxes] = ttnn.to_torch(out).to(dtype=torch.bool)
+            track_instances.mem_bank = track_instances.mem_bank.clone()
+            prev_embed = ttnn.from_torch(prev_embed, dtype=ttnn.bfloat16, device=self.device)
+            prev_embed = ttnn.to_layout(prev_embed, layout=ttnn.TILE_LAYOUT)
+            out = ttnn.concat([prev_embed[:, 1:], save_embed], dim=1)
+            track_instances.mem_bank[saved_idxes] = ttnn.to_torch(out)
+            track_instances.mem_bank = ttnn.from_torch(
+                track_instances.mem_bank, dtype=ttnn.bfloat16, device=self.device
+            )
+        track_instances.output_embedding = ttnn.from_torch(
+            track_instances.output_embedding, dtype=ttnn.bfloat16, device=self.device
+        )
 
     def _forward_temporal_attn(self, track_instances):
         key_padding_mask = track_instances.mem_padding_mask
 
         valid_idxes = key_padding_mask[:, -1] == 0
-
-        mask_tensor = ttnn.from_torch(valid_idxes, dtype=ttnn.uint32, device=self.device)
-        mask_tensor = ttnn.unsqueeze(mask_tensor, 0)
-        mask_tensor = ttnn.unsqueeze(mask_tensor, 0)
-        mask_tensor = ttnn.unsqueeze(mask_tensor, 0)
-
-        output_tensor = ttnn.nonzero(mask_tensor)
-        output_tensor1 = ttnn.to_torch(output_tensor[0])
-        output_tensor2 = ttnn.to_torch(output_tensor[1])
-
-        no_of_non_zero_indices = output_tensor1[..., 0].item()
-        indices_tensor = output_tensor2[:, :, :, :no_of_non_zero_indices]
-        indices_tensor = ttnn.from_torch(indices_tensor, device=self.device)
-
-        indices_tensor = ttnn.reshape(indices_tensor, (-1,))
-        indices_tensor = ttnn.to_layout(indices_tensor, ttnn.TILE_LAYOUT)
-        indices_tensor = ttnn.typecast(indices_tensor, dtype=ttnn.uint32)
-        ttnn_output = ttnn.embedding(indices_tensor, track_instances.output_embedding)
-        ttnn_output = ttnn.to_layout(ttnn_output, ttnn.TILE_LAYOUT)
-        ttnn_output = ttnn.typecast(ttnn_output, dtype=ttnn.float32)
-        ttnn_output = ttnn.to_torch(ttnn_output)
-        embed = ttnn_output
-
-        embed = ttnn.to_torch(track_instances.output_embedding)[valid_idxes]
-
-        if len(embed) > 0:
-            A, B, C = track_instances.mem_bank.shape
-            track_instances.mem_bank = ttnn.reshape(track_instances.mem_bank, (A, B * C))
-            ttnn_output = ttnn.embedding(indices_tensor, track_instances.mem_bank)
-            track_instances.mem_bank = ttnn.reshape(track_instances.mem_bank, (A, B, C))
-            ttnn_output = ttnn.to_layout(ttnn_output, ttnn.TILE_LAYOUT)
-            ttnn_output = ttnn.typecast(ttnn_output, dtype=ttnn.bfloat16)
-            ttnn_output = ttnn.reshape(ttnn_output, (ttnn_output.shape[0], B, C))
-            # ttnn_output = ttnn.to_torch(ttnn_output)
-            prev_embed = ttnn_output
-
-            x_tensor = ttnn.from_torch(key_padding_mask, dtype=ttnn.bfloat16, device=self.device)
-
-            ttnn_output = ttnn.embedding(indices_tensor, x_tensor)
-            ttnn_output = ttnn.to_layout(ttnn_output, ttnn.TILE_LAYOUT)
-            ttnn_output = ttnn.typecast(ttnn_output, dtype=ttnn.float32)
-            ttnn_output = ttnn.to_torch(ttnn_output)
-            key_padding_mask = ttnn_output
-            embed = embed.unsqueeze(0)
-            embed = ttnn.from_torch(embed, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-            prev_embed = ttnn.permute(prev_embed, (1, 0, 2))
-            embed2 = self.temporal_attn(
-                embed,
-                prev_embed,
-                prev_embed,
-                key_padding_mask=key_padding_mask,
-            )[
-                0
-            ][0]
-
-            out = embed + embed2
-
-            embed = ttnn.layer_norm(
-                out,
-                weight=self.params.temporal_norm1.weight,
-                bias=self.params.temporal_norm1.bias,
-                epsilon=self.eps,
-            )
-
-            x = ttnn.linear(embed, self.params.temporal_fc1.weight, bias=self.params.temporal_fc1.bias)
-            x = ttnn.relu(x)
-            embed2 = ttnn.linear(x, self.params.temporal_fc2.weight, bias=self.params.temporal_fc2.bias)
-
-            embed = ttnn.layer_norm(
-                embed + embed2,
-                weight=self.params.temporal_norm2.weight,
-                bias=self.params.temporal_norm2.bias,
-                epsilon=self.eps,
-            )
-            track_instances.output_embedding = ttnn.to_torch(track_instances.output_embedding, dtype=torch.float32)
-            embed = ttnn.to_torch(embed, dtype=torch.float32)
-            track_instances.output_embedding = track_instances.output_embedding.clone()
-
-            track_instances.output_embedding[valid_idxes] = embed
 
         return track_instances
 
