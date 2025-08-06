@@ -76,14 +76,15 @@ template <
     uint32_t clear_value_cb_id,
     uint32_t in_cb_ntiles,
     uint32_t in_nbytes_c,
-    bool is_large_kernel>
+    bool is_large_kernel,
+    bool last_tile_is_partial>
 ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = in_c / TILE_WIDTH;
-    constexpr bool tilize_reconfig =
-        in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 && (window_h * window_w) <= 16;
+    constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
+                                     (window_h * window_w) <= 16 && !last_tile_is_partial;
     constexpr uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
 
     uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
@@ -331,7 +332,8 @@ void kernel_main() {
                 clear_value_cb_id,
                 in_cb_ntiles,
                 in_nbytes_padded_c,
-                is_large_kernel>(ind, in_l1_read_base_addr);
+                is_large_kernel,
+                last_tile_is_partial>(ind, in_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -358,6 +360,7 @@ void kernel_main() {
             clear_value_cb_id,
             in_cb_ntiles,
             in_nbytes_padded_c,
-            is_large_kernel>(0, in_l1_read_base_addr);
+            is_large_kernel,
+            last_tile_is_partial>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()

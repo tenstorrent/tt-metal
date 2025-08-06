@@ -63,7 +63,7 @@ void MAIN {
     // rows populated with data, otherwise we need to call clear_out_tiles between reconfigs to avoid untilizing junk
     // data which is much slower than just untilizing the entire MAX_TILES_PER_REDUCTION
     constexpr bool tilize_reconfig =
-        in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 && window_size_hw <= 16;
+        in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 && window_size_hw <= 16 && !last_tile_is_partial;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
@@ -126,18 +126,8 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
             if (last_c_block) {
-                // if constexpr (last_tile_is_partial) {
-                //     if (partial_iter_output_tiles > 1) {
-                //         pack_untilize_dest<partial_iter_output_tiles - 1, partial_iter_output_tiles>(
-                //             out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                //         pack_untilize_dest_init<1>(out_cb_id, num_out_sticks, num_faces_in_last_output_tile);
-                //     }
-                //     pack_untilize_dest<1, partial_iter_output_tiles>(
-                //         out_cb_id, 1, partial_iter_output_tiles - 1, num_out_sticks, num_faces_in_last_output_tile);
-                // } else {
                 pack_untilize_dest<partial_iter_output_tiles>(
                     out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                // }
                 cb_push_back(out_cb_id, tiles_to_reserve);
             } else {
                 DPRINT << "rest of the cases" << ENDL();
