@@ -455,10 +455,12 @@ def run_llama_all_gather_matmul_impl(
 
     if validate_all:
         for tensor_index in range(len(tt_outs)):
+            print(f"validating tensor_index: {tensor_index}")
             tt_out_tensor = tt_outs[tensor_index]
             output_tensor = output_tensor_goldens_list[tensor_index]
             validate(tt_out_tensor, output_tensor)
     else:
+        print(f"validating last tensor")
         tt_out_tensor = tt_outs[-1]
         output_tensor = output_tensor_goldens_list[-1]
         validate(tt_out_tensor, output_tensor)

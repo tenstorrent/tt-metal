@@ -460,13 +460,17 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
             std::nullopt,              // global_cb
             sub_device_id);            // sub_device_id
 
+    std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>>
+        matmul_override_runtime_arguments_callback = matmul_program_with_callbacks->override_runtime_arguments_callback;
+
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,
          worker_sender_writer_kernel_id,
          worker_receiver_kernel_id,
          sender_worker_cores,
          intermediate_cores_vec,
-         ring_index](
+         ring_index,
+         matmul_override_runtime_arguments_callback](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -501,6 +505,16 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
                 auto& worker_receiver_runtime_args = worker_receiver_runtime_args_by_core[core.x][core.y];
                 worker_receiver_runtime_args[0] = semaphore.address();
                 worker_receiver_runtime_args[3] = aggregated.buffer()->address();
+            }
+
+            if (matmul_override_runtime_arguments_callback.has_value()) {
+                matmul_override_runtime_arguments_callback.value()(
+                    operation,
+                    program,
+                    {input_tensors[3], input_tensors[1]}, /* all gather output tensor, weight tensor */
+                    optional_input_tensors,
+                    {output_tensors[1]} /* matmul output tensor */
+                );
             }
         };
 
