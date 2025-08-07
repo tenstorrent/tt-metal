@@ -58,7 +58,7 @@ size_t get_tt_fabric_max_payload_size_bytes();
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
-    uint32_t link_idx,
+    const uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
