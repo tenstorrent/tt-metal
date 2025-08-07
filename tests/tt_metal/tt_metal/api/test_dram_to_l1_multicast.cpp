@@ -22,6 +22,7 @@
 #include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>

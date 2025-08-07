@@ -17,13 +17,14 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
