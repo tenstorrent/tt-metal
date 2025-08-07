@@ -59,6 +59,17 @@ struct pair_hash {
     }
 };
 
+struct tuple_hash {
+    template <class T1, class T2, class T3>
+    std::size_t operator()(const std::tuple<T1, T2, T3>& t) const {
+        auto h1 = std::hash<T1>{}(std::get<0>(t));
+        auto h2 = std::hash<T2>{}(std::get<1>(t));
+        auto h3 = std::hash<T3>{}(std::get<2>(t));
+        // Simple mixing
+        return h1 ^ (h2 << 1) ^ (h3 << 2);
+    }
+};
+
 class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDistributedContextManager {
     static constexpr uint32_t ROW_DIM = 0;
     static constexpr uint32_t COL_DIM = 1;
@@ -84,7 +95,7 @@ public:
         return control_plane_ptr_->get_coord_range(local_mesh_id_, MeshScope::LOCAL);
     }
 
-    void open_devices(Topology topology, RoutingType routing_type) {
+    void open_devices(Topology topology, RoutingType routing_type, FabricTensixType fabric_tensix_type) {
         auto it = topology_to_fabric_config_map.find({topology, routing_type});
         TT_FATAL(
             it != topology_to_fabric_config_map.end(),
@@ -92,6 +103,12 @@ public:
             topology,
             routing_type);
         auto new_fabric_config = it->second;
+
+        // Set fabric tensix config based on type
+        tt_fabric::FabricTensixConfig fabric_tensix_config = (fabric_tensix_type == FabricTensixType::Mux)
+                                                                 ? tt_fabric::FabricTensixConfig::MUX
+                                                                 : tt_fabric::FabricTensixConfig::DISABLED;
+        tt::tt_metal::MetalContext::instance().set_fabric_tensix_config(fabric_tensix_config);
         if (new_fabric_config != current_fabric_config_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);

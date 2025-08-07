@@ -99,6 +99,11 @@ static const StringEnumMapper<RoutingType> routing_type_mapper({
     {"Dynamic", RoutingType::Dynamic},
 });
 
+static const StringEnumMapper<FabricTensixType> fabric_tensix_type_mapper({
+    {"Default", FabricTensixType::Default},
+    {"Mux", FabricTensixType::Mux},  // "Mux" maps to Enabled for backward compatibility
+});
+
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
     {"RoundRobin", CoreAllocationPolicy::RoundRobin},
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
@@ -527,6 +532,15 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
     } else {
         log_info(tt::LogTest, "No routing type specified, defaulting to LowLatency");
         fabric_setup.routing_type = RoutingType::LowLatency;
+    }
+
+    if (fabric_setup_yaml["fabric_type"]) {
+        auto fabric_type_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_type"]);
+        fabric_setup.fabric_tensix_type =
+            detail::fabric_tensix_type_mapper.from_string(fabric_type_str, "FabricTensixType");
+    } else {
+        log_info(tt::LogTest, "No fabric type specified, defaulting to Default");
+        fabric_setup.fabric_tensix_type = FabricTensixType::Default;
     }
 
     if (fabric_setup_yaml["num_links"]) {
@@ -1820,6 +1834,10 @@ private:
         return detail::routing_type_mapper.to_string(rtype, "RoutingType");
     }
 
+    static std::string to_string(FabricTensixType ftype) {
+        return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixType");
+    }
+
     static std::string to_string(tt::tt_fabric::Topology topology) {
         return detail::topology_mapper.to_string(topology, "Topology");
     }
@@ -1988,6 +2006,10 @@ private:
         if (config.routing_type.has_value()) {
             out << YAML::Key << "routing_type";
             out << YAML::Value << to_string(config.routing_type.value());
+        }
+        if (config.fabric_tensix_type.has_value()) {
+            out << YAML::Key << "fabric_type";
+            out << YAML::Value << to_string(config.fabric_tensix_type.value());
         }
         out << YAML::EndMap;
     }

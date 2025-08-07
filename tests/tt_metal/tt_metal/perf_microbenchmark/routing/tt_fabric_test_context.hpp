@@ -55,6 +55,7 @@ using ParsedTestConfig = tt::tt_fabric::fabric_tests::ParsedTestConfig;
 using Topology = tt::tt_fabric::Topology;
 using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
+using FabricTensixType = tt::tt_fabric::fabric_tests::FabricTensixType;
 
 // Bandwidth measurement result structures
 struct BandwidthResult {
@@ -282,7 +283,9 @@ public:
         }
     }
 
-    void open_devices(Topology topology, RoutingType routing_type) { fixture_->open_devices(topology, routing_type); }
+    void open_devices(Topology topology, RoutingType routing_type, FabricTensixType fabric_tensix_type) {
+        fixture_->open_devices(topology, routing_type, fabric_tensix_type);
+    }
 
     void initialize_sync_memory() {
         if (!global_sync_) {

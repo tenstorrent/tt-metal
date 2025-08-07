@@ -89,6 +89,11 @@ enum class RoutingType {
     Dynamic,
 };
 
+enum class FabricTensixType {
+    Default,  // Normal fabric without tensix cores
+    Mux,      // Fabric with tensix cores enabled
+};
+
 enum class HighLevelTrafficPattern {
     AllToAll,
     OneToAll,
@@ -101,6 +106,7 @@ enum class HighLevelTrafficPattern {
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology;
     std::optional<RoutingType> routing_type;
+    std::optional<FabricTensixType> fabric_tensix_type;  // NEW: fabric tensix type (default/enabled)
     uint32_t num_links;
 };
 
