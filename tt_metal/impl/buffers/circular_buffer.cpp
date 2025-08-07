@@ -115,7 +115,13 @@ uint32_t CircularBuffer::page_size(uint32_t buffer_index) const {
     return page_size;
 }
 
-uint32_t CircularBuffer::num_pages(uint32_t buffer_index) const { return this->size() / this->page_size(buffer_index); }
+uint32_t CircularBuffer::num_pages(uint32_t buffer_index) const {
+        uint32_t num_pages = this->size() / this->page_size(buffer_index);
+        // LocalCBInterface.tiles_acked and LocalCBInterface.tiles_received are 16 bits, so we need to check if the number of pages would cause overflow.
+        constexpr uint32_t max_num_pages = (1 << 16) - 1;
+        TT_FATAL(num_pages <= max_num_pages, "Number of pages {} is greater than {}. Would cause wraparound in the CB calculations.", num_pages, max_num_pages);
+        return num_pages;
+}
 
 DataFormat CircularBuffer::data_format(uint32_t buffer_index) const {
     if (not this->uses_buffer_index(buffer_index)) {
