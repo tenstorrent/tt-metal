@@ -126,9 +126,7 @@ std::vector<std::string> HalJitBuildQueryWormholeBase::defines(const HalJitBuild
             defines.push_back("RISC_B0_HW");
             break;
         }
-        default:
-            TT_ASSERT(false, "Unsupported programmable core type {} to query defines", enchantum::to_string(core_type));
-            break;
+        default: TT_ASSERT(false, "Unsupported programmable core type {} to query defines", params.core_type); break;
     }
     return defines;
 }
@@ -188,9 +186,7 @@ std::vector<std::string> HalJitBuildQueryWormholeBase::srcs(const HalJitBuildQue
                     break;
             }
             break;
-        default:
-            TT_ASSERT(false, "Unsupported programmable core type {} to query srcs", enchantum::to_string(core_type));
-            break;
+        default: TT_ASSERT(false, "Unsupported programmable core type {} to query srcs", params.core_type); break;
     }
     return srcs;
 }
