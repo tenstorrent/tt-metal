@@ -419,7 +419,13 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
 // ////////////////////////////////////////////////////////////////////
 // ////////////////////////////////////////////////////////////////////
 
-TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SinglePageTile_OneHop_PersistentFabric) {
+// NOTE: The following tests are disabled because MutliInputReaderKernel currently uses single-device API to run,
+// which are not supported with Mesh workloads now that we are using the new distributed API.
+// Mo model currently uses the multi input reader kernel currently.
+
+TEST(
+    WorkerCclCommandProcessingKernelFabricUnicastMode,
+    DISABLED_MultiInputReader_SinglePageTile_OneHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
@@ -488,45 +494,57 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 // ////////////////////////////////////////////////////////////////////
 // ////////////////////////////////////////////////////////////////////
 
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_SinglePageTile_SingleHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_SinglePageTile_TwoHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_SinglePageTile_ThreeHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_4PageTile_SingleHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop_PersistentFabric) {
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DISABLED_MultiInputReader_4PageTile_TwoHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 128, 32});
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_4PageTile_ThreeHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 64, 64});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsPageTile_ThreeHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_lotsPageTile_ThreeHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 64, 16384});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
