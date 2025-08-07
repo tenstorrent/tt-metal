@@ -91,7 +91,7 @@ run_llama3_func() {
 
   # Run Llama3 accuracy tests for 1B, 3B, 8B, 11b weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 420 -k "accuracy and ci-token-matching" || fail=1
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 420 -k "performance and ci-token-matching" || fail=1
     echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
   done
 

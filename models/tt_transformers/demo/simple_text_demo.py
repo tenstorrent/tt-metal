@@ -558,8 +558,8 @@ def test_demo_text(
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
-    # if is_ci_env and (("accuracy" in test_id) or not ci_only):
-    # pytest.skip("CI only runs the CI-only tests")
+    if is_ci_env and (("accuracy" in test_id) or not ci_only):
+        pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
