@@ -335,6 +335,7 @@ def run_test_FalconCausalLM_end_to_end(
     ("tiiuae/falcon-40b-instruct",),
     ids=["falcon_40b"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_perf_bare_metal(
     num_devices,
     model_version,
@@ -406,6 +407,7 @@ def test_perf_bare_metal(
     ("tiiuae/falcon-40b-instruct",),
     ids=["falcon_40b"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_device_perf_bare_metal(
     num_devices,
     model_version,
