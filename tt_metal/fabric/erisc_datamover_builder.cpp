@@ -545,7 +545,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                 // set num_sender_buffer_slots
                 fill_sender_buffer_slots(
                     num_sender_buffer_slots,
-                    get_dateline_sender_channel_skip_idx(true /* is_2D_routing */),
+                    this->dateline_sender_channel_skip_idx_2d,
                     default_num_sender_buffer_slots,
                     dateline_num_sender_buffer_slots);
                 // set remote sender buffer slots equal to local sender, since remote is also dateline
@@ -590,8 +590,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->num_used_sender_channels = get_sender_channel_count(is_2D_routing);
     this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
-
-    log_info(tt::LogMetal, "topology: {}, is_2D_routing: {}", topology, is_2D_routing);
 
     if (is_2D_routing) {
         // For 2D there is no forwarding to self but we are still initialize the settings for it.
@@ -685,7 +683,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_remote_receiver_buffer_slots,
         num_downstream_sender_buffer_slots);
 
-    log_info(
+    log_trace(
         tt::LogOp,
         "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}, is_dateline_upstream_adj_dev_upstream "
         "{}",
@@ -693,11 +691,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         is_dateline_upstream,
         is_dateline_upstream_adj_dev,
         is_dateline_upstream_adj_dev_upstream);
-    log_info(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
-    log_info(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
-    log_info(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
-    log_info(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
-    log_info(tt::LogOp, "num_downstream_sender_buffer_slots: {}", num_downstream_sender_buffer_slots);
+    log_trace(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
+    log_trace(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
+    log_trace(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
+    log_trace(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
+    log_trace(tt::LogOp, "num_downstream_sender_buffer_slots: {}", num_downstream_sender_buffer_slots);
 
     size_t total_sender_slots = std::accumulate(
         num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + this->num_used_sender_channels, size_t{0});

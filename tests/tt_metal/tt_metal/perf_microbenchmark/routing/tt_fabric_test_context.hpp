@@ -181,8 +181,8 @@ public:
                             .atomic_inc_wrap = sync_pattern.atomic_inc_wrap,
                             .mcast_start_hops = sync_pattern.mcast_start_hops,
                             .seed = config.seed,
-                            .topology = config.fabric_setup.topology,
-                            .routing_type = config.fabric_setup.routing_type.value(),
+                            .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
+                            .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                             .mesh_shape = this->fixture_->get_mesh_shape(),
                         };
 
@@ -200,7 +200,7 @@ public:
 
                         // for 2d, we need to spcify the mcast start node id
                         std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
-                        if (fixture_->is_2d_fabric() &&
+                        if (fixture_->is_2D_routing_enabled() &&
                             sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
                             mcast_start_node_id =
                                 fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
@@ -265,8 +265,8 @@ public:
                     .atomic_inc_wrap = pattern.atomic_inc_wrap,
                     .mcast_start_hops = pattern.mcast_start_hops,
                     .seed = config.seed,
-                    .topology = config.fabric_setup.topology,
-                    .routing_type = config.fabric_setup.routing_type.value(),
+                    .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
+                    .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                     .mesh_shape = this->fixture_->get_mesh_shape(),
                 };
 
@@ -546,7 +546,7 @@ private:
             dst_node_ids = traffic_config.dst_node_ids.value();
 
             // assign hops for 2d LL and 1D
-            if (!(fixture_->use_dynamic_routing())) {
+            if (!(fixture_->is_dynamic_routing_enabled())) {
                 hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
             }
         }
@@ -554,7 +554,8 @@ private:
         // for 2d, we need to spcify the mcast start node id
         // TODO: in future, we should be able to specify the mcast start node id in the traffic config
         std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
-        if (fixture_->is_2d_fabric() && traffic_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+        if (fixture_->is_2D_routing_enabled() &&
+            traffic_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
             mcast_start_node_id = fixture_->get_mcast_start_node_id(src_node_id, hops.value());
         }
 

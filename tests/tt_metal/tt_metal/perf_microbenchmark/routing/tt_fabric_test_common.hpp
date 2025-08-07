@@ -223,9 +223,11 @@ public:
         return control_plane_ptr_->get_fabric_context().get_fabric_max_payload_size_bytes();
     }
 
-    bool is_2d_fabric() const override { return control_plane_ptr_->get_fabric_context().is_2D_routing_enabled(); }
+    bool is_2D_routing_enabled() const override {
+        return control_plane_ptr_->get_fabric_context().is_2D_routing_enabled();
+    }
 
-    bool use_dynamic_routing() const override {
+    bool is_dynamic_routing_enabled() const override {
         return control_plane_ptr_->get_fabric_context().is_dynamic_routing_enabled();
     }
 
@@ -1412,7 +1414,7 @@ private:
             }
         }
 
-        if (is_2d_fabric()) {
+        if (is_2D_routing_enabled()) {
             TT_FATAL(non_zero_dirs.size() <= 2, "2D fabric supports at most 2 directions for unicast");
         } else {
             TT_FATAL(non_zero_dirs.size() <= 1, "1D fabric supports at most 1 direction for unicast");

@@ -7,7 +7,6 @@
 #include <array>
 #include <vector>
 
-#include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 
 namespace tt::tt_fabric {
@@ -244,8 +243,8 @@ struct TrafficParameters {
 
     // Global context
     uint32_t seed;
-    Topology topology;
-    RoutingType routing_type;
+    bool is_2D_routing_enabled;
+    bool is_dynamic_routing_enabled;
     tt::tt_metal::distributed::MeshShape mesh_shape;
 };
 
@@ -300,14 +299,12 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         args.insert(args.end(), metadata_args.begin(), metadata_args.end());
     }
 
-    bool is_2d_fabric = FabricContext::is_2D_topology(this->parameters.topology);
-
     // push chip send type
     if (!is_sync_config) {
         args.push_back(this->parameters.chip_send_type);
     }
 
-    if (is_2d_fabric) {
+    if (this->parameters.is_2D_routing_enabled) {
         if (this->parameters.chip_send_type == ChipSendType::CHIP_UNICAST) {
             TT_FATAL(this->dst_node_ids.size() == 1, "2D unicast should have exactly one destination node.");
             const auto& dst_node_id = this->dst_node_ids[0];
@@ -325,13 +322,8 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
                 this->mcast_start_node_id.value_or(this->dst_node_ids[0]);  // Representative destination
             auto adjusted_hops = *(this->hops);
 
-            log_info(
-                tt::LogTest, "hops: {}, src node id: {}, start node id: {}", *(this->hops), src_node_id, dst_node_id);
-
             // Handle dynamic routing by adjusting hops
-            bool is_dynamic_routing = (this->parameters.routing_type == RoutingType::Dynamic);
-            if (is_dynamic_routing) {
-                log_info(tt::LogTest, "dynamic routing enabled");
+            if (this->parameters.is_dynamic_routing_enabled) {
                 auto north_hops = hops->count(RoutingDirection::N) > 0 ? hops->at(RoutingDirection::N) : 0;
                 auto south_hops = hops->count(RoutingDirection::S) > 0 ? hops->at(RoutingDirection::S) : 0;
                 auto east_hops = hops->count(RoutingDirection::E) > 0 ? hops->at(RoutingDirection::E) : 0;
@@ -351,8 +343,6 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
                 if (north_hops == 0 && south_hops == 0 && west_hops > 0) {
                     adjusted_hops[RoutingDirection::W] -= 1;
                 }
-
-                log_info(tt::LogTest, "original hops: {}, adjusted hops: {}", *(this->hops), adjusted_hops);
             }
 
             // chip_id and mesh_id is unused for low latency 2d mesh mcast

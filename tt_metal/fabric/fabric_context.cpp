@@ -120,6 +120,9 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
     this->topology_ = this->get_topology_from_config(fabric_config);
 
+    this->is_2D_routing_enabled_ = this->is_2D_topology(this->topology_);
+    this->is_dynamic_routing_enabled_ = this->is_dynamic_routing_config(fabric_config);
+
     this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
     this->channel_buffer_size_bytes_ = this->packet_header_size_bytes_ + this->max_payload_size_bytes_;
@@ -179,9 +182,9 @@ bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
 
 tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
 
-bool FabricContext::is_2D_routing_enabled() const { return is_2D_topology(topology_); }
+bool FabricContext::is_2D_routing_enabled() const { return this->is_2D_routing_enabled_; }
 
-bool FabricContext::is_dynamic_routing_enabled() const { return is_dynamic_routing_config(fabric_config_); }
+bool FabricContext::is_dynamic_routing_enabled() const { return this->is_dynamic_routing_enabled_; }
 
 bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
     if (topology_ == Topology::Ring) {
