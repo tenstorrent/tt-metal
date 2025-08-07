@@ -12,6 +12,10 @@ import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
+NUM_DEVICES = ttnn.distributed.get_num_devices()
+MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
+MESH_Y = 1 if NUM_DEVICES <= 8 else NUM_DEVICES / MESH_X
+
 
 class SdxlConvTest(OpTestBase):
     def __init__(
@@ -169,6 +173,7 @@ class SdxlConvTest(OpTestBase):
         pytest.param(2, id="2chips"),
         pytest.param(8, id="8chips"),
         pytest.param((8, 4), id="galaxy"),
+        pytest.param((MESH_X, MESH_Y), id="all"),  # run on all available devices
     ],
     indirect=["mesh_device"],
 )
@@ -274,7 +279,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     sdxlConvTest.run_op_test()
 
 
-@skip_for_blackhole("Multi-chip Blackhole has not been tested")
 @pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"logical_chip_{i}_" for i in range(32)])
 @pytest.mark.parametrize(
     "mesh_device",
