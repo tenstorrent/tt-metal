@@ -111,7 +111,7 @@ class LoadImages:
 
 
 # Resize image with optional padding (letterboxing)
-def LetterBox(img, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
+def letterbox(img, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
     shape = img.shape[:2]  # current shape (height, width)
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
@@ -140,7 +140,7 @@ def LetterBox(img, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=Tr
 
 # Apply LetterBox to a batch of images
 def pre_transform(im, res=(640, 640)):
-    return [LetterBox(img=x, new_shape=res) for x in im]
+    return [letterbox(img=x, new_shape=res) for x in im]
 
 
 # Image preprocessing: resize, normalize, and convert to tensor

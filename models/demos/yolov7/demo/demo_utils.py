@@ -15,40 +15,6 @@ import torchvision
 from loguru import logger
 
 
-def letterbox(
-    img,
-    new_shape=(640, 640),
-    color=(114, 114, 114),
-    auto=False,
-    scaleFill=True,
-    scaleup=True,
-    stride=32,
-):
-    shape = img.shape[:2]
-    if isinstance(new_shape, int):
-        new_shape = (new_shape, new_shape)
-    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-    if not scaleup:
-        r = min(r, 1.0)
-    ratio = r, r
-    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]
-    if auto:
-        dw, dh = np.mod(dw, stride), np.mod(dh, stride)
-    elif scaleFill:
-        dw, dh = 0.0, 0.0
-        new_unpad = (new_shape[1], new_shape[0])
-        ratio = new_shape[1] / shape[1], new_shape[0] / shape[0]
-    dw /= 2
-    dh /= 2
-    if shape[::-1] != new_unpad:
-        img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
-    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
-    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
-    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
-    return img  # , ratio, (dw, dh)
-
-
 def plot_one_box(x, img, color=None, label=None, line_thickness=3):
     tl = line_thickness or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1
     color = color or [random.randint(0, 255) for _ in range(3)]
@@ -180,25 +146,6 @@ def increment_path(path, exist_ok=True, sep=""):
         i = [int(m.groups()[0]) for m in matches if m]
         n = max(i) + 1 if i else 2
         return f"{path}{sep}{n}"
-
-
-def pre_transform(im, res):
-    return [letterbox(x, res) for x in im]
-
-
-def preprocess(im, res):
-    device = "cpu"
-    not_tensor = not isinstance(im, torch.Tensor)
-    if not_tensor:
-        im = np.stack(pre_transform(im, res))
-        im = im[..., ::-1].transpose((0, 3, 1, 2))
-        im = np.ascontiguousarray(im)
-        im = torch.from_numpy(im)
-
-    im = im.half() if device != "cpu" else im.float()
-    if not_tensor:
-        im /= 255
-    return im
 
 
 def postprocess(preds, img, orig_imgs, batch, names, path, dataset, save_dir="models/demos/yolov7/demo/runs/detect"):
