@@ -2552,8 +2552,12 @@ def test_remainder_implicit_broadcast(device, shapes, torch_dtype, ttnn_dtype):
             torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, shapes[1], dtype=torch.int32
         )
     else:
-        torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.float32)
-        torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.float32)
+        torch_input_tensor_a = torch.empty(shapes[0], dtype=torch.float32).uniform_(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max
+        )
+        torch_input_tensor_b = torch.empty(shapes[1], dtype=torch.float32).uniform_(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max
+        )
 
     golden_function = ttnn.get_golden_function(ttnn.remainder)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
