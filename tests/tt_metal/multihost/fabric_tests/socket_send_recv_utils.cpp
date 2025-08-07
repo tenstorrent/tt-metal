@@ -58,9 +58,6 @@ void test_socket_send_recv(
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     auto sender_rank = socket.get_config().sender_rank;
     auto recv_rank = socket.get_config().receiver_rank;
-
-    auto sender_core = socket.get_config().socket_connection_config[0].sender_core.core_coord;
-    auto recv_core = socket.get_config().socket_connection_config[0].receiver_core.core_coord;
     std::set<CoreRange> sender_core_range;
     std::set<CoreRange> recv_core_range;
     for (const auto& connection : socket.get_config().socket_connection_config) {
@@ -70,7 +67,7 @@ void test_socket_send_recv(
     auto sender_core_range_set = CoreRangeSet(sender_core_range);
     auto recv_core_range_set = CoreRangeSet(recv_core_range);
 
-    std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
+    std::vector<uint32_t> src_vec_per_core(data_size / sizeof(uint32_t));
 
     // Exchange seed between sender and receiver
     uint32_t seed = 0;
@@ -96,27 +93,36 @@ void test_socket_send_recv(
 
     std::mt19937 gen(seed);
     std::uniform_int_distribution<uint32_t> dis(0, UINT32_MAX);
-    std::generate(src_vec.begin(), src_vec.end(), [&]() { return dis(gen); });
-
+    std::generate(src_vec_per_core.begin(), src_vec_per_core.end(), [&]() { return dis(gen); });
+    std::vector<uint32_t> src_vec;
+    src_vec.reserve(data_size * sender_core_range_set.num_cores() / sizeof(uint32_t));
+    for (int i = 0; i < sender_core_range_set.num_cores(); i++) {
+        src_vec.insert(src_vec.end(), src_vec_per_core.begin(), src_vec_per_core.end());
+    }
+    for (int i = 0; i < 8; i++) {
+        log_info(tt::LogTest, "Src vec: {}", src_vec[i]);
+        log_info(tt::LogTest, "Src vec per core: {}", src_vec_per_core[i]);
+    }
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
 
     for (int i = 0; i < num_txns; i++) {
         if (distributed_context->rank() == sender_rank) {
             // TODO: Change to CoreRangeSet to all senders
-            auto sender_data_shard_params =
-                ShardSpecBuffer(CoreRangeSet(sender_core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+            auto sender_data_shard_params = ShardSpecBuffer(
+                sender_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sender_core_range_set.num_cores(), 1});
 
             const DeviceLocalBufferConfig sender_device_local_config{
                 .page_size = data_size,
                 .buffer_type = BufferType::L1,
                 .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
                 .bottom_up = false};
-            const ReplicatedBufferConfig buffer_config{.size = data_size};
+            const ReplicatedBufferConfig buffer_config{.size = sender_core_range_set.num_cores() * data_size};
 
             auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device_.get());
             auto sender_mesh_workload = CreateMeshWorkload();
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                auto sender_core = connection.sender_core.core_coord;
                 WriteShard(
                     mesh_device_->mesh_command_queue(),
                     sender_data_buffer,
@@ -165,9 +171,8 @@ void test_socket_send_recv(
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), sender_mesh_workload, false);
             Finish(mesh_device_->mesh_command_queue());
         } else if (distributed_context->rank() == recv_rank) {
-            auto recv_virtual_coord = mesh_device_->worker_core_from_logical_core(recv_core);
-            auto recv_data_shard_params =
-                ShardSpecBuffer(CoreRangeSet(recv_core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+            auto recv_data_shard_params = ShardSpecBuffer(
+                recv_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {recv_core_range_set.num_cores(), 1});
 
             const DeviceLocalBufferConfig recv_device_local_config{
                 .page_size = data_size,
@@ -175,11 +180,12 @@ void test_socket_send_recv(
                 .sharding_args = BufferShardingArgs(recv_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
                 .bottom_up = false};
 
-            const ReplicatedBufferConfig buffer_config{.size = data_size};
+            const ReplicatedBufferConfig buffer_config{.size = recv_core_range_set.num_cores() * data_size};
             auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device_.get());
 
             auto recv_mesh_workload = CreateMeshWorkload();
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                auto recv_core = connection.receiver_core.core_coord;
                 auto sender_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::SENDER, connection.sender_core.device_coord);
                 auto recv_fabric_node_id = mesh_device_->get_fabric_node_id(connection.receiver_core.device_coord);
@@ -215,6 +221,7 @@ void test_socket_send_recv(
             }
             // Run receiver workload using the created socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), recv_mesh_workload, false);
+            auto& core_to_core_id = recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 std::vector<uint32_t> recv_data_readback;
                 ReadShard(
@@ -222,13 +229,20 @@ void test_socket_send_recv(
                     recv_data_readback,
                     recv_data_buffer,
                     connection.receiver_core.device_coord);
-                EXPECT_EQ(src_vec, recv_data_readback);
+                uint32_t idx = core_to_core_id.at(connection.receiver_core.core_coord);
+                std::vector<uint32_t> recv_data_readback_per_core(
+                    recv_data_readback.begin() + idx * data_size / sizeof(uint32_t),
+                    recv_data_readback.begin() + (idx + 1) * data_size / sizeof(uint32_t));
+                EXPECT_EQ(src_vec_per_core, recv_data_readback_per_core);
             }
         }
         // Increment the source vector for the next iteration
         // This is to ensure that the data is different for each transaction
         for (int i = 0; i < src_vec.size(); i++) {
             src_vec[i]++;
+        }
+        for (int i = 0; i < src_vec_per_core.size(); i++) {
+            src_vec_per_core[i]++;
         }
     }
 }
