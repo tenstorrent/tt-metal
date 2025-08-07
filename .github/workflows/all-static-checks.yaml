@@ -116,10 +116,10 @@ jobs:
             BASE_REF="HEAD^"
           fi
 
-          # Find all changed files in the current PR/commit
-          CHANGED_FILES=$(git diff --name-only --diff-filter=AM $BASE_REF HEAD)
+          # Find all changed C++ files in the current PR/commit
+          CHANGED_FILES=$(git diff --name-only --diff-filter=AM $BASE_REF HEAD | grep -E '\.(cpp|hpp|h|cc|cxx)$')
 
-          # Check if any changed files contain new InterleavedAddrGen usages
+          # Check if any changed C++ files contain new InterleavedAddrGen usages
           NEW_USAGE_FOUND=0
           for file in $CHANGED_FILES; do
             if [ -f "$file" ]; then
