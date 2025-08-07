@@ -31,7 +31,8 @@ jobs:
       TT_METAL_WATCHER: 60
       TT_METAL_WATCHER_NOINLINE: 1
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+      # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface
     runs-on: ${{ matrix.runner-info.runs-on }}
     name: ${{ matrix.runner-info.machine-type }} ${{ matrix.runner-info.name }}
     steps:

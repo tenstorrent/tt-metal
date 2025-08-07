@@ -71,7 +71,8 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
       TT_METAL_HOME: ${{ github.workspace }}
       PYTHONPATH: ${{ github.workspace }}
-      HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+      # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️ Checkout
@@ -106,7 +107,8 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
+            # -e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
+            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
@@ -121,7 +123,8 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
+            # -e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
+            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
