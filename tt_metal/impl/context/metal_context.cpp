@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <enchantum/enchantum.hpp>
 #include "metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
@@ -96,20 +97,14 @@ void MetalContext::initialize(
     // Initialize inspector
     inspector_data_ = Inspector::initialize();
 
-    // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
-    // to initialize the control plane.
-    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
-        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
-    }
-
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
     // Need DispatchMemMap for both dispatch core types
     tt_metal::DispatchSettings::initialize(*cluster_);
-    dispatch_mem_map_[magic_enum::enum_integer(CoreType::WORKER)] =
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
         std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
-    dispatch_mem_map_[magic_enum::enum_integer(CoreType::ETH)] =
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
     // Initialize debug servers. Attaching individual devices done below
     if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -232,6 +227,12 @@ MetalContext& MetalContext::instance() {
 }
 
 MetalContext::MetalContext() {
+    // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
+    // to initialize the control plane.
+    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
+        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
+    }
+
     bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
@@ -288,7 +289,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map() const {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
-    auto& mem_map = dispatch_mem_map_[magic_enum::enum_integer(core_type)];
+    auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
     TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before intializing it.", core_type);
     return *mem_map;
 }
@@ -520,7 +521,8 @@ void MetalContext::initialize_control_plane() {
     if (cluster_type == tt::ClusterType::GALAXY && fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
         mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                "tt_metal/fabric/mesh_graph_descriptors" /
-                               "single_galaxy_torus_xy_graph_descriptor.yaml";
+                               "single_galaxy_torus_xy_graph_descriptor.yaml";                                                           
+
     }
 
     TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
@@ -889,7 +891,7 @@ void MetalContext::initialize_firmware(
         }
         default:
             TT_THROW(
-                "Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
+                "Unsupported programable core type {} to initialize build states", enchantum::to_string(core_type));
     }
 
     cluster_->write_core(

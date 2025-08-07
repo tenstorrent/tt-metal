@@ -71,7 +71,7 @@ test_suite_bh_single_pcie_llama_demo_tests() {
     pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
 }
 
-test_suite_bh_llmbox_metal_unit_tests() {
+test_suite_bh_multi_pcie_metal_unit_tests() {
     echo "[upstream-tests] Running BH LLMBox metal unit tests"
 
     ./build/test/tt_metal/tt_fabric/test_system_health
@@ -80,21 +80,43 @@ test_suite_bh_llmbox_metal_unit_tests() {
     ./build/test/tt_metal/unit_tests_eth
 }
 
-test_suite_bh_llmbox_llama_demo_tests() {
+test_suite_bh_multi_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama demo model tests"
-
     verify_llama_dir_
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 220
+    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
+        local data_parallel_devices="2"
+    elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
+        local data_parallel_devices="4"
+    elif [[ "$hw_topology" == "blackhole_rackbox" ]]; then
+        local data_parallel_devices="8"
+    else
+        echo "Your blackhole hw topology is not supported to run Llama demo model tests!"
+    fi
+
+    echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
+
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel "$data_parallel_devices"
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$data_parallel_devices" --max_generated_tokens 220
 }
 
-test_suite_bh_llmbox_llama_stress_tests() {
+test_suite_bh_multi_pcie_llama_stress_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama stress model tests"
-
     verify_llama_dir_
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 22000
+    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
+        local data_parallel_devices="2"
+    elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
+        local data_parallel_devices="4"
+    elif [[ "$hw_topology" == "blackhole_rackbox" ]]; then
+        local data_parallel_devices="8"
+    else
+        echo "Your blackhole hw topology is not supported to run Llama demo stress tests!"
+    fi
+
+    echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
+
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$data_parallel_devices" --max_generated_tokens 22000
 }
 
 test_suite_wh_6u_metal_unit_tests() {
@@ -127,13 +149,13 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
-    pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py
-    pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
+    pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick"
+    pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
-    # pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
-    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "mini-stress-test"
+    # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
+    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "mini-stress-test"
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
@@ -143,7 +165,7 @@ test_suite_wh_6u_llama_long_stress_tests() {
     verify_llama_dir_
 
     # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
-    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test and not mini-stress-test"
+    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
 }
 
 # Define test suite mappings for different hardware topologies
@@ -161,8 +183,17 @@ test_suite_bh_single_pcie_metal_unit_tests
 test_suite_bh_single_pcie_didt_tests"
 
 hw_topology_test_suites["blackhole_llmbox"]="
-test_suite_bh_llmbox_metal_unit_tests
-test_suite_bh_llmbox_llama_demo_tests"
+test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_multi_pcie_llama_demo_tests"
+
+hw_topology_test_suites["blackhole_deskbox"]="
+test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_multi_pcie_llama_demo_tests"
+
+hw_topology_test_suites["blackhole_rackbox"]="
+test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_multi_pcie_llama_demo_tests"
+
 
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests

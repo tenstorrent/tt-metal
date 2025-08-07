@@ -122,7 +122,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     }
     const auto compute_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_int_sum_h.cpp"};
-    const auto compute_kernel_1_id = CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -146,7 +146,6 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
             fp32_dest_acc_en,
             math_approx_mode);
     }
-    uint32_t out_dim_divider{Wt};
     for (uint32_t i = 0, num_cols_read = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -200,7 +199,7 @@ void MorehSumOperation::MorehSumHIntFactory::override_runtime_arguments(
     auto src_dram_buffer = tensor_args.input.buffer();
     auto dst_dram_buffer = tensor_return_value.buffer();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {

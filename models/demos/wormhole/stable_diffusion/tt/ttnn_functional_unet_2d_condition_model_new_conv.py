@@ -355,6 +355,8 @@ class UNet2DConditionModel:
             activation="",
             shard_layout=shard_layout,
             reshard_if_not_optimal=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
         compute_config = get_default_compute_config(self.device)
 
@@ -416,7 +418,7 @@ class UNet2DConditionModel:
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
-            ttnn.DumpDeviceProfiler(self.device)
+            ttnn.ReadDeviceProfiler(self.device)
             logger.info(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
@@ -501,7 +503,7 @@ class UNet2DConditionModel:
         only_cross_attention = list(reversed(only_cross_attention))
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
-            ttnn.DumpDeviceProfiler(self.device)
+            ttnn.ReadDeviceProfiler(self.device)
             logger.info(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 
@@ -640,6 +642,7 @@ class UNet2DConditionModel:
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_h_override=64,
             reshard_if_not_optimal=True,
+            enable_act_double_buffer=True,
         )
         compute_config = get_default_compute_config(self.device)
 

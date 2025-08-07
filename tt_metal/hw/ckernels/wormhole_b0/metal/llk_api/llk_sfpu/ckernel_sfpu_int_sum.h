@@ -16,23 +16,28 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+#ifndef SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
+#define SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
+
 #define BIT_MASK_32 0xFFFFFFFF
 #define SIGN 0x80000000
 #define MAGNITUDE 0x7FFFFFFF
-
-sfpi_inline vInt sfpu_twos_comp_to_sign_mag(vInt value) {
-    v_if(value & SIGN) {
-        vInt magnitude = (~value + 1) & MAGNITUDE;
-        value = SIGN | magnitude;
-    }
-    v_endif;
-    return value;
-}
 
 sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
     v_if(value & SIGN) {
         vInt magnitude = value & MAGNITUDE;
         value = (~magnitude + 1) & BIT_MASK_32;
+    }
+    v_endif;
+    return value;
+}
+
+#endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
+
+sfpi_inline vInt sfpu_twos_comp_to_sign_mag(vInt value) {
+    v_if(value & SIGN) {
+        vInt magnitude = (~value + 1) & MAGNITUDE;
+        value = SIGN | magnitude;
     }
     v_endif;
     return value;

@@ -6,6 +6,7 @@
 
 #include "moreh_sgd_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -48,7 +49,6 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     tt::tt_metal::IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t units_to_divide = num * Ht * Wt;
-    uint32_t core_w = grid.x;
     uint32_t core_h = grid.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -118,14 +118,17 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(param_in)),
-        static_cast<uint32_t>(is_dram(grad)),
-        static_cast<uint32_t>(momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*param_in.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*grad.buffer()).append_to(reader_compile_time_args);
+    if (momentum_buffer_in.has_value()) {
+        TensorAccessorArgs(*momentum_buffer_in->buffer()).append_to(reader_compile_time_args);
+    }
 
-    std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(param_out))};
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*param_out.buffer()).append_to(writer_compile_time_args);
     if (has_momentum_buffer_out) {
-        writer_compile_time_args.push_back(static_cast<uint32_t>(is_dram(momentum_buffer_out.value())));
+        TensorAccessorArgs(*momentum_buffer_out->buffer()).append_to(writer_compile_time_args);
     }
 
     const auto reader_kernel_file =
@@ -164,14 +167,6 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto param_in_addr = param_in.buffer()->address();
-    const auto grad_addr = grad.buffer()->address();
-    const auto momentum_buffer_in_addr =
-        momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0;
-
-    const auto param_out_addr = param_out.buffer()->address();
-    const auto momentum_buffer_out_addr =
-        momentum_buffer_out.has_value() ? momentum_buffer_out->buffer()->address() : 0;
 
     auto core_x_offset = 0;
     auto core_y_offset = 0;

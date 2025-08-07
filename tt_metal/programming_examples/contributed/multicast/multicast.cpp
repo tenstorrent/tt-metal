@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
 
         ////////// COMPUTE KERNEL SETUP //////////
         vector<uint32_t> compute_kernel_args = {};
-        KernelHandle comp_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
             receiver_cores_logical,
@@ -225,9 +225,7 @@ int main(int argc, char **argv) {
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
-                .compile_args = compute_kernel_args
-            }
-        );
+                .compile_args = compute_kernel_args});
 
         ////////// IDENTITY MATRIX TILE SETUP //////////
         std::vector<bfloat16> identity_tile = create_identity_matrix(TILE_WIDTH, TILE_HEIGHT, TILE_WIDTH);

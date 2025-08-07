@@ -49,13 +49,6 @@ ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
-add_library(span INTERFACE)
-target_link_libraries(
-    span
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::core>" # FIXME: this is a hack so we do not need to package up Boost
-)
-
 add_library(small_vector INTERFACE)
 target_link_libraries(
     small_vector
@@ -121,9 +114,13 @@ endif()
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME magic-enum-dev)
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 OPTIONS "MAGIC_ENUM_OPT_INSTALL TRUE")
-set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
+CPMAddPackage(
+    NAME enchantum
+    GIT_REPOSITORY https://github.com/ZXShady/enchantum.git
+    GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt

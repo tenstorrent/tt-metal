@@ -169,6 +169,8 @@ struct PermuteDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
     // API call to map user arguments to operation attributes and tensor args.
     // This is the only method that is called by the user

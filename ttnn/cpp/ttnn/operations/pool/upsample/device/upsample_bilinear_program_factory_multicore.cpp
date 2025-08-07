@@ -286,7 +286,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         .compile_args = compute_compile_time_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
 
-    auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+    CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
     uint32_t batch_size = input.padded_shape()[0];
     uint32_t in_h = input.padded_shape()[1];

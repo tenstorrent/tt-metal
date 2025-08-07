@@ -44,6 +44,8 @@
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.h>
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt_stl/overloaded.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -372,7 +374,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
     if (blocking) {
-        this->finish_nolock({sub_device_id});
+        this->finish_nolock({{sub_device_id}});
     }
 }
 
@@ -382,6 +384,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
     auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
@@ -412,6 +415,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
     auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
@@ -463,8 +467,13 @@ void FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
+
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
@@ -481,11 +490,16 @@ void FDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
+    if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
+        return;
+    }
+
     auto device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(BufferRegion(0, device_buffer->size()));
+    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -604,7 +618,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
 
     MeshEvent event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
-    for (const auto& sub_device_id : sub_device_ids) {
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
         sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
     }
@@ -618,7 +632,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : sub_device_ids) {
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
         sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
     }
@@ -656,19 +670,19 @@ void FDMeshCommandQueue::read_completion_queue() {
         } else {
             uint32_t num_reads = num_outstanding_reads_.load();
             for (uint32_t i = 0; i < num_reads; i++) {
-                auto mesh_read_descriptor = *(completion_queue_reads_.pop());
                 std::visit(
-                    [&](auto&& mesh_read_descriptor) {
-                        using T = std::decay_t<decltype(mesh_read_descriptor)>;
-                        if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
-                            this->copy_buffer_data_to_user_space(mesh_read_descriptor);
-                        } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
-                            this->read_completion_queue_event(mesh_read_descriptor);
-                        } else {
-                            this->read_l1_data_from_completion_queue(mesh_read_descriptor);
-                        }
+                    ttsl::overloaded{
+                        [this](MeshBufferReadDescriptor& mesh_read_descriptor) {
+                            copy_buffer_data_to_user_space(mesh_read_descriptor);
+                        },
+                        [this](MeshReadEventDescriptor& mesh_read_descriptor) {
+                            read_completion_queue_event(mesh_read_descriptor);
+                        },
+                        [this](MeshCoreDataReadDescriptor& mesh_read_descriptor) {
+                            read_l1_data_from_completion_queue(mesh_read_descriptor);
+                        },
                     },
-                    mesh_read_descriptor);
+                    *completion_queue_reads_.pop());
             }
             std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
             num_outstanding_reads_.fetch_sub(num_reads);
@@ -686,6 +700,7 @@ MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::g
 
 void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
+        ZoneScopedN("copy_buffer_data_to_user_space lambda");
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
         chip_id_t mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
@@ -755,6 +770,9 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
 
 void FDMeshCommandQueue::reset_worker_state(
     bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
+    for (auto device : mesh_device_->get_devices()) {
+        TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
+    }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;

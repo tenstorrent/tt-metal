@@ -19,6 +19,27 @@
 namespace ttnn::operations::conv {
 namespace conv2d {
 
+std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
+    const ttnn::Shape& conv_activation_shape,
+    const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
+    uint32_t num_cores_nhw,
+    uint32_t act_block_h_ntiles) {
+    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
+    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t batch_size = output_shape[0];
+    uint32_t conv_output_h = output_shape[1];
+    uint32_t conv_output_w = output_shape[2];
+
+    // pad height
+    uint32_t num_rows = (uint32_t)batch_size * conv_output_h * conv_output_w;
+    uint32_t act_block_h_datums = act_block_h_ntiles * tt::constants::TILE_HEIGHT;
+    uint32_t num_rows_padded = tt::round_up(num_rows, num_cores_nhw * act_block_h_datums);
+    uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
+    uint32_t num_cols_padded = tt::round_up(conv_activation_shape[3] * filter_w, tt::constants::TILE_WIDTH) * filter_h;
+    return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt::tt_metal::Program& program,
     const Tensor& a,
@@ -39,8 +60,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
-    bool enable_weights_double_buffer,
-    bool enable_subblock_padding) {
+    bool enable_weights_double_buffer) {
     tt::tt_metal::IDevice* device = a.device();
     TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
@@ -56,35 +76,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-
-    // it is bad for compute, pad act_block_h_ntiles
-    uint32_t out_subblock_h_ntiles_padded = out_subblock_h_ntiles;
-    if (enable_subblock_padding) {
-        uint32_t max_num_subblock = fp32_dest_acc_en ? 4 : 8;
-        uint32_t max_subblock_h = fp32_dest_acc_en ? 4 : 8;
-        TT_FATAL(
-            act_block_h_ntiles == out_block_h_ntiles, "to pad subblock, the number of blocks on height dim must be 1");
-
-        if ((out_subblock_w_ntiles * out_subblock_h_ntiles <= max_num_subblock / 2) and
-            (out_subblock_w_ntiles == weight_block_w_ntiles) and (act_block_h_ntiles == out_block_h_ntiles)) {
-            uint32_t num_subblock_h = act_block_h_ntiles / out_subblock_h_ntiles;
-            uint32_t num_iter = max_subblock_h - out_subblock_h_ntiles;
-            uint32_t new_out_subblock_h = out_subblock_h_ntiles;
-            uint32_t preferred_out_subblock_h = out_subblock_h_ntiles;
-
-            for (uint32_t i = 0; i < num_iter; ++i) {
-                new_out_subblock_h += 1;
-                uint32_t new_num_subblock_h = (act_block_h_ntiles + new_out_subblock_h - 1) / new_out_subblock_h;
-
-                if (new_num_subblock_h < num_subblock_h and
-                    (out_subblock_w_ntiles * new_out_subblock_h <= max_num_subblock)) {
-                    num_subblock_h = new_num_subblock_h;
-                    preferred_out_subblock_h = new_out_subblock_h;
-                }
-            }
-            out_subblock_h_ntiles_padded = preferred_out_subblock_h;
-        }
-    }
 
     TT_FATAL(
         out_block_h_ntiles >= act_block_h_ntiles,
@@ -115,10 +106,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // parallelization config
     const auto& p_config = parallelization_config;
-    uint32_t num_cores_x = p_config.grid_size.x;
-    uint32_t num_cores_y = p_config.grid_size.y;
-    // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
-    bool weight_width_sliced = p_config.per_core_out_matrix_width_ntile < weight_matrix_width_ntiles;
     uint32_t input_channels_padded = shard_shape[1] * input_num_cores;
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -134,7 +121,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
-    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
@@ -148,17 +134,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     }
 
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] =
-        optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded,
-            sliding_window_config,
-            parallelization_config.num_cores_nhw,
-            out_block_h_ntiles);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(
+        ashape_with_channels_padded, sliding_window_config, parallelization_config.num_cores_nhw, out_block_h_ntiles);
     TT_FATAL(act_matrix_shape.size() == 3, "Error");
     TT_FATAL(act_matrix_shape[0] == 1, "Error");
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
-    uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
 
     // TODO: Move all these TT_FATALs/checks to validate?
 
@@ -348,14 +329,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     std::map<std::string, std::string> writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
 
-    compute_defines["WIDTH_SHARDED"] = "1";
-
-    if (output_num_cores == 1) {
-        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
-    }
-    bool skip_mcast = is_singlecore_skip_mcast(p_config, a.memory_config().memory_layout());
-    if (skip_mcast) {
+    const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+    const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
+    const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
+    if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
+    }
+    if (skip_weights_mcast) {
+        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
@@ -403,14 +384,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         a.memory_config().shard_spec().value().shape,
         has_bias,
         false,
-        skip_mcast);
+        skip_activation_mcast);
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
         ttnn::operations::sliding_window::generate_sliding_window_op_config(
             op_trace_metadata, shard_boundaries, stride_w, true, act_block_h_datums, 0);
 
     // create sharded ttnn config tensors
-    tt::tt_metal::DataType indices_tt_dtype = tt::tt_metal::DataType::UINT16;
     Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
         conv_sharded_input_top_left_indices, parallel_config);
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
@@ -428,11 +408,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
     compute_kernel_args = {
-        act_block_w_ntiles,      // in0_block_w
-        act_num_subblocks,       // in0_num_sublocks
-        act_block_num_tiles,     // in0_block_num_tiles,
-        act_subblock_num_tiles,  // in0_sublock_num_tiles
-        act_subblock_h_ntiles,   // in0_subblock_h
+        act_block_w_ntiles,                         // in0_block_w
+        act_num_subblocks,                          // in0_num_sublocks
+        act_block_num_tiles,                        // in0_block_num_tiles,
+        act_subblock_num_tiles,                     // in0_sublock_num_tiles
+        act_subblock_h_ntiles * act_num_subblocks,  // reader_num_h_subblocks
 
         weight_num_subblocks,    // in1_num_sublocks
         weight_block_num_tiles,  // in1_block_num_tiles,
@@ -442,18 +422,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         num_blocks_act_w,              // in0_num_blocks_w,
         num_blocks_weight_w_per_core,  // in1_num_blocks_w
 
-        out_subblock_h_ntiles_padded,  // out_sublock_h
-        out_subblock_w_ntiles,         // out_sublock_w
-        out_subblock_num_tiles,        // out_sublock_num_tiles
+        out_subblock_h_ntiles,   // out_sublock_h
+        out_subblock_w_ntiles,   // out_sublock_w
+        out_subblock_num_tiles,  // out_sublock_num_tiles
 
         tilize_in0,    // tilize_in0
         untilize_out,  // untilize_out
 
         bias_ntiles,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-
-        skip_mcast ? get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index
-                   : get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+        get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,
@@ -532,7 +510,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             .compile_args = weights_kernel_compile_args,
             .defines = writer_defines});
 
-    auto compute_id = CreateKernel(
+    CreateKernel(
         program,
         compute_kernel_path,
         all_cores,

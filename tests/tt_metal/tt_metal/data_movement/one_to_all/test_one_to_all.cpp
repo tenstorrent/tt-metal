@@ -566,7 +566,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
     uint32_t test_case_id = 52;  // Arbitrary test id
 
     bool loopback = true;
-    NOC noc_id = NOC::NOC_1;
+    NOC noc_id = NOC::NOC_0;
 
     bool is_multicast = false;
     bool is_linked = false;
@@ -596,7 +596,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
     uint32_t test_case_id = 53;  // Arbitrary test id
 
     bool loopback = true;
-    NOC noc_id = NOC::NOC_1;
+    NOC noc_id = NOC::NOC_0;
 
     bool is_multicast = true;
     bool is_linked = false;
@@ -626,7 +626,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
     uint32_t test_case_id = 54;  // Arbitrary test id
 
     bool loopback = true;
-    NOC noc_id = NOC::NOC_1;
+    NOC noc_id = NOC::NOC_0;
 
     bool is_multicast = true;
     bool is_linked = true;

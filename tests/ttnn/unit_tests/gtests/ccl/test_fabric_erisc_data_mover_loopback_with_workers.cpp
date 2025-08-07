@@ -331,7 +331,6 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    const Layout layout = Layout::TILE;
     auto input_mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
@@ -361,7 +360,6 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0_UniquePerStream) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    const Layout layout = Layout::TILE;
     size_t in_shard_grid_x = 1;
     size_t in_shard_grid_y = 1;
     size_t out_shard_grid_x = 4;
@@ -421,7 +419,13 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
 // ////////////////////////////////////////////////////////////////////
 // ////////////////////////////////////////////////////////////////////
 
-TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SinglePageTile_OneHop_PersistentFabric) {
+// NOTE: The following tests are disabled because MutliInputReaderKernel currently uses single-device API to run,
+// which are not supported with Mesh workloads now that we are using the new distributed API.
+// Mo model currently uses the multi input reader kernel currently.
+
+TEST(
+    WorkerCclCommandProcessingKernelFabricUnicastMode,
+    DISABLED_MultiInputReader_SinglePageTile_OneHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
@@ -490,45 +494,57 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 // ////////////////////////////////////////////////////////////////////
 // ////////////////////////////////////////////////////////////////////
 
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_SinglePageTile_SingleHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_SinglePageTile_TwoHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_SinglePageTile_ThreeHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_4PageTile_SingleHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop_PersistentFabric) {
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DISABLED_MultiInputReader_4PageTile_TwoHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 128, 32});
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_4PageTile_ThreeHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 64, 64});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
-TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsPageTile_ThreeHop_PersistentFabric) {
+TEST(
+    WorkerCclCommandProcessingKernelFabricMulticastMode,
+    DISABLED_MultiInputReader_lotsPageTile_ThreeHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 64, 16384});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
@@ -1335,11 +1351,10 @@ TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
 TEST(EdmFabric, RingDeadlockStabilityTest) {
     constexpr size_t num_mcasts = 200000;
     constexpr size_t num_op_invocations = 5;
-    constexpr bool line_sync = true;
     size_t num_links = 1;
     std::vector<size_t> num_devices_vec;
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-    if (cluster_type == tt::ClusterType::GALAXY) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
         num_devices_vec = {4, 8};
         num_links = 4;
     } else {
@@ -1366,13 +1381,12 @@ TEST(EdmFabric, RingDeadlockStabilityTest) {
 TEST(EdmFabric, RingDeadlockStabilityTest_RelaxedFabricStrictness) {
     constexpr size_t num_mcasts = 200000;
     constexpr size_t num_op_invocations = 5;
-    constexpr bool line_sync = true;
     // Set to however many links are available
     std::optional<size_t> num_links = std::nullopt;
     std::vector<size_t> num_devices;
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
-    if (cluster_type != tt::ClusterType::GALAXY) {
+    if (cluster_type != tt::tt_metal::ClusterType::GALAXY) {
         return;
     }
     num_devices = {4, 8};

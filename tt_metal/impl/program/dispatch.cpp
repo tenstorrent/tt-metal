@@ -4,7 +4,6 @@
 
 #include "tt_metal/impl/program/dispatch.hpp"
 
-#include <magic_enum/magic_enum.hpp>
 #include <mesh_workload.hpp>
 #include <stddef.h>
 #include <string.h>
@@ -17,7 +16,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
-#include <initializer_list>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -50,6 +48,7 @@
 #include "semaphore.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
+#include <tt_stl/overloaded.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -434,15 +433,15 @@ void generate_runtime_args_cmds(
                 (no_stride ? 1 : num_packed_cmds) * tt::align(runtime_args_len * sizeof(uint32_t), l1_alignment);
             return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
         };
-    thread_local static auto get_runtime_args_data_offset =
-        [](uint32_t num_packed_cmds, uint32_t /*runtime_args_len*/, bool is_unicast) {
-            uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-            uint32_t sub_cmd_sizeB =
-                is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
-            uint32_t dispatch_cmd_sizeB =
-                sizeof(CQDispatchCmd) + tt::align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
-            return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
-        };
+    thread_local static auto get_runtime_args_data_offset = [](uint32_t num_packed_cmds,
+                                                               uint32_t /*runtime_args_len*/,
+                                                               bool is_unicast) {
+        uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        uint32_t sub_cmd_sizeB =
+            is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+        uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + tt::align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
+        return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
+    };
 
     constexpr bool unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
 
@@ -698,7 +697,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
                             std::vector<Transfer>{Transfer{
                                 .start = crta_offset,
-                                .data = tt::stl::Span(
+                                .data = tt::stl::Span<const uint8_t>(
                                     reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
                                 .cbs = {},
                                 .rta_data = &kernel->common_runtime_args_data()}};
@@ -935,7 +934,7 @@ public:
                     batched_transfers[std::make_pair(noc_xy_addr, dst_noc_info.num_dests)][start_addr] =
                         std::vector<Transfer>{
                             {{.start = start_addr,
-                              .data = tt::stl::Span(
+                              .data = tt::stl::Span<const uint8_t>(
                                   reinterpret_cast<const uint8_t*>(&semaphore_data.back()), sizeof(uint32_t))}}};
                 }
             } else if (semaphore.core_type() == CoreType::ETH) {
@@ -1060,7 +1059,7 @@ public:
 
                 batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
                     {.start = start_addr,
-                     .data = tt::stl::Span(
+                     .data = tt::stl::Span<const uint8_t>(
                          reinterpret_cast<const uint8_t*>(cb_config_payload.data()), max_index * sizeof(uint32_t)),
                      .cbs = circular_buffers_on_corerange}};
                 i++;
@@ -1090,18 +1089,14 @@ public:
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
         for (const auto& [cores, num_mcast_dests, kg_transfer_info] : program_transfer_info.kernel_bins) {
-            bool write_linear;
-            uint32_t noc_encoding;
-            std::visit(
-                [&](auto&& cores) {
-                    using T = std::decay_t<decltype(cores)>;
-                    if constexpr (std::is_same_v<T, CoreRange>) {
-                        noc_encoding = device->get_noc_multicast_encoding(constants.noc_index, cores);
-                        write_linear = false;
-                    } else {
-                        noc_encoding = device->get_noc_unicast_encoding(constants.noc_index, cores);
-                        write_linear = true;
-                    }
+            const auto [noc_encoding, write_linear] = std::visit(
+                ttsl::overloaded{
+                    [&](const CoreRange& cores) {
+                        return std::make_pair(device->get_noc_multicast_encoding(constants.noc_index, cores), false);
+                    },
+                    [&](const CoreCoord& cores) {
+                        return std::make_pair(device->get_noc_unicast_encoding(constants.noc_index, cores), true);
+                    },
                 },
                 cores);
             for (uint32_t kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
@@ -2518,8 +2513,9 @@ void set_go_signal_noc_data_on_dispatch(
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal =
-        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() ? DispatcherSelect::DISPATCH_SUBORDINATE
-                                                                                   : DispatcherSelect::DISPATCH_MASTER;
+        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()
+            ? DispatcherSelect::DISPATCH_SUBORDINATE
+            : DispatcherSelect::DISPATCH_MASTER;
     command_sequence.add_dispatch_set_go_signal_noc_data(go_signal_noc_data, dispatcher_for_go_signal);
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);

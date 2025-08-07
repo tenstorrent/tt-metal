@@ -201,9 +201,6 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     // split work
-    auto input_shape = input.padded_shape();
-    auto N = input_shape[0];
-
     const auto& input_shape_without_padding = input.logical_shape();
     const auto origin_N = input_shape_without_padding[0];
     const auto origin_C = input_shape_without_padding[1];

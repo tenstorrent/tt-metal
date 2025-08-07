@@ -205,7 +205,7 @@ static Tensor create_config_tensor(
 operation::ProgramWithCallbacks upsample_multi_core_sharded(
     const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     Program program = CreateProgram();
-    IDevice* device = input.device();
+    distributed::MeshDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -329,8 +329,7 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
 
     std::string reader_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
-    auto reader_kernel =
-        CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
+    CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
 
     // Capture config_buffer to cache this with the program
     auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb, config_cb, config_storage, config_buffer](

@@ -6,12 +6,11 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
-#include <magic_enum/magic_enum.hpp>
 
 namespace ttnn::operations::ternary_backward {
 

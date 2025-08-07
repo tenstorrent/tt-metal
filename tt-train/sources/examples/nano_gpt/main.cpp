@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
-//
 // SPDX-License-Identifier: Apache-2.0
 
 #include <CLI/CLI.hpp>
@@ -11,6 +10,7 @@
 #include <wandbcpp.hpp>
 
 #include "3tier/remote_optimizer.hpp"
+#include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
@@ -485,11 +485,12 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt.yaml";
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt.yaml";
+
     std::string run_name = "";
     bool is_eval = false;
     bool add_time_to_name = true;
-    bool enable_wandb = true;
+    bool enable_wandb = false;
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
@@ -528,8 +529,6 @@ int main(int argc, char **argv) {
         fmt::print("MPI config:\n");
         fmt::print("  enable_mpi: {}\n", config.enable_mpi);
         fmt::print("  num_mh_workers: {}\n", config.num_mh_workers);
-    } else {
-        fmt::print("Not MPI run.\n");
     }
 
     if (enable_wandb) {
@@ -677,47 +676,33 @@ int main(int argc, char **argv) {
     cached_data.masks_tensor = ttml::autograd::create_tensor(
         ttml::core::from_vector(mask, ttnn::Shape({1, 1, sequence_length, sequence_length}), device));
 
-    std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
-            auto start_timer = std::chrono::high_resolution_clock::now();
-            const uint32_t batch_size = samples.size();
-            std::vector<uint32_t> &data = cached_data.data;
-            std::vector<uint32_t> &targets = cached_data.targets;
+    std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn = [sequence_length,
+                                                                                  num_heads,
+                                                                                  device,
+                                                                                  &cached_data,
+                                                                                  &device_config](
+                                                                                     std::vector<DatasetSample>
+                                                                                         &&samples) {
+        auto start_timer = std::chrono::high_resolution_clock::now();
+        const uint32_t batch_size = samples.size();
+        std::vector<uint32_t> &data = cached_data.data;
+        std::vector<uint32_t> &targets = cached_data.targets;
 
-            data.clear();
-            targets.clear();
+        data.clear();
+        targets.clear();
 
-            data.reserve((size_t)batch_size * sequence_length);
-            targets.reserve((size_t)batch_size * sequence_length);
-            for (auto &[features, target_span] : samples) {
-                std::copy(features.begin(), features.end(), std::back_inserter(data));
-                std::copy(target_span.begin(), target_span.end(), std::back_inserter(targets));
-            }
-            auto end_timer = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-            fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
+        data.reserve((size_t)batch_size * sequence_length);
+        targets.reserve((size_t)batch_size * sequence_length);
+        for (auto &[features, target_span] : samples) {
+            std::copy(features.begin(), features.end(), std::back_inserter(data));
+            std::copy(target_span.begin(), target_span.end(), std::back_inserter(targets));
+        }
+        auto end_timer = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
+        fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
-            auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                if (device_config.enable_ddp) {
-                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
-                    auto data_tensor =
-                        ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                            data,
-                            ttnn::Shape({batch_size, 1, 1, sequence_length}),
-                            device,
-                            ttnn::Layout::ROW_MAJOR,
-                            mapper.get()));
-
-                    auto targets_tt_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                        targets,
-                        ttnn::Shape({batch_size, sequence_length}),
-                        device,
-                        ttnn::Layout::ROW_MAJOR,
-                        mapper.get());
-                    auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
-                    return {data_tensor, targets_tensor};
-                }
-
+        auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
+            if (device_config.enable_ddp) {
                 const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
                 auto data_tensor =
                     ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
@@ -727,18 +712,28 @@ int main(int argc, char **argv) {
                         ttnn::Layout::ROW_MAJOR,
                         mapper.get()));
 
-                auto targets_tensor =
-                    ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                        targets, ttnn::Shape({batch_size, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
+                auto targets_tt_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                    targets, ttnn::Shape({batch_size, sequence_length}), device, ttnn::Layout::ROW_MAJOR, mapper.get());
+                auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
                 return {data_tensor, targets_tensor};
-            };
+            }
 
-            auto [data_tensor, targets_tensor] = create_data_and_targets();
-            end_timer = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-            fmt::print("dataloader step time {} ms\n", (double)duration / 1000.);
-            return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor);
+            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                data, ttnn::Shape({batch_size, 1, 1, sequence_length}), device, ttnn::Layout::ROW_MAJOR, mapper.get()));
+
+            auto targets_tensor =
+                ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                    targets, ttnn::Shape({batch_size, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
+            return {data_tensor, targets_tensor};
         };
+
+        auto [data_tensor, targets_tensor] = create_data_and_targets();
+        end_timer = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
+        fmt::print("dataloader step time {} ms\n", (double)duration / 1000.);
+        return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor);
+    };
 
     LossAverageMeter loss_meter;
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
@@ -882,8 +877,7 @@ int main(int argc, char **argv) {
     };
 
     auto get_loss_value = [device](const TensorPtr &loss) {
-        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
-        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), composer);
+        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =
             std::accumulate(loss_xtensors.begin(), loss_xtensors.end(), 0.0F, [](float acc, auto &xtensor) {
@@ -895,8 +889,13 @@ int main(int argc, char **argv) {
 
     const uint32_t num_epochs = config.num_epochs;
     auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
+
+    bool is_everything_compiled = false;
+
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
+            ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
+
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
@@ -905,6 +904,8 @@ int main(int argc, char **argv) {
             auto loss = ttml::ops::cross_entropy_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
+
+            ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
 
             loss->backward();
             ttml::autograd::ctx().reset_graph();
@@ -950,11 +951,18 @@ int main(int argc, char **argv) {
                     }
                 }
 
+                ttml::autograd::ctx().get_profiler().read_results(device, fmt::format("iteration_{}", global_step));
+
                 if (global_step >= config.max_steps) {
                     break;
                 }
 
                 gradient_accumulator_helper.reset();
+
+                if (!is_everything_compiled) {
+                    ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
+                    is_everything_compiled = true;
+                }
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
@@ -994,5 +1002,7 @@ int main(int argc, char **argv) {
         wandbcpp::finish();
     }
 
+    ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0);
+    ttml::autograd::ctx().close_profiler();
     return 0;
 }

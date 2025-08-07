@@ -5,6 +5,7 @@
 #include <tt-metalium/constants.hpp>
 #include "pad_op.hpp"
 #include "pad_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
@@ -45,11 +46,13 @@ void Pad::validate_with_output_tensors(
         TT_FATAL((this->output_padded_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
         TT_FATAL((this->output_padded_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
         TT_FATAL(
-            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16,
+            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
+                input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32,
             "Cannot pad tilized tensor with specified format");
     } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
-            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16,
+            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
+                input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32,
             "Cannot pad RM tensor with specified format");
     }
 
@@ -76,6 +79,18 @@ std::vector<ttnn::TensorSpec> Pad::compute_output_specs(const std::vector<Tensor
             output_mem_config,
             output_logical_shape,
             output_padded_shape))};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Pad::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks Pad::create_program(

@@ -55,9 +55,11 @@ inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, u
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->mesh_id) {
-        return routing_table->intra_mesh_routing_table[dst_dev_id];
+        return static_cast<eth_chan_directions>(
+            routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
     } else {
-        return routing_table->inter_mesh_routing_table[dst_mesh_id];
+        return static_cast<eth_chan_directions>(
+            routing_table->inter_mesh_routing_table.get_original_direction(dst_mesh_id));
     }
 }
 
@@ -561,7 +563,7 @@ inline void fabric_client_connect(
     router_addr += direction * sizeof(uint64_t);
     // stream register to receive router buffer space available updates.
     uint64_t xy_local_addr = get_noc_addr(0);
-    noc_inline_dw_write<true>(
+    noc_inline_dw_write<InlineWriteDst::REG>(
         router_addr,
         (STREAM_REG_ADDR(
             STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX)));
@@ -589,7 +591,7 @@ inline void fabric_client_disconnect(volatile tt_l1_ptr fabric_push_client_inter
     uint64_t client_q_addr = get_noc_addr_helper(client_interface->router_addr_h, FABRIC_ROUTER_CLIENT_QUEUE_START);
 
     // update wr ptr for the next client
-    noc_inline_dw_write<true>(
+    noc_inline_dw_write<InlineWriteDst::DEFAULT>(
         client_q_addr + offsetof(fabric_push_client_queue_t, router_wr_ptr), client_interface->wr_ptr);
 
     // update curr client index so that the next client in the queue can connect
@@ -628,7 +630,7 @@ inline void fabric_async_write_push_data(
         size -= PACKET_HEADER_SIZE_BYTES;
     }
     noc_async_write_one_packet(src_addr, buffer_wr_addr, size, noc_index);
-    noc_inline_dw_write<true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    noc_inline_dw_write<InlineWriteDst::DEFAULT>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
     client_interface->wr_ptr++;
     *(volatile uint32_t*)client_interface->update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
     if (client_interface->wr_ptr >= client_interface->buffer_size) {

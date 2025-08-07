@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +26,8 @@
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
-#include "fabric_host_interface.h"
+#include "compressed_routing_table.hpp"
+#include "hostdevcommon/fabric_common.h"
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
@@ -582,7 +583,7 @@ chan_id_t ControlPlane::get_downstream_eth_chan_id(
     // If no match found, return a channel from candidate_target_chans
     // Enabled for TG Dispatch on Fabric
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         while (src_routing_plane_id >= candidate_target_chans.size()) {
             src_routing_plane_id = src_routing_plane_id % candidate_target_chans.size();
         }
@@ -768,12 +769,6 @@ void ControlPlane::trim_ethernet_channels_not_mapped_to_live_routing_planes() {
                         fabric_node_id.chip_id,
                         direction,
                         directional_eth_chans.at(direction).size());
-                    TT_FATAL(
-                        num_available_routing_planes <= 4,
-                        "Expected at most 4 routing planes for M{}D{} in direction {}",
-                        fabric_node_id.mesh_id,
-                        fabric_node_id.chip_id,
-                        direction);
                     bool trim = directional_eth_chans.at(direction).size() > num_available_routing_planes;
                     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
                     if (trim) {
@@ -1351,52 +1346,59 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
 
     tensix_routing_l1_info_t tensix_routing_info = {};
     tensix_routing_info.mesh_id = *mesh_id;
-    tensix_routing_info.device_id = chip_id;
 
     // Build intra-mesh routing entries (chip-to-chip routing)
-    std::fill_n(
-        tensix_routing_info.intra_mesh_routing_table,
-        tt::tt_fabric::MAX_MESH_SIZE,
-        (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
     TT_FATAL(
         router_intra_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_MESH_SIZE,
         "ControlPlane: Intra mesh routing table size exceeds maximum allowed size");
+
+    // Initialize all entries to INVALID_ROUTING_TABLE_ENTRY first
+    for (std::uint32_t i = 0; i < tt::tt_fabric::MAX_MESH_SIZE; i++) {
+        tensix_routing_info.intra_mesh_routing_table.set_original_direction(
+            i, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY));
+    }
+
     for (chip_id_t dst_chip_id = 0; dst_chip_id < router_intra_mesh_routing_table[*mesh_id][chip_id].size();
          dst_chip_id++) {
         if (chip_id == dst_chip_id) {
-            tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
-                (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+            tensix_routing_info.intra_mesh_routing_table.set_original_direction(
+                dst_chip_id, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION));
             continue;
         }
         auto forwarding_direction = router_intra_mesh_routing_table[*mesh_id][chip_id][dst_chip_id];
-        tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
+        std::uint8_t direction_value =
             forwarding_direction != RoutingDirection::NONE
-                ? this->routing_direction_to_eth_direction(forwarding_direction)
-                : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+                ? static_cast<std::uint8_t>(this->routing_direction_to_eth_direction(forwarding_direction))
+                : static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION);
+        tensix_routing_info.intra_mesh_routing_table.set_original_direction(dst_chip_id, direction_value);
     }
 
     // Build inter-mesh routing entries (mesh-to-mesh routing)
-    std::fill_n(
-        tensix_routing_info.inter_mesh_routing_table,
-        tt::tt_fabric::MAX_NUM_MESHES,
-        (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
     const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
     TT_FATAL(
         router_inter_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_NUM_MESHES,
         "ControlPlane: Inter mesh routing table size exceeds maximum allowed size");
+
+    // Initialize all entries to INVALID_ROUTING_TABLE_ENTRY first
+    for (std::uint32_t i = 0; i < tt::tt_fabric::MAX_NUM_MESHES; i++) {
+        tensix_routing_info.inter_mesh_routing_table.set_original_direction(
+            i, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY));
+    }
+
     for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table[*mesh_id][chip_id].size();
          dst_mesh_id++) {
         if (*mesh_id == dst_mesh_id) {
-            tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
-                (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+            tensix_routing_info.inter_mesh_routing_table.set_original_direction(
+                dst_mesh_id, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION));
             continue;
         }
         auto forwarding_direction = router_inter_mesh_routing_table[*mesh_id][chip_id][dst_mesh_id];
-        tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
+        std::uint8_t direction_value =
             forwarding_direction != RoutingDirection::NONE
-                ? this->routing_direction_to_eth_direction(forwarding_direction)
-                : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+                ? static_cast<std::uint8_t>(this->routing_direction_to_eth_direction(forwarding_direction))
+                : static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION);
+        tensix_routing_info.inter_mesh_routing_table.set_original_direction(dst_mesh_id, direction_value);
     }
 
     write_to_all_tensix_cores(
@@ -1584,7 +1586,7 @@ void ControlPlane::print_ethernet_channels() const {
     for (const auto& [fabric_node_id, fabric_eth_channels] : this->router_port_directions_to_physical_eth_chan_map_) {
         ss << fabric_node_id << ": " << std::endl;
         for (const auto& [direction, eth_chans] : fabric_eth_channels) {
-            ss << "   " << magic_enum::enum_name(direction) << ":";
+            ss << "   " << enchantum::to_string(direction) << ":";
             for (const auto& eth_chan : eth_chans) {
                 ss << " " << (std::uint16_t)eth_chan;
             }
@@ -2076,6 +2078,8 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
 }
 
 const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const { return intermesh_link_table_; }
+
+const MeshGraph& ControlPlane::get_mesh_graph() const { return *routing_table_generator_->mesh_graph; }
 
 uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const { return chip_id_to_asic_id_.at(chip_id); }
 

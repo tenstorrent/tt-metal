@@ -72,8 +72,6 @@ private:
     class ScopedDevices {
     private:
         std::vector<MaybeRemote<IDevice*>> devices_;
-
-        std::vector<IDevice*> local_devices_;
         std::map<chip_id_t, IDevice*> opened_local_devices_;
 
     public:
@@ -118,7 +116,6 @@ private:
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
-    std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
     uint32_t trace_buffers_size_ = 0;
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
@@ -128,6 +125,9 @@ private:
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
+
+    void mark_allocations_unsafe();
+    void mark_allocations_safe();
 
     // Returns the devices in row-major order for the new mesh shape
     std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
@@ -165,17 +165,18 @@ public:
     CoreCoord dram_grid_size() const override;
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
-    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;
-    std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
+    std::vector<CoreCoord> ethernet_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const override;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const override;
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
@@ -198,15 +199,6 @@ public:
     SystemMemoryManager& sysmem_manager() override;
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
-    // Trace APIs
-    void begin_trace(uint8_t cq_id, uint32_t tid) override;
-    void end_trace(uint8_t cq_id, uint32_t tid) override;
-
-    // TODO: `block_on_worker_thread` can be removed once we remove multi-threaded async dispatch
-    void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) override;
-    void release_trace(uint32_t tid) override;
-    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
-
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
@@ -215,9 +207,6 @@ public:
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
-
-    // Light Metal
-    void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
 
     bool using_slow_dispatch() const override;
     bool using_fast_dispatch() const override;
@@ -245,10 +234,14 @@ public:
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;
+    uint8_t noc_data_start_index(
+        SubDeviceId sub_device_id, bool mcast_data = true, bool unicast_data = true) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
-    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
@@ -268,7 +261,7 @@ public:
     std::vector<IDevice*> get_devices() const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
-    tt_fabric::FabricNodeId get_device_fabric_node_id(const MeshCoordinate& coord) const;
+    tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
 

@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -22,7 +23,6 @@ namespace operations::data_movement {
 operation::ProgramWithCallbacks non_zero_indices_single_core(
     const Tensor& input, const Tensor& out_num_indices, const Tensor& out_indices) {
     tt::tt_metal::Program program{};
-    IDevice* device = input.device();
 
     uint32_t alignment_base = 32 / input.element_size();
     // we want per core to be aligned to aligment_base per core
@@ -47,19 +47,19 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(2 * rounded_page_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, rounded_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt::tt_metal::CircularBufferConfig cb_dst0_config =
         tt::tt_metal::CircularBufferConfig(2 * 32, {{output_cb_index_0, output_cb_data_format}})
             .set_page_size(output_cb_index_0, 32);
-    auto cb_dst0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
 
     uint32_t dst_page_size = actual_elements * 4;
     uint32_t dst_rounded_page_size = round_up_to_mul32(dst_page_size);
     tt::tt_metal::CircularBufferConfig cb_dst1_config =
         tt::tt_metal::CircularBufferConfig(2 * dst_rounded_page_size, {{output_cb_index_1, output_cb_data_format}})
             .set_page_size(output_cb_index_1, dst_rounded_page_size);
-    auto cb_dst1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_dst1_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_dst1_config);
 
     std::map<std::string, std::string> defines;
     defines["NUM_BYTES"] = std::to_string(input.element_size());
@@ -69,10 +69,10 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
         (std::uint32_t)input_cb_index,
         (std::uint32_t)output_cb_index_0,
         (std::uint32_t)output_cb_index_1,
-        (std::uint32_t)src_is_dram,
-        (std::uint32_t)out_is_dram_0,
-        (std::uint32_t)out_is_dram_1,
     };
+    TensorAccessorArgs(*input.buffer()).append_to(compile_time_args);
+    TensorAccessorArgs(*out_num_indices.buffer()).append_to(compile_time_args);
+    TensorAccessorArgs(*out_indices.buffer()).append_to(compile_time_args);
 
     const std::array run_time_args = {
         (std::uint32_t)input.buffer()->address(),

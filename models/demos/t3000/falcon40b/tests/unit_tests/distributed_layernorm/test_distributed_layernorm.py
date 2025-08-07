@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.utility_functions import get_devices_for_t3000, skip_for_grayskull, torch2tt_tensor, tt2torch_tensor
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -137,7 +138,7 @@ class TtDistributedLayernorm:
 
         self.ln_eps = epsilon
 
-    def __call__(self, xs: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, xs: ttnn.Tensor, tt_ccl) -> ttnn.Tensor:
         num_devices = len(xs)
 
         counts = []
@@ -166,12 +167,19 @@ class TtDistributedLayernorm:
         for i in range(num_devices):
             meanxs[i] = ttnn.multiply(meanxs[i], counts[i])
         # AllGather
-        meanxs = ttnn.all_gather(
+        meanxs = ttnn.experimental.all_gather_async(
             meanxs,
+            persistent_output_buffer=None,
             dim=3,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
-            output_mem_config=self.dram_memcfg,
+            memory_config=self.dram_memcfg,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
+
         # Mean over per-device meanx
         # mean = torch.stack(meanx, dim=0).sum(dim=0) / total_count
         mean = []
@@ -189,11 +197,17 @@ class TtDistributedLayernorm:
         for i in range(num_devices):
             meanx2s[i] = ttnn.multiply(meanx2s[i], counts[i])
         # AllGather
-        meanx2s = ttnn.all_gather(
+        meanx2s = ttnn.experimental.all_gather_async(
             meanx2s,
+            persistent_output_buffer=None,
             dim=3,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
-            output_mem_config=self.dram_memcfg,
+            memory_config=self.dram_memcfg,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
         # Mean over per-device meanx2
         # meanx2 = torch.stack(meanx2, dim=0).sum(dim=0) / total_count
@@ -245,7 +259,7 @@ class TtDistributedLayernorm:
         return x_hat
 
 
-def run_test_DistributedLayernorm_inference(pcc, devices, model_location_generator, get_tt_cache_path):
+def run_test_DistributedLayernorm_inference(mesh_device, pcc, devices, model_location_generator, get_tt_cache_path):
     S = 2048
     num_chips = 8
     epsilon = 1e-5
@@ -314,9 +328,10 @@ def run_test_DistributedLayernorm_inference(pcc, devices, model_location_generat
         assert does_pass, f"PCC value is lower than {pcc}"
 
     # TT hardware execution -------------------------------------------------------------
+    tt_ccl = TT_CCL(mesh_device)
     tt_distributed_layernorm = TtDistributedLayernorm(devices, gammas_torch, betas_torch, epsilon, tt_cache_path)
 
-    tt_outputs = tt_distributed_layernorm(tt_inputs)
+    tt_outputs = tt_distributed_layernorm(tt_inputs, tt_ccl)
 
     tt_out = torch.concat([tt2torch_tensor(tt_o) for tt_o in tt_outputs], -1)
 
@@ -333,7 +348,9 @@ def run_test_DistributedLayernorm_inference(pcc, devices, model_location_generat
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("pcc", [(0.99)])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_DistributedLayernorm_inference(
+    mesh_device,
     pcc,
     all_devices,
     model_location_generator,
@@ -341,4 +358,4 @@ def test_DistributedLayernorm_inference(
 ):
     devices = get_devices_for_t3000(all_devices, 8)
 
-    run_test_DistributedLayernorm_inference(pcc, devices, model_location_generator, get_tt_cache_path)
+    run_test_DistributedLayernorm_inference(mesh_device, pcc, devices, model_location_generator, get_tt_cache_path)

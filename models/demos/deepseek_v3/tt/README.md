@@ -49,7 +49,7 @@ Since prefill and decode modes typically have very different performance charact
 
 ```python
 # Stage 1: Convert weights and get weight_config (saves to disk in standard format)
-weight_config = MLP1D.convert_weights(hf_config, torch_state_dict, Path("weights/mlp"), mesh_device)
+weight_config = MLP1D.convert_weights(hf_config, [torch_state_dict_3, torch_state_dict_18, None, torch_state_dict_33], Path("weights/mlp"), mesh_device)
 
 # Stage 2: Generate operator configs (returns nested dicts with TTNN objects)
 model_config = MLP1D.prefill_model_config(hf_config, mesh_device) # Or decode_model_config(hf_config, mesh_device) for decode
@@ -65,7 +65,9 @@ output = MLP1D.forward_prefill(input_tensor, run_config) # or forward_decode(inp
 ## Module Requirements
 Since the module classes are meant to only exist as namespaces for the module-specific behavior, each method to reimplement for a module is a `classmethod`. Each module should implement:
 
-### `convert_weights(hf_config: transformers.PretrainedConfig, state_dict: dict[str, torch.Tensor], output_path: Path, mesh_device: ttnn.Device) -> WeightConfig`
+### `convert_weights(hf_config: transformers.PretrainedConfig, state_dict: tuple[dict[str, torch.Tensor] | None, ...], output_path: Path, mesh_device: ttnn.Device) -> WeightConfig`
+- Receives the PyTroch state dictionaries for parallel layers of the module (1 dictionary if a layer already runs on the entire mesh device, None for a missing parallel layer)
+- Adds padding for missing parallel layers
 - Converts PyTorch weights to TTNN format using a standard configuration:
   - dtype: `ttnn.bfloat4_b`
   - layout: `ttnn.TILE_LAYOUT`
@@ -82,7 +84,7 @@ Since the module classes are meant to only exist as namespaces for the module-sp
 - Should use the `FromWeightConfig` and `MeshDeviceStub` for indicating the weight tensors and providing the mesh device used in the `forward_prefill` and `forward_decode` functions (see [the section on `run_config`](#runconfig-creation) for details)
 
 ### `forward_prefill(x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor` and `forward_decode(x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor`
-- Executes the layer using the provided RunConfig
+- Executes the layers using the provided RunConfig
 - Uses clean dict expansion: `ttnn.linear(x, **cfg["w1"])`
 - **Important**: `OpConfigBase` automatically filters out `None` values during `**cfg` expansion, so `None` means "use TTNN's default" rather than "pass None explicitly"
 - For dynamic configs, overrides with keyword arguments: `ttnn.linear(x, program_config=self.w1_pc(**cfg["w1_pc"]), **cfg["w1"])`

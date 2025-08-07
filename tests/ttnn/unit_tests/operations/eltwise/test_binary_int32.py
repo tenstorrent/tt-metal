@@ -33,6 +33,7 @@ import ttnn
     [
         ttnn.logical_or,
         ttnn.logical_xor,
+        ttnn.logical_and,
         ttnn.add,
         ttnn.sub,
     ],
@@ -42,7 +43,7 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, devic
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
 
-    if ttnn_op in {ttnn.logical_or, ttnn.logical_xor}:
+    if ttnn_op in {ttnn.logical_or, ttnn.logical_xor, ttnn.logical_and}:
         torch_input_tensor_a[::5] = 0  # every 5th element is zero
         torch_input_tensor_b[::10] = 0  # every 10th element is zero
 
@@ -51,7 +52,6 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, devic
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
-
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=ttnn.int32,
@@ -98,6 +98,7 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, devic
     [
         ttnn.logical_or,
         ttnn.logical_xor,
+        ttnn.logical_and,
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
@@ -173,7 +174,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         block_sharded_memory_config,
     ],
 )
-@pytest.mark.parametrize("ttnn_fn", ("logical_or", "logical_xor", "add", "sub", "mul"))
+@pytest.mark.parametrize("ttnn_fn", ("logical_or", "logical_xor", "logical_and", "add", "sub", "mul"))
 def test_binary_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device):
     ttnn_op = getattr(ttnn, ttnn_fn)
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
@@ -215,10 +216,13 @@ def test_binary_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device)
     [
         ttnn.logical_or,
         ttnn.logical_xor,
+        ttnn.logical_and,
     ],
 )
 def test_binary_logical_int32_edge_cases(logical_op, device):
-    torch_input_tensor_a = torch.tensor([0, 1, 0, 1, -1, 2147483647, -2147483647, 2147483647, 0])
+    torch_input_tensor_a = torch.tensor(
+        [0, 1, 0, 1, -1, 2147483647, -2147483647, 2147483647, 0, 1073872896, -1073872896]
+    )
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=ttnn.int32,
@@ -227,7 +231,9 @@ def test_binary_logical_int32_edge_cases(logical_op, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    torch_input_tensor_b = torch.tensor([0, 0, -1, 1, -1, 2147483647, -2147483647, 0, -2147483647])
+    torch_input_tensor_b = torch.tensor(
+        [0, 0, -1, 1, -1, 2147483647, -2147483647, 0, -2147483647, 1073872896, -1073872896]
+    )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=ttnn.int32,

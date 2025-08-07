@@ -66,7 +66,10 @@ TEST(BigMeshDualRankTest2x4, SystemMeshShape) {
     auto& control_plane = MetalContext::instance().get_control_plane();
     auto rank = control_plane.get_local_host_rank_id_binding();
 
-    auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(MeshShape(2, 4));
+    auto mapped_devices = system_mesh.get_mapped_devices(MeshShape(2, 4));
+    const MeshContainer<MaybeRemote<int>> physical_device_ids(MeshShape(2, 4), std::move(mapped_devices.device_ids));
+    const MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids(
+        MeshShape(2, 4), std::move(mapped_devices.fabric_node_ids));
     if (rank == HostRankId{0}) {
         EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 0)).is_local());
         EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 1)).is_local());
@@ -86,6 +89,16 @@ TEST(BigMeshDualRankTest2x4, SystemMeshShape) {
         EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 2)).is_local());
         EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 3)).is_local());
     }
+
+    // Check fabric node IDs are set for all devices, globally.
+    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(0, 0)).chip_id, 0);
+    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(0, 1)).chip_id, 1);
+    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(0, 2)).chip_id, 2);
+    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(0, 3)).chip_id, 3);
+    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 0)).chip_id, 4);
+    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 1)).chip_id, 5);
+    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 2)).chip_id, 6);
+    EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 3)).chip_id, 7);
 }
 
 }  // namespace tt::tt_metal::distributed

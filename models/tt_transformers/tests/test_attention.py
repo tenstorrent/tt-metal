@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -88,8 +89,7 @@ def test_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling,
     )
 
     transformation_mats = rope_setup.get_both_trans_mats()
@@ -137,8 +137,8 @@ def test_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
     )
     freqs_cis = torch.complex(cos, sin)
 
@@ -157,7 +157,9 @@ def test_attention_inference(
 
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim)  # Qwen2.5 0.5B sees 0.1 to 2.1
+        pt_attention_input = torch.randn(
+            batch_size, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+        )  # Qwen2.5 0.5B sees 0.1 to 2.1
 
         tt_attention_input = pt_attention_input.clone()
 

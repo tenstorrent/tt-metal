@@ -1,5 +1,9 @@
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)
 
+add_library(test_common_utils STATIC)
+target_sources(test_common_utils PUBLIC common_test_utils.cpp)
+target_link_libraries(test_common_utils PRIVATE TTNN::CPP)
+
 function(setup_ttnn_test_target target_name)
     target_link_libraries(
         ${target_name}
@@ -26,12 +30,17 @@ target_sources(
         test_reflect.cpp
         test_to_and_from_json.cpp
         test_sliding_window_infra.cpp
+        test_async_runtime.cpp
+        test_conv2d.cpp
+        test_multi_cq_multi_dev.cpp
+        test_multiprod_queue.cpp
 )
 target_include_directories(unit_tests_ttnn_smoke PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
     unit_tests_ttnn_smoke
     PRIVATE
         test_common_libs
+        test_common_utils
         TTNN::CPP
 )
 
@@ -41,7 +50,6 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_basic)
 target_sources(
     unit_tests_ttnn_basic
     PRIVATE
-        common_test_utils.cpp
         test_add.cpp
         test_broadcast_to.cpp
         test_generic_op.cpp
@@ -62,32 +70,12 @@ target_link_libraries(
         TTNN::CPP
 )
 
-add_library(unit_tests_ttnn_slow OBJECT)
-add_library(TTNN::Test::Slow ALIAS unit_tests_ttnn_slow)
-TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_slow)
-target_sources(
-    unit_tests_ttnn_slow
-    PRIVATE
-        test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
-        test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
-        test_multi_cq_multi_dev.cpp
-        test_multiprod_queue.cpp
-)
-target_include_directories(unit_tests_ttnn_slow PRIVATE ${PROJECT_SOURCE_DIR}/tests)
-target_link_libraries(
-    unit_tests_ttnn_slow
-    PRIVATE
-        test_common_libs
-        TTNN::CPP
-)
-
 add_executable(unit_tests_ttnn)
 target_link_libraries(
     unit_tests_ttnn
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
-        TTNN::Test::Slow
 )
 
 # unit_tests_ttnn_ccl
@@ -123,6 +111,17 @@ target_sources(
         ccl/test_send_recv_ops.cpp
 )
 setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
+
+# unit_tests_ttnn_multihost_ccl_ops
+add_executable(unit_tests_ttnn_multihost_ccl_ops)
+target_sources(
+    unit_tests_ttnn_multihost_ccl_ops
+    PRIVATE
+        multihost_ccl/main.cpp
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost/fabric_tests/intermesh_routing_test_utils.cpp
+        multihost_ccl/test_send_recv_ops.cpp
+)
+setup_ttnn_test_target(unit_tests_ttnn_multihost_ccl_ops)
 
 # unit_tests_ttnn_fabric_edm
 
@@ -199,6 +198,7 @@ target_link_libraries(
     PRIVATE
         Boost::asio
         Boost::lockfree
+        test_common_utils
 )
 
 # unit_tests_ttnn_emitc
