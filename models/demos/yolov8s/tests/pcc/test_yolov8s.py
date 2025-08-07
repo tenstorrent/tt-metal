@@ -7,14 +7,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov8s.common import load_torch_model
+from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
 from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
 from models.utility_functions import disable_persistent_kernel_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True, ids=["0"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8S_L1_SMALL_SIZE}], indirect=True, ids=["0"])
 @pytest.mark.parametrize(
     "input_tensor",
     [torch.rand((1, 3, 640, 640))],

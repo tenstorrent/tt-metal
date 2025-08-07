@@ -66,7 +66,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Llama-3.1-8B      | N300        | 96        | 100       | 38.8          | 79        |
 | Llama-3.1-8B      | T3K         | 95        | 100       | 60.8          | 81        |
 | Llama-3.1-8B      | TG          | 95        | 100       | 29.5          |           |
-| Llama-3.2-11B     | N300        | 96        | 100       | 38.3          | 78        |
+| Llama-3.2-11B     | N300        | 95        | 100       | 38.3          | 78        |
 | Llama-3.2-11B     | T3K         | 94        | 100       | 61.4          | 53        |
 | Llama-3.2-11B     | TG          | 94        | 100       | 29.5          |           |
 | Llama-3.1-70B     | T3K         | 96        | 100       | 16.5          | 168       |

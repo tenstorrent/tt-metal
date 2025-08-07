@@ -9,6 +9,7 @@ import math
 import torch
 import ttnn
 from loguru import logger
+from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager, create_vae_parallel_config
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
@@ -291,30 +292,84 @@ def silu(x: ttnn.Tensor) -> ttnn.Tensor:
 
 def unpadded_all_gather_async(
     x,
+    persistent_output_buffer,
     dim,
-    cluster_axis,
-    mesh_device,
-    topology,
     multi_device_global_semaphore,
-    memory_config=None,
     num_links=1,
-    persistent_output_tensor=None,
+    memory_config=None,
+    topology=ttnn.Topology.Linear,
+    cluster_axis=None,
+    chunks_per_sync=None,
+    num_workers_per_link=None,
+    num_buffers_per_channel=None,
 ):
     shape = list(x.shape)
 
     x = ttnn.experimental.all_gather_async(
         x,
+        persistent_output_buffer=persistent_output_buffer,
         dim=dim,
-        cluster_axis=cluster_axis,
-        mesh_device=mesh_device,
-        topology=topology,
         multi_device_global_semaphore=multi_device_global_semaphore,
-        memory_config=memory_config,
         num_links=num_links,
-        persistent_output_tensor=persistent_output_tensor,
+        topology=topology,
+        cluster_axis=cluster_axis,
+        memory_config=memory_config,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
 
     shape[dim] = x.shape[dim]
     x = ttnn.reshape(x, shape, x.padded_shape)
 
     return x
+
+
+def create_parallel_configs(mesh_device, cfg, sp, tp, topology, num_links):
+    # Setup parallel manager
+    cfg_factor, cfg_axis = cfg
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
+    parallel_manager = StableDiffusionParallelManager(
+        mesh_device,
+        cfg_factor,
+        sp_factor,
+        tp_factor,
+        sp_factor,
+        tp_factor,
+        topology,
+        cfg_axis=cfg_axis,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+    )
+
+    # HACK: reshape submesh device 0 from 2D to 1D
+    encoder_device = parallel_manager.submesh_devices[0]
+    if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
+        # If reshaping, vae_device must be on submesh 0. That means T5 can't fit, so disable it.
+        vae_device = parallel_manager.submesh_devices[0]
+        enable_t5_text_encoder = False
+
+        cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
+        assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
+        print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
+        encoder_device.reshape(ttnn.MeshShape(1, 4))
+    else:
+        # vae_device can only be on submesh 1 if submesh is not getting reshaped.
+        vae_device = parallel_manager.submesh_devices[1]
+        enable_t5_text_encoder = True
+
+    print(f"T5 enabled: {enable_t5_text_encoder}")
+
+    encoder_parallel_manager = EncoderParallelManager(
+        encoder_device,
+        topology,
+        mesh_axis=1,  # 1x4 submesh, parallel on axis 1
+        num_links=num_links,
+    )
+    vae_parallel_manager = create_vae_parallel_config(vae_device, parallel_manager)
+    # HACK: reshape submesh device 0 from 1D to 2D
+    encoder_device.reshape(ttnn.MeshShape(*parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape))
+
+    return parallel_manager, encoder_parallel_manager, vae_parallel_manager, enable_t5_text_encoder

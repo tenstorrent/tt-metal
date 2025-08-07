@@ -16,17 +16,9 @@ bool has_wrap_around(tt::tt_fabric::Topology topology) {
     return topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus;
 }
 
-std::vector<tt::tt_metal::IDevice*> get_axis_devices(
-    const MeshDeviceView& mesh_view, uint32_t axis, uint32_t axis_value) {
-    // axis == 1 -> horizontal row (East/West)
-    // axis == 0 -> vertical column (North/South)
-    if (axis == 1) {
-        return mesh_view.get_devices_on_row(axis_value);
-    } else if (axis == 0) {
-        return mesh_view.get_devices_on_column(axis_value);
-    }
-    TT_THROW("Axis must be 0 (column) or 1 (row)");
-    return {};
+tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(tt::tt_fabric::Topology topology) {
+    return has_wrap_around(topology) ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
+                                     : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
 }
 
 uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const tt::tt_metal::IDevice* device) {
@@ -40,7 +32,7 @@ uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const 
 }
 }  // namespace detail
 
-std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
+std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
     const MeshDeviceView& mesh_view,
     const MeshCoordinate& mesh_coordinate,
     const tt::tt_fabric::Topology topology,
@@ -48,8 +40,9 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     // For readability use symbolic indices instead of raw numbers when accessing the
     // `directions` array `{East, West, North, South}`.
     enum Direction : std::size_t { East = 0, West = 1, North = 2, South = 3 };
+    auto boundary_mode = detail::get_boundary_mode(topology);
 
-    std::vector<tt::tt_metal::IDevice*> neighbors;
+    std::vector<ttnn::MeshCoordinate> neighbors;
     // directions: {East, West, North, South}
     std::array<bool, 4> directions = {false, false, false, false};
 
@@ -57,58 +50,32 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     auto src_device = mesh_view.get_device(mesh_coordinate);
 
     // Helper that appends neighbours for a single axis
-    auto process_axis = [&](uint32_t axis_val) {
-        auto axis_devices =
-            detail::get_axis_devices(mesh_view, axis_val, axis_val == 1 ? mesh_coordinate[0] : mesh_coordinate[1]);
-        uint32_t idx = detail::device_index(axis_devices, src_device);
-        uint32_t size = axis_devices.size();
-        if (size <= 1) {
-            return;  // no neighbours on this axis
-        }
-        uint32_t next_neighbor_idx = idx + 1;
-        uint32_t prev_neighbor_idx = idx - 1;
-        uint32_t first_device = 0;
-        uint32_t last_device = size - 1;
+    auto process_axis = [&](int32_t axis_val) {
+        int32_t next_neighbor_offset = 1;
+        int32_t prev_neighbor_offset = -1;
 
-        auto add_neighbor = [&](Direction dir, uint32_t dev_idx) {
-            neighbors.push_back(axis_devices[dev_idx]);
-            directions[dir] = true;
+        auto add_neighbor = [&](Direction dir, int32_t neighbor_offset) {
+            auto neighbor = mesh_coordinate.get_neighbor(mesh_view.shape(), neighbor_offset, axis_val, boundary_mode);
+            if (neighbor.has_value()) {
+                neighbors.push_back(neighbor.value());
+                directions[dir] = true;
+            } else {
+                directions[dir] = false;
+            }
         };
 
         if (axis_val == 1) {
             // For horizontal axis (rows): process East then West
             // Positive direction (East)
-            if (next_neighbor_idx < size) {
-                log_debug(tt::LogOp, "Adding East neighbor: {}", next_neighbor_idx);
-                add_neighbor(Direction::East, next_neighbor_idx);
-            } else if (wrap_around_connection) {
-                add_neighbor(Direction::East, first_device);
-            }
-
+            add_neighbor(Direction::East, next_neighbor_offset);
             // Negative direction (West)
-            if (idx > 0) {
-                log_debug(tt::LogOp, "Adding West neighbor: {}", prev_neighbor_idx);
-                add_neighbor(Direction::West, prev_neighbor_idx);
-            } else if (wrap_around_connection) {
-                add_neighbor(Direction::West, last_device);
-            }
+            add_neighbor(Direction::West, prev_neighbor_offset);
         } else {
             // For vertical axis (columns): process North then South to maintain correct order
             // Negative direction (North)
-            if (idx > 0) {
-                log_debug(tt::LogOp, "Adding North neighbor: {}", prev_neighbor_idx);
-                add_neighbor(Direction::North, prev_neighbor_idx);
-            } else if (wrap_around_connection) {
-                add_neighbor(Direction::North, last_device);
-            }
-
+            add_neighbor(Direction::North, prev_neighbor_offset);
             // Positive direction (South)
-            if (next_neighbor_idx < size) {
-                log_debug(tt::LogOp, "Adding South neighbor: {}", next_neighbor_idx);
-                add_neighbor(Direction::South, next_neighbor_idx);
-            } else if (wrap_around_connection) {
-                add_neighbor(Direction::South, first_device);
-            }
+            add_neighbor(Direction::South, next_neighbor_offset);
         }
     };
 

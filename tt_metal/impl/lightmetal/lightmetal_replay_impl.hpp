@@ -60,6 +60,7 @@ public:
     bool run();
 
     // Executor functions for all traced host API calls (commands)
+    // Trace APIs are no longer supported due to trace API deprecation. See Issue #24955
     void execute(const tt::tt_metal::flatbuffer::Command* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* command);
@@ -102,6 +103,7 @@ public:
     void remove_cb_handle_from_map(uint32_t global_id);
 
     // Return the TraceDescriptor for a given trace_id from flatbuffer.
+    // No longer supported due to trace API deprecation. See Issue #24955
     std::optional<TraceDescriptor> get_trace_by_id(uint32_t target_trace_id);
 
     // fromFlatBuffer that need class state

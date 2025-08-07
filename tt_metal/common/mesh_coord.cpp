@@ -105,7 +105,8 @@ size_t MeshShape::get_stride(size_t dim) const { return strides_[dim]; }
 
 size_t MeshShape::dims() const { return size(); }
 size_t MeshShape::mesh_size() const {
-    return empty() ? 0 : std::accumulate(value_.begin(), value_.end(), 1, std::multiplies<size_t>());
+    return empty() ? 0
+                   : std::accumulate(value_.begin(), value_.end(), static_cast<size_t>(1), std::multiplies<size_t>());
 }
 
 bool operator==(const MeshShape& lhs, const MeshShape& rhs) = default;

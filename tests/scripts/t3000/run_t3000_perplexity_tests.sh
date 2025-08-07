@@ -8,7 +8,7 @@ run_t3000_falcon7b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_falcon7b_perplexity_tests"
 
   # Falcon7B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py --timeout=1500 ; fail+=$?
+  pytest -n auto models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py --timeout=1500 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -27,7 +27,7 @@ run_t3000_falcon40b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_perplexity_tests"
 
   # Falcon40B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
+  pytest -n auto models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -50,7 +50,7 @@ run_t3000_llama70b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_llama70b_perplexity_tests"
 
   # Llama-70B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
+  pytest -n auto models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -69,8 +69,8 @@ run_t3000_mixtral8x7b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral8x7b_perplexity_tests"
 
   # Mixtral8x7B perplexity tests
-  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -121,7 +121,6 @@ run_t3000_mistral_perplexity_tests() {
 
   echo "LOG_METAL: Running run_t3000_mistral_perplexity_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
   hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
   WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py ci-token-matching --max_generated_tokens 175 --timeout=3600
@@ -146,8 +145,6 @@ run_t3000_llama3_perplexity_tests_t3000() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
-
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
 
   for MESH_DEVICE in T3K; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
@@ -175,7 +172,6 @@ run_t3000_qwen25_perplexity_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_qwen25_perplexity_tests"
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
 
   HF_MODEL=$qwen72b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --max_generated_tokens 175 --timeout 3600; fail+=$?
@@ -199,7 +195,6 @@ run_t3000_qwen3_perplexity_tests() {
   pip install -r models/tt_transformers/requirements.txt
 
   echo "LOG_METAL: Running run_t3000_qwen3_perplexity_tests"
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
 
   HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --max_generated_tokens 175 --timeout 3600; fail+=$?

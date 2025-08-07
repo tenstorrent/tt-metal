@@ -220,6 +220,8 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
     const std::span<const uint32_t>& shard_shape,
     const std::span<const uint32_t>& tensor_coord);
 
+uint32_t get_num_pages(const ttnn::Tensor& tensor);
+
 }  // namespace data_movement
 }  // namespace operations
 }  // namespace ttnn

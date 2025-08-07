@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +26,8 @@
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
-#include "fabric_host_interface.h"
+#include "compressed_routing_table.hpp"
+#include "hostdevcommon/fabric_common.h"
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
@@ -768,12 +769,6 @@ void ControlPlane::trim_ethernet_channels_not_mapped_to_live_routing_planes() {
                         fabric_node_id.chip_id,
                         direction,
                         directional_eth_chans.at(direction).size());
-                    TT_FATAL(
-                        num_available_routing_planes <= 4,
-                        "Expected at most 4 routing planes for M{}D{} in direction {}",
-                        fabric_node_id.mesh_id,
-                        fabric_node_id.chip_id,
-                        direction);
                     bool trim = directional_eth_chans.at(direction).size() > num_available_routing_planes;
                     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
                     if (trim) {
@@ -1591,7 +1586,7 @@ void ControlPlane::print_ethernet_channels() const {
     for (const auto& [fabric_node_id, fabric_eth_channels] : this->router_port_directions_to_physical_eth_chan_map_) {
         ss << fabric_node_id << ": " << std::endl;
         for (const auto& [direction, eth_chans] : fabric_eth_channels) {
-            ss << "   " << magic_enum::enum_name(direction) << ":";
+            ss << "   " << enchantum::to_string(direction) << ":";
             for (const auto& eth_chan : eth_chans) {
                 ss << " " << (std::uint16_t)eth_chan;
             }

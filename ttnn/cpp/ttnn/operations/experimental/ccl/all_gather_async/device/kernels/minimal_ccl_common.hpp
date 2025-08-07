@@ -49,7 +49,6 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     l1_read_addr += payload_size_bytes;
 }
 
-#ifdef ARCH_WORMHOLE
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 void scatter_write_for_fabric_write(
     uint64_t first_noc0_dest_noc_addr,
@@ -68,7 +67,6 @@ void scatter_write_for_fabric_write(
         fabric_mux_connection, pkt_hdr, l1_read_addr, first_payload_size_bytes + second_payload_size_bytes);
     noc_async_writes_flushed();
 }
-#endif
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 void write_for_fabric_write(

@@ -329,7 +329,10 @@ ALWI void cb_matmul_blocks(
     const uint32_t& in0_block_w,
     const uint32_t& subblock_h,
     const uint32_t& subblock_w,
-    const bool& transpose) {
+    const bool& transpose,
+    const bool& add_mask,
+    const uint32_t& mask_cb,
+    const uint32_t& zero_cb) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
@@ -348,9 +351,9 @@ ALWI void cb_matmul_blocks(
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
+
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
-
             uint32_t dst_index = 0;
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
@@ -361,16 +364,26 @@ ALWI void cb_matmul_blocks(
                 in0_index++;
                 in1_index += N;
             }
+            if (add_mask) {
+                cb_wait_front(mask_cb, out_subblock_num_tiles);
+                cb_wait_front(zero_cb, 1);
+                add_tiles_init(zero_cb, mask_cb, true);
+                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                    add_tiles(zero_cb, mask_cb, 0, i, i);
+                }
+                cb_pop_front(mask_cb, out_subblock_num_tiles);
+            }
             tile_regs_commit();
             tile_regs_wait();
+            cb_reserve_back(out_cb, out_subblock_num_tiles);
             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                 pack_tile(i, out_cb);
             }
+            cb_push_back(out_cb, out_subblock_num_tiles);
             tile_regs_release();
             in1_index_offset += subblock_w;
         }
         in0_index_offset += subblock_h * in0_block_w;
     }
     cb_pop_front(in1_cb, K * N);
-    cb_push_back(out_cb, output_num_tiles);
 }

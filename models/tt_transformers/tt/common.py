@@ -67,12 +67,18 @@ class RopeScalingYarn(RopeScaling):
 
 
 def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
-    if rope_scaling_params.get("rope_type") == RopeScalingType.LLAMA3:
+    rope_scaling_type = rope_scaling_params.get("rope_type") or rope_scaling_params.get("type")
+    if rope_scaling_type == RopeScalingType.LLAMA3:
         return RopeScalingLlama3(**rope_scaling_params)
-    elif rope_scaling_params.get("rope_type") == RopeScalingType.YARN:
+    elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
+    elif rope_scaling_type in ["default", "mrope"]:
+        logger.warning(
+            f"Rope scaling type was set to {rope_scaling_type}, defaulting to no rope scaling as this rope type is not supported yet by TTT"
+        )
+        return None
     else:
-        return RopeScaling(rope_type=RopeScalingType.DEFAULT, **rope_scaling_params)
+        raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
 
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):

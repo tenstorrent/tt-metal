@@ -10,11 +10,6 @@ from models.demos.mobilenetv2.tests.pcc.test_mobilenetv2 import MOBILENETV2_BATC
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
-def get_expected_times(name):
-    base = {"mobilenetv2": (63.3, 0.14)}
-    return base[name]
-
-
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
