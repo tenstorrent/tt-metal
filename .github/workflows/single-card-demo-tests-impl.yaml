@@ -92,7 +92,7 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
       # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface
+      HF_HUB_CACHE: /mnt/MLPerf/huggingface
     runs-on: >-
       ${{
         matrix.test-group.civ2-compatible == true
