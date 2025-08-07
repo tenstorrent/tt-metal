@@ -49,7 +49,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<GlobalSemaphore>& barrier_semaphore) {
     tt::tt_metal::Program program{};
 
     auto mesh_device = input_tensor.mesh_device();
