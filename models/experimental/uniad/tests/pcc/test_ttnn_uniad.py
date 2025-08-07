@@ -6,6 +6,7 @@ from models.experimental.uniad.reference.uniad import UniAD
 from models.experimental.uniad.tt.ttnn_uniad import TtUniAD
 import numpy as np
 from models.experimental.uniad.reference.utils import LiDARInstance3DBoxes
+from models.experimental.uniad.tt.ttnn_utils import TtLiDARInstance3DBoxes
 
 from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_model_parameters_perception_transformer
 
@@ -356,8 +357,10 @@ def test_uniad_reference(device, reset_seeds):
         ttnn.from_torch(sdc_planning_mask[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     ]
     ttnn_command = [ttnn.from_torch(command, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)]
+    import copy
 
-    ttnn_img_metas = img_metas[:]
+    ttnn_img_metas = copy.deepcopy(img_metas)
+    ttnn_img_metas[0][0]["box_type_3d"] = TtLiDARInstance3DBoxes
 
     parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
 
