@@ -111,7 +111,7 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
                 dtype_str = str(shard.dtype).split(".")[-1]
                 layout_str = str(shard.layout).split(".")[-1]
 
-                # TODO: Shard number is same as device id for now, this will break when shards are replicated
+                # TODO: #11406 - Shard number is same as device id for now, this will break when shards are replicated
                 #       Need to update this when we can group devices by shard
                 return f"Shard {device_id}\nShape: {shape_str}\nDtype: {dtype_str}\nLayout: {layout_str}"
             return ""
