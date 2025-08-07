@@ -194,4 +194,12 @@ inline __attribute__((always_inline)) void configure_csr() {
     configure_gathering();
     configure_l1_data_cache();
     disable_relaxed_memory_ordering();
+#if defined(ARCH_BLACKHOLE)
+    asm(R"ASM(
+        .option push
+        li   t1, 0x4000000
+        csrrs zero, 0x7c0, t1
+        .option pop
+         )ASM");
+#endif
 }
