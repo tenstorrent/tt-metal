@@ -11,6 +11,7 @@ from ttnn.model_preprocessing import (  # preprocess_layernorm_parameter,; prepr
 )
 
 import ttnn
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8s_world.reference.yolov8s_world import (
     SPPF,
     C2f,

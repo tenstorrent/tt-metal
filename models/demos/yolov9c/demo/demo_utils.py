@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
-from models.experimental.yolo_eval.utils import non_max_suppression, scale_boxes
+from models.demos.utils.common_demo_utils import non_max_suppression, scale_boxes
 
 
 def get_consistent_color(index):
