@@ -130,6 +130,7 @@ class TtDecoder(nn.Module):
 
         logger.info("Executing out ops")
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,

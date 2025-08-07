@@ -12,7 +12,7 @@ def get_DRAM_GN_config(module_path, idx):
         core_y = 4
         num_out_blocks = 96
     elif "mid_block" in module_path or "up_blocks.0" in module_path:
-        core_y = 4
+        core_y = 8
         num_out_blocks = 4
     else:
         parts = module_path.split(".")

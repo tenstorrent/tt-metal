@@ -29,7 +29,7 @@ class TtAttention(nn.Module):
         super().__init__()
         self.device = device
 
-        self.norm_core_grid = ttnn.CoreGrid(y=4, x=8)
+        self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
         self.norm_eps = 1e-6
         self.num_out_blocks = 4
@@ -94,6 +94,7 @@ class TtAttention(nn.Module):
 
     def forward(self, input_tensor, input_shape, encoder_hidden_states=None):
         hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
