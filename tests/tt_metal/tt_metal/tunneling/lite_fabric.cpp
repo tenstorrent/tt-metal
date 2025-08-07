@@ -11,12 +11,12 @@
 #include "dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
 #include "lite_fabric.hpp"
-#include "fabric_edm_packet_header.hpp"
 #include "firmware_common.h"
 #include "init-fsm-basic.h"
 #include "lite_fabric_constants.hpp"
 #include "lite_fabric_channels.hpp"
 #include "lite_fabric_channel_util.hpp"
+#include "lite_fabric_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
@@ -84,18 +84,23 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 #endif
 
 FORCE_INLINE void send_next_data(
-    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS_ARRAY[0]>& sender_buffer_channel,
+    tt::tt_fabric::EthChannelBuffer<lite_fabric::LiteFabricHeader, SENDER_NUM_BUFFERS_ARRAY[0]>& sender_buffer_channel,
     volatile lite_fabric::HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE>& host_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS_ARRAY[0]>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS_ARRAY[0]>& receiver_buffer_channel,
+    tt::tt_fabric::EthChannelBuffer<lite_fabric::LiteFabricHeader, RECEIVER_NUM_BUFFERS_ARRAY[0]>&
+        receiver_buffer_channel,
     bool on_mmio_chip) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     constexpr uint32_t sender_txq_id = 0;
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
-    volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
+    volatile auto* pkt_header = reinterpret_cast<volatile lite_fabric::LiteFabricHeader*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
+    // Actual payload may be offset by an unaligned offset. Ensure we include this in the payload size
+    // Buffer slots have 16B padding at the end which is unused.
+    payload_size_bytes += pkt_header->unaligned_offset;
+    payload_size_bytes = (payload_size_bytes + 15) & ~15;
     uint32_t dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
     DPRINT << "S: Forward Buffer 0x" << HEX() << src_addr << " " << DEC() << (uint32_t)payload_size_bytes << "B to 0x"
            << HEX() << dest_addr << DEC() << ENDL();
@@ -121,10 +126,11 @@ FORCE_INLINE void send_next_data(
 }
 
 FORCE_INLINE void run_sender_channel_step(
-    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS_ARRAY[0]>& local_sender_channel,
+    tt::tt_fabric::EthChannelBuffer<lite_fabric::LiteFabricHeader, SENDER_NUM_BUFFERS_ARRAY[0]>& local_sender_channel,
     volatile lite_fabric::HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE>& host_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS_ARRAY[0]>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS_ARRAY[0]>& remote_receiver_channel,
+    tt::tt_fabric::EthChannelBuffer<lite_fabric::LiteFabricHeader, RECEIVER_NUM_BUFFERS_ARRAY[0]>&
+        remote_receiver_channel,
     bool on_mmio_chip) {
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     bool has_unsent_packet =
@@ -154,23 +160,25 @@ FORCE_INLINE void run_sender_channel_step(
 }
 
 __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_request(
-    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+    tt_l1_ptr lite_fabric::LiteFabricHeader* const packet_start,
     uint16_t payload_size_bytes,
     uint32_t transaction_id,
     volatile lite_fabric::LiteFabricMemoryMap* lite_fabric,
-    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS_ARRAY[0]>& sender_buffer_channel,
+    tt::tt_fabric::EthChannelBuffer<lite_fabric::LiteFabricHeader, SENDER_NUM_BUFFERS_ARRAY[0]>& sender_buffer_channel,
     bool on_mmio_chip) {
     invalidate_l1_cache();
     const auto& header = *packet_start;
-    uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
-    tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
-    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
+    lite_fabric::NocSendType noc_send_type = header.noc_send_type;
+    if (noc_send_type > lite_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
-            const auto dest_address = header.command_fields.unicast_write.noc_address;
+        case lite_fabric::NocSendType::NOC_UNICAST_WRITE: {
+            const uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) +
+                                                   sizeof(lite_fabric::LiteFabricHeader) + header.unaligned_offset;
+
+            const auto dest_address = header.command_fields.noc_unicast.noc_address;
             DPRINT << "R: NOC_UNICAST_WRITE Source Address: " << HEX() << payload_start_address
                    << " Destination Address: " << HEX() << dest_address << " Size: " << DEC()
                    << (uint32_t)payload_size_bytes << ENDL();
@@ -185,21 +193,22 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 tt::tt_fabric::forward_and_local_write_noc_vc);
         } break;
 
-        case tt::tt_fabric::NocSendType::NOC_READ: {
+        case lite_fabric::NocSendType::NOC_READ: {
             if (!on_mmio_chip) {
                 auto& host_interface = lite_fabric->host_interface;
-                const auto src_address = header.command_fields.read.noc_address;
+                const auto src_address = header.command_fields.noc_read.noc_address;
                 // This assumes nobody else is using the sender channel on device 1 because
                 // the tunnel depth is only 1 at the moment
                 uint32_t dst_address = sender_buffer_channel.get_cached_next_buffer_slot_addr();
-                uint32_t payload_dst_address = dst_address + sizeof(PACKET_HEADER_TYPE);
+                uint32_t payload_dst_address =
+                    dst_address + sizeof(lite_fabric::LiteFabricHeader) + header.unaligned_offset;
 
                 DPRINT << "R: NOC_READ src_address: " << HEX() << src_address << " dst_address: " << dst_address
-                       << DEC() << " event: " << header.command_fields.read.event << ENDL();
+                       << DEC() << " event: " << header.command_fields.noc_read.event << ENDL();
 
                 // Create packet header for writing back
-                tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header_in_sender_ch =
-                    reinterpret_cast<tt::tt_fabric::LowLatencyPacketHeader*>(dst_address);
+                tt_l1_ptr lite_fabric::LiteFabricHeader* packet_header_in_sender_ch =
+                    reinterpret_cast<lite_fabric::LiteFabricHeader*>(dst_address);
                 *packet_header_in_sender_ch = header;
                 // Read the data into the buffer
                 // This is safe only if the data at the sender buffer slot has been flushed out
@@ -214,7 +223,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 host_interface.h2d.sender_host_write_index = tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[0]>(
                     host_interface.h2d.sender_host_write_index);
             } else {
-                DPRINT << "NOC_READ Event " << DEC() << header.command_fields.read.event << " Address " << HEX()
+                DPRINT << "NOC_READ Event " << DEC() << header.command_fields.noc_read.event << " Address " << HEX()
                        << (uint32_t)packet_start << ENDL();
             }
 
@@ -233,11 +242,12 @@ FORCE_INLINE void receiver_send_completion_ack(uint8_t src_id) {
 }
 
 FORCE_INLINE void run_receiver_channel_step(
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS_ARRAY[0]>& remote_receiver_channel,
+    tt::tt_fabric::EthChannelBuffer<lite_fabric::LiteFabricHeader, RECEIVER_NUM_BUFFERS_ARRAY[0]>&
+        remote_receiver_channel,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS_ARRAY[0]>& receiver_channel_pointers,
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS_ARRAY[0], NUM_TRANSACTION_IDS, 0>& receiver_channel_trid_tracker,
     volatile lite_fabric::LiteFabricMemoryMap* lite_fabric,
-    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS_ARRAY[0]>& local_sender_channel,
+    tt::tt_fabric::EthChannelBuffer<lite_fabric::LiteFabricHeader, SENDER_NUM_BUFFERS_ARRAY[0]>& local_sender_channel,
     bool on_mmio_chip) {
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_0_pkts_sent_id>();
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
@@ -248,8 +258,8 @@ FORCE_INLINE void run_receiver_channel_step(
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
-        tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-            remote_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+        tt_l1_ptr lite_fabric::LiteFabricHeader* packet_header = const_cast<lite_fabric::LiteFabricHeader*>(
+            remote_receiver_channel.template get_packet_header<lite_fabric::LiteFabricHeader>(receiver_buffer_index));
 
         DPRINT << "R: rcvr buffer index " << (uint32_t)receiver_buffer_index << " from addr " << HEX()
                << (uint32_t)(remote_receiver_channel.get_buffer_address(receiver_buffer_index)) << DEC() << ENDL();
@@ -314,11 +324,13 @@ BEGIN_MAIN_FUNCTION() {
     init_ptr_val<to_sender_0_pkts_acked_id>(0);
     init_ptr_val<to_sender_0_pkts_completed_id>(0);
 
-    auto remote_receiver_channels = tt::tt_fabric::EthChannelBuffers<RECEIVER_NUM_BUFFERS_ARRAY>::make(
-        std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
+    auto remote_receiver_channels =
+        tt::tt_fabric::EthChannelBuffers<lite_fabric::LiteFabricHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
+            std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
-    auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<SENDER_NUM_BUFFERS_ARRAY>::make(
-        std::make_index_sequence<NUM_SENDER_CHANNELS>{});
+    auto local_sender_channels =
+        tt::tt_fabric::EthChannelBuffers<lite_fabric::LiteFabricHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
+            std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& local_sender_buffer_addresses = {
         lf_local_sender_0_channel_address};
@@ -333,13 +345,16 @@ BEGIN_MAIN_FUNCTION() {
     remote_receiver_channels.init(
         remote_receiver_buffer_addresses.data(),
         CHANNEL_BUFFER_SIZE,
-        sizeof(PACKET_HEADER_TYPE),
+        sizeof(lite_fabric::LiteFabricHeader),
         RECEIVER_CHANNEL_BASE_ID);
     lite_fabric::init_receiver_headers(remote_receiver_channels);
 
     // initialize the local sender channel worker interfaces
     local_sender_channels.init(
-        local_sender_buffer_addresses.data(), CHANNEL_BUFFER_SIZE, sizeof(PACKET_HEADER_TYPE), SENDER_CHANNEL_BASE_ID);
+        local_sender_buffer_addresses.data(),
+        CHANNEL_BUFFER_SIZE,
+        sizeof(lite_fabric::LiteFabricHeader),
+        SENDER_CHANNEL_BASE_ID);
 
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS_ARRAY[0], NUM_TRANSACTION_IDS, 0> receiver_channel_0_trid_tracker;
 

@@ -229,4 +229,127 @@ TEST(Tunneling, LiteFabricBarrier) {
     tt::tt_metal::detail::CloseDevices(devices);
 }
 
-TEST(Tunneling, LiteFabricReadsAndWrites) {}
+TEST(Tunneling, LiteFabricSmallWrites) {
+    CHECK_TEST_REQS();
+
+    auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+
+    auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+
+    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+
+    CoreCoord logical_worker{0, 0};
+    CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
+    uint32_t l1_base = devices[1]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+    uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
+
+    // due to unaligned, the read will be only 1B of the original data. mask off the irrelevant bits
+    // ensure they did not overwrite each other
+    constexpr uint32_t num_writes = 64;
+    std::vector<uint32_t> write_data = create_random_vector_of_bfloat16(
+        num_writes * sizeof(uint32_t), 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
+    for (int i = 1; i < num_writes; ++i) {
+        host_interface.write_any_len(&write_data[i], 1, tunnel.mmio_cxy_virtual(), dest_noc_addr + i);
+        write_data[i] = write_data[i] & 0xff;
+    }
+    host_interface.barrier(tunnel.mmio_cxy_virtual());
+
+    for (int i = 1; i < num_writes; ++i) {
+        std::vector<uint32_t> read_data(1);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            read_data.data(), 1, tt_cxy_pair{1, virtual_worker}, l1_base + i);
+        log_info(
+            tt::LogMetal, "Read data {} from {:#x} {:#x} expecting {:#x}", i, l1_base + i, read_data[0], write_data[i]);
+        ASSERT_EQ(read_data[0], write_data[i]);
+    }
+
+    lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
+    tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
+
+    tt::tt_metal::detail::CloseDevices(devices);
+}
+
+TEST(Tunneling, LiteFabricUnalignedWrites) {
+    CHECK_TEST_REQS();
+
+    auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+
+    auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+
+    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+
+    CoreCoord logical_worker{0, 0};
+    CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
+    uint32_t l1_base = devices[1]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+
+    // Make destination not aligned by various amounts
+    for (int aligned_offset = 0; aligned_offset < 16; ++aligned_offset) {
+        uint32_t addr = l1_base + aligned_offset;
+        uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+        uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)addr;
+        log_info(tt::LogMetal, "Testing unaligned write to {:#x}", addr);
+        std::vector<uint32_t> test_data = create_random_vector_of_bfloat16(
+            4096, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
+
+        host_interface.write_any_len(
+            test_data.data(), test_data.size() * sizeof(uint32_t), tunnel.mmio_cxy_virtual(), dest_noc_addr);
+        host_interface.barrier(tunnel.mmio_cxy_virtual());
+
+        std::vector<uint32_t> read_data(test_data.size());
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            read_data.data(), test_data.size() * sizeof(uint32_t), tt_cxy_pair{1, virtual_worker}, addr);
+        ASSERT_EQ(read_data, test_data);
+    }
+
+    lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
+    tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
+
+    tt::tt_metal::detail::CloseDevices(devices);
+}
+
+TEST(Tunneling, LiteFabricUnalignedReads) {
+    CHECK_TEST_REQS();
+
+    auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+
+    auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+
+    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+
+    CoreCoord logical_worker{0, 0};
+    CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
+    uint32_t l1_base = devices[1]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+    uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
+
+    // Using a known good API for this
+    std::vector<uint32_t> write_data =
+        create_random_vector_of_bfloat16(4096, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        write_data.data(), write_data.size() * sizeof(uint32_t), tt_cxy_pair{1, virtual_worker}, l1_base);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(1);
+
+    // Read a 256-byte slice (64 elements) from an unaligned address (l1_base + 7)
+    constexpr size_t kNumBytesToRead = 64 * sizeof(uint32_t);
+    const size_t unaligned_offset_bytes = 7;
+
+    std::vector<uint8_t> read_bytes(kNumBytesToRead);
+    host_interface.read(
+        read_bytes.data(), read_bytes.size(), tunnel.mmio_cxy_virtual(), dest_noc_addr + unaligned_offset_bytes);
+
+    // Build expected bytes by taking a byte view of the original write buffer and slicing by the same offset
+    const uint8_t* write_bytes = reinterpret_cast<const uint8_t*>(write_data.data());
+    std::vector<uint8_t> expected_bytes(read_bytes.size());
+    std::memcpy(expected_bytes.data(), write_bytes + unaligned_offset_bytes, read_bytes.size());
+
+    ASSERT_EQ(read_bytes, expected_bytes);
+
+    lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
+}
