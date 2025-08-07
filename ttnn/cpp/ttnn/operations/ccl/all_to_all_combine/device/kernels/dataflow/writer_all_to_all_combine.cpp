@@ -42,40 +42,6 @@ inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
     return k * TokensPerDevice + t_idx;
 }
 
-template <
-    uint32_t linearized_mesh_coord,
-    tt::tt_fabric::Topology topology,
-    uint32_t mesh_rows,
-    uint32_t mesh_cols,
-    ReplicateGroup replicate_axis,
-    uint32_t src_chip_id,
-    uint32_t num_devices>
-inline void send_init_semaphore_to_configured_targets(
-    std::array<WorkerToFabricEdmSender, 4>& fabric_connections,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    const uint8_t dest_chip_ids[num_devices],
-    const uint8_t dest_mesh_ids[num_devices],
-    uint64_t init_noc_semaphore_addr) {
-    for (uint32_t device_idx = 0; device_idx < num_devices; ++device_idx) {
-        if (device_idx == linearized_mesh_coord) {
-            continue;
-        } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
-            if constexpr (is_1d_topology<topology>()) {
-                fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
-                    linearized_mesh_coord,
-                    topology,
-                    mesh_rows,
-                    mesh_cols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
-            } else {
-                const auto& dest_chip_id = dest_chip_ids[device_idx];
-                const auto& dest_mesh_id = dest_mesh_ids[device_idx];
-                fabric_send_chip_unicast_noc_unicast_semaphore_only<src_chip_id, mesh_rows, mesh_cols>(
-                    fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, false);
-            }
-        }
-    }
-}
-
 }  // namespace detail
 
 void kernel_main() {
@@ -139,7 +105,7 @@ void kernel_main() {
     }
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
 
-    detail::send_init_semaphore_to_configured_targets<
+    send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
         mesh_rows,

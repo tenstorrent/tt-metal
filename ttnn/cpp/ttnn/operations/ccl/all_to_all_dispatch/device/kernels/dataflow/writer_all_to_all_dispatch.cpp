@@ -156,6 +156,21 @@ void kernel_main() {
         }
     }
 
+    // Send initialization semaphore to configured targets for synchronization
+    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+    send_init_semaphore_to_configured_targets<
+        linearized_mesh_coord,
+        topology,
+        mesh_rows,
+        mesh_cols,
+        axis,
+        src_chip_id,
+        num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+
+    // Wait for all devices to complete initialization synchronization
+    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
+    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
