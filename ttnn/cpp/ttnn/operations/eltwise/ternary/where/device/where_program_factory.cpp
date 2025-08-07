@@ -46,12 +46,7 @@ void set_or_update_runtime_arguments(
     constexpr size_t num_writer_args = 3;
     constexpr size_t num_kernel_args = 1;
 
-    // Reader args count depends on variant and broadcast type
-    size_t num_reader_args = 5;  // Default for no broadcast
-    if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        num_reader_args = 27;  // Column broadcast needs args for all 3 tensors (predicate + true + false)
-    }
-    uint32_t dummy_arg = 0;
+    // Reader args: 5 for simple variants, 27 for column broadcast
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
@@ -62,8 +57,8 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            // Handle cores with zero tiles - need to create appropriate zero arrays based on arg count
-            if (num_reader_args == 27) {
+            // Handle cores with zero tiles - need to determine correct array size based on variant
+            if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
                 std::array<uint32_t, 27> zero_reader_args{};
                 handle_args(program, reader_kernel_id, core, zero_reader_args);
             } else {
@@ -148,25 +143,25 @@ void set_or_update_runtime_arguments(
             // If not sharded, a_num_tiles, b_num_tiles, f_num_tiles, c_current_shard_width remain 0 (like binary_ng)
         }
 
-        // Set reader runtime arguments based on variant
+        // Set reader runtime arguments based on variant (use appropriate array sizes)
         if (variant == WhereVariant::TTS) {
-            // TTS: predicate (arg 0) + value_true tensor (arg 1)
-            std::array reader_runtime_args = {
-                predicate_tensor.buffer()->address(),
-                value_true_tensor.value().buffer()->address(),
-                dummy_arg,
-                num_tiles_per_core,
-                start_tile_id,
+            // TTS: predicate (arg 0) + value_true tensor (arg 1) - only 5 args needed
+            std::array<uint32_t, 5> reader_runtime_args = {
+                predicate_tensor.buffer()->address(),           // 0: predicate address
+                value_true_tensor.value().buffer()->address(),  // 1: true tensor address
+                0,                                              // 2: unused (but expected by kernel)
+                num_tiles_per_core,                             // 3: num_tiles_per_core
+                start_tile_id                                   // 4: start_tile_id
             };
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else if (variant == WhereVariant::TST) {
-            // TST: predicate (arg 0) + value_false tensor (arg 1, maps to c_1)
-            std::array reader_runtime_args = {
-                predicate_tensor.buffer()->address(),
-                value_false_tensor.value().buffer()->address(),
-                dummy_arg,
-                num_tiles_per_core,
-                start_tile_id,
+            // TST: predicate (arg 0) + value_false tensor (arg 1, maps to c_1) - only 5 args needed
+            std::array<uint32_t, 5> reader_runtime_args = {
+                predicate_tensor.buffer()->address(),            // 0: predicate address
+                value_false_tensor.value().buffer()->address(),  // 1: false tensor address (goes to c_1)
+                0,                                               // 2: unused (but expected by kernel)
+                num_tiles_per_core,                              // 3: num_tiles_per_core
+                start_tile_id                                    // 4: start_tile_id
             };
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
@@ -180,56 +175,49 @@ void set_or_update_runtime_arguments(
                 c_start_id = start_tile_id;
             }
 
-            // Use extended reader_runtime_args format for 3 tensors
-            // Note: Added complete false tensor args (addr + strides + num_tiles) as args 21-26
+            // Standard first 5 args + extended args for column broadcast
             std::array<uint32_t, 27> reader_runtime_args = {
-                predicate_tensor.buffer()->address(),            // 0: a.buffer()->address()
-                c_start_id,                                      // 1: c_start_id
-                a_num_tiles,                                     // 2: a_num_tiles
-                num_tiles_per_core,                              // 3: c_num_tiles
-                c_current_shard_width,                           // 4: c_current_shard_width
-                aHt * aWt * aC * aN * aD * (aND > 1),            // 5: a stride calculations
-                aHt * aWt * aC * aN * (aD > 1),                  // 6
-                aHt * aWt * aC * (aN > 1),                       // 7
-                aHt * aWt * (aC > 1),                            // 8
-                cD,                                              // 9
-                cN,                                              // 10
-                cC,                                              // 11
-                cHt,                                             // 12
-                cWt,                                             // 13
-                cND,                                             // 14
-                value_true_tensor.value().buffer()->address(),   // 15: true_addr
-                bHt * bWt * bC * bN * bD * (bND > 1),            // 16: true stride calculations
-                bHt * bWt * bC * bN * (bD > 1),                  // 17
-                bHt * bWt * bC * (bN > 1),                       // 18
-                bHt * bWt * (bC > 1),                            // 19
-                b_num_tiles,                                     // 20: true_num_tiles
-                value_false_tensor.value().buffer()->address(),  // 21: false_addr (using actual false tensor)
-                fHt * fWt * fC * fN * fD * (fND > 1),            // 22: false stride calculations
-                fHt * fWt * fC * fN * (fD > 1),                  // 23
-                fHt * fWt * fC * (fN > 1),                       // 24
-                fHt * fWt * (fC > 1),                            // 25
-                f_num_tiles,                                     // 26: false_num_tiles
+                // Standard first 5 arguments (same as nobcast kernels)
+                predicate_tensor.buffer()->address(),            // 0: src0_addr (predicate)
+                value_true_tensor.value().buffer()->address(),   // 1: src1_addr (true tensor)
+                value_false_tensor.value().buffer()->address(),  // 2: src2_addr (false tensor)
+                num_tiles_per_core,                              // 3: num_tiles (per core)
+                c_start_id,                                      // 4: start_id
+                // Additional column broadcast arguments (args 5-26)
+                aHt * aWt * aC * aN * aD * (aND > 1),  // 5: nD_stride
+                aHt * aWt * aC * aN * (aD > 1),        // 6: d_stride
+                aHt * aWt * aC * (aN > 1),             // 7: n_stride
+                aHt * aWt * (aC > 1),                  // 8: c_stride
+                cD,                                    // 9: D
+                cN,                                    // 10: N
+                cC,                                    // 11: C
+                cHt,                                   // 12: Ht
+                cWt,                                   // 13: Wt
+                cND,                                   // 14: cND
+                bHt * bWt * bC * bN * bD * (bND > 1),  // 15: true_nD_stride
+                bHt * bWt * bC * bN * (bD > 1),        // 16: true_d_stride
+                bHt * bWt * bC * (bN > 1),             // 17: true_n_stride
+                bHt * bWt * (bC > 1),                  // 18: true_c_stride
+                b_num_tiles,                           // 19: true_num_tiles
+                fHt * fWt * fC * fN * fD * (fND > 1),  // 20: false_nD_stride
+                fHt * fWt * fC * fN * (fD > 1),        // 21: false_d_stride
+                fHt * fWt * fC * (fN > 1),             // 22: false_n_stride
+                fHt * fWt * (fC > 1),                  // 23: false_c_stride
+                f_num_tiles,                           // 24: false_num_tiles
+                c_current_shard_width,                 // 25: dst_shard_width
+                a_num_tiles,                           // 26: src_num_tiles (predicate)
             };
-
-            // DEBUG: Print WHERE reader args
-            std::cout << "\n=== WHERE READER ARGS (TTT COL_BCAST) core(" << core.x << "," << core.y
-                      << ") ===" << std::endl;
-            for (size_t i = 0; i < reader_runtime_args.size(); ++i) {
-                std::cout << "  arg[" << i << "] = " << reader_runtime_args[i] << std::endl;
-            }
-            std::cout << "===========================================" << std::endl;
 
             // TODO: value_false_tensor needs to be handled separately (maybe through a different CB or as scalar)
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else {
-            // TTT: predicate (arg 0) + value_true (arg 1) + value_false (arg 2)
-            std::array reader_runtime_args = {
-                predicate_tensor.buffer()->address(),
-                value_true_tensor.value().buffer()->address(),
-                value_false_tensor.value().buffer()->address(),
-                num_tiles_per_core,
-                start_tile_id,
+            // TTT (non-broadcast): predicate (arg 0) + value_true (arg 1) + value_false (arg 2) - only 5 args needed
+            std::array<uint32_t, 5> reader_runtime_args = {
+                predicate_tensor.buffer()->address(),            // 0: predicate address
+                value_true_tensor.value().buffer()->address(),   // 1: true tensor address
+                value_false_tensor.value().buffer()->address(),  // 2: false tensor address
+                num_tiles_per_core,                              // 3: num_tiles_per_core
+                start_tile_id                                    // 4: start_tile_id
             };
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         }
@@ -258,14 +246,6 @@ void set_or_update_runtime_arguments(
             uint32_t quantization_zero_point = 0u;  // No quantization for where
 
             std::array compute_runtime_args = {num_tiles_per_core, freq, counter, quantization_zero_point};
-
-            // DEBUG: Print WHERE compute args
-            std::cout << "\n=== WHERE COMPUTE ARGS (TTT COL_BCAST) core(" << core.x << "," << core.y
-                      << ") ===" << std::endl;
-            for (size_t i = 0; i < compute_runtime_args.size(); ++i) {
-                std::cout << "  arg[" << i << "] = " << compute_runtime_args[i] << std::endl;
-            }
-            std::cout << "===========================================" << std::endl;
 
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else if (variant == WhereVariant::TTS) {
