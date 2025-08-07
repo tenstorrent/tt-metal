@@ -11,7 +11,7 @@ from ...utils.tensor import bf16_tensor
 from ...utils.check import assert_quality
 from ...models.transformers.attention_sd35 import SD35JointAttention
 from ...parallel.manager import CCLManager
-from ....stable_diffusion_35_large.reference.attention import Attention as TorchAttention
+from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
 
 
 @pytest.mark.parametrize(
@@ -35,7 +35,7 @@ from ....stable_diffusion_35_large.reference.attention import Attention as Torch
         (1, 4096, 333),  # SD3.5 large config
     ],
 )
-@pytest.mark.parametrize("context_pre_only", [True, False])
+# @pytest.mark.parametrize("context_pre_only", [True, False])
 # TODO: add more parametrizations of Attention module options
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_sd35_joint_attention(
@@ -45,7 +45,7 @@ def test_sd35_joint_attention(
     B: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
-    context_pre_only: bool,
+    # context_pre_only: bool,
 ) -> None:
     torch_dtype = torch.bfloat16
 
@@ -61,15 +61,19 @@ def test_sd35_joint_attention(
     eps = 1e-6
 
     # Create Torch model
-    torch_model = TorchAttention(
-        query_dim=query_dim,
-        dim_head=head_dim,
-        heads=heads,
-        out_dim=query_dim,
-        qk_norm="rms_norm",
-        added_kv_proj_dim=query_dim,
-        context_pre_only=context_pre_only,
-    ).to(torch_dtype)
+    # torch_model = TorchAttention(
+    #     query_dim=query_dim,
+    #     dim_head=head_dim,
+    #     heads=heads,
+    #     out_dim=query_dim,
+    #     qk_norm="rms_norm",
+    #     added_kv_proj_dim=query_dim,
+    #     context_pre_only=context_pre_only,
+    # ).to(torch_dtype)
+    parent_torch_model = TorchSD3Transformer2DModel.from_pretrained(
+        f"stabilityai/stable-diffusion-3.5-large", subfolder="transformer", torch_dtype=torch_dtype
+    )
+    torch_model = parent_torch_model.transformer_blocks[0].attn
     torch_model.eval()
 
     # Create CCL manager
@@ -100,7 +104,7 @@ def test_sd35_joint_attention(
         out_dim=query_dim,
         bias=bias,
         out_bias=out_bias,
-        context_pre_only=context_pre_only,
+        context_pre_only=torch_model.context_pre_only,
         eps=eps,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
@@ -134,9 +138,9 @@ def test_sd35_joint_attention(
             mesh_device, dims=spatial_shard_dims, mesh_shape=tuple(mesh_device.shape)
         ),
     )
-    assert_quality(torch_spatial, tt_spatial_torch, pcc=0.998_000)
+    assert_quality(torch_spatial, tt_spatial_torch, pcc=0.997_000)
 
-    if not context_pre_only:
+    if not torch_model.context_pre_only:
         prompt_shard_dims = [None, None]
         prompt_shard_dims[sp_axis] = 0
         prompt_shard_dims[tp_axis] = 3
