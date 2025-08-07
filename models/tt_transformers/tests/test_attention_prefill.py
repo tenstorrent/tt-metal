@@ -154,7 +154,7 @@ def test_attention_inference(
     tt_out = tt_model(
         attention_input,
         current_pos=None,
-        rot_mats_global=rot_mats,
+        rot_mats=rot_mats,
         user_id=0,
         mode="prefill",
         page_table=page_table_tt,
