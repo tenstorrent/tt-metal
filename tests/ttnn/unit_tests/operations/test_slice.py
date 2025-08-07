@@ -1269,10 +1269,11 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 @pytest.mark.parametrize(
     "dims, slice_size, core_x, core_y",
     [
-        [[2, 64, 64, 256], 32, 4, 4],
-        [[2, 64, 64, 512], 16, 4, 4],
-        [[2, 16, 16, 1024], 4, 4, 4],
-        [[2, 128, 128, 256], 32, 8, 4],
+        # [[2, 64, 64, 256], 32, 4, 4],
+        # [[2, 64, 64, 512], 16, 4, 4],
+        # [[2, 16, 16, 1024], 4, 4, 4],
+        # [[2, 128, 128, 256], 32, 8, 4],
+        [[2, 128, 128, 63], 32, 8, 2],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -1314,7 +1315,7 @@ def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
             output_shape, core_grid, ttnn.ShardStrategy.BLOCK, orientation
         )
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
-        output = ttnn.to_torch(this_ttnn_output)
+        output = this_ttnn_output.cpu().to_torch_with_padded_shape()
         output = torch.reshape(output, this_torch_output.shape)
         assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
 

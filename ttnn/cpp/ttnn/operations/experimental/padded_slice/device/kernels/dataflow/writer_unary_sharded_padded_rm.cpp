@@ -35,5 +35,6 @@ void kernel_main() {
         noc_async_read_one_packet_with_state<true>(pad_noc_addr, write_addr);
         write_addr += padded_row_size_bytes;
     }
+    noc_async_full_barrier();
     noc_async_read_barrier();
 }

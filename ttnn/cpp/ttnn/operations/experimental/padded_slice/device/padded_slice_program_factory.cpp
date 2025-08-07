@@ -68,7 +68,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
     uint32_t input_page_size = input_shape[-1] * input_tensor.element_size();
-    uint32_t input_row_size_bytes = input_shape[-1] * input_tensor.element_size() / num_cores_channels;
+    uint32_t input_row_size_bytes = tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
 
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
@@ -165,6 +165,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
+        uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes, input_page_size - width_offset);
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
 
@@ -174,6 +175,15 @@ get_padded_slice_runtime_args_rm_sharded_output(
         reader_kernel_args[addr_offset++] = num_sticks_per_core;
         reader_kernel_args[addr_offset] = num_sticks_per_core;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
+
+        log_debug(
+            tt::LogOp,
+            "For Core {}, start_id : {}, width_offset : {}, num_sticks_per_core : {}, this_input_row_size_bytes : {}",
+            core,
+            start_id,
+            width_offset,
+            num_sticks_per_core,
+            this_input_row_size_bytes);
 
         std::vector<uint32_t> writer_kernel_args = {
             num_sticks_per_core, output_row_size_elems, input_row_size_bytes, output_row_size_bytes};
@@ -216,10 +226,11 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output);
 
     bool pad_output_row = false;
-
-    TT_FATAL(
-        a.logical_shape()[3] % num_cores_channels == 0,
-        "Input tensor should be divisible by number of cores in channel dimension");
+    log_debug(tt::LogOp, "Input Shape {}, Padded Shape : {}", a.logical_shape(), a.padded_shape());
+    // TT_FATAL(
+    //     a.logical_shape()[3] % num_cores_channels == 0,
+    //     "Input tensor {} should be divisible by number of cores in channel dimension {}",
+    //     a.logical_shape()[3],num_cores_channels);
     uint32_t input_row_size_bytes = a.logical_shape()[-1] * a.element_size();
     input_row_size_bytes = input_row_size_bytes / num_cores_channels;
 

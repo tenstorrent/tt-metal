@@ -106,7 +106,6 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
-@skip_for_blackhole("Not fully tested on Blackhole")
 @pytest.mark.parametrize(
     "input_layout, dtype",
     [[ttnn.TILE_LAYOUT, ttnn.bfloat8_b], [ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16]],
