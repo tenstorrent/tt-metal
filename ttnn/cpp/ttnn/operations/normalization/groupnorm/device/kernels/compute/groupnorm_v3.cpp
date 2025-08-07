@@ -72,18 +72,18 @@ void MAIN {
             cb_wait_front(src_cb_idx, src_tiles_per_page);
             for (uint32_t tile = 0; tile < src_tiles_per_page; ++tile) {
                 //     // TODO: Implement
-                sub_tiles_bcast_scalar(src_cb_idx, mean_cb_idx, tile, 0, mean_dst_reg);
+                // sub_tiles_bcast_scalar(src_cb_idx, mean_cb_idx, tile, 0, mean_dst_reg);
             }
 
             cb_pop_front(src_cb_idx, src_tiles_per_page);
-            tile_regs_commit();
+            // tile_regs_commit();
 
             cb_reserve_back(dst_cb_idx, dst_tiles_per_page);
             // tile_regs_wait();
             for (uint32_t tile = 0; tile < dst_tiles_per_page; ++tile) {
                 pack_tile(mean_dst_reg, dst_cb_idx, tile);
             }
-            tile_regs_release();
+            // tile_regs_release();
             cb_push_back(dst_cb_idx, dst_tiles_per_page);
         }
     }
