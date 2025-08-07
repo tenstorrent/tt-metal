@@ -148,10 +148,20 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im2_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im3_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im4_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im5_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines;
+    if (input.dtype() == DataType::FLOAT32) {
+        unary_defines["TANH_FP32"] = "1";
+    } else {
+        unary_defines["TANH_BF16"] = "1";
+    }
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
 
     tt::tt_metal::CreateKernel(
