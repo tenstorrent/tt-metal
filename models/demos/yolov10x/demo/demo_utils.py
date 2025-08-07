@@ -4,7 +4,6 @@
 
 
 import torch
-import torch.nn as nn
 
 from models.demos.utils.common_demo_utils import Results, non_max_suppression, scale_boxes
 
@@ -37,15 +36,3 @@ def postprocess(preds, img, orig_imgs, batch, names):
         results.append(Results(orig_img, path=img_path, names=names, boxes=pred))
 
     return results
-
-
-class Ensemble(nn.ModuleList):
-    def __init__(self):
-        super(Ensemble, self).__init__()
-
-    def forward(self, x, augment=False):
-        y = []
-        for module in self:
-            y.append(module(x, augment)[0])
-        y = torch.cat(y, 1)
-        return y, None

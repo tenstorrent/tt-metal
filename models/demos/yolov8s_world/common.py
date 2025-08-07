@@ -6,8 +6,8 @@ import os
 
 import torch
 
+from models.demos.utils.common_demo_utils import attempt_load
 from models.demos.yolov8s_world.reference import yolov8s_world
-from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import attempt_load
 
 YOLOV8SWORLD_L1_SMALL_SIZE = 24576
 
