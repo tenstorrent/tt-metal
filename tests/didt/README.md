@@ -14,11 +14,13 @@ Resnet Convolution: `pytest tests/didt/test_resnet_conv.py::test_resnet_conv -k 
 
 ### Supported systems
 
-We support N150, N300, T3000, 6U Galaxy systems, and single chip Blackhole. To choose the system, pass in the following parametrization ids (as shown in the example commands):
+We support N150, N300, T3000, 6U Galaxy systems, and single/multi chip Blackhole. To choose the system, pass in the following parametrization ids (as shown in the example commands):
 - 1chips
 - 2chips
 - 8chips
 - galaxy
+
+Alternatively, running with `all` will run the test on as many devices as are detected on the system.
 
 ### Targetting specific device
 
