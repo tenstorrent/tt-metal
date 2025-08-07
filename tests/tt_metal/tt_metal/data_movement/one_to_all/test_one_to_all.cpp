@@ -49,11 +49,18 @@ struct OneToAllConfig {
     //  response packets) (60, 45, 23, vs 60, 60, 60 at posted)
 };
 
-bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfig& test_config) {
     /* ================ SETUP ================ */
 
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // assert(
     //    (test_config.is_multicast && test_config.loopback) ||
@@ -86,11 +93,11 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     auto sub_core_list = corerange_to_cores(sub_logical_core_set);
 
     // Subordinate Physical (only needed for unicast)
-    CoreCoord sub_worker_start_coord = device->worker_core_from_logical_core(sub_logical_start_coord);
-    CoreCoord sub_worker_end_coord = device->worker_core_from_logical_core(sub_logical_end_coord);
+    CoreCoord sub_worker_start_coord = mesh_device->worker_core_from_logical_core(sub_logical_start_coord);
+    CoreCoord sub_worker_end_coord = mesh_device->worker_core_from_logical_core(sub_logical_end_coord);
     vector<uint32_t> sub_worker_coordinates = {};
     for (auto& sub_logical_core : sub_core_list) {
-        CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);
+        CoreCoord sub_worker_core = mesh_device->worker_core_from_logical_core(sub_logical_core);
         uint32_t sub_worker_core_packed =
             (sub_worker_core.x << 16) | (sub_worker_core.y & 0xFFFF);  // Pack coordinates into a single uint32_t
         sub_worker_coordinates.push_back(sub_worker_core_packed);
@@ -99,7 +106,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     // L1 Space Allocation
 
     // Obtain L1 Address for Storing Data
-    L1AddressInfo mst_l1_info = unit_tests::dm::get_l1_address_and_size(device, test_config.mst_core_coord);
+    L1AddressInfo mst_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.mst_core_coord);
     // Check if the L1 size is sufficient for the test configuration
     if (mst_l1_info.size < bytes_per_transaction) {
         log_error(LogTest, "Insufficient L1 size for the test configuration");
@@ -116,7 +123,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     // Checks that both master and all subordinate cores have the same L1 base address and size
     for (auto& sub_logical_core : sub_core_list) {
-        L1AddressInfo sub_l1_info = unit_tests::dm::get_l1_address_and_size(device, sub_logical_core);
+        L1AddressInfo sub_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, sub_logical_core);
         if (mst_l1_info.base_address != sub_l1_info.base_address || mst_l1_info.size != sub_l1_info.size) {
             log_error(LogTest, "Mismatch in L1 address or size between master and subordinate cores");
             return false;
@@ -166,7 +173,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     DataMovementProcessor data_movement_processor = DataMovementProcessor::RISCV_0;
     auto sender_kernel = CreateKernel(
-        program,
+        program_,
         sender_kernel_path,
         mst_logical_core_set,
         DataMovementConfig{
@@ -180,12 +187,12 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             sender_runtime_args.end(), sub_worker_coordinates.begin(), sub_worker_coordinates.end());
     }
 
-    SetRuntimeArgs(program, sender_kernel, mst_logical_core_set, sender_runtime_args);
+    SetRuntimeArgs(program_, sender_kernel, mst_logical_core_set, sender_runtime_args);
 
     // Assign unique id
 
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     /* ================ EXECUTION ================ */
 
@@ -201,7 +208,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // LAUNCH THE PROGRAM
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     // Read output from subordinate L1 buffers (implement a loop)
     vector<uint32_t> packed_output;
@@ -229,7 +236,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
 void directed_ideal_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     bool is_multicast,
@@ -276,7 +283,7 @@ void directed_ideal_test(
 
 void packet_sizes_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     bool is_multicast,
@@ -463,7 +470,7 @@ void custom_test(
 /* ========== UNICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 0;
 
@@ -487,7 +494,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
 }
 
 /* ========== 5x5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast5x5PacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllUnicast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 1;
 
@@ -511,7 +518,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast5x5PacketSizes) {
 }
 
 /* ========== All ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 2;
 
@@ -538,7 +545,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
 /* ========== MULTICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 3;
 
@@ -562,7 +569,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSizes) {
 }
 
 /* ========== 5x5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast5x5PacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 4;
 
@@ -586,7 +593,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast5x5PacketSizes) {
 }
 
 /* ========== All ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 5;
 
@@ -613,7 +620,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
 /* ========== MULTICAST LINKED ========== */
 
 /* ========== 2x2 ========= */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 6;
 
@@ -637,7 +644,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
 }
 
 /* ========== 5x5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 7;
 
@@ -661,7 +668,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
 }
 
 /* ========== 11x10 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 8;
 
@@ -688,7 +695,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
 /* ========== DIRECTED IDEAL ========== */
 
 /* ========== UNICAST ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 52;  // Arbitrary test id
 
@@ -718,7 +725,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
 }
 
 /* ========== MULTICAST ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 53;  // Arbitrary test id
 
@@ -748,7 +755,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
 }
 
 /* ========== MULTICAST LINKED ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 54;  // Arbitrary test id
 
