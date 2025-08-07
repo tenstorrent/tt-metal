@@ -20,9 +20,9 @@ def tensor_map():
         # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
-        [1, 1, 7, 7],
+        [1, 1, 56, 56],
         [2, 32, 16, 16],
-        [1, 290, 10, 10],
+        [2, 290, 10, 10],
         [1, 512, 112, 32],
         [1, 320, 48, 48],
         [1, 320, 47, 47],
@@ -36,8 +36,7 @@ def tensor_map():
         # Reductions which are large and wide at the same time
         # go to large kernels
         (3, 3),
-        (5, 5),
-        (6, 6),
+        (9, 9),
         (36, 36),
     ),
 )
@@ -47,7 +46,7 @@ def tensor_map():
 )
 @pytest.mark.parametrize(
     "padding",
-    ((0, 0),),
+    ((1, 1),),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
@@ -73,7 +72,7 @@ def tensor_map():
 @pytest.mark.parametrize(
     "shard_scheme",
     [
-        # None,
+        None,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ],
 )

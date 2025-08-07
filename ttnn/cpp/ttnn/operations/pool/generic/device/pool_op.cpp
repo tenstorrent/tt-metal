@@ -70,14 +70,13 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     auto& out_mem_config = op_attr.memory_config_;
     auto& output_dtype = op_attr.output_dtype_;
 
-    const auto input_shape = input.logical_shape();
     uint32_t out_h = sliding_window_config.get_output_shape()[1];
     uint32_t out_w = sliding_window_config.get_output_shape()[2];
     uint32_t out_c = sliding_window_config.channels;
     uint32_t batch_size = sliding_window_config.batch_size;
     uint32_t out_nhw = batch_size * out_h * out_w;
 
-    bool is_out_tiled = false;  // pool output is row major
+    bool is_out_tiled = output_dtype == DataType::BFLOAT8_B;
     uint32_t tile_rows = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
 
     uint32_t num_cores_nhw = sliding_window_config.num_cores_nhw;

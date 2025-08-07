@@ -105,7 +105,8 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
 
                 noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
-
+                // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
+                // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
                 if constexpr (tilize_reconfig) {
                     in_l1_write_addr += read_bytes;
                 } else {
@@ -121,8 +122,14 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         cb_push_back(in_cb_id, 1);
                         cb_reserve_back(in_cb_id, 1);
                         in_l1_write_addr = get_write_ptr(in_cb_id);
-
+                        // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
+                        // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
+                        // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
+                        // cannot contain values greater than the max value, and if we have N=1 chunks we already
+                        // initialized the entire CB with the init value, but for avg pool we need to fill the
+                        // entire CB with the init value since the junk data will contribute to the average.
                         if constexpr (is_avg_pool) {
+                            // clear the in CB
                             if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
                                 processed_sticks != total_elems_to_reduce) {
                                 clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(

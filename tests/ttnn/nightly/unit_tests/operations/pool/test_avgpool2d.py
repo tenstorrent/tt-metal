@@ -76,7 +76,7 @@ def randomize_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
         tensor_map[tensor_shape] = torch_tensor
     return torch_tensor
 
