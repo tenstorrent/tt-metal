@@ -73,6 +73,7 @@ TEST(Tunneling, LiteFabricInit) {
     lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc, elf_path);
     lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
     lite_fabric::WaitForState(*cluster.get(), desc, lite_fabric::InitState::TERMINATED);
+    lite_fabric::SetResetState(*cluster.get(), desc, true);
 }
 
 TEST(Tunneling, LiteFabricWriteAllCores) {
@@ -227,3 +228,5 @@ TEST(Tunneling, LiteFabricBarrier) {
 
     tt::tt_metal::detail::CloseDevices(devices);
 }
+
+TEST(Tunneling, LiteFabricReadsAndWrites) {}
