@@ -71,6 +71,15 @@ jobs:
     with:
       version: 22.04
 
+  fail-fast:
+    if: failure()
+    runs-on: ubuntu-latest
+    needs: [code-analysis]
+    permissions:
+      actions: write
+    steps:
+      - uses: action-pack/cancel@bb57491c99942855e9da36ffbe86a686b2bd35a3
+
   find-changes:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
