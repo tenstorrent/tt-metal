@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <stdint.h>
 #include <tt_stl/span.hpp>
 #include <cstddef>
@@ -53,9 +54,10 @@ struct KernelSource {
 
     std::string source_;
     SourceType source_type_;
+    // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
+    std::filesystem::path path_;
 
-    KernelSource(const std::string &source, const SourceType &source_type) :
-        source_(source), source_type_(source_type) {}
+    KernelSource(const std::string& source, const SourceType& source_type);
 
     std::string name() const {
         std::string name;

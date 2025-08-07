@@ -170,7 +170,7 @@ bool test_dropout_standalone(
 
         KernelHandle eltwise_sfpu_kernel_id = CreateKernel(
             program,
-            "/tests/tt_metal/tt_metal/test_kernels/compute/dropout_sfpu.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/compute/dropout_sfpu.cpp",
             core,
             ComputeConfig{
                 .math_approx_mode = math_approx_mode,

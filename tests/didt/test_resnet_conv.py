@@ -202,7 +202,6 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         deallocate_activation=False,
         enable_act_double_buffer=True,
         enable_split_reader=True,
-        enable_subblock_padding=False,
     )
     # This sets subblocks to [2, 4] in underlying matmul
     conv_config.act_block_h_override = 40 * 32

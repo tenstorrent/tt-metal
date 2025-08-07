@@ -228,7 +228,19 @@ void py_module_types(py::module& module) {
     )pbdoc")
         .def(py::init<>(), R"pbdoc(
         Default constructor for SemaphoreDescriptor.
-    )pbdoc");
+    )pbdoc")
+        .def(
+            py::init<CoreType, CoreRangeSet, uint32_t>(),
+            py::arg("core_type") = CoreType::WORKER,
+            py::arg("core_ranges"),
+            py::arg("initial_value"),
+            R"pbdoc(
+                Initialize a SemaphoreDescriptor with core type, core ranges, and initial value.
+            )pbdoc")
+        .def_readwrite("core_type", &tt::tt_metal::SemaphoreDescriptor::core_type, "Type of core for the semaphore")
+        .def_readwrite("core_ranges", &tt::tt_metal::SemaphoreDescriptor::core_ranges, "Core ranges for the semaphore")
+        .def_readwrite(
+            "initial_value", &tt::tt_metal::SemaphoreDescriptor::initial_value, "Initial value for the semaphore");
 
     py::class_<tt::tt_metal::ProgramDescriptor>(module, "ProgramDescriptor", R"pbdoc(
         Descriptor for a complete program.
