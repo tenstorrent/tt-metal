@@ -78,9 +78,9 @@ void MetalContext::initialize(
             // Re-init request with the same parameters, do nothing unless force re-init requested.
             if (force_reinit_) {
                 force_reinit_ = false;
-                // log_warning(
-                //     tt::LogAlways,
-                //     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
+                log_warning(
+                    tt::LogAlways,
+                    "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
                 teardown();
             } else {
                 return;
@@ -847,6 +847,12 @@ void MetalContext::initialize_firmware(
         cluster_->l1_barrier(device_id);
     };
 
+    // Use a different mailbox address each time we initialize firmware to avoid double
+    // PCIe write bug. Also in active_erisc firmwarwe we will clear the mailbox before we return,
+    // so if any double write was sent during runtime it will be cleared
+    // as of tt-firmware 18.6.0 there is no one else using the mailbox
+    static int mailbox_index = 0;
+
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
@@ -967,9 +973,12 @@ void MetalContext::initialize_firmware(
                     device_id,
                     virtual_core,
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
+                    mailbox_index,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
                     true);
                 tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
+                // There are 4 mailboxes. wrap to 0 after 3
+                mailbox_index = (mailbox_index + 1) % 4;
             }
 
             break;
