@@ -129,57 +129,6 @@ void MeshSocketTestRunner::run_test(const ParsedTestConfig& test) {
     log_info(tt::LogTest, "Creating sockets for test '{}'...", test.name);
     auto sockets = create_sockets_for_test(test);
 
-    // Log detailed socket information
-    log_info(tt::LogTest, "Created {} socket(s) for test '{}'", sockets.size(), test.name);
-    for (size_t i = 0; i < sockets.size(); ++i) {
-        const auto& socket = sockets[i];
-        const auto& config = socket.get_config();
-        log_info(
-            tt::LogTest,
-            "  Socket {}: sender_rank={}, receiver_rank={}, connections={}",
-            i + 1,
-            *config.sender_rank,
-            *config.receiver_rank,
-            config.socket_connection_config.size());
-
-        for (size_t j = 0; j < config.socket_connection_config.size(); ++j) {
-            const auto& conn = config.socket_connection_config[j];
-            log_info(
-                tt::LogTest,
-                "    Connection {}: sender_device=({},{}), receiver_device=({},{}), sender_core=({},{}), "
-                "receiver_core=({},{})",
-                j + 1,
-                conn.sender_core.device_coord[0],
-                conn.sender_core.device_coord[1],
-                conn.receiver_core.device_coord[0],
-                conn.receiver_core.device_coord[1],
-                conn.sender_core.core_coord.x,
-                conn.sender_core.core_coord.y,
-                conn.receiver_core.core_coord.x,
-                conn.receiver_core.core_coord.y);
-        }
-
-        log_info(
-            tt::LogTest,
-            "    Memory config: fifo_size={}, storage_type={}",
-            config.socket_mem_config.fifo_size,
-            config.socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::L1 ? "L1" : "Other");
-    }
-
-    // Log test memory configuration
-    log_info(
-        tt::LogTest,
-        "Test memory config: fifo_size={}, page_size={}, data_size={}, num_transactions={}",
-        test.memory_config.fifo_size,
-        test.memory_config.page_size,
-        test.memory_config.data_size,
-        test.memory_config.num_transactions);
-
-    if (sockets.empty()) {
-        log_warning(tt::LogTest, "No sockets created for test '{}' on current rank", test.name);
-        return;
-    }
-
     log_info(tt::LogTest, "Executing {} socket(s) for test '{}'", sockets.size(), test.name);
 
     uint32_t num_iterations = test.num_iterations.value_or(DEFAULT_NUM_ITERATIONS);
