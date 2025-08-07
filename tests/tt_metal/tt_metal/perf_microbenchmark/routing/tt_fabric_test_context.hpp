@@ -540,8 +540,6 @@ private:
             hops = traffic_config.hops;
             dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                 traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
-            log_info(
-                tt::LogTest, "for src: {}, from hops: {}, got dst nodes: {}", src_node_id, hops.value(), dst_node_ids);
         } else {
             dst_node_ids = traffic_config.dst_node_ids.value();
 

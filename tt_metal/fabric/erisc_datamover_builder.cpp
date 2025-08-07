@@ -145,6 +145,10 @@ static size_t get_dateline_sender_channel_skip_idx(const bool is_2D_routing) {
                          : FabricEriscDatamoverConfig::dateline_sender_channel_skip_idx;
 }
 
+static uint32_t get_downstream_edm_sender_channel(const bool is_2D_routing, const eth_chan_directions direction) {
+    return is_2D_routing ? direction : 1;
+}
+
 FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
     noc_(risc_id == 0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1),
     enable_handshake_(true),
@@ -1519,7 +1523,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
     // For 1D, downstream channel is always 1 because channel 0 is always reserved for worker connections
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
-    auto ds_edm_send_chan = is_2D_routing ? this->direction : 1;
+    auto ds_edm_send_chan = get_downstream_edm_sender_channel(is_2D_routing, this->direction);
     auto adapter_spec = downstream_edm.build_connection_to_fabric_channel(ds_edm_send_chan);
 
     if (is_2D_routing) {
