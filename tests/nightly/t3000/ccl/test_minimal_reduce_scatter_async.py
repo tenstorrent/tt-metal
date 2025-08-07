@@ -106,6 +106,10 @@ def run_reduce_scatter_impl(
     ##### All gather input setup #####
     logger.info(f"Reduce scatter shape: {rs_input_shape}")
     logger.info(f"Reduce scatter dim: {dim}")
+    logger.info(f"input mem config: {mem_config_input}")
+    logger.info(f"Reduce input mem config: {mem_config_rs}")
+    logger.info(f"intermediate mem config: {mem_config_intermediate}")
+    logger.info(f"topology: {rs_topology}")
 
     tt_input_tensor_mesh_list = []
     torch_input_tensor_list = []
