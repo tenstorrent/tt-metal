@@ -19,6 +19,27 @@
 namespace ttnn::operations::conv {
 namespace conv2d {
 
+std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
+    const ttnn::Shape& conv_activation_shape,
+    const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
+    uint32_t num_cores_nhw,
+    uint32_t act_block_h_ntiles) {
+    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
+    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t batch_size = output_shape[0];
+    uint32_t conv_output_h = output_shape[1];
+    uint32_t conv_output_w = output_shape[2];
+
+    // pad height
+    uint32_t num_rows = (uint32_t)batch_size * conv_output_h * conv_output_w;
+    uint32_t act_block_h_datums = act_block_h_ntiles * tt::constants::TILE_HEIGHT;
+    uint32_t num_rows_padded = tt::round_up(num_rows, num_cores_nhw * act_block_h_datums);
+    uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
+    uint32_t num_cols_padded = tt::round_up(conv_activation_shape[3] * filter_w, tt::constants::TILE_WIDTH) * filter_h;
+    return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt::tt_metal::Program& program,
     const Tensor& a,
@@ -113,12 +134,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     }
 
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] =
-        optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded,
-            sliding_window_config,
-            parallelization_config.num_cores_nhw,
-            out_block_h_ntiles);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(
+        ashape_with_channels_padded, sliding_window_config, parallelization_config.num_cores_nhw, out_block_h_ntiles);
     TT_FATAL(act_matrix_shape.size() == 3, "Error");
     TT_FATAL(act_matrix_shape[0] == 1, "Error");
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
@@ -391,11 +408,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
     compute_kernel_args = {
-        act_block_w_ntiles,      // in0_block_w
-        act_num_subblocks,       // in0_num_sublocks
-        act_block_num_tiles,     // in0_block_num_tiles,
-        act_subblock_num_tiles,  // in0_sublock_num_tiles
-        act_subblock_h_ntiles,   // in0_subblock_h
+        act_block_w_ntiles,                         // in0_block_w
+        act_num_subblocks,                          // in0_num_sublocks
+        act_block_num_tiles,                        // in0_block_num_tiles,
+        act_subblock_num_tiles,                     // in0_sublock_num_tiles
+        act_subblock_h_ntiles * act_num_subblocks,  // reader_num_h_subblocks
 
         weight_num_subblocks,    // in1_num_sublocks
         weight_block_num_tiles,  // in1_block_num_tiles,

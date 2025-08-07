@@ -24,11 +24,10 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv_transpose2d {
 
-template <typename T>
 Result conv_transpose2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -211,7 +210,6 @@ Result conv_transpose2d(
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader,
         conv_config.full_inner_dim);
 
     bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
