@@ -35,7 +35,7 @@ class DeepseekV3MoEExperts(nn.Module):
 
         self.experts = nn.ModuleList(
             [
-                ReferenceExpert(config, intermediate_size=config.moe_intermediate_size)
+                ReferenceExpert(config, intermediate_size=config.moe_intermediate_size).eval()
                 for i in range(config.n_routed_experts)
             ]
         )
