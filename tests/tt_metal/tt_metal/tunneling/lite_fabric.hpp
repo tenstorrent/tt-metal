@@ -8,8 +8,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include "fabric_edm_packet_header.hpp"
+#include "hal_types.hpp"
 #include "lite_fabric_constants.hpp"
+#include "lite_fabric_header.hpp"
 
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
 
@@ -156,6 +157,7 @@ struct HostToLiteFabricInterface {
     uint32_t receiver_channel_base = 0;
     uint32_t eth_barrier_addr = 0;
     uint32_t tensix_barrier_addr = 0;
+    uint32_t l1_alignment_bytes = 0;  // Assumed to be 16B
 
     inline void init() volatile {
         h2d.sender_host_write_index = 0;
@@ -165,7 +167,8 @@ struct HostToLiteFabricInterface {
     }
 
     constexpr uint32_t get_max_payload_data_size_bytes() const {
-        return CHANNEL_BUFFER_SIZE - sizeof(tt::tt_fabric::LowLatencyPacketHeader);
+        // Additional 16B to be used only for unaligned reads/writes
+        return CHANNEL_BUFFER_SIZE - sizeof(LiteFabricHeader) - 16;
     }
 
     // Host Only Methods below
@@ -198,8 +201,8 @@ struct HostToLiteFabricInterface {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         tt_driver_atomics::mfence();
 
-        volatile tt::tt_fabric::LowLatencyPacketHeader header;
-        header.command_fields.read.event = 0;
+        volatile LiteFabricHeader header;
+        header.command_fields.noc_read.event = 0;
         const auto expectedOrderId = HostToLiteFabricReadEvent::get();
         log_info(
             tt::LogMetal,
@@ -210,14 +213,15 @@ struct HostToLiteFabricInterface {
         while (true) {
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 const_cast<void*>(static_cast<volatile void*>(&header)),
-                sizeof(tt::tt_fabric::LowLatencyPacketHeader),
+                sizeof(LiteFabricHeader),
                 virtual_core_sender,
                 read_event_addr);
-            if (header.command_fields.read.event == expectedOrderId) {
+            if (header.command_fields.noc_read.event == expectedOrderId) {
                 break;
             } else if (
-                header.command_fields.read.event != 0xdeadbeef && header.command_fields.read.event > expectedOrderId) {
-                TT_THROW("Read event out of order: {} > {}", header.command_fields.read.event, expectedOrderId);
+                header.command_fields.noc_read.event != 0xdeadbeef &&
+                header.command_fields.noc_read.event > expectedOrderId) {
+                TT_THROW("Read event out of order: {} > {}", header.command_fields.noc_read.event, expectedOrderId);
             }
         };
 
@@ -259,16 +263,19 @@ struct HostToLiteFabricInterface {
     }
 
     void send_payload_flush_non_blocking_from_address(
-        tt::tt_fabric::LowLatencyPacketHeader& header, tt_cxy_pair virtual_core_sender, uint32_t channel_address) {
+        LiteFabricHeader& header, tt_cxy_pair virtual_core_sender, uint32_t channel_address) {
+        if (!header.get_payload_size_excluding_header()) {
+            return;
+        }
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         uint32_t addr = get_next_send_buffer_slot_address(channel_address);
-        if (header.noc_send_type == tt::tt_fabric::NocSendType::NOC_READ) {
+        if (header.noc_send_type == lite_fabric::NocSendType::NOC_READ) {
             log_info(
                 tt::LogMetal,
                 "Send {}B read payload header address {:#x} source address {:#x} Host IF on Device {:#x}",
                 header.get_payload_size_including_header(),
                 addr,
-                header.command_fields.read.noc_address,
+                header.command_fields.noc_read.noc_address,
                 host_interface_on_device_addr);
         } else {
             log_info(
@@ -276,10 +283,10 @@ struct HostToLiteFabricInterface {
                 "Send {}B write payload header address {:#x} dest address {:#x} Host IF on Device {:#x}",
                 header.get_payload_size_including_header(),
                 addr,
-                header.command_fields.unicast_write.noc_address,
+                header.command_fields.noc_unicast.noc_address,
                 host_interface_on_device_addr);
         }
-        cluster.write_core(&header, sizeof(tt::tt_fabric::LowLatencyPacketHeader), virtual_core_sender, addr);
+        cluster.write_core(&header, sizeof(LiteFabricHeader), virtual_core_sender, addr);
 
         cluster.l1_barrier(virtual_core_sender.chip);
 
@@ -292,12 +299,14 @@ struct HostToLiteFabricInterface {
 
     void send_payload_without_header_non_blocking_from_address(
         void* data, size_t size, tt_cxy_pair virtual_core_sender, uint32_t channel_address) {
-        if (size > CHANNEL_BUFFER_SIZE - sizeof(tt::tt_fabric::LowLatencyPacketHeader)) {
+        if (!size) {
+            return;
+        }
+        if (size > CHANNEL_BUFFER_SIZE - sizeof(LiteFabricHeader)) {
             throw std::runtime_error("Payload size exceeds channel buffer size");
         }
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        uint32_t addr =
-            get_next_send_buffer_slot_address(channel_address) + sizeof(tt::tt_fabric::LowLatencyPacketHeader);
+        uint32_t addr = get_next_send_buffer_slot_address(channel_address) + sizeof(LiteFabricHeader);
         log_info(tt::LogMetal, "Send {}B payload only {:#x}", size, addr);
         cluster.write_core(data, size, virtual_core_sender, addr);
     }
@@ -318,15 +327,15 @@ struct HostToLiteFabricInterface {
 
     // Only up to max buffer size is supported
     void write(void* mem_ptr, size_t size, tt_cxy_pair sender_core, uint64_t dst_noc_addr) {
-        tt::tt_fabric::LowLatencyPacketHeader header;
+        LiteFabricHeader header;
         header.to_chip_unicast(1);
-        header.to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, size);
-
-        uint32_t header_address = get_next_send_buffer_slot_address(sender_channel_base);
-        uint32_t data_address = header_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader);
+        header.to_noc_unicast_write(lite_fabric::NocUnicastCommandHeader{dst_noc_addr}, size);
+        // Unaligned address
+        header.unaligned_offset = dst_noc_addr & (l1_alignment_bytes - 1);
 
         wait_for_empty_write_slot(sender_core);
-        send_payload_without_header_non_blocking_from_address(mem_ptr, size, sender_core, sender_channel_base);
+        send_payload_without_header_non_blocking_from_address(
+            mem_ptr, size, sender_core, sender_channel_base + header.unaligned_offset);
         send_payload_flush_non_blocking_from_address(header, sender_core, sender_channel_base);
     }
 
@@ -352,13 +361,19 @@ struct HostToLiteFabricInterface {
     }
 
     void read(void* mem_ptr, size_t size, tt_cxy_pair receiver_core, uint64_t src_noc_addr) {
-        tt::tt_fabric::LowLatencyPacketHeader header;
+        LiteFabricHeader header;
         header.to_chip_unicast(1);
-        header.to_noc_read(tt::tt_fabric::NocReadCommandHeader{src_noc_addr, HostToLiteFabricReadEvent::get()}, size);
+        header.to_noc_read(lite_fabric::NocReadCommandHeader{src_noc_addr, HostToLiteFabricReadEvent::get()}, size);
+        header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
 
         uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
-        log_info(tt::LogMetal, "Reading data from {} {:#x}", receiver_core.str(), receiver_header_address);
-        uint32_t receiver_data_address = receiver_header_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader);
+        log_info(
+            tt::LogMetal,
+            "Reading data from {} {:#x} unaligned {}",
+            receiver_core.str(),
+            receiver_header_address,
+            header.unaligned_offset);
+        uint32_t receiver_data_address = receiver_header_address + sizeof(LiteFabricHeader) + header.unaligned_offset;
 
         wait_for_empty_write_slot(receiver_core);
         send_payload_flush_non_blocking_from_address(header, receiver_core, sender_channel_base);
@@ -402,6 +417,8 @@ struct LiteFabricMemoryMap {
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_BARRIER);
         host_interface.tensix_barrier_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_BARRIER);
+        host_interface.l1_alignment_bytes =
+            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
         host_interface.init();
         return host_interface;
     }
