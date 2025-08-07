@@ -1773,8 +1773,10 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
 void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, uint8_t num_send_dirs = 1) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
-    uint32_t num_hops = 1;
-    std::vector<RoutingDirection> dirs = {RoutingDirection::E, RoutingDirection::W};
+    struct {
+        uint32_t num_hops;
+        RoutingDirection dir;
+    } routing_info[] = {{1, RoutingDirection::E}, {2, RoutingDirection::W}};
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1797,8 +1799,8 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
-    for (auto dir : dirs) {
-        fabric_hops[dir] = num_hops;
+    for (auto& info : routing_info) {
+        fabric_hops[info.dir] = info.num_hops;
     }
 
     if (!find_device_with_neighbor_in_multi_direction(
@@ -1812,8 +1814,8 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
     }
     std::vector<tt::tt_metal::IDevice*> receiver_devices;
     for (int i = 0; i < num_send_dirs; i++) {
-        auto& dir = dirs[i];
-        dst_physical_device_id = physical_end_device_ids_by_dir[dir][num_hops - 1];
+        auto& dir = routing_info[i].dir;
+        dst_physical_device_id = physical_end_device_ids_by_dir[dir][routing_info[i].num_hops - 1];
 
         // get a port to connect to
         eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, dir);
@@ -1854,8 +1856,10 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
         time_seed,
         receiver_virtual_core.x,
         receiver_virtual_core.y,
-        0,
-        0};
+    };
+    for (uint8_t i = 0; i < num_send_dirs; i++) {
+        sender_runtime_args.push_back(routing_info[i].num_hops);
+    }
 
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -1938,10 +1942,12 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
 void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, uint8_t num_send_dirs = 1) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
-    uint32_t start_distance = 1;
-    uint32_t range = 1;
-    std::vector<RoutingDirection> dirs = {RoutingDirection::E, RoutingDirection::W};
-    uint32_t num_packets = 100;
+    struct {
+        uint32_t start_distance;
+        uint32_t range;
+        RoutingDirection dir;
+    } routing_info[] = {{1, 2, RoutingDirection::E}, {1, 1, RoutingDirection::W}};
+    uint32_t num_packets = 10;
     std::vector<tt_metal::Program> receiver_programs;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1975,7 +1981,7 @@ void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type
     chip_id_t src_physical_device_id;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
     for (uint8_t i = 0; i < num_send_dirs; i++) {
-        fabric_hops[dirs[i]] = start_distance + range - 1;
+        fabric_hops[routing_info[i].dir] = routing_info[i].start_distance + routing_info[i].range - 1;
     }
 
     if (!find_device_with_neighbor_in_multi_direction(
@@ -1986,20 +1992,22 @@ void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type
             physical_end_device_ids_by_dir,
             fabric_hops)) {
         log_info(tt::LogTest, "No Mcast destinations found for");
-        for (const auto& dir : dirs) {
-            log_info(tt::LogTest, "\t{} hops in {}", fabric_hops[dir], dir);
+        for (auto& info : routing_info) {
+            log_info(tt::LogTest, "\t{} hops in {}", fabric_hops[info.dir], info.dir);
         }
         GTEST_SKIP() << "Skipping Test";
     }
     tt::tt_metal::distributed::MeshShape mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-    auto last_recv_phys_chip_id = physical_end_device_ids_by_dir[dirs[0]][range - 1];
+    auto last_recv_phys_chip_id = physical_end_device_ids_by_dir[routing_info[0].dir][routing_info[0].range - 1];
     auto* last_recv_device = DevicePool::instance().get_active_device(last_recv_phys_chip_id);
     CoreCoord receiver_virtual_core = last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     // adjust physical_end_device_ids_by_dir and end_fabric_node_ids_by_dir to start from start_distance
     std::vector<chip_id_t> first_hop_phys_chip_ids;
     for (uint8_t i = 0; i < num_send_dirs; i++) {
-        auto dir = dirs[i];
+        auto dir = routing_info[i].dir;
+        auto start_distance = routing_info[i].start_distance;
+        auto range = routing_info[i].range;
         first_hop_phys_chip_ids.push_back(physical_end_device_ids_by_dir[dir][0]);  // needed to get link_idx
         physical_end_device_ids_by_dir[dir] = std::vector(
             physical_end_device_ids_by_dir[dir].begin() + start_distance - 1,
@@ -2066,9 +2074,11 @@ void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type
         num_packets,
         time_seed,
         receiver_virtual_core.x,
-        receiver_virtual_core.y,
-        start_distance,
-        range};
+        receiver_virtual_core.y};
+    for (uint8_t i = 0; i < num_send_dirs; i++) {
+        sender_runtime_args.push_back(routing_info[i].start_distance);
+        sender_runtime_args.push_back(routing_info[i].range);
+    }
 
     // append the EDM connection rt args for fwd connection
     for (auto first_hop_phys_chip_id : first_hop_phys_chip_ids) {

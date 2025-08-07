@@ -27,9 +27,25 @@ void kernel_main() {
     uint32_t time_seed = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t noc_x_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t noc_y_start = get_arg_val<uint32_t>(rt_arg_idx++);
-    // mcast only
-    uint32_t start_distance = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t range = get_arg_val<uint32_t>(rt_arg_idx++);
+    union {
+        struct {
+            uint8_t num_hops[num_send_dir];
+        } ucast;
+        struct {
+            uint8_t start_distance[num_send_dir];
+            uint8_t range[num_send_dir];
+        } mcast;
+    } hop_info;
+    if constexpr (is_chip_multicast) {
+        for (uint32_t i = 0; i < num_send_dir; i++) {
+            hop_info.mcast.start_distance[i] = static_cast<uint8_t>(get_arg_val<uint32_t>(rt_arg_idx++));
+            hop_info.mcast.range[i] = static_cast<uint8_t>(get_arg_val<uint32_t>(rt_arg_idx++));
+        }
+    } else {
+        for (uint32_t i = 0; i < num_send_dir; i++) {
+            hop_info.ucast.num_hops[i] = static_cast<uint8_t>(get_arg_val<uint32_t>(rt_arg_idx++));
+        }
+    }
 
     tt::tt_fabric::WorkerToFabricEdmSender connections[num_send_dir] = {};
     auto route_id = PacketHeaderPool::allocate_header_n(num_send_dir);
@@ -58,8 +74,8 @@ void kernel_main() {
                         source_l1_buffer_address,
                         packet_payload_size_bytes,
                         tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, target_address)},
-                        start_distance,
-                        range);
+                        hop_info.mcast.start_distance,
+                        hop_info.mcast.range);
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
                     fabric_multicast_noc_unicast_inline_write(
@@ -67,8 +83,8 @@ void kernel_main() {
                         route_id,
                         tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
                             get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
-                        start_distance,
-                        range);
+                        hop_info.mcast.start_distance,
+                        hop_info.mcast.range);
                 } break;
                 case NOC_UNICAST_SCATTER_WRITE: {
                     uint16_t first_chunk_size = packet_payload_size_bytes / 2;
@@ -81,8 +97,8 @@ void kernel_main() {
                             {get_noc_addr(noc_x_start, noc_y_start, target_address),
                              get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
                             first_chunk_size},
-                        start_distance,
-                        range);
+                        hop_info.mcast.start_distance,
+                        hop_info.mcast.range);
                 } break;
                 default: {
                     ASSERT(false);
@@ -97,7 +113,7 @@ void kernel_main() {
                         source_l1_buffer_address,
                         packet_payload_size_bytes,
                         tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, target_address)},
-                        1);
+                        hop_info.ucast.num_hops);
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
                     fabric_unicast_noc_unicast_inline_write(
@@ -105,7 +121,7 @@ void kernel_main() {
                         route_id,
                         tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
                             get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
-                        1);
+                        hop_info.ucast.num_hops);
                 } break;
                 case NOC_UNICAST_SCATTER_WRITE: {
                     uint16_t first_chunk_size = packet_payload_size_bytes / 2;
@@ -118,7 +134,7 @@ void kernel_main() {
                             {get_noc_addr(noc_x_start, noc_y_start, target_address),
                              get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
                             first_chunk_size},
-                        1);
+                        hop_info.ucast.num_hops);
                 } break;
                 default: {
                     ASSERT(false);
