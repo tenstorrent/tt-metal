@@ -19,6 +19,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import compile_trace_sd
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
@@ -521,7 +522,7 @@ def run_demo_inference_diffusiondb(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 11 * 8192, "trace_region_size": 789835776}],
+    [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": 789835776}],
     indirect=True,
 )
 @pytest.mark.parametrize(
