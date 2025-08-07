@@ -58,34 +58,40 @@ namespace messages {
     // Transmits descriptions of newly detected endpoints
     struct EndpointDefinitionMessage {
         const char *type = "EndpointDefinitionMessage";
+        std::string host;
         std::vector<EndpointDescription> endpoints;
     };
 
     void to_json(nlohmann::json &j, const EndpointDefinitionMessage &e) {
         j = nlohmann::json{
-            { "type", e.type }, 
+            { "type", e.type },
+            { "host", e.host },
             { "endpoints", e.endpoints }
         };
     }
 
     void from_json(const nlohmann::json &j, EndpointDefinitionMessage &e) {
+        j.at("host").get_to(e.host);
         j.at("endpoints").get_to(e.endpoints);
     }
 
     // Transmits updates for endpoints whose state has changed
     struct EndpointStateChangeMessage {
         const char *type = "EndpointStateChangeMessage";
+        std::string host;
         std::vector<EndpointState> endpoints;
     };
 
     void to_json(nlohmann::json &j, const EndpointStateChangeMessage &s) {
         j = nlohmann::json({
             { "type", s.type },
+            { "host", s.host },
             { "endpoints", s.endpoints }
         });
     }
 
     void from_json(const nlohmann::json &j, EndpointStateChangeMessage &s) {
+        j.at("host").get_to(s.host);
         j.at("endpoints").get_to(s.endpoints);
     }
 }
