@@ -46,6 +46,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
+#include "tt_stl/small_vector.hpp"
 
 namespace tt::tt_fabric {
 
@@ -132,29 +133,6 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
     }
 
     return adjacent_chips;
-}
-
-// Creates distributed contexts for `mesh_ids`.
-// In production deployments, `mesh_ids` is typically a single mesh that may or may not span multiple hosts.
-std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>
-create_distributed_contexts(const std::vector<MeshId>& mesh_ids, const MeshGraph& mesh_graph) {
-    std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>
-        distributed_contexts;
-    // Optimize for common case of single-host, single-mesh.
-    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    if (mesh_ids.size() == 1 && mesh_graph.get_host_ranks(mesh_ids.front()).size() == 1) {
-        distributed_contexts.emplace(mesh_ids.front(), global_context);
-        return distributed_contexts;
-    }
-
-    for (const auto mesh_id : mesh_ids) {
-        std::vector<int> ranks;
-        for (const auto& [_, host_rank_id] : mesh_graph.get_host_ranks(mesh_id)) {
-            ranks.push_back(*host_rank_id);
-        }
-        distributed_contexts.emplace(mesh_id, global_context->create_sub_context(tt::stl::make_span(ranks)));
-    }
-    return distributed_contexts;
 }
 
 }  // namespace
@@ -380,9 +358,12 @@ void ControlPlane::init_control_plane(
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    std::vector<int> this_host{*global_context->rank()};
-    this->distributed_contexts_ =
-        create_distributed_contexts(this->local_mesh_binding_.mesh_ids, *this->routing_table_generator_->mesh_graph);
+    std::transform(
+        this->local_mesh_binding_.mesh_ids.begin(),
+        this->local_mesh_binding_.mesh_ids.end(),
+        std::inserter(this->distributed_contexts_, this->distributed_contexts_.end()),
+        [&](const MeshId& mesh_id) { return std::make_pair(mesh_id, global_context); });
+    std::array this_host = {*global_context->rank()};
     this->host_local_context_ =
         tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->create_sub_context(this_host);
 

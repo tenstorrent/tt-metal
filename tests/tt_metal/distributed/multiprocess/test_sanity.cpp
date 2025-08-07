@@ -54,9 +54,8 @@ TEST(BigMeshDualRankTest2x4, LocalRankBinding) {
     EXPECT_EQ(distributed_context->size(), multihost::Size(2));
     EXPECT_EQ(distributed_context->rank(), dctx.rank());
 
-    // Note these are different pointers, as ControlPlane::get_distributed_context() returns a pointer to a sub-context,
-    // to accommodate multi-mesh deployments.
-    EXPECT_NE(&MetalContext::instance().global_distributed_context(), distributed_context.get());
+    // TODO: #24728 - support multi-mesh environments, where these 2 contexts are different (sub-context vs global).
+    EXPECT_EQ(MetalContext::instance().global_distributed_context().id(), distributed_context->id());
 }
 
 TEST(BigMeshDualRankTest2x4, SystemMeshValidation) {
