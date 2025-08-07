@@ -22,10 +22,6 @@
 #include "edm_fabric_flow_control_helpers.hpp"
 
 namespace tt::tt_fabric {
-static constexpr uint8_t worker_handshake_noc = 0;
-}  // namespace tt::tt_fabric
-
-namespace tt::tt_fabric {
 
 template <typename T>
 FORCE_INLINE auto wrap_increment(T val, size_t max) {
