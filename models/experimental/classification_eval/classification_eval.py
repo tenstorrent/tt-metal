@@ -10,7 +10,7 @@ import transformers
 from transformers import AutoImageProcessor
 from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 import ttnn
-from models.experimental.classification_eval.classification_eval_utils import get_data_loader
+from models.demos.utils.common_demo_utils import get_data_loader, load_imagenet_dataset
 
 
 def evaluation(
@@ -27,7 +27,7 @@ def evaluation(
     res=None,
 ):
     # Loading the dataset
-    input_loc = str(model_location_generator("ImageNet_data"))
+    input_loc = load_imagenet_dataset(model_location_generator)
     iterations = 512
     # iteration dataset, preprocessing
     data_loader = get_data_loader(input_loc, batch_size, iterations // batch_size)
