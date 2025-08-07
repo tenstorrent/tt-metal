@@ -84,7 +84,7 @@ def evaluation(
                 / "unet.pt"
             )
         sample_count = 0
-        max_samples = 200
+        max_samples = 100
         all_patient_metrics = defaultdict(list)
 
         for patient_id in patient_folders:
