@@ -101,6 +101,44 @@ jobs:
         run: |
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
+  check-interleaved-addr-gen-usage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for new InterleavedAddrGen usages in changed files
+        run: |
+          # Get the base branch for comparison
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_REF="HEAD^"
+          fi
+
+          # Find all changed files in the current PR/commit
+          CHANGED_FILES=$(git diff --name-only --diff-filter=AM $BASE_REF HEAD)
+
+          # Check if any changed files contain new InterleavedAddrGen usages
+          NEW_USAGE_FOUND=0
+          for file in $CHANGED_FILES; do
+            if [ -f "$file" ]; then
+              # Check for InterleavedAddrGen, InterleavedAddrGenFast, InterleavedPow2AddrGen, or get_interleaved_addr_gen
+              if git diff $BASE_REF HEAD -- "$file" | grep -E "^\+.*Interleaved.*AddrGen|^\+.*get_interleaved_addr_gen" > /dev/null; then
+                echo "❌ Found new InterleavedAddrGen usage in: $file"
+                echo "Added lines:"
+                git diff $BASE_REF HEAD -- "$file" | grep -E "^\+.*Interleaved.*AddrGen|^\+.*get_interleaved_addr_gen"
+                NEW_USAGE_FOUND=1
+              fi
+            fi
+          done
+
+          if [ $NEW_USAGE_FOUND -eq 1 ]; then
+            echo ""
+            echo "❌ New InterleavedAddrGen usages detected!"
+            echo "Please use TensorAccessor instead."
+            exit 1
+          else
+            echo "✅ No new InterleavedAddrGen usages found in changed files."
+          fi
   check-sweeps-workflow:
     runs-on: ubuntu-latest
     steps:
