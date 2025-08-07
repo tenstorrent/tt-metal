@@ -31,6 +31,9 @@ void GroupNorm::validate(
     TT_FATAL(a.padded_shape()[3] % this->num_groups == 0, "channel must be divisible by num_groups!");
     TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
 
+    TT_FATAL(gamma.has_value(), "ERROR - gamma must be provided as argument to group_norm");
+    TT_FATAL(beta.has_value(), "ERROR - beta must be provided as argument to group_norm");
+
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
