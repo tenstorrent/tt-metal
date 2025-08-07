@@ -163,7 +163,7 @@ TEST_F(DeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
     CoreRangeSet cr_set({cr});
 
     CircularBufferConfig config = CircularBufferConfig(cb_config.page_size * (1 << 16), {{0, cb_config.data_format}})
-                                       .set_page_size(0, cb_config.page_size);
+                                      .set_page_size(0, cb_config.page_size);
 
     EXPECT_ANY_THROW(CreateCircularBuffer(program, cr_set, config));
 }

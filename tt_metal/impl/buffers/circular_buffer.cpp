@@ -91,11 +91,12 @@ void CircularBuffer::validate_set_config_attributes() {
         if (ps_set) {
             // Validate number of pages is not too large.
             uint32_t num_pages = this->size() / this->page_size(buffer_index);
-            // LocalCBInterface.tiles_acked and LocalCBInterface.tiles_received are 16 bits, so we need to check if the number
-            // of pages would cause overflow.
+            // LocalCBInterface.tiles_acked and LocalCBInterface.tiles_received are 16 bits, so we need to check if the
+            // number of pages would cause overflow.
             TT_FATAL(
                 num_pages <= max_num_cb_pages,
-                "For buffer index {}, number of CB pages {} is greater than {}. Would cause wraparound in the CB calculations.",
+                "For buffer index {}, number of CB pages {} is greater than {}. Would cause wraparound in the CB "
+                "calculations.",
                 buffer_index,
                 num_pages,
                 max_num_cb_pages);
@@ -130,7 +131,11 @@ uint32_t CircularBuffer::page_size(uint32_t buffer_index) const {
 
 uint32_t CircularBuffer::num_pages(uint32_t buffer_index) const {
     uint32_t num_pages = this->size() / this->page_size(buffer_index);
-    TT_ASSERT(num_pages <= max_num_cb_pages, "Number of CB pages {} is greater than {}. Would cause wraparound in the CB calculations.", num_pages, max_num_cb_pages);
+    TT_ASSERT(
+        num_pages <= max_num_cb_pages,
+        "Number of CB pages {} is greater than {}. Would cause wraparound in the CB calculations.",
+        num_pages,
+        max_num_cb_pages);
     return num_pages;
 }
 
