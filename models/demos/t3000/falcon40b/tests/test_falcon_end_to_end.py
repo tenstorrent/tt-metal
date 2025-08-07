@@ -430,6 +430,7 @@ def run_test_FalconCausalLM_end_to_end(
         ),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconCausalLM_end_to_end_with_program_cache(
     num_devices,
     model_version,

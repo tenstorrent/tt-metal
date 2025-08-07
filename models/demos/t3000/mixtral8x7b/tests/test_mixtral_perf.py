@@ -40,6 +40,7 @@ class Emb(torch.nn.Module):
         (2048, 150, 0.085),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_model_perf(
     t3k_mesh_device,
     generation_start_pos,
