@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-
 import pytest
 import torch
 from loguru import logger
@@ -21,27 +19,12 @@ from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_model_parameters,
     get_mesh_mappers,
 )
-from models.demos.ttnn_resnet.tests.demo_utils import get_data_loader
-from models.tt_cnn.tt.pipeline import (
-    PipelineConfig,
-    create_pipeline_from_config,
-    get_memory_config_for_persistent_dram_tensor,
-)
+from models.demos.utils.common_demo_utils import get_batch, get_data_loader, load_imagenet_dataset
+from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config, get_memory_config_for_persistent_dram_tensor
+
 from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
-
-
-def load_imagenet_dataset(model_location_generator=None, model_version="ImageNet_data"):
-    if model_location_generator is not None and "TT_GH_CI_INFRA" in os.environ:
-        dataset_path = (
-            model_location_generator("vision-models/mobilenetv2/ImageNet_data", model_subdir="", download_if_ci_v2=True)
-            / "data"
-        )
-    else:
-        dataset_path = model_version
-    print("path is ", dataset_path)
-    return str(dataset_path)
 
 
 def run_mobilenetv2_imagenet_demo(
@@ -109,11 +92,7 @@ def run_mobilenetv2_imagenet_demo(
         model_version = "microsoft/resnet-50"
         image_processor = AutoImageProcessor.from_pretrained(model_version)
         logger.info("ImageNet-1k validation Dataset")
-        # input_loc = "/home/ubuntu/venkatesh_latest/tt-metal/models/demos/mobilenetv2/demo/images"
-        # input_loc = str(model_location_generator("ImageNet_data"))
         input_loc = load_imagenet_dataset(model_location_generator)
-        print("location is ", input_loc)
-        # location is  /tmp/ttnn_model_cache/model_weights/vision-models/mobilenetv2/ImageNet_data/data
         data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
         input_tensors_all = []
         input_labels_all = []
@@ -149,7 +128,8 @@ def run_mobilenetv2_imagenet_demo(
             output = mobilenetv2_trace_2cq.run(torch_input_tensor)
             output = ttnn.to_torch(output, mesh_composer=mobilenetv2_trace_2cq.test_infra.output_mesh_composer)
             prediction = output.argmax(dim=-1)
-
+            profiler.end(f"run")
+            total_inference_time += profiler.get(f"run")
             for i in range(batch_size):
                 predictions.append(imagenet_label_dict[prediction[i].item()])
                 logger.info(
