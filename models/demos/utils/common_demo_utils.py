@@ -12,6 +12,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+import torch.nn as nn
 import torchvision
 from loguru import logger
 
@@ -109,8 +110,9 @@ class LoadImages:
         return math.ceil(self.nf / self.bs)
 
 
+# Resize image with optional padding (letterboxing)
 def LetterBox(img, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
-    shape = img.shape[:2]
+    shape = img.shape[:2]  # current shape (height, width)
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
 
@@ -136,31 +138,35 @@ def LetterBox(img, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=Tr
     return img
 
 
+# Apply LetterBox to a batch of images
 def pre_transform(im, res=(640, 640)):
     return [LetterBox(img=x, new_shape=res) for x in im]
 
 
+# Image preprocessing: resize, normalize, and convert to tensor
 def preprocess(im, res=(640, 640)):
     device = "cpu"
     not_tensor = not isinstance(im, torch.Tensor)
     if not_tensor:
         im = np.stack(pre_transform(im, res))
-        im = im[..., ::-1].transpose((0, 3, 1, 2))
+        im = im[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, NHWC to NCHW
         im = np.ascontiguousarray(im)
         im = torch.from_numpy(im)
 
     im = im.half() if device != "cpu" else im.float()
     if not_tensor:
-        im /= 255
+        im /= 255  # normalize to [0, 1]
     return im
 
 
+# Return an empty tensor or array of same shape and type
 def empty_like(x):
     return (
         torch.empty_like(x, dtype=torch.float32) if isinstance(x, torch.Tensor) else np.empty_like(x, dtype=np.float32)
     )
 
 
+# Convert bounding boxes from (x_center, y_center, width, height) to (x1, y1, x2, y2)
 def xywh2xyxy(x):
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
     y = empty_like(x)
@@ -171,6 +177,7 @@ def xywh2xyxy(x):
     return y
 
 
+# Perform non-maximum suppression (NMS) on predictions
 def non_max_suppression(
     prediction,
     conf_thres=0.25,
@@ -187,8 +194,8 @@ def non_max_suppression(
     in_place=True,
     rotated=False,
 ):
-    CONF_IDX = 4
-    CLASS_IDX = 5
+    CONF_IDX = 4  # confidence score index
+    CLASS_IDX = 5  # class index
     assert 0 <= conf_thres <= 1, f"Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0"
     assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
 
@@ -196,12 +203,15 @@ def non_max_suppression(
         prediction = prediction[0]
     if classes is not None:
         classes = torch.tensor(classes, device=prediction.device)
+
+    # Short-circuit path: filter predictions using confidence and class index
     if prediction.shape[-1] == 6:
         output = [pred[pred[:, CONF_IDX] > conf_thres][:max_det] for pred in prediction]
         if classes is not None:
             output = [pred[(pred[:, CLASS_IDX : CLASS_IDX + 1] == classes).any(1)] for pred in output]
         return output
 
+    # Extended NMS logic
     bs = prediction.shape[0]
     nc = nc or (prediction.shape[1] - 4)
     nm = prediction.shape[1] - nc - 4
@@ -256,14 +266,17 @@ def non_max_suppression(
     return output
 
 
+# Extract boxes, confidence, and class IDs from predictions
 def Boxes(data):
     return {"xyxy": data[:, :4], "conf": data[:, -2], "cls": data[:, -1]}
 
 
+# Structure final detection results
 def Results(orig_img, path, names, boxes):
     return {"orig_img": orig_img, "path": path, "names": names, "boxes": Boxes(boxes)}
 
 
+# Clip boxes to image boundaries
 def clip_boxes(boxes, shape):
     if isinstance(boxes, torch.Tensor):
         boxes[..., 0] = boxes[..., 0].clamp(0, shape[1])
@@ -276,6 +289,7 @@ def clip_boxes(boxes, shape):
     return boxes
 
 
+# Rescale boxes from resized image to original image size
 def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xywh=False):
     if ratio_pad is None:
         gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])
@@ -342,3 +356,84 @@ def get_mesh_mappers(device):
         weights_mesh_mapper = None
         output_mesh_composer = None
     return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
+# Postprocessing pipeline for object detection
+def postprocess(preds, img, orig_imgs, batch, names):
+    args = {"conf": 0.25, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
+
+    preds = non_max_suppression(
+        preds,
+        args["conf"],
+        args["iou"],
+        agnostic=args["agnostic_nms"],
+        max_det=args["max_det"],
+        classes=args["classes"],
+    )
+
+    results = []
+    for pred, orig_img, img_path in zip(preds, orig_imgs, batch[0]):
+        pred[:, :4] = scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
+        results.append(Results(orig_img, path=img_path, names=names, boxes=pred))
+
+    return results
+
+
+class Ensemble(nn.ModuleList):
+    def __init__(self):
+        super(Ensemble, self).__init__()
+
+    def forward(self, x, augment=False):
+        y = []
+        for module in self:
+            y.append(module(x, augment)[0])
+        y = torch.cat(y, 1)
+        return y, None
+
+
+def attempt_download(file, repo="ultralytics/assets"):
+    tests = Path(__file__).parent.parent
+    file_path = tests / Path(str(file).strip().replace("'", "").lower())
+
+    if not file_path.exists():
+        name = "yolov8s-world.pt"
+        msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
+        try:
+            url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
+            logger.info(f"Downloading {url} to {file_path}...")
+            torch.hub.download_url_to_file(url, file_path)
+
+            assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
+        except Exception as e:
+            logger.info(f"Error downloading from GitHub: {e}. Trying secondary source...")
+
+            url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
+            logger.info(f"Downloading {url} to {file_path}...")
+            os.system(f"curl -L {url} -o {file_path}")
+
+            if not file_path.exists() or file_path.stat().st_size < 1e6:
+                file_path.unlink(missing_ok=True)
+                logger.info(f"ERROR: Download failure for {msg}")
+            else:
+                logger.info(f"Download succeeded from secondary source!")
+    return file_path
+
+
+def attempt_load(weights, map_location=None):
+    model = Ensemble()
+    for w in weights if isinstance(weights, list) else [weights]:
+        weight_path = attempt_download(w)
+        logger.info(f"Loading weights from: {weight_path}")
+        ckpt = torch.load(weight_path, map_location=map_location, weights_only=False)
+        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
+    for m in model.modules():
+        if isinstance(m, (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU)):
+            m.inplace = True
+        elif isinstance(m, nn.Upsample):
+            m.recompute_scale_factor = None
+    if len(model) == 1:
+        return model[-1]
+    else:
+        for k in ["names", "stride"]:
+            setattr(model, k, getattr(model[-1], k))
+        return model
