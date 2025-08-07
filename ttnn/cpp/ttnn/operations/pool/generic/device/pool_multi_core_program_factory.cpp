@@ -422,7 +422,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pad_w,                          // 3
         in_aligned_nbytes_c,            // 4
         in_w,                           // 5
-        input_shape[3] / num_shards_c,  // 6
+        in_c / num_shards_c,            // 6
         params.split_reader,            // enable split reader //7
         0,                              // split reader id //8
         bf16_scalar,                    // 9
@@ -474,7 +474,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         kernel_h * kernel_w,            // 1
         params.split_reader,            // 2
         out_nhw_per_core,               // 3
-        input_shape[3] / num_shards_c,  // 4
+        in_c / num_shards_c,            // 4
         in_nblocks_c,                   // 5
         params.max_rows_for_reduction,  // 6
         in_cb_id_0,                     // 7
