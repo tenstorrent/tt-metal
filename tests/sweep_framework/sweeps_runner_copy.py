@@ -6,11 +6,72 @@ import enlighten
 import importlib
 import datetime as dt
 from multiprocessing import Process, Queue
+from queue import Empty
 from framework.statuses import VectorValidity, TestStatus
 import framework.tt_smi_util as tt_smi_util
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSource, VectorSourceFactory
-from framework.database import deserialize_for_postgres, deserialize
+from framework.serialize import deserialize_for_postgres, deserialize
+import subprocess
+from dataclasses import dataclass
+from typing import Optional
+from framework.result_destination import ResultDestinationFactory
+
+PROCESS_TERMINATION_TIMEOUT_SECONDS = 5
+
+
+@dataclass
+class SweepsConfig:
+    """Configuration object for sweeps runner"""
+
+    module_name: Optional[str] = None
+    suite_name: Optional[str] = None
+    vector_source: str = "elastic"
+    file_path: Optional[str] = None
+    vector_id: Optional[str] = None
+    result_destination: str = "elastic"
+    watcher: bool = False
+    measure_perf: bool = False
+    measure_device_perf: bool = False
+    dry_run: bool = False
+    sweeps_tag: Optional[str] = None
+    skip_modules: Optional[str] = None
+    skip_on_timeout: bool = False
+    elastic_connection_string: Optional[str] = None
+    elastic_username: Optional[str] = None
+    elastic_password: Optional[str] = None
+
+
+def create_config_from_args(args) -> SweepsConfig:
+    """Create configuration object from parsed arguments"""
+    config = SweepsConfig(
+        module_name=args.module_name,
+        suite_name=args.suite_name,
+        vector_source=args.vector_source,
+        file_path=args.file_path,
+        vector_id=args.vector_id,
+        result_destination=args.result_dest,
+        watcher=args.watcher,
+        measure_perf=args.perf,
+        measure_device_perf=args.device_perf,
+        dry_run=args.dry_run,
+        sweeps_tag=args.tag,
+        skip_modules=args.skip_modules,
+        skip_on_timeout=args.skip_on_timeout,
+    )
+
+    if config.vector_source == "elastic" or config.result_destination == "elastic":
+        from framework.elastic_config import get_elastic_url
+
+        config.elastic_connection_string = get_elastic_url("corp")
+
+        # Acquire once
+        config.elastic_username = os.getenv("ELASTIC_USERNAME")
+        config.elastic_password = os.getenv("ELASTIC_PASSWORD")
+        if not config.elastic_username or not config.elastic_password:
+            raise ValueError("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
+
+    return config
 
 
 def validate_arguments(args, parser):
@@ -69,100 +130,6 @@ def get_timeout(test_module):
     return timeout
 
 
-def test_vector_source(vector_source, module_names, vector_source_type):
-    """Test the vector source functionality with comprehensive validation"""
-    logger.info(f"Testing vector source: {vector_source_type}")
-
-    # Test 1: Validate connection
-    logger.info("Testing connection validation...")
-    is_connected = vector_source.validate_connection()
-    if is_connected:
-        logger.info("✓ Connection validation successful")
-    else:
-        logger.error("✗ Connection validation failed")
-        return
-
-    # Test 2: Test with each module
-    if isinstance(module_names, str):
-        test_modules = [module_names]
-    else:
-        test_modules = module_names if module_names else []
-
-    if not test_modules:
-        logger.info("No modules specified for testing")
-        return
-
-    for module_name in test_modules:
-        logger.info(f"\n--- Testing module: {module_name} ---")
-
-        # Test 3: Get available suites
-        logger.info("Testing get_available_suites...")
-        try:
-            available_suites = vector_source.get_available_suites(module_name)
-            if available_suites:
-                logger.info(f"✓ Found {len(available_suites)} suites: {available_suites}")
-            else:
-                logger.warning(f"✓ No suites found for module {module_name} (this may be expected)")
-
-            # Test 4: Load vectors for each suite
-            if available_suites:
-                for suite_name in available_suites[:2]:  # Test first 2 suites to avoid too much output
-                    logger.info(f"Testing load_vectors for suite: {suite_name}")
-                    try:
-                        vectors = vector_source.load_vectors(module_name, suite_name)
-                        if vectors:
-                            logger.info(f"✓ Loaded {len(vectors)} vectors from suite '{suite_name}'")
-                            # Show sample vector info
-                            sample_vector = vectors[0]
-                            vector_id = sample_vector.get("vector_id", "N/A")
-                            logger.info(f"  Sample vector ID: {vector_id}")
-                            logger.info(f"  Sample vector keys: {list(sample_vector.keys())}")
-                        else:
-                            logger.warning(f"✓ No vectors found in suite '{suite_name}' (this may be expected)")
-                    except Exception as e:
-                        logger.error(f"✗ Error loading vectors from suite '{suite_name}': {e}")
-
-            # Test 5: Load all vectors for the module (no specific suite)
-            logger.info("Testing load_vectors for entire module...")
-            try:
-                all_vectors = vector_source.load_vectors(module_name)
-                if all_vectors:
-                    logger.info(f"✓ Loaded {len(all_vectors)} total vectors from module '{module_name}'")
-                else:
-                    logger.warning(f"✓ No vectors found for module '{module_name}' (this may be expected)")
-            except Exception as e:
-                logger.error(f"✗ Error loading all vectors for module '{module_name}': {e}")
-
-        except Exception as e:
-            logger.error(f"✗ Error getting available suites for module '{module_name}': {e}")
-            continue
-
-    # Test 6: Test vector ID loading (if we have any vectors)
-    if test_modules:
-        first_module = test_modules[0]
-        logger.info(f"\n--- Testing vector ID loading for module: {first_module} ---")
-        try:
-            # Get a sample vector ID
-            sample_vectors = vector_source.load_vectors(first_module)
-            if sample_vectors:
-                sample_vector_id = sample_vectors[0].get("vector_id")
-                if sample_vector_id:
-                    logger.info(f"Testing load_vectors with vector_id: {sample_vector_id}")
-                    specific_vector = vector_source.load_vectors(first_module, vector_id=sample_vector_id)
-                    if specific_vector:
-                        logger.info(f"✓ Successfully loaded specific vector by ID")
-                    else:
-                        logger.warning(f"✗ Could not load vector by ID: {sample_vector_id}")
-                else:
-                    logger.warning("No vector_id found in sample vectors")
-            else:
-                logger.warning("No vectors available to test vector ID loading")
-        except Exception as e:
-            logger.error(f"✗ Error testing vector ID loading: {e}")
-
-    logger.info(f"\n--- Vector source testing completed for {vector_source_type} ---")
-
-
 def sanitize_inputs(test_vectors):
     info_field_names = ["sweep_name", "suite_name", "vector_id", "input_hash"]
     header_info = []
@@ -179,7 +146,55 @@ def sanitize_inputs(test_vectors):
     return header_info, test_vectors
 
 
-def run(test_module, input_queue, output_queue):
+def get_devices(test_module):
+    try:
+        return test_module.mesh_device_fixture()
+    except:
+        return default_device()
+
+
+def get_hostname():
+    return subprocess.check_output(["uname", "-n"]).decode("ascii").strip()
+
+
+def get_username():
+    return os.environ["USER"]
+
+
+def git_hash():
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("ascii").strip()
+    except Exception as e:
+        return "Couldn't get git hash!"
+
+
+def get_git_author():
+    """Get the git author name"""
+    try:
+        return subprocess.check_output(["git", "config", "user.name"]).decode("ascii").strip()
+    except Exception as e:
+        return "Unknown"
+
+
+def get_git_branch():
+    """Get the current git branch name"""
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode("ascii").strip()
+    except Exception as e:
+        return "Unknown"
+
+
+def get_initiated_by():
+    """Get the user who initiated the run - username for dev, CI pipeline name for CI/CD"""
+    # Check if we're in a CI environment
+    ci_pipeline = os.getenv("GITHUB_WORKFLOW") or os.getenv("CI_PIPELINE_NAME")
+    if ci_pipeline:
+        return ci_pipeline
+    else:
+        return get_username()
+
+
+def run(test_module, input_queue, output_queue, config: SweepsConfig):
     device_generator = get_devices(test_module)
     try:
         device, device_name = next(device_generator)
@@ -190,11 +205,8 @@ def run(test_module, input_queue, output_queue):
     try:
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
-            # Use appropriate deserialization based on database backend
-            if DATABASE_BACKEND == "postgres":
-                test_vector = deserialize_vector_for_postgres(test_vector)
-            else:  # DATABASE_BACKEND == "elastic"
-                test_vector = deserialize_vector(test_vector)
+            # Deserialize a test vector (dictionary) back into original object form
+            test_vector = deserialize_vector(test_vector)
             try:
                 results = test_module.run(**test_vector, device=device)
                 if type(results) == list:
@@ -206,7 +218,7 @@ def run(test_module, input_queue, output_queue):
             except Exception as e:
                 status, message = False, str(e)
                 e2e_perf = None
-            if MEASURE_DEVICE_PERF:
+            if config.measure_device_perf:
                 perf_result = gather_single_test_perf(device, status)
                 message = get_updated_message(message, perf_result)
                 output_queue.put([status, message, e2e_perf, perf_result])
@@ -220,7 +232,7 @@ def run(test_module, input_queue, output_queue):
             logger.info(f"Closed device configuration, {device_name}.")
 
 
-def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info):
+def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
     results = []
     input_queue = Queue()
     output_queue = Queue()
@@ -230,14 +242,14 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
     arch = ttnn.get_arch_name()
     reset_util = tt_smi_util.ResetUtil(arch)
 
-    if len(test_vectors) > 1 and not DRY_RUN:
-        p = Process(target=run, args=(test_module, input_queue, output_queue))
+    if len(test_vectors) > 1 and not config.dry_run:
+        p = Process(target=run, args=(test_module, input_queue, output_queue, config))
         p.start()
 
     for i, test_vector in enumerate(test_vectors):
         vector_id = header_info[i].get("vector_id", "N/A")
         logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Vector ID='{vector_id}'")
-        if DRY_RUN:
+        if config.dry_run:
             print(f"Would have executed test for vector {test_vector}")
             suite_pbar.update()
             continue
@@ -249,10 +261,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
         original_vector_data = test_vector.copy()
 
         # Use appropriate deserialization based on database backend
-        if DATABASE_BACKEND == "postgres":
-            validity = deserialize_for_postgres(test_vector["validity"])
-        else:  # DATABASE_BACKEND == "elastic"
-            validity = deserialize(test_vector["validity"])
+        validity = deserialize(test_vector["validity"])
 
         if validity == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
@@ -264,21 +273,21 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
             test_vector.pop("validity")
 
             try:
-                if MEASURE_PERF:
+                if config.measure_perf:
                     # Run one time before capturing result to deal with compile-time slowdown of perf measurement
                     input_queue.put(test_vector)
                     if p is None:
                         logger.info(
                             "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                         )
-                        run(test_module, input_queue, output_queue)
+                        run(test_module, input_queue, output_queue, config)
                     output_queue.get(block=True, timeout=timeout)
                 input_queue.put(test_vector)
                 if p is None:
                     logger.info(
                         "Executing test on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                     )
-                    run(test_module, input_queue, output_queue)
+                    run(test_module, input_queue, output_queue, config)
                 response = output_queue.get(block=True, timeout=timeout)
                 status, message, e2e_perf, device_perf = (
                     response[0],
@@ -286,10 +295,10 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     response[2],
                     response[3],
                 )
-                if status and MEASURE_DEVICE_PERF and device_perf is None:
+                if status and config.measure_device_perf and device_perf is None:
                     result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
                     result["message"] = message
-                elif status and MEASURE_DEVICE_PERF:
+                elif status and config.measure_device_perf:
                     result["status"] = TestStatus.PASS
                     result["message"] = message
                     result["device_perf"] = device_perf
@@ -310,7 +319,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     else:
                         result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
                     result["exception"] = message
-                if e2e_perf and MEASURE_PERF:
+                if e2e_perf and config.measure_perf:
                     result["e2e_perf"] = e2e_perf
                 else:
                     result["e2e_perf"] = None
@@ -337,7 +346,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                 results.append(result)
 
                 # Check if we should skip remaining tests in the suite
-                if SKIP_REMAINING_ON_TIMEOUT:
+                if config.skip_on_timeout:
                     # Skip all remaining tests in the suite
                     logger.info("Skipping remaining tests in suite due to timeout.")
                     for j in range(i + 1, len(test_vectors)):
@@ -389,53 +398,189 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
 
 def run_sweeps(
     module_names,
+    config: SweepsConfig,
     run_contents=None,
-    vector_source_type="elastic",
-    elastic_connection_string=None,
-    elastic_username=None,
-    elastic_password=None,
-    sweeps_tag=None,
-    file_path=None,
 ):
     pbar_manager = enlighten.get_manager()
-    # Only create the vector source with the credentials if needed
-    if vector_source_type == "elastic":
-        if not all([elastic_connection_string, elastic_username, elastic_password, sweeps_tag]):
+
+    # Create vector source based on config
+    if config.vector_source == "elastic":
+        if not all([config.elastic_connection_string, config.sweeps_tag]):
             raise ValueError("Elastic credentials are required when using elastic vector source")
 
+        # Get credentials from environment
+        elastic_username = config.elastic_username
+        elastic_password = config.elastic_password
+
+        if not all([elastic_username, elastic_password]):
+            raise ValueError("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
+
         vector_source = VectorSourceFactory.create_source(
-            vector_source_type,
-            connection_string=elastic_connection_string,
+            config.vector_source,
+            connection_string=config.elastic_connection_string,
             username=elastic_username,
             password=elastic_password,
-            tag=sweeps_tag,
+            tag=config.sweeps_tag,
         )
-    elif vector_source_type == "file":
-        if not file_path:
+    elif config.vector_source == "file":
+        if not config.file_path:
             raise ValueError("File path is required when using file vector source")
         vector_source = VectorSourceFactory.create_source(
-            vector_source_type,
-            file_path=file_path,
+            config.vector_source,
+            file_path=config.file_path,
         )
-    elif vector_source_type == "vectors_export":
-        vector_source = VectorSourceFactory.create_source(vector_source_type)
+    elif config.vector_source == "vectors_export":
+        vector_source = VectorSourceFactory.create_source(config.vector_source)
     else:
-        raise ValueError(f"Unknown vector source: {vector_source_type}")
+        raise ValueError(f"Unknown vector source: {config.vector_source}")
 
-    # Test the vector source functionality
-    test_vector_source(vector_source, module_names, vector_source_type)
+    # Create result destination based on config
+    if config.result_destination == "postgres":
+        result_dest = ResultDestinationFactory.create_destination("postgres")
+    elif config.result_destination == "elastic":
+        if not config.elastic_connection_string:
+            raise ValueError("Elastic connection string is required for elastic result destination")
 
-    # TODO: Implement actual sweep execution logic here
-    logger.info("TODO: Implement unified execution engine for running the actual tests")
+        elastic_username = config.elastic_username
+        elastic_password = config.elastic_password
+
+        if not all([elastic_username, elastic_password]):
+            raise ValueError("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set for elastic result destination")
+        result_dest = ResultDestinationFactory.create_destination(
+            "elastic",
+            connection_string=config.elastic_connection_string,
+            username=elastic_username,
+            password=elastic_password,
+        )
+    elif config.result_destination == "results_export":
+        result_dest = ResultDestinationFactory.create_destination("results_export")
+    else:
+        raise ValueError(f"Unknown result destination: {config.result_destination}")
+
+    # Initialize run metadata and run record
+    run_id = None
+    final_status = "success"
+
+    if not config.dry_run:
+        run_metadata = {
+            "initiated_by": get_initiated_by(),
+            "host": get_hostname(),
+            "git_author": get_git_author(),
+            "git_branch_name": get_git_branch(),
+            "git_commit_hash": git_hash(),
+            "start_time_ts": dt.datetime.now(),
+            "status": "success",
+            "run_contents": run_contents,
+            "device": ttnn.get_arch_name(),
+        }
+        run_id = result_dest.initialize_run(run_metadata)
+        if run_id:
+            logger.info(f"Initialized run with id: {run_id}")
 
     # Unified processing regardless of source
-    for module_name in module_names:
-        test_module = importlib.import_module("sweeps." + module_name)
-        suites = vector_source.get_available_suites(module_name)
-        for suite in suites:
-            vectors = vector_source.load_vectors(module_name, suite)
-            header_info, test_vectors = sanitize_inputs(vectors)
-            execute_suite(test_module, test_vectors, pbar_manager, suite, module_name, header_info)
+    module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
+    try:
+        for module_name in module_names:
+            test_module = importlib.import_module("sweeps." + module_name)
+            suites = vector_source.get_available_suites(module_name)
+
+            for suite in suites:
+                suite_start_time = dt.datetime.now()
+
+                vectors = vector_source.load_vectors(module_name, suite)
+                header_info, test_vectors = sanitize_inputs(vectors)
+                results = execute_suite(
+                    test_module, test_vectors, pbar_manager, suite, module_name, header_info, config
+                )
+
+                suite_end_time = dt.datetime.now()
+                logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+
+                # Export results
+                if not config.dry_run and results:
+                    run_context = {
+                        "run_id": run_id,
+                        "test_start_time": suite_start_time,
+                        "test_end_time": suite_end_time,
+                        "git_hash": git_hash(),
+                    }
+                    try:
+                        test_status = result_dest.export_results(header_info, results, run_context)
+                        if test_status == "failure":
+                            final_status = "failure"
+                    except Exception as e:
+                        logger.error(f"Failed to export results for {module_name}, suite {suite}: {e}")
+                        final_status = "failure"
+                        # continue with other suites
+
+            module_pbar.update()
+    except Exception as e:
+        logger.error(f"Error during sweep execution: {e}")
+        final_status = "failure"
+        raise
+    finally:
+        if not config.dry_run:
+            result_dest.finalize_run(run_id, final_status)
+            logger.info(f"Finalized run with status: {final_status}")
+        module_pbar.close()
+
+
+def get_module_names(config: SweepsConfig):
+    """Extract module names based on configuration"""
+    if config.module_name:
+        # Always support comma-separated module names now
+        if "," in config.module_name:
+            module_names = [name.strip() for name in config.module_name.split(",")]
+            logger.info(f"Running multiple modules: {module_names}")
+        else:
+            module_names = [config.module_name]
+            logger.info(f"Running module: {module_names}")
+    else:
+        module_names = list(get_all_modules())
+        logger.info(f"Running all modules.")
+        if config.skip_modules:
+            skip_modules_set = {name.strip() for name in config.skip_modules.split(",")}
+            module_names = [name for name in module_names if name not in skip_modules_set]
+            logger.info(f"But skipping: {', '.join(skip_modules_set)}")
+
+    return module_names
+
+
+def get_run_contents(config: SweepsConfig):
+    """Generate run contents description based on configuration"""
+    if config.module_name or config.suite_name:
+        run_contents_details = []
+        if config.module_name:
+            run_contents_details.append(f"{config.module_name}")
+        if config.suite_name:
+            run_contents_details.append(f"{config.suite_name}")
+        return ", ".join(run_contents_details)
+    else:
+        return "all_sweeps"
+
+
+def enable_watcher():
+    logger.info("Enabling Watcher")
+    os.environ["TT_METAL_WATCHER"] = "120"
+    os.environ["TT_METAL_WATCHER_APPEND"] = "1"
+
+
+def disable_watcher():
+    logger.info("Disabling Watcher")
+    os.environ.pop("TT_METAL_WATCHER")
+    os.environ.pop("TT_METAL_WATCHER_APPEND")
+
+
+def enable_profiler():
+    logger.info("Enabling Device Profiler")
+    os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
+    os.environ["ENABLE_TRACY"] = "1"
+
+
+def disable_profiler():
+    logger.info("Disabling Device Profiler")
+    os.environ.pop("TT_METAL_DEVICE_PROFILER")
+    os.environ.pop("ENABLE_TRACY")
 
 
 if __name__ == "__main__":
@@ -467,7 +612,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--result-dest",
         required=False,
-        default="elastic",
+        default="postgres",
         choices=["elastic", "postgres", "results_export"],
         help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export']",
     )
@@ -518,108 +663,50 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
-    # VALIDATION
+    # Argument validation
     validate_arguments(args, parser)
 
-    # SET GLOBAL VARIABLES
-    global MODULE_NAME, SUITE_NAME, VECTOR_SOURCE, FILE_PATH, VECTOR_ID
-    global RESULT_DESTINATION, WATCHER, MEASURE_PERF, MEASURE_DEVICE_PERF
-    global DRY_RUN, SWEEPS_TAG, SKIP_MODULES, SKIP_ON_TIMEOUT, ELASTIC_CONNECTION_STRING
-
-    MODULE_NAME = args.module_name
-    SUITE_NAME = args.suite_name
-    VECTOR_SOURCE = args.vector_source
-    FILE_PATH = args.file_path
-    VECTOR_ID = args.vector_id
-    RESULT_DESTINATION = args.result_dest
-    WATCHER = args.watcher
-    MEASURE_PERF = args.perf
-    MEASURE_DEVICE_PERF = args.device_perf
-    DRY_RUN = args.dry_run
-    SWEEPS_TAG = args.tag
-    SKIP_MODULES = args.skip_modules
-    SKIP_ON_TIMEOUT = args.skip_on_timeout
+    # Create sweeps config object
+    config = create_config_from_args(args)
 
     # Import Elasticsearch if using elastic database
-    if VECTOR_SOURCE == "elastic" or RESULT_DESTINATION == "elastic":
+    if config.vector_source == "elastic" or config.result_destination == "elastic":
         from elasticsearch import Elasticsearch, NotFoundError
         from framework.elastic_config import *
 
-        ELASTIC_CONNECTION_STRING = get_elastic_url("corp")
-    else:
-        ELASTIC_CONNECTION_STRING = None
-
-    if WATCHER:
+    if config.watcher:
         enable_watcher()
 
-    if MEASURE_DEVICE_PERF:
+    if config.measure_device_perf:
         enable_profiler()
 
-    # Parse module names and suite names to get run_command
-    if MODULE_NAME or SUITE_NAME:
-        run_contents_details = []
-        if MODULE_NAME:
-            run_contents_details.append(f"{MODULE_NAME}")
-        if SUITE_NAME:
-            run_contents_details.append(f"{SUITE_NAME}")
-        run_contents = ", ".join(run_contents_details)
-    else:
-        run_contents = "all_sweeps"
+    # Generate run contents description
+    run_contents = get_run_contents(config)
 
     logger.info(
-        f"Running current sweeps with tag: {SWEEPS_TAG} using {VECTOR_SOURCE} test vector source, outputting to {RESULT_DESTINATION}."
+        f"Running current sweeps with tag: {config.sweeps_tag} using {config.vector_source} test vector source, outputting to {config.result_destination}."
     )
 
-    if SKIP_ON_TIMEOUT:
+    if config.skip_on_timeout:
         logger.info("Timeout behavior: Skip remaining tests in suite when a test times out.")
     else:
         logger.info("Timeout behavior: Continue running remaining tests in suite when a test times out.")
 
-    # Extract credentials only when needed
-    elastic_username = None
-    elastic_password = None
-    elastic_connection_string = None
-
-    if args.vector_source == "elastic" or args.result_dest == "elastic":
-        from framework.elastic_config import get_elastic_url
-
-        elastic_username = os.getenv("ELASTIC_USERNAME")
-        elastic_password = os.getenv("ELASTIC_PASSWORD")
-        # You'll need to determine how to get the elastic connection string
-        elastic_connection_string = get_elastic_url("corp")  # or based on args
-
     # Parse modules for running specific tests
-    module_names = None
-    if MODULE_NAME:
-        # Always support comma-separated module names now
-        if "," in MODULE_NAME:
-            module_names = [name.strip() for name in MODULE_NAME.split(",")]
-            logger.info(f"Running multiple modules: {module_names}")
-        else:
-            module_names = MODULE_NAME
-    else:
-        module_names = list(get_all_modules())
-        logger.info(f"Running all modules.")
-        if SKIP_MODULES:
-            skip_modules_set = {name.strip() for name in SKIP_MODULES.split(",")}
-            module_names = [name for name in module_names if name not in skip_modules_set]
-            logger.info(f"But skipping: {', '.join(skip_modules_set)}")
+    module_names = get_module_names(config)
 
-    import ttnn
+    from ttnn import *
+    from framework.serialize import *
+    from framework.device_fixtures import default_device
 
     run_sweeps(
         module_names,
+        config=config,
         run_contents=run_contents,
-        vector_source_type=args.vector_source,
-        elastic_connection_string=elastic_connection_string,
-        elastic_username=elastic_username,
-        elastic_password=elastic_password,
-        sweeps_tag=args.tag,
-        file_path=args.file_path,
     )
 
-    # if WATCHER:
-    #     disable_watcher()
+    if config.watcher:
+        disable_watcher()
 
-    # if MEASURE_DEVICE_PERF:
-    #     disable_profiler()
+    if config.measure_device_perf:
+        disable_profiler()

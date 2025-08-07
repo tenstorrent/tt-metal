@@ -29,7 +29,6 @@ from framework.database import (
     push_test,
     generate_error_signature,
     map_test_status_to_run_status,
-    get_postgres_config,
 )
 from sweep_utils.roofline_utils import get_updated_message
 
