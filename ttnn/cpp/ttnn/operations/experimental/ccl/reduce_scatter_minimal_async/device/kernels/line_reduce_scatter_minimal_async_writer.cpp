@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-constexpr uint32_t use_scatter_write = 1;
-
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -40,7 +38,7 @@ constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(9);
 constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(10);
 constexpr uint32_t ring_size = get_compile_time_arg_val(11);
 constexpr uint32_t num_batches = get_compile_time_arg_val(12);
-constexpr uint32_t contig_pages_advanced = use_scatter_write == 1 ? get_compile_time_arg_val(13) : 1;
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(13);
 constexpr bool is_forward = get_compile_time_arg_val(14);
 constexpr bool is_first_device_in_direction = get_compile_time_arg_val(15);
 constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(16);

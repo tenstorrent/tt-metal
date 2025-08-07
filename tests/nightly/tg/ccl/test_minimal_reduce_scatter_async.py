@@ -11,7 +11,7 @@ from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
-        (4, [1, 1, 256, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (4, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (4, [1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (4, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
@@ -56,7 +56,10 @@ from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear", "fabric_ring"],
+    ids=[
+        "fabric_linear",
+        "fabric_ring",
+    ],
 )
 @pytest.mark.parametrize("chunks_per_sync", [2])
 @pytest.mark.parametrize("num_workers_per_link", [2])

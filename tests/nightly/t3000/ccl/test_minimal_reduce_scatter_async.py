@@ -195,7 +195,10 @@ def run_reduce_scatter_impl(
     else:
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
-            tt_reduce_scatter_output_list.append(tt_reduce_scatter_output_tensor)
+            tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
+            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
+            tt_reduce_scatter_output_tensor.deallocate(True)
+            tt_reduce_scatter_output_list.append(tt_rs_out)
 
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
@@ -204,13 +207,10 @@ def run_reduce_scatter_impl(
             logger.info(f"Done iteration {i}")
 
     for i in range(num_iters):
-        tt_rs_out_tensor = tt_reduce_scatter_output_list[i]
+        tt_rs_out = tt_reduce_scatter_output_list[i]
         torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
 
         torch_rs_out = torch.cat(torch_rs_out_tensor, 3)
-
-        tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
-        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
 
         if ones_tensor:
             eq, output = comp_equal(tt_rs_out, torch_rs_out)
