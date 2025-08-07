@@ -18,8 +18,6 @@ END
 
 cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
-./create_venv.sh
-source python_env/bin/activate
 
 timeout_duration=2m
 patch=""
