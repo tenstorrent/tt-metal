@@ -22,7 +22,7 @@ def reference_model(hf_config):
     torch.use_deterministic_algorithms(True)
     # Note : Running Reference MoE without shared experts
     hf_config.n_shared_experts = None
-    return DeepseekV3MoE(hf_config)
+    return DeepseekV3MoE(hf_config).eval()
 
 
 @pytest.mark.parametrize(
