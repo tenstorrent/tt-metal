@@ -38,6 +38,7 @@ void py_bind_all_to_all_combine(py::module& module) {
                const std::optional<uint32_t>& axis,
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<ttnn::Tensor>& optional_output_tensor,
+               const std::optional<GlobalSemaphore>& init_semaphore,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -51,7 +52,8 @@ void py_bind_all_to_all_combine(py::module& module) {
                     memory_config,
                     axis,
                     subdevice_id,
-                    optional_output_tensor);
+                    optional_output_tensor,
+                    init_semaphore);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_indices_tensor").noconvert(),
@@ -65,6 +67,7 @@ void py_bind_all_to_all_combine(py::module& module) {
             py::arg("axis") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("init_semaphore") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });
 }

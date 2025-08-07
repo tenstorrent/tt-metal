@@ -158,7 +158,8 @@ AllToAllCombineDeviceOperation::invoke(
     const std::optional<uint32_t>& axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const bool locally_reduced) {
+    const bool locally_reduced,
+    const std::optional<GlobalSemaphore>& init_semaphore) {
     return {
         operation_attributes_t{
             .output_mem_config = memory_config,
@@ -167,7 +168,8 @@ AllToAllCombineDeviceOperation::invoke(
             .topology = topology,
             .cross_device_semaphore = global_semaphore,
             .locally_reduced = locally_reduced,
-            .subdevice_id = std::move(subdevice_id)},
+            .subdevice_id = std::move(subdevice_id),
+            .init_semaphore = init_semaphore},
         tensor_args_t{
             .input_tensor = input_tensor,
             .mapping_tensor = expert_mapping_tensor,

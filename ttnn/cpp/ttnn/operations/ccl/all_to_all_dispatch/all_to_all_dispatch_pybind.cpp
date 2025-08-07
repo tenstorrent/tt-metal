@@ -84,6 +84,7 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<GlobalSemaphore>& global_semaphore,
+               const std::optional<GlobalSemaphore>& init_semaphore,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -96,7 +97,8 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                     topology,
                     memory_config,
                     subdevice_id,
-                    global_semaphore);
+                    global_semaphore,
+                    init_semaphore);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_indices_tensor").noconvert(),
@@ -109,6 +111,7 @@ void py_bind_all_to_all_dispatch(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("global_semaphore") = std::nullopt,
+            py::arg("init_semaphore") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });
 }

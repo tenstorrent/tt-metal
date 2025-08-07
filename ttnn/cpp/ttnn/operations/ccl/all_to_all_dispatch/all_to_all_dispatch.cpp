@@ -27,7 +27,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<GlobalSemaphore>& global_semaphore) {
+    const std::optional<GlobalSemaphore>& global_semaphore,
+    const std::optional<GlobalSemaphore>& init_semaphore) {
     auto mesh_device = input_tensor.mesh_device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
@@ -103,7 +104,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         memory_config_,
         subdevice_core_range_set,
         global_semaphore,
-        impl);
+        impl,
+        init_semaphore);
 }
 
 }  // namespace ttnn::operations::ccl

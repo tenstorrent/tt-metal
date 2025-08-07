@@ -168,7 +168,8 @@ AllToAllDispatchDeviceOperation::invoke(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     const std::optional<GlobalSemaphore>& global_semaphore,
-    AllToAllTransferType impl) {
+    AllToAllTransferType impl,
+    const std::optional<GlobalSemaphore>& init_semaphore) {
     return {
         operation_attributes_t{
             .worker_core_range_set = worker_core_range_set,
@@ -177,7 +178,8 @@ AllToAllDispatchDeviceOperation::invoke(
             .num_links = num_links,
             .topology = topology,
             .cross_device_semaphore = global_semaphore,
-            .impl = impl},
+            .impl = impl,
+            .init_semaphore = init_semaphore},
         tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,
