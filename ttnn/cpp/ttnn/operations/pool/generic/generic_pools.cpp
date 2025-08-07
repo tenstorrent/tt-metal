@@ -70,7 +70,6 @@ static Tensor pool2d_invoke(
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto output_shape = sliding_window_config.get_output_shape();
-    auto input_shape = sliding_window_config.get_input_shape();
     // pool output is row major
     bool is_out_tiled = false;
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
