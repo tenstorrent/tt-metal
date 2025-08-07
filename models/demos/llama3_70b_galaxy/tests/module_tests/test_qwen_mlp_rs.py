@@ -19,21 +19,21 @@ def test_qwen_mlp_rs(mesh_device):
 
     cores = model_args.sub_core_grids
     global_semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3)]
-    # global_semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0)]
 
-    persistent_interim_buffers = (
-        # 512 = 4 devices * 4 pages per packet * 32 tile_width
-        ttnn.from_torch(  # We need to be able to fit 2*3840 into the second dimension
-            torch.zeros((*(8, 4), 32, 512 * model_config["REDUCE_SCATTER_INTERIM_MEMCFG"].shard_spec.num_cores())),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
-        )
+    # Input tensor shape: [1, 1, 32, 3840]
+
+    # 512 = 4 devices * 4 pages per packet * 32 tile_width
+    persistent_interim_buffers = ttnn.from_torch(  # We need to be able to fit 2*3840 into the second dimension
+        torch.zeros((*(16, 4), 32, 3840)),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
     )
+
     persistent_output_buffers = ttnn.from_torch(
-        torch.zeros((*(8, 4), 32, 32 * model_config["REDUCE_SCATTER_OUT_MEMCFG"].shard_spec.num_cores())),
+        torch.zeros((*(8, 4), 32, 3840 // 4)),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
