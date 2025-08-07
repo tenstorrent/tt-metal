@@ -267,13 +267,14 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         std::vector<uint32_t> writer_runtime_args = {
             output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
             (uint32_t)operation_attributes.cross_device_semaphore->address(),
+            (uint32_t)operation_attributes.init_semaphore->address(),
             0,
             0,
         };
         reader_runtime_args[3] = tokens_per_core_start;
         reader_runtime_args[4] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
-        writer_runtime_args[2] = tokens_per_core_start;
-        writer_runtime_args[3] = reader_runtime_args[4];
+        writer_runtime_args[3] = tokens_per_core_start;
+        writer_runtime_args[4] = reader_runtime_args[4];
         tokens_per_core_start = reader_runtime_args[4];
         log_debug(
             tt::LogOp,
@@ -324,6 +325,7 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
 
             writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
             writer_runtime_args.at(1) = (uint32_t)operation_attributes.cross_device_semaphore->address();
+            writer_runtime_args.at(2) = (uint32_t)operation_attributes.init_semaphore->address();
         }
     }
 }
