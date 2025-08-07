@@ -8,7 +8,7 @@ import torch
 import ttnn
 
 from models.experimental.uniad.reference.utils import Instances
-
+from models.experimental.uniad.tt.ttnn_utils import Instances as TtInstances
 
 from models.experimental.uniad.tt.ttnn_head import TtBEVFormerTrackHead
 from models.experimental.uniad.tt.ttnn_resnet import TtResNet
@@ -18,8 +18,9 @@ from models.experimental.uniad.reference.runtime_tracker_base import RuntimeTrac
 # from models.experimental.uniad.tt.ttnn_query_interaction import TtQueryInteractionModule
 from models.experimental.uniad.reference.query_interaction_module import QueryInteractionModule
 
-# from models.experimental.uniad.tt.ttnn_memory_bank import TtMemoryBank
-from models.experimental.uniad.reference.memory_bank import MemoryBank
+from models.experimental.uniad.tt.ttnn_memory_bank import TtMemoryBank
+
+# from models.experimental.uniad.reference.memory_bank import MemoryBank
 from models.experimental.uniad.reference.detr_track_3d_coder import DETRTrack3DCoder
 from models.experimental.uniad.tt.ttnn_planning_head import TtPlanningHeadSingleMode
 from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
@@ -257,14 +258,14 @@ class TtUniAD:
             iou_thres=0.3,
         )
 
-        self.memory_bank = MemoryBank(
+        self.memory_bank = TtMemoryBank(
             # mem_args,
             dim_in=embed_dims,
             hidden_dim=embed_dims,
             dim_out=embed_dims,
             memory_bank_len=mem_args["memory_bank_len"],
-            # params=parameters.memory_bank,
-            # device=device,
+            params=parameters.memory_bank,
+            device=device,
         )
         self.mem_bank_len = 0 if self.memory_bank is None else self.memory_bank.max_his_length
         # self.criterion = build_loss(loss_cfg)
@@ -1079,9 +1080,34 @@ class TtUniAD:
 
         track_instances.mem_bank = track_instances.mem_bank.to(torch.float)
 
+        # Converting the above track_instances to torch.
+        tt_track_instances = TtInstances((1, 1))
+        tt_track_instances.ref_pts = ttnn.from_torch(track_instances.ref_pts, device=self.device)
+        tt_track_instances.query = ttnn.from_torch(track_instances.query, device=self.device, layout=ttnn.TILE_LAYOUT)
+        tt_track_instances.output_embedding = ttnn.from_torch(
+            track_instances.output_embedding, dtype=ttnn.bfloat16, device=self.device
+        )
+        tt_track_instances.obj_idxes = ttnn.from_torch(track_instances.obj_idxes, device=self.device)
+        tt_track_instances.scores = ttnn.from_torch(track_instances.scores, device=self.device)
+        tt_track_instances.save_period = ttnn.from_torch(
+            track_instances.save_period, device=self.device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_track_instances.mem_padding_mask = track_instances.mem_padding_mask.to(dtype=torch.bool)
+        tt_track_instances.mem_bank = ttnn.from_torch(track_instances.mem_bank, dtype=ttnn.bfloat16, device=self.device)
+
         """ update with memory_bank """
         if self.memory_bank is not None:
-            track_instances = self.memory_bank(track_instances)
+            tt_track_instances = self.memory_bank(tt_track_instances)
+
+        # track_instances=Instances((1, 1))
+        track_instances.ref_pts = ttnn.to_torch(tt_track_instances.ref_pts).to(dtype=torch.float)
+        track_instances.query = ttnn.to_torch(tt_track_instances.query).to(dtype=torch.float)
+        track_instances.output_embedding = ttnn.to_torch(tt_track_instances.output_embedding).to(dtype=torch.float)
+        track_instances.obj_idxes = ttnn.to_torch(tt_track_instances.obj_idxes)
+        track_instances.scores = ttnn.to_torch(tt_track_instances.scores).to(dtype=torch.float)
+        track_instances.save_period = ttnn.to_torch(tt_track_instances.save_period)
+        track_instances.mem_padding_mask = tt_track_instances.mem_padding_mask
+        track_instances.mem_bank = ttnn.to_torch(tt_track_instances.mem_bank).to(dtype=torch.float)
 
         """  Update track instances using matcher """
         tmp = {}
