@@ -184,24 +184,13 @@ void read_events_from_completion_queue(
         channel);
     uint32_t event_completed = dispatch_cmd_and_event[sizeof(CQDispatchCmd) / sizeof(uint32_t)];
 
-#if 0
-    if (event_completed != event_descriptor.event_id) {
-        std::cout << "Event Order Issue: expected to read back completion signal for event " << event_descriptor.event_id << " but got " << event_completed << std::endl;
-        while(false) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-#else
     TT_FATAL(
         event_completed == event_descriptor.event_id,
         "Event Order Issue: expected to read back completion signal for event {} but got {}!",
         event_descriptor.event_id,
         event_completed);
-#endif
     sysmem_manager.completion_queue_pop_front(1, cq_id);
     sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
-    std::cout << "Completion queue popped event " << event_completed
-              << " (global: " << event_descriptor.get_global_event_id() << ")" << std::endl;
     log_trace(
         LogAlways,
         "Completion queue popped event {} (global: {})",

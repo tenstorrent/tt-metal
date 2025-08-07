@@ -476,8 +476,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_host(
     } else {
         initialize_write_cmd(write_cmd_dst);
     }
-    std::cout << "add_dispatch_write_host: write_linear_host.is_event: " << is_event << " data_sizeB: " << data_sizeB
-              << std::endl;
+
     if (inline_data) {
         TT_ASSERT(data != nullptr);  // compiled out?
         this->add_data(data, data_sizeB, data_sizeB);

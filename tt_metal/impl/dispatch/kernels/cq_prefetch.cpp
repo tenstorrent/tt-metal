@@ -23,12 +23,6 @@
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
 #include "debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
-// #include <random>
-// #include <array>
-
-#define ENABLE_PREFETCH_DPRINTS 1
-
-#define ENABLE_PREFETCH_RELAY_PAGED_SAMPLES_DPRINT 0
 
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
 struct CQPrefetchHToPrefetchDHeader_s {
@@ -226,10 +220,6 @@ static uint32_t upstream_total_acquired_page_count = 0;
 static uint32_t ringbuffer_wp = scratch_db_base;
 static uint32_t ringbuffer_offset = 0;
 
-static uint32_t print_indexes[128] = {
-    0,
-};
-
 CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>
     relay_client;
 
@@ -311,12 +301,11 @@ FORCE_INLINE uint32_t read_from_pcie(
 
     // Wrap pcie/hugepage
     if (pcie_read_ptr + size > pcie_base + pcie_size) {
-        DPRINT << "pcie_read_ptr wrapped around: " << pcie_read_ptr << " " << size << " " << pcie_base << " "
-               << pcie_size << ENDL();
         pcie_read_ptr = pcie_base;
     }
 
     uint64_t host_src_addr = pcie_noc_xy | pcie_read_ptr;
+    // DPRINT << "read_from_pcie: " << fence + preamble_size << " " << pcie_read_ptr << ENDL();
     noc_async_read(host_src_addr, fence + preamble_size, size);
     pending_read_size = size + preamble_size;
     pcie_read_ptr += size;
@@ -361,31 +350,27 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
     static uint32_t pending_read_size = 0;
     static volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr =
         (volatile tt_l1_ptr prefetch_q_entry_type*)prefetch_q_base;
-    constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1);  // BIT(15)
+    constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1);
 
     if (stall_state == STALLED) {
         ASSERT(pending_read_size == 0);  // Before stalling, fetch must have been completed.
         return;
     }
 
-    if (fence < cmd_ptr) {  // fetchq wrapped around, reset cmd_ptr to fence
-        DPRINT << "fetch_q_get_cmds: fence < cmd_ptr, reset cmd_ptr to fence: " << fence << " " << cmd_ptr << ENDL();
+    // DPRINT << "fetch_q_get_cmds: " << cmd_ptr << " " << fence << ENDL();
+    if (fence < cmd_ptr) {
         cmd_ptr = fence;
     }
 
-    bool cmd_ready = (cmd_ptr != fence);  // cmd_ptr < fence means there are commands in the cmddat_q
+    bool cmd_ready = (cmd_ptr != fence);
 
     uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
-    uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask)
-                          << prefetch_q_log_minsize;  // prefetch_q_rd_ptr_local & BITMASK(15) x 16
-    bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0;  // stall_flag = BIT(15)
+    uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
+    bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0;
     stall_state = static_cast<StallState>(stall_flag << 1);  // NOT_STALLED -> STALL_NEXT if stall_flag is set
 
     if (fetch_size != 0 && pending_read_size == 0) {
-        pending_read_size = read_from_pcie<preamble_size>(
-            prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
-        // DPRINT << "read_from_pcie: fetch_size: " << fetch_size << " new pending_read_size: " << pending_read_size <<
-        // ENDL();
+        pending_read_size = read_from_pcie<preamble_size>(prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
         if (stall_state == STALL_NEXT && pending_read_size != 0) {
             // No pending reads -> stall_state can be set to STALLED, since the read to the cmd
             // that initiated the stall has been issued.
@@ -393,7 +378,6 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             // by preamble size. After ensuring that the exec_buf command has been read (barrier),
             // exit.
             barrier_and_stall(pending_read_size, fence, cmd_ptr);  // STALL_NEXT -> STALLED
-            DPRINT << "fetch_q_get_cmds: STALL_NEXT -> STALLED" << ENDL();
             return;
         }
     }
@@ -579,7 +563,9 @@ uint32_t process_relay_paged_cmd_large(
     uint32_t page_size,
     uint32_t pages,
     uint32_t length_adjust) {
+#if ENABLE_PREFETCH_DPRINTS
     DPRINT << "relay_paged_cmd_large: " << page_size << " " << pages << " " << length_adjust << ENDL();
+#endif
 
     InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
 
@@ -701,11 +687,6 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     uint32_t page_size = cmd->relay_paged.page_size;
     uint32_t pages = cmd->relay_paged.pages;
     uint16_t length_adjust = cmd->relay_paged.is_dram_and_length_adjust & CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK;
-    constexpr uint32_t print_iteration_count = 128 * 1024 * 1024 / scratch_db_half_size;
-    uint32_t print_iteration_count_current = 0;
-
-    DPRINT << "relay_paged: " << base_addr << " " << page_id << " " << page_size << " " << pages << " " << length_adjust
-           << " " << downstream_data_ptr << ENDL();
 
     if (page_size > scratch_db_half_size) {
         return process_relay_paged_cmd_large<is_dram>(
@@ -715,11 +696,9 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
 
     // First step - read into DB0
-    uint64_t initial_read_length, read_length = (uint64_t)pages * page_size;
-    initial_read_length = read_length;
+    uint64_t read_length = (uint64_t)pages * page_size;
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint32_t amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
-    DPRINT << "     read_length: " << read_length << " amt_to_read: " << amt_to_read << ENDL();
     uint32_t amt_read = 0;
     while (amt_to_read >= page_size) {
         uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
@@ -741,42 +720,12 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
         // TODO(pgk); we can do better on WH w/ tagging
         noc_async_writes_flushed();
 
-#if ENABLE_PREFETCH_RELAY_PAGED_SAMPLES_DPRINT
-        // print a sample of the scratch_db_top array for every 128 MB of data read
-        if (++print_iteration_count_current >= print_iteration_count) {
-            print_iteration_count_current = 0;
-            // Initialize print_indexes array with random integers from 0 to scratch_db_half_size  - 1
-            // std::random_device rd;
-            // std::mt19937 gen(rd());
-            // std::uniform_int_distribution<uint32_t> distrib(0, scratch_db_half_size/sizeof(uint16_t) - 1);
-
-            int i = 0;
-            for (auto& idx : print_indexes) {
-                // idx = static_cast<uint32_t>(distrib(gen));
-                idx = i;
-                i++;
-            }
-            DPRINT << "EnqueueRead prefetch_relay_paged sample (" << initial_read_length - read_length
-                   << " bytes read): " << ENDL();
-            uint16_t* print_ptr = reinterpret_cast<uint16_t*>(scratch_read_addr);
-            for (size_t i = 0; i < sizeof(print_indexes) / sizeof(print_indexes[0]); i += 32) {
-                for (auto j = 0; j < 32; j++) {
-                    uint16_t val = print_ptr[print_indexes[i + j]];
-                    DPRINT << "0x" << HEX() << SETW(4) << val << " " << DEC();
-                }
-                DPRINT << ENDL();
-            }
-        }
-#endif
-
         db_toggle ^= 1;
         scratch_read_addr = scratch_db_top[db_toggle];
         scratch_write_addr = scratch_db_top[db_toggle ^ 1];
 
         uint32_t amt_to_write = amt_read;
         amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
-        // DPRINT << "     read_length: " << read_length << " amt_to_read: " << amt_to_read << " amt_to_write: " <<
-        // amt_to_write << ENDL();
         amt_read = 0;
         while (amt_to_read >= page_size) {
             uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
@@ -803,8 +752,6 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     ASSERT(length_adjust < page_size);
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_read - length_adjust;
-    // DPRINT << "     read_length: " << read_length << " amt_read: " << amt_read << " amt_to_write: " << amt_to_write
-    // << ENDL();
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
@@ -936,9 +883,8 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__
     uint32_t sub_cmds_length = cmd->relay_paged_packed.count * sizeof(CQPrefetchRelayPagedPackedSubCmd);
     uint32_t stride = cmd->relay_paged_packed.stride;
     ASSERT(total_length > 0);
-#if ENABLE_PREFETCH_DPRINTS
-    DPRINT << "paged_packed: " << total_length << " " << sub_cmds_length << " " << stride << ENDL();
-#endif
+    // DPRINT << "paged_packed: " << total_length << " " << cmd->relay_paged_packed.stride << ENDL();
+
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
     uint32_t remaining = cmddat_q_end - data_ptr;
     uint32_t* l1_cache_pos = l1_cache;
@@ -978,10 +924,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     uint32_t read_addr = cmd->relay_linear.addr;
     uint64_t length = cmd->relay_linear.length | ((uint64_t)cmd->relay_linear.length_hi << 32);
     uint64_t read_length = length;
-
-#if ENABLE_PREFETCH_DPRINTS
-    DPRINT << "relay_linear: " << cmd_ptr << " " << length << " " << read_addr << " " << noc_xy_addr << ENDL();
-#endif
+    // DPRINT << "relay_linear: " << cmd_ptr << " " << length << " " << read_addr << " " << noc_xy_addr << ENDL();
 
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
@@ -1093,7 +1036,7 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     uint32_t length = cmd->relay_inline.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
-    DPRINT << "relay_inline_exec_buf_cmd:" << length << " " << dispatcher_type << ENDL();
+    // DPRINT << "relay_inline_exec_buf_cmd:" << length << ENDL();
     uint32_t npages =
         (length + RelayInlineState::downstream_page_size - 1) >> RelayInlineState::downstream_log_page_size;
 
@@ -1242,9 +1185,7 @@ static uint32_t process_exec_buf_relay_paged_packed_cmd(
     uint32_t sub_cmds_length = cmd->relay_paged_packed.count * sizeof(CQPrefetchRelayPagedPackedSubCmd);
     uint32_t stride = cmd->relay_paged_packed.stride;
     ASSERT(total_length > 0);
-#if ENABLE_PREFETCH_DPRINTS
-    DPRINT << "exec_buf_paged_packed: " << total_length << " " << stride << " " << sub_cmds_length << ENDL();
-#endif
+    // DPRINT << "paged_packed: " << total_length << " " << cmd->relay_paged_packed.stride << ENDL();
 
     void* end = copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
 
@@ -1304,8 +1245,6 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     uint8_t flags = cmd->paged_to_ringbuffer.flags;
     uint32_t wp_update_offset = cmd->paged_to_ringbuffer.wp_offset_update;
 
-    DPRINT << "paged_to_ringbuffer: " << start_page << " " << base_addr << " " << log2_page_size << " " << length << " "
-           << flags << " " << wp_update_offset << ENDL();
     ASSERT(length <= wp_update_offset);
 
     if (flags & CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START) {
@@ -1387,7 +1326,7 @@ uint32_t process_relay_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream__da
     uint32_t count = cmd->relay_ringbuffer.count;
     uint32_t sub_cmds_length = count * sizeof(CQPrefetchRelayRingbufferSubCmd);
     uint32_t stride = cmd->relay_ringbuffer.stride;
-    DPRINT << "relay_ringbuffer: " << count << " " << stride << " " << sub_cmds_length << ENDL();
+    // DPRINT << "relay_ringbuffer: " << count << " " << cmd->relay_ringbuffer.stride << ENDL();
 
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
     uint32_t remaining = cmddat_q_end - data_ptr;
@@ -1443,24 +1382,26 @@ bool process_cmd(
 
     switch (cmd->base.cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_LINEAR:
-            DPRINT << "relay linear: " << cmd_ptr << ENDL();
+            // DPRINT << "relay linear: " << cmd_ptr << ENDL();
             stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr);
             break;
 
-        case CQ_PREFETCH_CMD_RELAY_PAGED: {
-            uint32_t is_dram_and_length_adjust = cmd->relay_paged.is_dram_and_length_adjust;
-            uint32_t is_dram = is_dram_and_length_adjust & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
-            uint32_t start_page = cmd->relay_paged.start_page;
-            DPRINT << "relay paged: " << cmd_ptr << " " << stride << " " << is_dram << ENDL();
-            if (is_dram) {
-                stride = process_relay_paged_cmd<true>(cmd_ptr, downstream_data_ptr, start_page);
-            } else {
-                stride = process_relay_paged_cmd<false>(cmd_ptr, downstream_data_ptr, start_page);
+        case CQ_PREFETCH_CMD_RELAY_PAGED:
+            // DPRINT << "relay dram page: " << cmd_ptr << ENDL();
+            {
+                uint32_t is_dram_and_length_adjust = cmd->relay_paged.is_dram_and_length_adjust;
+                uint32_t is_dram = is_dram_and_length_adjust & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
+                uint32_t start_page = cmd->relay_paged.start_page;
+                if (is_dram) {
+                    stride = process_relay_paged_cmd<true>(cmd_ptr, downstream_data_ptr, start_page);
+                } else {
+                    stride = process_relay_paged_cmd<false>(cmd_ptr, downstream_data_ptr, start_page);
+                }
             }
-        } break;
+            break;
 
         case CQ_PREFETCH_CMD_RELAY_PAGED_PACKED:
-            DPRINT << "relay paged packed" << ENDL();
+            // DPRINT << "relay paged packed" << ENDL();
             if (exec_buf) {
                 stride =
                     process_exec_buf_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
@@ -1491,7 +1432,7 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
-            DPRINT << "inline no flush" << ENDL();
+            // DPRINT << "inline no flush" << ENDL();
             if (exec_buf) {
                 stride = process_exec_buf_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr, exec_buf_state);
             } else {
@@ -1500,7 +1441,7 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_EXEC_BUF:
-            DPRINT << "exec buf: " << cmd_ptr << ENDL();
+            // DPRINT << "exec buf: " << cmd_ptr << ENDL();
             ASSERT(!exec_buf);
             if (is_h_variant) {
                 ASSERT(stall_state == STALLED);  // ExecBuf must be preceded by a prefetcher stall
@@ -1510,7 +1451,7 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_EXEC_BUF_END:
-            DPRINT << "exec buf end: " << cmd_ptr << ENDL();
+            // DPRINT << "exec buf end: " << cmd_ptr << ENDL();
             ASSERT(exec_buf);
             stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
                 cmd_ptr, downstream_data_ptr, exec_buf_state);
@@ -1518,12 +1459,12 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_STALL:
-            DPRINT << "stall" << ENDL();
+            // DPRINT << "stall" << ENDL();
             stride = process_stall(cmd_ptr);
             break;
 
         case CQ_PREFETCH_CMD_DEBUG:
-            DPRINT << "debug" << ENDL();
+            // DPRINT << "debug" << ENDL();
             //  Splitting debug cmds not implemented for exec_bufs (yet)
             if (exec_buf) {
                 ASSERT(0);
@@ -1532,23 +1473,23 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_TERMINATE:
-            DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();
+            // DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();
             ASSERT(!exec_buf);
             done = true;
             break;
 
         case CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER:
-            DPRINT << "paged to ringbuffer" << ENDL();
+            // DPRINT << "paged to ringbuffer" << ENDL();
             stride = process_paged_to_ringbuffer_cmd(cmd_ptr, downstream_data_ptr);
             break;
 
         case CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET:
-            DPRINT << "set ringbuffer offset" << ENDL();
+            // DPRINT << "set ringbuffer offset" << ENDL();
             stride = process_set_ringbuffer_offset(cmd_ptr);
             break;
 
         case CQ_PREFETCH_CMD_RELAY_RINGBUFFER:
-            DPRINT << "relay ringbuffer" << ENDL();
+            // DPRINT << "relay ringbuffer" << ENDL();
             if (exec_buf) {
                 stride = process_exec_buf_relay_ringbuffer_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
             } else {
@@ -1557,8 +1498,8 @@ bool process_cmd(
             break;
 
         default:
-            DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " "
-                   << cmddat_q_base << ENDL();
+            //  DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " <<
+            //                           cmddat_q_base << ENDL();
             //  DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
             //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
@@ -1819,8 +1760,6 @@ void kernel_main_hd() {
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0);
-
-    DPRINT << "cq_prefetch_hd: " << cmddat_q_base << " " << fence << ENDL();
 
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");

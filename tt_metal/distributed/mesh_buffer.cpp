@@ -8,7 +8,6 @@
 #include <mesh_coord.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <vector>
-#include <iostream>
 
 #include "assert.hpp"
 #include "device.hpp"
@@ -79,68 +78,6 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const DeviceLocalBufferConfig& device_local_config,
     MeshDevice* mesh_device,
     std::optional<DeviceAddr> address) {
-    // Print all argument details
-    std::cout << "=== MeshBuffer::create Arguments Details ===" << std::endl;
-
-    // Print address argument
-    std::cout << "Address: "
-              << (address.has_value() ? ([&]() {
-                     std::ostringstream oss;
-                     oss << "0x" << std::hex << address.value();
-                     return oss.str();
-                 }())
-                                      : "auto-allocated")
-              << std::endl;
-
-    // Print device_local_config details
-    std::cout << "DeviceLocalBufferConfig:" << std::endl;
-    std::cout << "  page_size: " << device_local_config.page_size << " bytes" << std::endl;
-    std::cout << "  buffer_type: " << static_cast<int>(device_local_config.buffer_type) << std::endl;
-    std::cout << "  bottom_up: "
-              << (device_local_config.bottom_up.has_value() ? (device_local_config.bottom_up.value() ? "true" : "false")
-                                                            : "unspecified")
-              << std::endl;
-    std::cout << "  sub_device_id: "
-              << (device_local_config.sub_device_id.has_value()
-                      ? std::to_string(static_cast<uint32_t>(device_local_config.sub_device_id.value().get()))
-                      : "unspecified")
-              << std::endl;
-
-    // Print mesh_buffer_config details (variant)
-    std::cout << "MeshBufferConfig:" << std::endl;
-    std::visit(
-        [](const auto& config) {
-            using T = std::decay_t<decltype(config)>;
-            if constexpr (std::is_same_v<T, ReplicatedBufferConfig>) {
-                std::cout << "  Type: REPLICATED" << std::endl;
-                std::cout << "  size: " << config.size << " bytes" << std::endl;
-            } else if constexpr (std::is_same_v<T, ShardedBufferConfig>) {
-                std::cout << "  Type: SHARDED" << std::endl;
-                std::cout << "  global_size: " << config.global_size << " bytes" << std::endl;
-                std::cout << "  global_buffer_shape: (" << config.global_buffer_shape.height() << ", "
-                          << config.global_buffer_shape.width() << ")" << std::endl;
-                std::cout << "  shard_shape: (" << config.shard_shape.height() << ", " << config.shard_shape.width()
-                          << ")" << std::endl;
-                std::cout << "  shard_orientation: "
-                          << (config.shard_orientation == ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR")
-                          << std::endl;
-
-                auto replicated = config.replicated_dims();
-                std::cout << "  replicated_dims: (height=" << (replicated.first ? "true" : "false")
-                          << ", width=" << (replicated.second ? "true" : "false") << ")" << std::endl;
-
-                auto physical_shape = config.physical_shard_shape();
-                std::cout << "  physical_shard_shape: (" << physical_shape.height() << ", " << physical_shape.width()
-                          << ")" << std::endl;
-
-                std::cout << "  compute_datum_size_bytes: " << config.compute_datum_size_bytes() << " bytes"
-                          << std::endl;
-            }
-        },
-        mesh_buffer_config);
-
-    std::cout << "=============================================" << std::endl;
-
     validate_mesh_buffer_config(mesh_buffer_config, *mesh_device);
 
     const DeviceAddr device_local_size = std::visit(
@@ -173,9 +110,6 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     }
 
     mesh_buffer->initialize_device_buffers();
-
-    // Print configuration details after creation
-    mesh_buffer->print_config_details();
 
     return mesh_buffer;
 }
@@ -285,42 +219,6 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query replicated dims for buffers sharded across the Mesh");
     return this->global_shard_spec().replicated_dims();
-}
-
-void MeshBuffer::print_config_details() const {
-    std::cout << "=== MeshBuffer Configuration Details ===" << std::endl;
-
-    std::visit(
-        [](const auto& config) {
-            using T = std::decay_t<decltype(config)>;
-            if constexpr (std::is_same_v<T, ReplicatedBufferConfig>) {
-                std::cout << "Buffer Type: REPLICATED" << std::endl;
-                std::cout << "Size: " << config.size << " bytes" << std::endl;
-            } else if constexpr (std::is_same_v<T, ShardedBufferConfig>) {
-                std::cout << "Buffer Type: SHARDED" << std::endl;
-                std::cout << "Global Size: " << config.global_size << " bytes" << std::endl;
-                std::cout << "Global Buffer Shape: (" << config.global_buffer_shape.height() << ", "
-                          << config.global_buffer_shape.width() << ")" << std::endl;
-                std::cout << "Shard Shape: (" << config.shard_shape.height() << ", " << config.shard_shape.width()
-                          << ")" << std::endl;
-                std::cout << "Shard Orientation: "
-                          << (config.shard_orientation == ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR")
-                          << std::endl;
-
-                auto replicated = config.replicated_dims();
-                std::cout << "Replicated Dimensions: (height=" << (replicated.first ? "true" : "false")
-                          << ", width=" << (replicated.second ? "true" : "false") << ")" << std::endl;
-
-                auto physical_shape = config.physical_shard_shape();
-                std::cout << "Physical Shard Shape: (" << physical_shape.height() << ", " << physical_shape.width()
-                          << ")" << std::endl;
-
-                std::cout << "Datum Size: " << config.compute_datum_size_bytes() << " bytes" << std::endl;
-            }
-        },
-        config_);
-
-    std::cout << "=========================================" << std::endl;
 }
 
 AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
