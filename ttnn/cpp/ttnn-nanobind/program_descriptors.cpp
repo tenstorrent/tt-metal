@@ -13,7 +13,10 @@
 #include <nanobind/operators.h>
 #include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
