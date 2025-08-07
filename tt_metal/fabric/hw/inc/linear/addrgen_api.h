@@ -56,7 +56,7 @@ FORCE_INLINE void to_noc_fused_unicast_write_atomic_inc(
     const uint32_t id,
     const AddrGenType& d,
     uint32_t offset = 0) {
-    auto page_size = addrgen_detail::get_page_size(d, offset, edm_to_local_chip_noc);
+    auto page_size = addrgen_detail::get_page_size(d);
     auto noc_address = d.get_noc_addr(id, offset, edm_to_local_chip_noc);
 
     pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
