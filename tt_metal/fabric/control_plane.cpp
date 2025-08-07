@@ -144,18 +144,14 @@ create_distributed_contexts(const std::vector<MeshId>& mesh_ids, const MeshGraph
     const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (mesh_ids.size() == 1 && mesh_graph.get_host_ranks(mesh_ids.front()).size() == 1) {
         distributed_contexts.emplace(mesh_ids.front(), global_context);
-        std::cout << "create_distributed_contexts: single-host, single-mesh, mesh id is " << *mesh_ids.front()
-                  << std::endl;
         return distributed_contexts;
     }
 
     for (const auto mesh_id : mesh_ids) {
-        std::cout << "create_distributed_contexts: mesh id is " << *mesh_id << std::endl;
         std::vector<int> ranks;
         for (const auto& [_, host_rank_id] : mesh_graph.get_host_ranks(mesh_id)) {
             ranks.push_back(*host_rank_id);
         }
-
         distributed_contexts.emplace(mesh_id, global_context->create_sub_context(tt::stl::make_span(ranks)));
     }
     return distributed_contexts;
@@ -383,7 +379,8 @@ void ControlPlane::init_control_plane(
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
-    std::vector<int> this_host{*this->local_mesh_binding_.host_rank};
+    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    std::vector<int> this_host{*global_context->rank()};
     this->distributed_contexts_ =
         create_distributed_contexts(this->local_mesh_binding_.mesh_ids, *this->routing_table_generator_->mesh_graph);
     this->host_local_context_ =
