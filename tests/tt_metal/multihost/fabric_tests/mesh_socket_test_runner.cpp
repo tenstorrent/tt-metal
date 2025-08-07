@@ -57,6 +57,7 @@ void MeshSocketTestRunner::run_all_tests() {
         log_info(tt::LogTest, "=== Running Test {}/{}: '{}' ===", i + 1, expanded_tests_.size(), test.name);
 
         run_test(test);
+
         Finish(mesh_device_->mesh_command_queue(0));
         log_info(tt::LogTest, "✓ Test '{}' completed successfully", test.name);
     }
@@ -224,12 +225,15 @@ tt::tt_metal::distributed::SocketConnection MeshSocketTestRunner::convert_to_soc
 void MeshSocketTestRunner::execute_socket_test(
     tt::tt_metal::distributed::MeshSocket& socket, const ParsedTestConfig& test) {
     // Use the existing test_socket_send_recv function from socket_send_recv_utils.cpp
-    tt::tt_fabric::fabric_router_tests::multihost::multihost_utils::test_socket_send_recv(
-        mesh_device_,
-        socket,
-        test.memory_config.data_size,
-        test.memory_config.page_size,
-        test.memory_config.num_transactions);
+    TT_FATAL(
+        tt::tt_fabric::fabric_router_tests::multihost::multihost_utils::test_socket_send_recv(
+            mesh_device_,
+            socket,
+            test.memory_config.data_size,
+            test.memory_config.page_size,
+            test.memory_config.num_transactions),
+        "Socket test {} failed",
+        test.name);
 }
 
 bool MeshSocketTestRunner::should_participate_in_test(const ParsedTestConfig& test) const {

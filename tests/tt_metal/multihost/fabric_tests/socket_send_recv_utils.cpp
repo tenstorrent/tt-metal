@@ -42,7 +42,7 @@ std::string get_test_variant_name(TestVariant variant) {
     }
 }
 
-void test_socket_send_recv(
+bool test_socket_send_recv(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
     tt_metal::distributed::MeshSocket& socket,
     uint32_t data_size,
@@ -51,6 +51,8 @@ void test_socket_send_recv(
     using namespace tt::tt_metal::distributed::multihost;
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
+
+    bool is_data_match = true;
 
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -231,7 +233,8 @@ void test_socket_send_recv(
                 std::vector<uint32_t> recv_data_readback_per_core(
                     recv_data_readback.begin() + idx * data_size / sizeof(uint32_t),
                     recv_data_readback.begin() + (idx + 1) * data_size / sizeof(uint32_t));
-                EXPECT_EQ(src_vec_per_core, recv_data_readback_per_core);
+                is_data_match &= (src_vec_per_core == recv_data_readback_per_core);
+                EXPECT_TRUE(is_data_match);
             }
         }
         // Increment the source vector for the next iteration
@@ -243,6 +246,7 @@ void test_socket_send_recv(
             src_vec_per_core[i]++;
         }
     }
+    return is_data_match;
 }
 
 std::vector<uint32_t> get_neighbor_host_ranks(SystemConfig system_config) {
