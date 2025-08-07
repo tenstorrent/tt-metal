@@ -27,11 +27,11 @@ uint32_t get_page_size(const InterleavedAddrGenFast<DRAM>& s) {
 
 // Placeholder max page size for the addrgen until the page size is properly visible by the worker
 // https://github.com/tenstorrent/tt-metal/issues/25966
-static constexpr uint32_t max_fabric_addrgen_page_size = 4532;
+static constexpr uint32_t max_fabric_addrgen_payload_size = 4532;
 
 FORCE_INLINE void validate_max_payload_size(uint32_t payload_size) {
-    ASSERT((page_size > max_fabric_addrgen_page_size));
-    if ((payload_size > max_fabric_addrgen_page_size)) {
+    ASSERT((page_size > max_fabric_addrgen_payload_size));
+    if ((payload_size > max_fabric_addrgen_payload_size)) {
         WAYPOINT("HUNG");
         // hang to prompt investigation
         while (1) {
