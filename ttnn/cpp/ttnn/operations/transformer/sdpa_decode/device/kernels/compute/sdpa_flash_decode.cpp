@@ -308,7 +308,6 @@ void MAIN {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
-
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
 
@@ -319,7 +318,6 @@ void MAIN {
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
-
                 sub_exp_block_bcast_cols_inplace_reduce<
                     cb_qk_im,
                     Sq_chunk_t,
@@ -336,7 +334,6 @@ void MAIN {
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
                 pack_reconfig_data_format(cb_out_im);
-
                 cb_matmul_blocks(
                     cb_qk_im,
                     cb_v_in,
@@ -379,7 +376,7 @@ void MAIN {
                     /* cb_cur_sum += cb_prev_sum */
                     reconfig_data_format(cb_cur_sum, cb_prev_sum);  // DEBUG
                     pack_reconfig_data_format(cb_cur_sum);
-                    add_block(cb_cur_sum, cb_prev_sum, cb_prev_sum, Sq_chunk_t);
+                    add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
 
                     /* cb_out_accumulate_im += cb_out_im */
                     reconfig_data_format(cb_out_accumulate_im, cb_out_im);  // DEBUG
@@ -391,11 +388,12 @@ void MAIN {
                     reconfig_data_format(cb_cur_max, cb_cur_max);  // DEBUG
                     pack_reconfig_data_format(cb_prev_max);
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 } else {
                     // Write o, m, l into cb_out
                     move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
                     move_block<true>(cb_cur_max, cb_out_m, Sq_chunk_t);
-                    move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
+                    move_block<true>(cb_cur_sum, cb_out_l, Sq_chunk_t);
                 }
             }
         }
@@ -445,14 +443,10 @@ void MAIN {
             pack_reconfig_data_format(cb_cur_sum);
             recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
 
-            reconfig_data_format(cb_prev_sum, cb_prev_sum);  // DEBUG
-            pack_reconfig_data_format(cb_prev_sum);
-            recip_block_inplace<vector_mode>(cb_prev_sum, Sq_chunk_t);
-
-            /* cb_out_accumulate_im *= cb_prev_sum */
-            reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);  // DEBUG
+            /* cb_out_accumulate_im *= cb_cur_sum */
+            reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
-            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_prev_sum, Sq_chunk_t, vDHt);
+            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
             pack_reconfig_data_format(cb_out_final);
 
             if constexpr (untilize_output) {
