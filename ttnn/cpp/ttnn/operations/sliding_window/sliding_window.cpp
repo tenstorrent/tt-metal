@@ -89,6 +89,13 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
     if (ceil_mode) {
         output_h = std::ceil(output_h_float) + 1;
         output_w = std::ceil(output_w_float) + 1;
+        // adjust the output shape if the last kernel position is in the padding region
+        if (((output_h - 1) * stride_hw.first) >= (input_hw.first + padding[0])) {
+            output_h--;
+        }
+        if (((output_w - 1) * stride_hw.second) >= (input_hw.second + padding[2])) {
+            output_w--;
+        }
     } else {
         output_h = std::floor(output_h_float) + 1;
         output_w = std::floor(output_w_float) + 1;
@@ -116,9 +123,13 @@ uint32_t SlidingWindowConfig::get_pad_w() const { return padding[2] + padding[3]
 uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
     uint32_t ceil_padding_h = 0;
     if (ceil_mode) {
-        ttnn::Shape output_shape = get_output_shape();
-        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
-        ceil_padding_h = stride_hw.first * (output_shape[1] - 1) + window_hw.first - input_hw.first - get_pad_h();
+        // Calculate the output size using the original ceil formula (before adjustment)
+        float output_h_float =
+            (float)(input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1) / stride_hw.first;
+        uint32_t output_h = std::ceil(output_h_float) + 1;
+
+        // extra_padding = ceil size - non ceil size
+        ceil_padding_h = stride_hw.first * (output_h - 1) + window_hw.first - input_hw.first - get_pad_h();
     }
 
     return ceil_padding_h;
@@ -127,9 +138,13 @@ uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
 uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
     uint32_t ceil_padding_w = 0;
     if (ceil_mode) {
-        ttnn::Shape output_shape = get_output_shape();
-        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
-        ceil_padding_w = stride_hw.second * (output_shape[2] - 1) + window_hw.second - input_hw.second - get_pad_w();
+        // Calculate the output size using the original ceil formula (before adjustment)
+        float output_w_float =
+            (float)(input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1) / stride_hw.second;
+        uint32_t output_w = std::ceil(output_w_float) + 1;
+
+        // extra_padding = ceil size - non ceil size
+        ceil_padding_w = stride_hw.second * (output_w - 1) + window_hw.second - input_hw.second - get_pad_w();
     }
 
     return ceil_padding_w;
