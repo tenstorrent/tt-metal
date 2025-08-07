@@ -17,8 +17,7 @@ target_link_libraries(
     PRIVATE
         TTNN::Test::Basic
         TTNN::Test::Basic::Tensor
+        TTNN::Test::CCL
 )
-
-target_link_libraries(tt-nn-validation-basic PRIVATE TTNN::Test::CCL)
 
 install(TARGETS tt-nn-validation-basic RUNTIME COMPONENT ttnn-validation)
