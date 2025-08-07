@@ -219,7 +219,7 @@ uint32_t calculate_L1_usage(
 
     // after reduction
     uint32_t out_cb_pagesize =
-        std::min((uint32_t)16, output_memory.shard_spec().value().shape[1]) * params.nbytes;
+        std::min(static_cast<uint32_t>(16), output_memory.shard_spec().value().shape[1]) * params.nbytes;
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
