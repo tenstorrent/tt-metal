@@ -2028,6 +2028,12 @@ private:
             out << YAML::Key << "routing_type";
             out << YAML::Value << to_string(config.routing_type.value());
         }
+        if (config.topology == Topology::Torus && config.torus_config.has_value()) {
+            out << YAML::Key << "torus_config";
+            out << YAML::Value << config.torus_config.value();
+        }
+        out << YAML::Key << "num_links";
+        out << YAML::Value << config.num_links;
         out << YAML::EndMap;
     }
 };
