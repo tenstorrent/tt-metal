@@ -1085,10 +1085,10 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": 20,
                 # T3K targets
-                "T3K_Llama-3.1-70B": 16,
-                "T3K_Qwen2.5-72B": 13,
+                # "T3K_Llama-3.1-70B": 16, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
+                # "T3K_Qwen2.5-72B": 13, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
                 "T3K_Qwen2.5-Coder-32B": 21,
-                "T3K_Qwen3-32B": 20,
+                # "T3K_Qwen3-32B": 20, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
             }
 
             # Only call verify_perf if the model_device_key exists in the targets
