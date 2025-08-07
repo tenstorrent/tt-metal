@@ -298,18 +298,19 @@ class Transformer(LightweightModule):
         )
 
     def _update_decode_inputs_device(self, current_pos, rot_mat_idxs):
+        current_pos_tiled = ttnn.to_layout(current_pos, layout=ttnn.TILE_LAYOUT)
         # Update only active positions (current_pos != -1)
-        predicate = ttnn.to_layout(ttnn.ne(current_pos, -1), layout=ttnn.TILE_LAYOUT)
+        predicate = ttnn.ne(current_pos_tiled, -1)
         result = ttnn.where(
             predicate,
-            ttnn.add(current_pos, 1),
-            current_pos,
+            ttnn.add(current_pos_tiled, 1),
+            current_pos_tiled,
         )
         ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), current_pos)
 
         # We need to cast to int32 to avoid issues with cast from float to uint32
         rot_mat_idxs_signed = ttnn.typecast(ttnn.to_layout(rot_mat_idxs, layout=ttnn.TILE_LAYOUT), ttnn.int32)
-        # Update only active positions (current_pos != 0)
+        # Update only active positions (rot_mat_idxs_signed != 0)
         predicate = ttnn.nez(rot_mat_idxs_signed)
         result = ttnn.where(
             predicate,
