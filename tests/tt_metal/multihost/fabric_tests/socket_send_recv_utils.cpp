@@ -107,7 +107,6 @@ bool test_socket_send_recv(
 
     for (int i = 0; i < num_txns; i++) {
         if (distributed_context->rank() == sender_rank) {
-            // TODO: Change to CoreRangeSet to all senders
             auto sender_data_shard_params = ShardSpecBuffer(
                 sender_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sender_core_range_set.num_cores(), 1});
 
