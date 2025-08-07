@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from ...layers.normalization import DistributedLayerNorm
-from ...layers.linear import ColParallelLinear
+from ...layers.normalization import DistributedLayerNorm, LayerNorm
+from ...layers.linear import ColParallelLinear, Linear
 from ...layers.feedforward import ParallelFeedForward
+from ...layers.embeddings import SD35CombinedTimestepTextProjEmbeddings, PatchEmbed
 from ...utils.substate import substate
 from .attention_sd35 import SD35JointAttention
 
@@ -326,3 +327,135 @@ class SD35TransformerBlock:
 def chunk_time(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, :, i * size : (i + 1) * size] for i in range(count)]
+
+
+class SD35Transformer2DModel:
+    def __init__(
+        self,
+        sample_size=128,
+        patch_size=2,
+        in_channels=16,
+        num_layers=18,
+        attention_head_dim=64,
+        num_attention_heads=18,
+        joint_attention_dim=4096,
+        caption_projection_dim=1152,
+        pooled_projection_dim=2048,
+        out_channels=16,
+        pos_embed_max_size=96,
+        dual_attention_layers=(),
+        mesh_device=None,
+        ccl_manager=None,
+        parallel_config=None,
+        init=False,
+    ):
+        self.sample_size = sample_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.num_layers = num_layers
+        self.attention_head_dim = attention_head_dim
+        self.num_attention_heads = num_attention_heads
+        self.joint_attention_dim = joint_attention_dim
+        self.caption_projection_dim = caption_projection_dim
+        self.pooled_projection_dim = pooled_projection_dim
+        self.out_channels = out_channels
+        self.pos_embed_max_size = pos_embed_max_size
+        self.dual_attention_layers = dual_attention_layers
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+
+        self.out_channels = out_channels if out_channels is not None else in_channels
+        self.inner_dim = num_attention_heads * attention_head_dim
+
+        # Components
+        self.pos_embed = PatchEmbed(
+            height=sample_size,
+            width=sample_size,
+            patch_size=patch_size,
+            in_channels=in_channels,
+            embed_dim=self.inner_dim,
+            pos_embed_max_size=pos_embed_max_size,
+            mesh_device=mesh_device,
+            tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            sp_mesh_axis=parallel_config.sequence_parallel.mesh_axis,
+            init=init,
+        )
+
+        self.time_text_embed = SD35CombinedTimestepTextProjEmbeddings(
+            embedding_dim=self.inner_dim,
+            pooled_projection_dim=pooled_projection_dim,
+            mesh_device=mesh_device,
+            init=init,
+        )
+
+        self.context_embedder = ColParallelLinear(
+            joint_attention_dim,
+            caption_projection_dim,
+            bias=True,
+            mesh_device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            init=init,
+        )
+
+        # Transformer blocks
+        self.transformer_blocks = []
+        for i in range(num_layers):
+            block = SD35TransformerBlock(
+                dim=self.inner_dim,
+                num_heads=num_attention_heads,
+                head_dim=attention_head_dim,
+                context_pre_only=i == num_layers - 1,
+                use_dual_attention=i in dual_attention_layers,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                init=init,
+            )
+            self.transformer_blocks.append(block)
+
+        # Output normalization and projection
+        self.norm_out_linear = Linear(self.inner_dim, 2 * self.inner_dim, mesh_device=mesh_device, init=init)
+        self.norm_out_norm = LayerNorm(
+            self.inner_dim, norm_elementwise_affine=False, norm_eps=1e-6, mesh_device=mesh_device, init=init
+        )
+        self.proj_out = Linear(
+            self.inner_dim, patch_size * patch_size * self.out_channels, mesh_device=mesh_device, init=init
+        )
+
+    def load_state_dict(self, state_dict):
+        self.pos_embed.load_state_dict(substate(state_dict, "pos_embed"))
+        self.time_text_embed.load_state_dict(substate(state_dict, "time_text_embed"))
+        self.context_embedder.load_state_dict(substate(state_dict, "context_embedder"))
+
+        for i, block in enumerate(self.transformer_blocks):
+            block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
+
+        self.norm_out_linear.load_state_dict(substate(state_dict, "norm_out.linear"))
+        self.norm_out_norm.load_state_dict(substate(state_dict, "norm_out.norm"))
+        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+
+    def __call__(self, spatial, prompt_embed, pooled_projections, timestep, N, L):
+        """
+        Args:
+            spatial: Input spatial tensor (latents) - fractured dim 2 along sp_axis
+            prompt_embed: Text prompt embeddings - replicated
+            pooled_projections: Pooled text projections - replicated
+            timestep: Timestep tensor - replicated
+        """
+        spatial = self.pos_embed(spatial)
+
+        time_embed = self.time_text_embed(timestep, pooled_projections)
+        prompt_embed = self.context_embedder(prompt_embed)
+
+        # Pass through transformer blocks
+        for block in self.transformer_blocks:
+            spatial, prompt_embed = block(spatial, prompt_embed, time_embed, N, L)
+
+        # Final normalization and projection
+        spatial_time = self.norm_out_linear(ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        scale, shift = chunk_time(spatial_time, 2)
+
+        spatial = self.norm_out_norm(spatial) * (1 + scale) + shift
+
+        return self.proj_out(spatial)
