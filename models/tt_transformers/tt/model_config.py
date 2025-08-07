@@ -1608,24 +1608,42 @@ class ModelArgs:
     def _set_vision_params(self, config):
         vision_config = config.get("vision_config", config)
 
-        self.vision_chunk_size = vision_config.get("vision_chunk_size", -1)
-        self.image_size = vision_config.get("image_size", 896)
-        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", -1)
-        self.vision_dim = vision_config.get("hidden_size", 1280)
+        if "Qwen2.5-VL" in self.base_model_name:
+            self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
+            self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
+            self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 8)
+            self.vision_dim = vision_config.get("hidden_size", 1152)
+        else:
+            self.vision_chunk_size = vision_config.get("vision_chunk_size", -1)
+            self.image_size = vision_config.get("image_size", 896)
+            self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
+            self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", -1)
+            self.vision_dim = vision_config.get("hidden_size", 1280)
 
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
         self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
+        self.vision_attn_n_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
-        self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
+        if "Qwen2.5-VL" in self.base_model_name:
+            self.vision_n_layers = vision_config.get("num_hidden_layers") or vision_config.get("depth") or 27
+        else:
+            self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
+
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
         self.vision_dropout = vision_config.get("attention_dropout", 0.0)
         self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", 256)
+
+        # Qwen2.5 VL specific params
+        if "Qwen2.5-VL" in self.base_model_name:
+            self.spatial_merge_size = vision_config.get("spatial_merge_size")
+            self.window_size = vision_config.get("window_size")
+            self.fullatt_block_indexes = vision_config.get("fullatt_block_indexes")
+            self.out_hidden_size = vision_config.get("out_hidden_size")
+            self.temporal_patch_size = vision_config.get("temporal_patch_size")
 
         # Optional vision activation layer, defaults to GELU
         act_layer = vision_config.get("act_layer", "gelu").lower()
@@ -1640,6 +1658,18 @@ class ModelArgs:
         self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
 
     def _set_hf_params(self, checkpoint_dir):
+        def merge_text_config(base_config):
+            text_config = base_config.get("text_config", {})
+            # Merge non-nested keys into text_config
+            text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return text_config
+
+        def merge_vision_config(base_config):
+            vision_config = base_config.get("vision_config", {})
+            # Merge non-nested keys into vision_config
+            vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return vision_config
+
         if self.from_hf_url:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
@@ -1655,12 +1685,25 @@ class ModelArgs:
             else:
                 self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
             config = self.hf_config.to_dict()
+            if "text_config" in config or "vision_config" in config:
+                merged_text_config = merge_text_config(config)
+                self._set_params_from_dict(merged_text_config, is_hf=True)
+
+                if "Qwen2.5-VL" in self.base_model_name:
+                    self._set_vision_params(config["vision_config"])
+                else:
+                    if "vision_config" in config:
+                        merged_vision_config = merge_vision_config(config)
+                        self._set_vision_params(merged_vision_config)
+            else:
+                self._set_params_from_dict(config, is_hf=True)
+
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config, is_hf=True)
+            self._set_params_from_dict(config)
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -2322,7 +2365,10 @@ class ModelArgs:
                     from transformers import Gemma3ForConditionalGeneration
 
                     model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-                    model = model
+                if "Qwen2.5-VL" in self.model_name:
+                    from transformers import Qwen2_5_VLForConditionalGeneration
+
+                    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(self.CKPT_DIR)
                 else:
                     if self.cached_hf_model is None:
                         model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
@@ -2348,11 +2394,24 @@ class ModelArgs:
         layer = model.vision_tower.vision_model
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+
+        return layer
+
+    def reference_vision_block(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.visual.blocks[0]
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+
         return layer
 
     def reference_vision_mlp(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].mlp
+
+        if "Qwen2.5-VL" in self.model_name:
+            layer = model.visual.blocks[0].mlp
+        else:
+            layer = model.vision_tower.vision_model.encoder.layers[0].mlp
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -2388,13 +2447,18 @@ class ModelArgs:
             layer = model.vision_tower.vision_model.post_layernorm
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+
         return layer
 
     def reference_vision_attention(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
+        if "Qwen2.5-VL" in self.model_name:
+            layer = model.visual.blocks[0].attn
+        else:
+            layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+
         return layer
 
     def reference_vision_encoder_block(self):
@@ -2402,13 +2466,39 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.encoder.layers[0]
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+
+        return layer
+
+    def reference_vision_rms_norm(self):
+        model = self.reference_vision_transformer(wrap=False)
+        if "Qwen2.5-VL" in self.model_name:
+            layer = model.visual.blocks[0].norm1
         return layer
 
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        if "Qwen2.5-VL" in self.model_name:
+            layer = model.visual.blocks
+        else:
+            layer = model.vision_tower.vision_model.encoder
+
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+
+        return layer
+
+    def reference_vision_qwen_merger(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.visual.merger
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_qwen_patch_embed(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.visual.patch_embed
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_mlp(self):
