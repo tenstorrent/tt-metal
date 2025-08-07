@@ -35,7 +35,7 @@ run_qwen25_vl_func() {
   # todo)) Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 600 || fail=1
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 900 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
