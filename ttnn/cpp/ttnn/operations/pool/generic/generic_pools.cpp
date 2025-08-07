@@ -67,6 +67,7 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
         .dilation_hw = {dilation_h, dilation_w},
         .ceil_mode = ceil_mode,
+        .return_indices = return_indices,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto output_shape = sliding_window_config.get_output_shape();
@@ -165,11 +166,12 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         .core_range_set = parallel_config.grid,
         .snap_to_tile = false,
         .ceil_mode = ceil_mode,
+        .return_indices = return_indices,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
 
     // Call the halo uop
-    auto haloed_tensor = ttnn::halo(
+    Tensor haloed_tensor = ttnn::halo(
         queue_id,
         input_tensor_sharded,
         sliding_window_config,
@@ -183,7 +185,7 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
     const uint32_t pre_allocate_size =
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
-    auto output_tensor = ttnn::prim::pool2d(
+    std::vector<Tensor> output_tensors = ttnn::prim::pool2d(
         queue_id,
         haloed_tensor,
         sliding_window_config,
@@ -195,14 +197,20 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         pre_allocate_size);
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
-        output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
+        for (int i = 0; i < output_tensors.size(); i++) {
+            output_tensors[i] = ttnn::to_memory_config(output_tensors[i], memory_config.value(), std::nullopt);
+        }
     }
 
-    if (return_indices && pool_type == Pool2DType::MAX_POOL2D) {
-        // For now, return the same tensor for both values and indices
-        return std::make_pair(output_tensor, output_tensor);
+    if (return_indices) {
+        TT_FATAL(
+            output_tensors.size() == 2,
+            "Expected two output tensors when return_indices is true, but got {}.",
+            output_tensors.size());
+        return std::make_pair(output_tensors[0], output_tensors[1]);
     } else {
-        return output_tensor;
+        TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
+        return output_tensors[0];
     }
 }
 

@@ -99,6 +99,7 @@ uint32_t calculate_L1_usage(
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
+    bool return_indices,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t out_h,
