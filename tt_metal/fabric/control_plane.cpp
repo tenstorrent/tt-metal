@@ -1219,7 +1219,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         this->local_mesh_binding_.host_rank,
         src_fabric_node_id.mesh_id);
 
-    std::vector<std::pair<FabricNodeId, chan_id_t>> route{{src_fabric_node_id, src_chan_id}};
+    std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     int i = 0;
     while (src_fabric_node_id != dst_fabric_node_id) {
         i++;
@@ -1273,6 +1273,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
                     "ControlPlane: src_fabric_node_id {} not found in candidate_end_nodes",
                     src_fabric_node_id);
             }
+            route.push_back({src_fabric_node_id, src_chan_id});
             break;
         }
     }
