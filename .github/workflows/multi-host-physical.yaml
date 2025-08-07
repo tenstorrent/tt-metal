@@ -43,7 +43,7 @@ jobs:
         env:
           CONTAINER_HOME: "/home/ansible"
         with:
-          docker_image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:c2417bb0778b77d3092bd2f4a4c4269123d25b05
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
@@ -51,22 +51,18 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v ${{ github.workspace }}:${{ github.workspace }}
-            -v /dev/hugepages-1G:/dev/hugepages-1G
             -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            -v ${{ steps.capture-home.outputs.home }}:${{ steps.capture-home.outputs.home }}:ro
             --device /dev/tenstorrent
             --privileged
             --pid=host
           install_wheel: true
           run_args: |
-            sleep 10s
-            unset PYTHON_ENV_DIR
-            echo "Running mpirun command on multiple hosts"
-            cd "${{ github.workspace }}"
-            ./create_venv.sh
-            source ./python_env/bin/activate
-            apt update && sudo apt install -y openmpi-bin libopenmpi-devopenmpi-common
+            # unset PYTHON_ENV_DIR
+            # echo "Running mpirun command on multiple hosts"
+            # cd "${{ github.workspace }}"
+            # ./create_venv.sh
+            # source ./python_env/bin/activate
             # mpirun --allow-run-as-root --hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output hostname
             # mpirun --allow-run-as-root --hostfile /etc/mpirun/hostfile --mca btl_base_warn_component_unused 0 --mca btl tcp,self  --mca btl_tcp_if_include cnx1 --mca oob_tcp_if_include cnx1  --tag-output bash -c "export TT_MESH_ID=0; export TT_HOST_RANK=0; export LD_LIBRARY_PATH=${{ github.workspace }}/build/lib; export TT_METAL_HOME=${{ github.workspace }}; export PYTHONPATH=${{ github.workspace }}; export ARCH_NAME=wormhole_b0; ${{ github.workspace }}/build/test/tt_metal/multi_host_fabric_tests"
             tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
