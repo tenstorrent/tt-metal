@@ -246,6 +246,7 @@ struct ConvDRAMParamters {
 uint32_t estimate_halo_output_bytes(
     std::array<uint32_t, 2> halo_input_shard_shape,
     uint32_t batch_size,
+    uint32_t input_height,
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> dilation,
