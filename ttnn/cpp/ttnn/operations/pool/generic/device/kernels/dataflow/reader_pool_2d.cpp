@@ -112,9 +112,7 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 } else {
                     in_l1_write_addr += max_write_inc;
                 }
-
                 processed_sticks++;
-
                 if constexpr (is_large_kernel) {
                     if ((processed_sticks % max_sticks_for_reduction) == 0 ||
                         processed_sticks == total_elems_to_reduce) {

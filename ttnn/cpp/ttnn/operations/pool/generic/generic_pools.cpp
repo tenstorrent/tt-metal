@@ -145,7 +145,6 @@ static Tensor pool2d_invoke(
             input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_sharded, sharded_mem_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
-
     } else {
         TT_FATAL(
             !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
@@ -179,7 +178,6 @@ static Tensor pool2d_invoke(
         output_nhw_padded,
         output_shard_height_padded,
         output_shard_width_padded);
-
     out_memory_config = out_memory_config.with_shard_spec(tt::tt_metal::ShardSpec{
         shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR});
     sliding_window_config = sliding_window::SlidingWindowConfig{
