@@ -159,15 +159,6 @@ public:
     virtual std::string target_name(const Params& params) const = 0;
 };
 
-// Wormhole and Blackhole share many common build options.
-// This class has the options shared between the two to avoid duplication.
-class HalJitBuildQueryWormholeBase : public HalJitBuildQueryInterface {
-public:
-    std::vector<std::string> defines(const Params& params) const override;
-    std::vector<std::string> srcs(const Params& params) const override;
-    std::string target_name(const Params& params) const override;
-};
-
 class Hal {
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;

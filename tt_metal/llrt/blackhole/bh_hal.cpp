@@ -19,6 +19,7 @@
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
+#include "hal_1xx_common.hpp"
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -55,7 +56,7 @@ namespace tt {
 
 namespace tt_metal {
 
-class HalJitBuildQueryBlackHole : public HalJitBuildQueryWormholeBase {
+class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
@@ -109,13 +110,13 @@ public:
     }
 
     std::vector<std::string> defines(const Params& params) const override {
-        auto defines = HalJitBuildQueryWormholeBase::defines(params);
+        auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_BLACKHOLE");
         return defines;
     }
 
     std::vector<std::string> srcs(const Params& params) const override {
-        auto srcs = HalJitBuildQueryWormholeBase::srcs(params);
+        auto srcs = HalJitBuildQueryBase::srcs(params);
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             if (params.is_fw) {
                 srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
@@ -183,7 +184,7 @@ public:
             // This is no longer necessary, but only to keep the target names unchanged.
             return "active_erisc";
         }
-        return HalJitBuildQueryWormholeBase::target_name(params);
+        return HalJitBuildQueryBase::target_name(params);
     }
 };
 
