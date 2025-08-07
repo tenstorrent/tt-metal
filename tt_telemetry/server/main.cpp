@@ -24,8 +24,6 @@
 
 #include <boost/functional/hash.hpp>
 
-#include <httplib.h>
-
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
@@ -38,209 +36,9 @@
 #include <telemetry/ethernet_link.hpp>
 #include <telemetry/ethernet_helpers.hpp>
 #include <telemetry/print_helpers.hpp>
-
+#include <server/web_server.hpp>
 #include <server/json_messages.hpp>
 
-
-/**************************************************************************************************
- Web Server
-**************************************************************************************************/
-
-using json = nlohmann::json;
-class TelemetryServer {
-private:
-    httplib::Server server;
-    std::vector<httplib::DataSink*> sse_clients;
-    std::mutex clients_mutex;
-    std::thread telemetry_thread;
-    std::atomic<bool> running{false};
-
-    // Mock telemetry data generator
-    json generate_telemetry_data() {
-        static std::random_device rd;
-        static std::mt19937 gen(rd());
-        static std::uniform_real_distribution<> cpu_dist(0.0, 100.0);
-        static std::uniform_real_distribution<> mem_dist(40.0, 90.0);
-        static std::uniform_real_distribution<> temp_dist(30.0, 80.0);
-
-        auto now = std::chrono::system_clock::now();
-        auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()).count();
-
-        return json{
-            {"timestamp", timestamp},
-            {"cpu_usage", cpu_dist(gen)},
-            {"memory_usage", mem_dist(gen)},
-            {"temperature", temp_dist(gen)},
-            {"network_rx", static_cast<int>(cpu_dist(gen) * 1000)},
-            {"network_tx", static_cast<int>(cpu_dist(gen) * 800)}
-        };
-    }
-
-    void broadcast_telemetry() {
-        while (running) {
-            auto data = generate_telemetry_data();
-            std::string message = "data: " + data.dump() + "\n\n";
-
-            std::lock_guard<std::mutex> lock(clients_mutex);
-            auto it = sse_clients.begin();
-            while (it != sse_clients.end()) {
-                if (!(*it)->write(message.c_str(), message.size())) {
-                    // Client disconnected
-                    it = sse_clients.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-    }
-
-    std::string read_file(const std::string& path) {
-        std::ifstream file(path);
-        if (!file.is_open()) {
-            return "";
-        }
-        std::stringstream buffer;
-        buffer << file.rdbuf();
-        return buffer.str();
-    }
-
-public:
-    void setup_routes() {
-        // Enable CORS for all routes
-        server.set_pre_routing_handler([](const httplib::Request&, httplib::Response& res) {
-            res.set_header("Access-Control-Allow-Origin", "*");
-            res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            res.set_header("Access-Control-Allow-Headers", "Content-Type");
-            return httplib::Server::HandlerResponse::Unhandled;
-        });
-
-        // Serve static files (React app)
-        server.Get("/", [this](const httplib::Request&, httplib::Response& res) {
-            std::string content = read_file("tt_telemetry/frontend/static/index.html");
-            if (content.empty()) {
-                res.set_content("<html><body><h1>Telemetry Server Running</h1><p>Place your React build in /static directory</p></body></html>", "text/html");
-            } else {
-                res.set_content(content, "text/html");
-            }
-        });
-
-        // Serve static assets
-        server.Get(R"(/static/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
-            std::string filename = req.matches[1];
-            std::string content = read_file("tt_telemetry/frontend/static/" + filename);
-            if (!content.empty()) {
-                // Set appropriate content type
-                if (filename.ends_with(".html") || filename.ends_with(".htm")) {
-                    res.set_content(content, "text/html");
-                } else if (filename.ends_with(".js")) {
-                    res.set_content(content, "application/javascript");
-                } else if (filename.ends_with(".css")) {
-                    res.set_content(content, "text/css");
-                } else if (filename.ends_with(".json")) {
-                    res.set_content(content, "application/json");
-                } else {
-                    res.set_content(content, "application/octet-stream");
-                }
-            } else {
-                res.status = 404;
-            }
-        });
-
-        // REST API - Get current system status
-        server.Get("/api/status", [this](const httplib::Request&, httplib::Response& res) {
-            json response = {
-                {"server_status", "running"},
-                {"active_connections", sse_clients.size()},
-                {"uptime_seconds", 12345}, // Mock uptime
-                {"version", "1.0.0"}
-            };
-            res.set_content(response.dump(), "application/json");
-        });
-
-        // REST API - Get latest telemetry snapshot
-        server.Get("/api/telemetry", [this](const httplib::Request&, httplib::Response& res) {
-            auto data = generate_telemetry_data();
-            res.set_content(data.dump(), "application/json");
-        });
-
-        // Server-Sent Events endpoint for real-time telemetry
-        server.Get("/api/stream", [this](const httplib::Request&, httplib::Response& res) {
-            res.set_header("Content-Type", "text/event-stream");
-            res.set_header("Cache-Control", "no-cache");
-            res.set_header("Connection", "keep-alive");
-
-            res.set_content_provider(
-                "text/event-stream",
-                [this](size_t /*offset*/, httplib::DataSink& sink) {
-                    {
-                        std::lock_guard<std::mutex> lock(clients_mutex);
-                        sse_clients.push_back(&sink);
-                    }
-
-                    // Send initial data
-                    auto initial_data = generate_telemetry_data();
-                    std::string initial_message = "data: " + initial_data.dump() + "\n\n";
-                    sink.write(initial_message.c_str(), initial_message.size());
-
-                    // Keep connection alive - the broadcast_telemetry thread will send updates
-                    // We'll rely on the write operations to detect disconnection
-                    while (running) {
-                        std::this_thread::sleep_for(std::chrono::seconds(1));
-                        // The broadcast_telemetry thread handles actual data sending
-                        // If client disconnects, write() will fail and remove the client
-                    }
-
-                    // Remove client when connection ends
-                    {
-                        std::lock_guard<std::mutex> lock(clients_mutex);
-                        sse_clients.erase(
-                            std::remove(sse_clients.begin(), sse_clients.end(), &sink),
-                            sse_clients.end());
-                    }
-
-                    return true;
-                }
-            );
-        });
-
-        // Handle OPTIONS requests for CORS
-        server.Options(".*", [](const httplib::Request&, httplib::Response&) {
-            return;
-        });
-    }
-
-    void start() {
-        setup_routes();
-
-        // Start telemetry broadcasting thread
-        running = true;
-        telemetry_thread = std::thread(&TelemetryServer::broadcast_telemetry, this);
-
-        std::cout << "Starting telemetry server on port 8080..." << std::endl;
-        std::cout << "API endpoints:" << std::endl;
-        std::cout << "  GET  /                - Web UI" << std::endl;
-        std::cout << "  GET  /api/status      - Server status" << std::endl;
-        std::cout << "  GET  /api/telemetry   - Current telemetry" << std::endl;
-        std::cout << "  GET  /api/stream      - Real-time stream (SSE)" << std::endl;
-
-        server.listen("0.0.0.0", 5555);
-    }
-
-    void stop() {
-        running = false;
-        server.stop();
-        if (telemetry_thread.joinable()) {
-            telemetry_thread.join();
-        }
-    }
-
-    ~TelemetryServer() {
-        stop();
-    }
-};
 
 /**************************************************************************************************
  Main
@@ -310,14 +108,7 @@ int main() {
     std::cout << "json: " << j << std::endl;
 
     // Web server
-    TelemetryServer server;
-    
-    try {
-        server.start();
-    } catch (const std::exception& e) {
-        std::cerr << "Server error: " << e.what() << std::endl;
-        return 1;
-    }
+    run_web_server();
 
     return 0;
 }
