@@ -85,15 +85,36 @@ void GroupNorm::validate(
     // internally tilizing RM into tilized inputs) Valid only if sharded program is used, and input and output tensors
     // are in row major layout.
     if (negative_mask.has_value()) {
-        TT_FATAL(negative_mask.value().layout() == Layout::TILE, "Error");
-        TT_FATAL(negative_mask.value().padded_shape()[1] == this->num_groups, "Error");
-        TT_FATAL(negative_mask.value().padded_shape()[2] == TILE_HEIGHT, "Error");
-        TT_FATAL(negative_mask.value().padded_shape()[3] % TILE_WIDTH == 0, "Error");
-        TT_FATAL(a.is_sharded(), "Error");
-        TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Error");
+        TT_FATAL(
+            negative_mask.value().layout() == Layout::TILE,
+            "Negative musk must be in TILE layout, but layout is {}",
+            negative_mask.value().layout());
+        TT_FATAL(
+            negative_mask.value().padded_shape()[1] == this->num_groups,
+            "Negative mask padded shape[1] must be equal to num_groups, but is {} and num_groups is {}",
+            negative_mask.value().padded_shape()[1],
+            this->num_groups);
+        TT_FATAL(
+            negative_mask.value().padded_shape()[2] == TILE_HEIGHT,
+            "Negative mask padded shape[2] must be equal to TILE_HEIGHT, but is {} and TILE_HEIGHT is {}",
+            negative_mask.value().padded_shape()[2],
+            TILE_HEIGHT);
+        TT_FATAL(
+            negative_mask.value().padded_shape()[3] % TILE_WIDTH == 0,
+            "Negative mask padded shape[3] must be divisible by TILE_WIDTH, but is {} and TILE_WIDTH is {}",
+            negative_mask.value().padded_shape()[3],
+            TILE_WIDTH);
+        TT_FATAL(a.is_sharded(), "Negative mask support is only available for sharded input tensors.");
+        TT_FATAL(
+            a.layout() == Layout::ROW_MAJOR,
+            "If using negative mask, input tensor must be in ROW_MAJOR layout, but layout is {}",
+            a.layout());
         Layout output_layout =
             std::visit([](const auto& config) -> Layout { return config.output_layout; }, this->program_config);
-        TT_FATAL(output_layout == Layout::ROW_MAJOR, "Error");
+        TT_FATAL(
+            output_layout == Layout::ROW_MAJOR,
+            "If using negative mask, output tensor must be in ROW_MAJOR layout, but layout is {}",
+            output_layout);
     }
 }
 std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

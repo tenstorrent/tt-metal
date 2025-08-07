@@ -146,6 +146,8 @@ def run_unet_model(
     ttnn.deallocate(ttnn_output_tensor)
     ttnn.deallocate(ttnn_timestep_tensor)
     ttnn.deallocate(ttnn_encoder_tensor)
+    ttnn.deallocate(ttnn_added_cond_kwargs["text_embeds"])
+    ttnn.deallocate(ttnn_added_cond_kwargs["time_ids"])
 
     ttnn.ReadDeviceProfiler(device)
 
@@ -174,6 +176,8 @@ def run_unet_model(
         ttnn.deallocate(ttnn_output_tensor)
         ttnn.deallocate(ttnn_timestep_tensor)
         ttnn.deallocate(ttnn_encoder_tensor)
+        ttnn.deallocate(ttnn_added_cond_kwargs["text_embeds"])
+        ttnn.deallocate(ttnn_added_cond_kwargs["time_ids"])
 
         ttnn.ReadDeviceProfiler(device)
 
