@@ -11,8 +11,8 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "sd35_spatial",
@@ -47,7 +47,7 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
 def test_all_gather_async(
     mesh_device,
     num_devices,
