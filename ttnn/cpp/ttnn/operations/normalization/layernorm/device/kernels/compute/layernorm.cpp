@@ -17,6 +17,8 @@
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "dprint_tensix.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -56,7 +58,7 @@ void MAIN {
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
-    constexpr int onetile = 1;
+    // constexpr int onetile = 1;
     constexpr int dst0 = 0;  // Input tile to Welford's algorithm
     constexpr int dst1 = 1;  // Partial E[x] result
     constexpr int dst2 = 2;  // Partial Var[x] result
@@ -133,23 +135,30 @@ void MAIN {
         /*
          * Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
          */
+        DPRINT << "W_START" << ENDL();
         ACQ();
         cb_reserve_back(cb_ex, onetile);
-        welford_init();
         uint32_t start_N = 1;
         // Welford's needs transposed input tile
-        constexpr uint32_t tranpose = 1;
-        copy_tile_to_dst_init_short(cb_x, transpose);
+        init_sfpu(cb_x, cb_ex);
+        constexpr uint32_t transpose = 1;
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // TODO RM: Do we need wt + blk tiles still
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
+                copy_tile_to_dst_init_short(cb_x, transpose);
                 copy_tile(cb_x, j, dst0);
+                welford_init();
+                dprint_tensix_dest_reg(0);  // "0" indicates tile idx of Dest to print
                 welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
                 start_N += tile_width;
             }
             // we don't pop cb_x until we compute Ex
         }
+        // read dest reg
+        dprint_tensix_dest_reg(dst1);  // "0" indicates tile idx of Dest to print
+        // read dest reg
+        dprint_tensix_dest_reg(dst2);  // "0" indicates tile idx of Dest to print
         pack_tile(dst1, cb_ex);
         pack_tile(dst2, cb_ex2);
         REL();
@@ -157,6 +166,7 @@ void MAIN {
         cb_push_back(cb_ex, 1);
         cb_push_back(cb_ex2, 1);
 
+        DPRINT << "W_END" << ENDL();
         /*
          * x - E[x]
          * compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
