@@ -206,7 +206,10 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
             # Deserialize a test vector (dictionary) back into original object form
-            test_vector = deserialize_vector(test_vector)
+            if config.result_destination == "postgres" or config.result_destination == "results_export":
+                test_vector = deserialize_vector_for_postgres(test_vector)
+            else:  # DATABASE_BACKEND == "elastic"
+                test_vector = deserialize(test_vector)
             try:
                 results = test_module.run(**test_vector, device=device)
                 if type(results) == list:
@@ -250,7 +253,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
         vector_id = header_info[i].get("vector_id", "N/A")
         logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Vector ID='{vector_id}'")
         if config.dry_run:
-            print(f"Would have executed test for vector {test_vector}")
+            logger.info(f"Would have executed test for vector {test_vector}")
             suite_pbar.update()
             continue
         result = dict()
