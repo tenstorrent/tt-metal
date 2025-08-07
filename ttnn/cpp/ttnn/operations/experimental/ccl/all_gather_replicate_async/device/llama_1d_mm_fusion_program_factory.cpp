@@ -1641,19 +1641,12 @@ process_gather_in0_program_and_create_override_variables(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
-    log_info(tt::LogOp, "LLONG FUSION: process_gather_in0_program_and_create_override_variables");
     const auto& b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
     const bool in1_is_dram_interleaved = in1_buffer->is_dram() && !b.is_sharded();
     const bool in1_is_dram_sharded =
         in1_buffer->is_dram() && b.is_sharded() && !global_cb.has_value();  // read from DRAM directly
-
-    log_info(tt::LogOp, "LLONG FUSION: in0_block_w: {}", in0_block_w);
-    log_info(tt::LogOp, "LLONG FUSION: out_subblock_h: {}", out_subblock_h);
-    log_info(tt::LogOp, "LLONG FUSION: out_subblock_w: {}", out_subblock_w);
-    log_info(tt::LogOp, "LLONG FUSION: per_core_M: {}", per_core_M);
-    log_info(tt::LogOp, "LLONG FUSION: per_core_N: {}", per_core_N);
 
     /* Core setup */
     constexpr bool row_major = true;
@@ -1684,37 +1677,9 @@ process_gather_in0_program_and_create_override_variables(
     const uint32_t ring_size =
         fused_op_signaler->ring_size;  // use ccl ring size instead of num_cores = local core ring size for fused op
     const uint32_t ring_index = fused_op_signaler->start_ring_index;
-    log_info(tt::LogOp, "LLONG FUSION: ring_index: {}", ring_index);
-
-    for (uint32_t idx = 0; idx < ring_size; idx++) {
-        log_info(
-            tt::LogOp,
-            "LLONG FUSION: fused_op_receiver_signal_semaphores[{}]: {}",
-            idx,
-            fused_op_signaler->fused_op_receiver_signal_semaphores[idx]);
-    }
 
     uint32_t num_hop_cores = hop_cores.num_cores();
     bool use_hop_cores = num_hop_cores > 0;
-
-    log_info(
-        tt::LogOp,
-        "LLONG FUSION: num_cores: {}, ring_size: {}, num_hop_cores: {}, use_hop_cores: {}",
-        num_cores,
-        ring_size,
-        num_hop_cores,
-        use_hop_cores);
-    log_info(tt::LogOp, "LLONG FUSION: all_cores: {}", all_cores);
-    log_info(tt::LogOp, "LLONG FUSION: ring_cores: {}", ring_cores);
-    log_info(tt::LogOp, "LLONG FUSION: hop_cores: {}", hop_cores);
-    log_info(tt::LogOp, "LLONG FUSION: non_idle_cores: {}", non_idle_cores);
-    log_info(tt::LogOp, "LLONG FUSION: subdevice_cores: {}", subdevice_cores);
-    log_info(
-        tt::LogOp,
-        "LLONG FUSION: restricted_cores: {}",
-        restricted_cores.has_value() ? restricted_cores.value() : CoreRangeSet());
-    log_info(tt::LogOp, "LLONG FUSION: in0_buffer: {}", in0_buffer->address());
-    log_info(tt::LogOp, "LLONG FUSION: in1_buffer: {}", in1_buffer->address());
 
     /* Inner dim - no padding needed for multicast approach */
     const uint32_t Kt_total = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
@@ -1722,9 +1687,6 @@ process_gather_in0_program_and_create_override_variables(
     in0_block_w = Kt_total / num_multicast_steps;  // Each step sends 1/4 of K dimension
 
     uint32_t num_blocks = num_multicast_steps;  // Always 4 blocks now
-    log_info(tt::LogOp, "LLONG FUSION: Kt_total: {}", Kt_total);
-    log_info(tt::LogOp, "LLONG FUSION: in0_block_w: {}", in0_block_w);
-    log_info(tt::LogOp, "LLONG FUSION: num_blocks: {}", num_blocks);
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
@@ -1746,12 +1708,6 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in0_CB_tiles =
         per_core_M * multicast_chunk_width_in_tiles * num_multicast_steps;  // Buffer for all 4 chunk
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
-    log_info(
-        tt::LogOp,
-        "LLONG FUSION: multicast_chunk_width_in_tiles: {}, in0_CB_tiles: {}, in0_CB_size: {}",
-        multicast_chunk_width_in_tiles,
-        in0_CB_tiles,
-        in0_CB_size);
 
     /* in1 */
     uint32_t in1_shard_height_in_tiles = 0;
@@ -1766,10 +1722,6 @@ process_gather_in0_program_and_create_override_variables(
         in1_shard_width_in_tiles =
             in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
         in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
-        log_info(tt::LogOp, "LLONG FUSION: num_global_cb_receivers: {}", num_global_cb_receivers);
-        log_info(tt::LogOp, "LLONG FUSION: in1_shard_height_in_tiles: {}", in1_shard_height_in_tiles);
-        log_info(tt::LogOp, "LLONG FUSION: in1_shard_width_in_tiles: {}", in1_shard_width_in_tiles);
-        log_info(tt::LogOp, "LLONG FUSION: in1_CB_tiles: {}", in1_CB_tiles);
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -1789,8 +1741,6 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in2_single_tile_size = in0_single_tile_size;
     uint32_t in2_CB_tiles = 0;  // No additional buffer needed for multicast
     uint32_t in2_CB_size = 0;
-    log_info(
-        tt::LogOp, "LLONG FUSION: in2 not needed for multicast - CB2 tiles: {}, size: {}", in2_CB_tiles, in2_CB_size);
 
     /* out */
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -1803,7 +1753,6 @@ process_gather_in0_program_and_create_override_variables(
 
     /* semaphores */
     auto in0_signal_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    log_info(tt::LogOp, "LLONG FUSION: in0_signal_semaphore_id: {}", in0_signal_semaphore_id);
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -1824,7 +1773,6 @@ process_gather_in0_program_and_create_override_variables(
             .set_tile_dims(src0_cb_index, in0_tile)
             .set_globally_allocated_address(*in0_buffer);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
-    log_info(tt::LogOp, "LLONG FUSION: in0_CB_size: {}", in0_CB_size);
 
     uint32_t src1_cb_index = base_cb_index + 1;
     tt::tt_metal::CBHandle cb_src1;
@@ -1848,7 +1796,6 @@ process_gather_in0_program_and_create_override_variables(
         }
         cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
-    log_info(tt::LogOp, "LLONG FUSION: in1_CB_size: {}", in1_CB_size);
 
     uint32_t src2_cb_index = base_cb_index + 2;
     tt_metal::CircularBufferConfig src2_cb_config =
@@ -1856,7 +1803,6 @@ process_gather_in0_program_and_create_override_variables(
             .set_page_size(src2_cb_index, in2_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile);
     // auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
-    log_info(tt::LogOp, "LLONG FUSION: in2_CB_size: {}", in2_CB_size);
 
     uint32_t sync_cb_index = base_cb_index + 3;
     uint32_t sync_cb_size_bytes = 16;
@@ -1864,7 +1810,6 @@ process_gather_in0_program_and_create_override_variables(
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_size_bytes);
     auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
-    log_info(tt::LogOp, "LLONG FUSION: sync_cb_size_bytes: {}", sync_cb_size_bytes);
 
     uint32_t sync_cb2_index = base_cb_index + 4;
     uint32_t sync_cb2_size_bytes = 16;
@@ -1872,7 +1817,6 @@ process_gather_in0_program_and_create_override_variables(
         tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
     auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
-    log_info(tt::LogOp, "LLONG FUSION: sync_cb2_size_bytes: {}", sync_cb2_size_bytes);
 
     uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
     uint32_t interm0_cb_index = base_cb_index + 6;
@@ -1941,11 +1885,6 @@ process_gather_in0_program_and_create_override_variables(
                                    .set_tile_dims(interm0_cb_index, output_tile)
                                    .set_globally_allocated_address(*out_buffer);
             auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
-            log_info(
-                tt::LogOp,
-                "LLONG FUSION: output_cb_index: {}, interm0_cb_index: {}",
-                output_cb_index,
-                interm0_cb_index);
             cb_outputs.push_back(cb_output);
             output_cb_indices.push_back(output_cb_index);
             interm_cb_indices.push_back(interm0_cb_index);
@@ -1995,13 +1934,6 @@ process_gather_in0_program_and_create_override_variables(
     TT_FATAL(
         out_block_num_subblocks == 1 || !untilize_out,
         "untilize_out is not supported for cases that out_block_num_subblocks > 1");
-    log_info(tt::LogOp, "LLONG FUSION: in0_block_w: {}", in0_block_w);
-    log_info(tt::LogOp, "LLONG FUSION: in0_num_subblocks: {}", in0_num_subblocks);
-    log_info(tt::LogOp, "LLONG FUSION: in0_block_num_tiles: {}", in0_block_num_tiles);
-    log_info(tt::LogOp, "LLONG FUSION: in0_subblock_num_tiles: {}", in0_subblock_num_tiles);
-    log_info(tt::LogOp, "LLONG FUSION: in1_num_subblocks: {}", in1_num_subblocks);
-    log_info(tt::LogOp, "LLONG FUSION: in1_block_num_tiles: {}", in1_block_num_tiles);
-    log_info(tt::LogOp, "LLONG FUSION: in1_block_size_bytes: {}", in1_block_size_bytes);
     std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,             // in0_block_w (now 1/4 of K)
         in0_num_subblocks,       // in0_num_subblocks
@@ -2564,8 +2496,6 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         a.memory_config().nd_shard_spec()->shard_shape[-2],
         a.memory_config().nd_shard_spec()->shard_shape[-1]};  // one shard of aggregated tensor will be in0
     const auto& bshape = b.padded_shape();
-    log_info(tt::LogOp, "a shape: {}", ashape);
-    log_info(tt::LogOp, "b shape: {}", bshape);
     auto in0_tile = a.tensor_spec().tile();
     auto in1_tile = b.tensor_spec().tile();
     // cannot use the output tensor tile directly as that might be changed by user override

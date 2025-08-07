@@ -67,12 +67,6 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, intermediate_tensor, dim, ring_index);
     const uint32_t num_transfers = ring_size;
     const uint32_t weight_tensor_width = input_tensor_b.padded_shape()[3] / 32;
-    log_info(tt::LogOp, "LLONG FUSION: dim: {}", dim);
-    log_info(tt::LogOp, "LLONG FUSION: weight_tensor_width: {}", weight_tensor_width);
-    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.num_rows: {}", tensor_slicer.num_rows);
-    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.num_cols: {}", tensor_slicer.num_cols);
-    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.output_page_offset: {}", tensor_slicer.output_page_offset);
-    log_info(tt::LogOp, "LLONG FUSION: num_transfers: {}", num_transfers);
 
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
         ttnn::experimental::ccl::MatmulFusedOpSignaler(
@@ -131,20 +125,12 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     auto bbox_physical_end_core = mesh_device->worker_core_from_logical_core(bbox.end_coord);
 
     auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
-    log_info(tt::LogOp, "LLONG FUSION: aggregated_tensor_cores: {}", aggregated_tensor_cores);
-    log_info(tt::LogOp, "LLONG FUSION: bbox: {}", bbox);
-    log_info(tt::LogOp, "LLONG FUSION: output_tensor_cores: {}", output_tensor_cores);
-    log_info(
-        tt::LogOp, "sub_device_core_range_set: {}", corerange_to_cores(sub_device_core_range_set, std::nullopt, true));
-    log_info(tt::LogOp, "LLONG FUSION: ring_index: {}", ring_index);
     auto intermediate_tensor_cores = intermediate_tensor.memory_config().shard_spec()->grid;
     auto available_cores = sub_device_core_range_set.subtract(intermediate_tensor_cores);
     available_cores = available_cores.subtract(output_tensor_cores);
 
     const auto [sender_worker_core_range, sender_worker_cores] =
         ar_choose_worker_cores(num_links, num_workers_per_link, available_cores);
-    log_info(tt::LogOp, "LLONG FUSION: sender_worker_core_range: {}", sender_worker_core_range);
-    log_info(tt::LogOp, "LLONG FUSION: sender_worker_cores: {}", sender_worker_cores);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -155,15 +141,6 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     const auto intermediate_tensor_shard_num_pages =
         intermediate_tensor_shard_shape[0] * intermediate_tensor_shard_shape[1] / TILE_HW;
     const auto intermediate_tensor_page_size = intermediate_tensor.buffer()->page_size();
-
-    log_info(tt::LogOp, "LLONG FUSION: input_tensor_num_pages: {}", input_tensor_num_pages);
-    log_info(tt::LogOp, "LLONG FUSION: input_tensor_cores: {}", input_tensor_cores);
-    log_info(tt::LogOp, "LLONG FUSION: input_tensor_shard_shape: {}", input_tensor_shard_shape);
-    log_info(tt::LogOp, "LLONG FUSION: input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
-    log_info(tt::LogOp, "LLONG FUSION: intermediate_tensor_cores: {}", intermediate_tensor_cores);
-    log_info(tt::LogOp, "LLONG FUSION: intermediate_tensor_shard_shape: {}", intermediate_tensor_shard_shape);
-    log_info(tt::LogOp, "LLONG FUSION: intermediate_tensor_shard_num_pages: {}", intermediate_tensor_shard_num_pages);
-    log_info(tt::LogOp, "LLONG FUSION: intermediate_tensor_page_size: {}", intermediate_tensor_page_size);
 
     log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
@@ -318,7 +295,6 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
              next_core_to_left,
              next_core_to_right});
     }
-    log_info(tt::LogOp, "LLONG FUSION: cores_per_device: {}", cores_per_device);
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
 

@@ -399,10 +399,6 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     const auto& intermediate_tensor = input_tensors[2];
     auto intermediate_shape = intermediate_tensor.padded_shape();
     auto intermediate_shard_shape = intermediate_tensor.memory_config().shard_spec()->shape;
-    std::cout << "LLONG DEBUG: intermediate_shape: " << intermediate_shape[0] << " " << intermediate_shape[1] << " "
-              << intermediate_shape[2] << " " << intermediate_shape[3] << std::endl;
-    std::cout << "LLONG DEBUG: intermediate_shard_shape: " << intermediate_shard_shape[0] << " "
-              << intermediate_shard_shape[1] << " " << std::endl;
 
     // Calculate aggregated tensor shape and shard specs
     auto aggregated_shape = intermediate_shape;
