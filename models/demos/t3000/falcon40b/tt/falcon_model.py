@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.demos.t3000.falcon40b.tt.falcon_attention import generate_cos_sin_cache
+from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.t3000.falcon40b.tt.falcon_embeddings import TtFalconEmbeddings
 from models.demos.t3000.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors, partial_layernorm
@@ -36,6 +37,7 @@ class TtFalconModelShared:
         # NOTE: Once we make embeddings run on device, pass in state dict
         # instead of model itself
         self.mesh_device = mesh_device
+        self.tt_ccl = TT_CCL(self.mesh_device)
         self.state_dict = state_dict
         self.base_url = base_url
         self.config = config
@@ -74,6 +76,7 @@ class TtFalconModelShared:
         self.layers = [
             TtFalconDecoderLayer(
                 mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 state_dict=state_dict,
                 base_url=f"{base_url}.h",
                 layer_num=layer_num,
@@ -308,11 +311,17 @@ class TtFalconModelShared:
                 layer_output, self.model_config["BFP8_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
-        layer_output = ttnn.all_gather(
+        layer_output = ttnn.experimental.all_gather_async(
             layer_output,
+            persistent_output_buffer=None,
             dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
 
         if self.model_config["LN_INPUT_DTYPE"] != self.model_config["BFP8_DTYPE"]:
@@ -365,11 +374,17 @@ class TtFalconModelShared:
             layer_output,
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        layer_output = ttnn.all_gather(
+        layer_output = ttnn.experimental.all_gather_async(
             layer_output,
+            persistent_output_buffer=None,
             dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
         layer_output = ttnn.interleaved_to_sharded(
             layer_output,

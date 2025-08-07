@@ -228,6 +228,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     profiler.start("cache_attention")
     cache_attention(
         mesh_device,
+        tt_model.tt_ccl,
         state_dict,
         model_args,
         current_rot_mat,
@@ -485,6 +486,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
         "32k-instruct",
     ],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral8x7b_demo(t3k_mesh_device, input_prompts, instruct_weights, prefill_len, is_ci_env):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights with max prefill length of 32k to reduce CI pipeline load")

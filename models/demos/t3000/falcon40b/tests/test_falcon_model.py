@@ -306,6 +306,7 @@ def run_test_FalconModel_inference(
     ],
     ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconModel_inference(
     num_devices,
     model_version,
