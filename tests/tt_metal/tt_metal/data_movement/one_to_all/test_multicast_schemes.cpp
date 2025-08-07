@@ -17,7 +17,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm::core_to_all::multicast_schemes {
 
-uint32_t determine_max_grid_dimension(std::vector<IDevice*>& devices_) {
+uint32_t determine_max_grid_dimension(std::vector<std::shared_ptr<distributed::MeshDevice>>& devices_) {
     uint32_t smaller_dimension = std::min(
         devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y);
     return (smaller_dimension - 1);
@@ -97,7 +97,7 @@ std::pair<CoreCoord, CoreCoord> get_coordinates(uint32_t sub_grid_dimension_size
 
 void test(
     tt::ARCH arch_,
-    std::vector<IDevice*>& devices_,
+    std::vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     uint32_t sub_grid_dimension_size,
@@ -129,7 +129,7 @@ void test(
 
 void run_all_tests(
     tt::ARCH arch_,
-    std::vector<IDevice*>& devices_,
+    std::vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     bool loopback = true) {
@@ -166,7 +166,7 @@ void run_all_tests(
 /* =================== LOOP THROUGH SCHEMES ==================== */
 /* ============================================================= */
 
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemesLoopback) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesLoopback) {
     uint32_t test_case_id = 100;
 
     bool loopback = true;
@@ -175,7 +175,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemesLoopback) {
         arch_, devices_, num_devices_, test_case_id, loopback);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
     uint32_t test_case_id = 101;
 
     bool loopback = false;
@@ -205,7 +205,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
         10. Sender out grid ending not row not column
 */
 
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
     uint32_t test_case_id = 110;
 
     bool loopback = false;
