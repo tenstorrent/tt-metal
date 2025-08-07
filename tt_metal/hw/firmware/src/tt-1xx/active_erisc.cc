@@ -139,6 +139,11 @@ void __attribute__((noinline)) Application() {
     // } while (gEnableFwFlag[0] != 1);
     // This flag must be set to 1 before launching this firmware
     gEnableFwFlag[0] = 1;
+    // Workaround: ignore a duplicate host disable (0) from a previous run until
+    // the first GO of this instance, but only for a short grace window so that
+    // a legitimate immediate close (without GO) can still succeed.
+    bool ignore_disable_until_first_go = true;
+    uint32_t ignore_disable_spin_budget = 20000;  // small fence-spins budget
 
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
@@ -175,7 +180,7 @@ void __attribute__((noinline)) Application() {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (gEnableFwFlag[0] != 1) {
+            if (!ignore_disable_until_first_go && gEnableFwFlag[0] != 1) {
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 // Track if we could not return back to _start
                 debug_dump_addr[0] = 0xefefefef;
@@ -194,8 +199,22 @@ void __attribute__((noinline)) Application() {
             } else {
                 service_base_fw();
             }
+
+            // Expire the grace window to honor legitimate immediate exit without GO
+            if (ignore_disable_until_first_go && ignore_disable_spin_budget > 0) {
+                ignore_disable_spin_budget--;
+                if (ignore_disable_spin_budget == 0) {
+                    ignore_disable_until_first_go = false;
+                }
+            }
         }
         WAYPOINT("GD");
+        // First valid GO observed; re-arm normal exit behavior and clear any stale disable
+        if (ignore_disable_until_first_go) {
+            ignore_disable_until_first_go = false;
+            gEnableFwFlag[0] = 1;
+            __asm__ volatile("fence");
+        }
         debug_dump_addr[0] = 0xcccccccc;
 
         {
