@@ -17,7 +17,7 @@ from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d, 
 
 parameters = {
     "max_pool2d_short_sweep_suite": {
-        "dtype": [ttnn.bfloat16],
+        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_specs": [
             # Contains following parameters
             # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]

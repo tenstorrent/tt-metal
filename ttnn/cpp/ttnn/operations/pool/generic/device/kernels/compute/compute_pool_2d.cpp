@@ -76,9 +76,6 @@ void MAIN {
     if constexpr (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id_0, 1);
     }
-    if (last_tile_is_partial) {
-        DPRINT << "partial tile" << ENDL();
-    }
 
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
@@ -115,8 +112,6 @@ void MAIN {
                     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
                     num_faces_in_input_tile,
                     face_r_dim);
-                DPRINT << "tiles_to_reduce " << tiles_to_reduce << ENDL();
-                DPRINT << "tiles_to_reserve " << tiles_to_reserve << ENDL();
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                 }
@@ -130,7 +125,6 @@ void MAIN {
                     out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                 cb_push_back(out_cb_id, tiles_to_reserve);
             } else {
-                DPRINT << "rest of the cases" << ENDL();
                 pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                 cb_push_back(out_cb_id, tiles_to_reserve);
             }
