@@ -15,7 +15,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     num_cores_to_rectangle_grid,
     round_up,
 )
-from models.demos.llama3_subdevices.tt.model_config import (
+from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from tracy import signpost
@@ -284,21 +284,12 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    aggregated_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            aggregated_core_range_set,
-            [M, interemediate_N_per_shard * intermediate_num_cores],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
     ag_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            output_core_range_set,
-            [M, output_N_per_shard],
+            intermediate_core_range_set,
+            [M, interemediate_N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
