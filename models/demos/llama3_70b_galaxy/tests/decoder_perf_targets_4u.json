@@ -191,7 +191,7 @@
             "op_name": "AllGatherAsync_1",
             "kernel_duration": 19229.59375,
             "op_to_op": 1173.0,
-            "non-overlapped-dispatch-time": 3521.8,
+            "non-overlapped-dispatch-time": 5420.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
