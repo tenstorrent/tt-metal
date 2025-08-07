@@ -4,8 +4,9 @@
 
 import json
 import os
+from itertools import product
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence, Tuple
 
 import safetensors.torch
 import torch
@@ -16,6 +17,9 @@ from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE
 from models.utility_functions import comp_pcc
+
+# Constant for testing
+MAX_START_POS = 512
 
 
 def load_state_dict(model_path: Path, module_path: str):
@@ -36,6 +40,96 @@ def load_state_dict(model_path: Path, module_path: str):
         for safetensor_state_dict in [safetensors.torch.load_file(model_path / safetensor_file_path)]
         for weight_name in weight_names
     }
+
+
+def add_inv_scale_to_state_dict(
+    state_dict: dict[str, torch.Tensor],
+    block_shape: Sequence[int],
+    weight_names: list[str] = ["up_proj", "down_proj", "gate_proj"],
+) -> dict[str, torch.Tensor]:
+    """
+    Quantizes specified weights in state_dict and adds inverse scale tensors.
+
+    Args:
+        state_dict: original model weights
+        block_shape: shape of quantization blocks (e.g., [128, 128])
+        weight_names: list of substrings to match in parameter names
+
+    Returns:
+        new state_dict with quantized weights and _scale_inv tensors
+    """
+    output_state_dict: dict[str, torch.Tensor] = {}
+    for name, tensor in state_dict.items():
+        if weight_names and not any(name.endswith(weight_name + ".weight") for weight_name in weight_names):
+            output_state_dict[name] = tensor
+            continue
+
+        tensor_quant, dequant_scale = quantize_fp8_blockwise(tensor, block_shape)
+        output_state_dict[name] = tensor_quant
+        output_state_dict[name + "_scale_inv"] = dequant_scale
+
+    return output_state_dict
+
+
+def quantize_fp8_blockwise(tensor: torch.Tensor, block_shape: Sequence[int]) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Quantize a tensor to FP8 using blockwise quantization as done in DeepSeek-V3/HuggingFace.
+
+    Args:
+        tensor: Input tensor to quantize (typically float32 or bfloat16)
+        block_shape: Shape of quantization blocks (e.g., [128, 128] for DeepSeek-V3)
+
+    Returns:
+        Tuple of (quantized_tensor, inverse_scale_tensor)
+        - quantized_tensor: FP8 quantized tensor (torch.float8_e4m3fn)
+        - inverse_scale_tensor: Inverse scale factors for dequantization (float32)
+    """
+    assert len(block_shape) == tensor.ndim
+
+    # Convert to float32 for computation if needed
+    if tensor.dtype != torch.float32:
+        tensor = tensor.float()
+
+    # Calculate the number of blocks in each dimension
+    # This handles non-divisible cases by using ceil division
+    scale_shape = tuple((tensor.shape[i] + block_shape[i] - 1) // block_shape[i] for i in range(tensor.ndim))
+
+    # Initialize outputs
+    quantized = torch.zeros(tensor.shape).to(torch.float8_e4m3fn)
+    inv_scale = torch.ones(scale_shape, dtype=torch.float32, device=tensor.device)
+
+    # FP8 E4M3 maximum value (448.0)
+    fp8_max = torch.finfo(torch.float8_e4m3fn).max
+
+    # Process each block
+    for block_indices in product(*[range(s) for s in scale_shape]):
+        # Calculate the actual slice bounds for this block
+        slices = []
+        for i, block_idx in enumerate(block_indices):
+            start = block_idx * block_shape[i]
+            end = min(start + block_shape[i], tensor.shape[i])
+            slices.append(slice(start, end))
+        slices = tuple(slices)
+
+        # Extract the block
+        block = tensor[slices]
+
+        # Find the maximum absolute value in this block
+        absmax = torch.abs(block).max()
+
+        if absmax > 0:
+            # Calculate scale factor to map to FP8 range
+            scale = fp8_max / absmax
+            inv_scale[block_indices] = 1.0 / scale
+
+            # Quantize the block
+            quantized[slices] = (block * scale).to(torch.float8_e4m3fn)
+        else:
+            # Block is all zeros
+            inv_scale[block_indices] = 1.0
+            quantized[slices] = block.to(torch.float8_e4m3fn)
+
+    return quantized, inv_scale
 
 
 def load_reference_io_tensors_for_module(
