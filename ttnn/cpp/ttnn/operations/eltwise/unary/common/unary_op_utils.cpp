@@ -79,8 +79,11 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::LEZ:
         case UnaryOpType::GEZ:
         case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
-        case UnaryOpType::HARDSIGMOID: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::WHERE_TSS: return "SFPU_OP_WHERE_INCLUDE";
+        case UnaryOpType::SOFTSIGN:
+        case UnaryOpType::HARDSIGMOID:
+        case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
+        case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -358,6 +361,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
             break;
+        case UnaryOpType::CELU:
+            op_init_and_name = {
+                "celu_tile_init();",
+                fmt::format(
+                    "celu_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(1.0f / param0))};
+            break;
         case UnaryOpType::HARDSHRINK: op_init_and_name = {}; break;
         case UnaryOpType::WHERE_TSS: {
             std::string where_call;
@@ -369,6 +381,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 where_call = fmt::format("where_tile({}, {}, {});", idst, 1, 2);
             }
             op_init_and_name = std::make_pair("where_tile_init();", where_call);
+            break;
+        }
+        case UnaryOpType::HARDTANH: {
+            float param1 = params[1];
+            op_init_and_name = {
+                "hardtanh_tile_init();",
+                fmt::format(
+                    "hardtanh_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(param1))};
             break;
         }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
@@ -408,6 +431,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::ISNAN: op_init_and_name = {"isnan_tile_init();", fmt::format("isnan_tile({});", idst)}; break;
         case UnaryOpType::LOGICAL_NOT_UNARY:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {
                     "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_int32({});", idst)};
@@ -442,7 +467,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::SIGN: op_init_and_name = {"sign_tile_init();", fmt::format("sign_tile({});", idst)}; break;
         case UnaryOpType::SQUARE:
-            op_init_and_name = {"square_tile_init();", fmt::format("square_tile({});", idst)};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype.value() == DataType::INT32) {
+                op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0});", idst)};
+            } else {
+                op_init_and_name = {"square_tile_init();", fmt::format("square_tile({});", idst)};
+            }
             break;
         case UnaryOpType::TILED_PROD:
             op_init_and_name = {"tiled_prod_tile_init();", fmt::format("tiled_prod_tile({});", idst)};
@@ -565,9 +596,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::HARDSIGMOID:
             op_init_and_name = {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
             break;
+        case UnaryOpType::SOFTSIGN:
+            op_init_and_name = {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
+            break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
         case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
+        case UnaryOpType::HARDSWISH: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -699,6 +734,12 @@ std::string get_compute_kernel_path(
                 return fmt::format("{}/{}", compute_root, "hardshrink_kernel_sfpu.cpp");
             } else {
                 return fmt::format("{}/{}", compute_root, "hardshrink_kernel.cpp");
+            }
+        case UnaryOpType::HARDSWISH:
+            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
+                return fmt::format("{}/{}", compute_root, "hardswish_kernel_sfpu.cpp");
+            } else {
+                return fmt::format("{}/{}", compute_root, "hardswish_kernel.cpp");
             }
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }

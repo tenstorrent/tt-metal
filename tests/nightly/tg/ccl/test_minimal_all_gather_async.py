@@ -4,6 +4,7 @@
 
 import pytest
 import ttnn
+
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
 
 
@@ -85,4 +86,4 @@ def test_all_gather_async(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
     )
-    ttnn.DumpDeviceProfiler(submesh_device)
+    ttnn.ReadDeviceProfiler(submesh_device)

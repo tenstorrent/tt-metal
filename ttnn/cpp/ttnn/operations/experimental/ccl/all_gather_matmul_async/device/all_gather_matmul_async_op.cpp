@@ -36,11 +36,15 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
     TT_ASSERT(input_tensors.size() == 2, "AllGatherMatmulAsync requires 2 input tensors: [input, weight]");
     auto& input_tensor = input_tensors[0];
     auto& weight_tensor = input_tensors[1];
-    auto& all_gather_output_tensor = output_tensors.at(0).value();
-    // All Gather validate
-    this->all_gather_async_struct.validate_with_output_tensors({input_tensor}, {all_gather_output_tensor});
-    // Matmul validate.
-    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
+
+    if (output_tensors[0].has_value()) {
+        auto& all_gather_output_tensor = output_tensors.at(0).value();
+        // All Gather validate
+        this->all_gather_async_struct.validate_with_output_tensors({input_tensor}, {all_gather_output_tensor});
+        // Matmul validate.
+        this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
+    }
+
     // All Gather Matmul validate
     TT_FATAL(
         this->all_gather_async_struct.dim == 3, "AllGatherMatmulAsync requires dim=3 for the AllGather operaitons.");
@@ -61,13 +65,16 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
         },
         this->matmul_struct.program_config.value());
 
-    const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
-    if (all_gather_output_tensor_shard_spec.has_value()) {
-        const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
-        TT_FATAL(
-            this->all_gather_async_struct.ring_size == num_all_gather_output_shards,
-            "AllGatherMatmulAsync requires number of tensor slices to equal the number of output shards of the "
-            "all_gather.");
+    if (output_tensors[0].has_value()) {
+        auto& all_gather_output_tensor = output_tensors.at(0).value();
+        const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
+        if (all_gather_output_tensor_shard_spec.has_value()) {
+            const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
+            TT_FATAL(
+                this->all_gather_async_struct.ring_size == num_all_gather_output_shards,
+                "AllGatherMatmulAsync requires number of tensor slices to equal the number of output shards of the "
+                "all_gather.");
+        }
     }
 }
 

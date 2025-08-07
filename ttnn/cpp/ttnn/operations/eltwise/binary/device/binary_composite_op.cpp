@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_composite_op.hpp"
-#include <magic_enum/magic_enum.hpp>
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -30,21 +29,6 @@ Tensor _hypot(const Tensor& input_a, const Tensor& input_b, const std::optional<
     a_sq.deallocate();
     b_sq.deallocate();
     return ttnn::sqrt(c_sq, output_mem_config);
-}
-
-// xlogy(x,y)=x*log(y)
-Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    float t_nan = std::nanf(" ");
-    Tensor result = ttnn::multiply(input_a, ttnn::log(input_b, output_mem_config), std::nullopt, output_mem_config);
-    result = ttnn::where(
-        ttnn::logical_or(
-            ttnn::ltz(input_b, output_mem_config),
-            ttnn::eq(input_b, t_nan, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        t_nan,
-        result);
-    return result;
 }
 
 // nextafter

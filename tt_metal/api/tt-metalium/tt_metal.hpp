@@ -134,7 +134,7 @@ void LaunchProgram(
     const std::shared_ptr<Program>& program,
     bool wait_until_cores_done = true,
     bool force_slow_dispatch = false);
-void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results = true);
+void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to

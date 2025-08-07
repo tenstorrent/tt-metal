@@ -6,7 +6,7 @@
 
 #include <device_pool.hpp>
 #include <host_api.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
@@ -29,7 +29,7 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
@@ -724,7 +724,7 @@ void create_cq_program(IDevice* device) {
             case FDKernelType::UNSET:
                 TT_THROW(
                     "Unknown kernel type {} {} on Device {}",
-                    magic_enum::enum_name(node_and_kernel->GetKernelType()),
+                    enchantum::to_string(node_and_kernel->GetKernelType()),
                     typeid(*node_and_kernel).name(),
                     device->id());
                 break;

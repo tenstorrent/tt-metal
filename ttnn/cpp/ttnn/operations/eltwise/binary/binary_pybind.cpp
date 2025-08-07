@@ -2117,6 +2117,13 @@ void py_module(py::module& module) {
         R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc");
 
+    detail::bind_binary_operation(
+        module,
+        ttnn::xlogy,
+        R"doc(Computes xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{output\_tensor}_i = \mathrm{input\_tensor\_a}_i \cdot \log(\mathrm{input\_tensor\_b}_i)
+        )doc");
+
     detail::bind_binary_unary_operation(
         module,
         ttnn::rsub,
@@ -2196,13 +2203,6 @@ void py_module(py::module& module) {
         R"doc(\mathrm{output\_tensor}_i = \sqrt{(\mathrm{input\_tensor\_a}_i^2 + \mathrm{input\_tensor\_b}_i^2)}
         )doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-
-    detail::bind_binary_composite(
-        module,
-        ttnn::xlogy,
-        R"doc(Computes xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{output\_tensor}_i = \mathrm{input\_tensor\_a}_i \cdot \log(\mathrm{input\_tensor\_b}_i)
-        )doc");
 
     detail::bind_binary_composite(
         module,

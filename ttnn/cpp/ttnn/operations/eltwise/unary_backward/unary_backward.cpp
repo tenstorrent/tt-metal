@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <magic_enum/magic_enum.hpp>
 #include <utility>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/constants.hpp>

@@ -9,7 +9,7 @@
 namespace {
 
 // this function is supposed to write either a whole stick or part of it (76800 elements)
-template <bool is_dram, typename AddrGen>
+template <typename AddrGen>
 FORCE_INLINE void write_to_output(
     const uint32_t& cb,
     const AddrGen& addr_gtor,
@@ -35,10 +35,7 @@ void kernel_main() {
     const uint32_t start_stick_id = get_arg_val<uint32_t>(1);
     const uint32_t sticks_for_core = get_arg_val<uint32_t>(2);
 
-    const auto output_addr_gtor{
-        get_interleaved_addr_gen<ctas.output_tensor_is_dram, ctas.is_output_stick_size_bytes_pow2_min_32>(
-            output_buffer_address, ctas.output_stick_size_bytes, ctas.output_stick_size_bytes_log2)};
-    using output_addr_gtor_type = decltype(output_addr_gtor);
+    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_buffer_address, ctas.output_stick_size_bytes);
 
     using output_std_type = std_type_t<get_dataformat(ctas.output_cb)>;
 
@@ -50,8 +47,7 @@ void kernel_main() {
              offset_bytes += input_and_output_chunk_size * sizeof(output_std_type)) {
             const uint32_t chunk_write_bytes = std::min(
                 ctas.output_stick_size_bytes - offset_bytes, input_and_output_chunk_size * sizeof(output_std_type));
-            write_to_output<ctas.output_tensor_is_dram, output_addr_gtor_type>(
-                ctas.output_cb, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
+            write_to_output(ctas.output_cb, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
         }
     }
 }

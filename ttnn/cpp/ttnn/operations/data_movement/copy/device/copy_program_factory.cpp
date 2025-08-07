@@ -12,6 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <algorithm>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 using namespace tt::constants;
@@ -80,29 +81,19 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
-        reader_compile_time_args = {(uint32_t)src_is_dram};
-        writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+        writer_compile_time_args = {(std::uint32_t)output_cb_index};
     } else {
-        bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
-        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(input_unit_size) : 0;
-        reader_compile_time_args = {
-            (std::uint32_t)src0_cb_index,
-            (std::uint32_t)src_is_dram,
-            (std::uint32_t)src_stick_size_is_power_of_two,
-            (std::uint32_t)src_log2_stick_size};
-        bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
-        uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(output_unit_size) : 0;
-        writer_compile_time_args = {
-            (std::uint32_t)output_cb_index,
-            (std::uint32_t)dst_is_dram,
-            (std::uint32_t)dst_stick_size_is_power_of_two,
-            (std::uint32_t)dst_log2_stick_size};
+        reader_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)input_unit_size};
+        writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_unit_size};
     }
     std::map<std::string, std::string> kernel_defines;
     if (sharded) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input, writer_compile_time_args);
         shard_builder::extend_sharding_compile_time_args(input, reader_compile_time_args);
+    } else {
+        TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     }
     if (backwards) {
         kernel_defines["BACKWARDS"] = "1";

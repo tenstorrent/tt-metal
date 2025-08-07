@@ -22,11 +22,12 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     QKV_CRS,
     FF1_CRS,
 )
+
 from tests.ttnn.unit_tests.operations.ccl.test_llama_all_gather_matmul import (
     run_llama_all_gather_matmul_impl,
     BINARY_MULT_CRS,
 )
-from models.demos.llama3_subdevices.tt.model_config import (
+from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler

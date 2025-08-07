@@ -70,6 +70,7 @@ void MAIN {
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
     constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
+    constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
@@ -250,6 +251,13 @@ void MAIN {
                 reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
                 pack_reconfig_data_format(cb_qk_im);
 
+#ifdef DYNAMIC_CHUNK_SIZE
+                bool add_mask_fusion =
+                    is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk || use_attention_mask;
+#else
+                bool add_mask_fusion = false;
+#endif
+
                 cb_matmul_blocks(
                     cb_q_in,
                     cb_k_in,
@@ -263,7 +271,26 @@ void MAIN {
                     qk_in0_block_w,
                     qk_subblock_h_dynamic,
                     qk_subblock_w_dynamic,
-                    true /*transpose*/);
+                    true,
+                    add_mask_fusion,
+                    cb_mask_in,
+                    cb_zero_in);
+
+                if (!add_mask_fusion) {
+                    if constexpr (is_causal) {
+                        // For decode, we only apply mask at the last chunk for causal mode
+                        if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
+                            /* QK += MASK */
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                        }
+                    } else {
+                        if constexpr (use_attention_mask) {
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                        }
+                    }
+                }
 
                 /**
                  * Note
@@ -271,20 +298,6 @@ void MAIN {
                  * where the scaling is fused into exp both in exp(x - max) and exp(prev_max - cur_max).
                  * This gives us scaling for free on the performance-critical exp(x - max) computation.
                  */
-
-                if constexpr (is_causal) {
-                    // For decode, we only apply mask at the last chunk for causal mode
-                    if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
-                        /* QK += MASK */
-                        reconfig_data_format(cb_qk_im, cb_mask_in);
-                        add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
-                    }
-                } else {
-                    if constexpr (use_attention_mask) {
-                        reconfig_data_format(cb_qk_im, cb_mask_in);
-                        add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
-                    }
-                }
 
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_max);
@@ -295,6 +308,7 @@ void MAIN {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
+
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
 
@@ -305,6 +319,7 @@ void MAIN {
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
+
                 sub_exp_block_bcast_cols_inplace_reduce<
                     cb_qk_im,
                     Sq_chunk_t,
@@ -315,12 +330,15 @@ void MAIN {
 
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
+                uint32_t cb_sum_dest = k_chunk > k_chunk_start ? cb_cur_sum : cb_prev_sum;
+
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
+                    cb_sum_dest, cb_sum_dest, Sk_chunk_t_dynamic, false);
 
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
                 pack_reconfig_data_format(cb_out_im);
+
                 cb_matmul_blocks(
                     cb_qk_im,
                     cb_v_in,
@@ -334,7 +352,10 @@ void MAIN {
                     out_in0_block_w_dynamic,
                     out_subblock_h,
                     out_subblock_w,
-                    false /*transpose*/);
+                    false /*transpose*/,
+                    false,
+                    cb_mask_in,
+                    cb_zero_in);
 
                 reconfig_data_format_srca(cb_out_im);
                 cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
@@ -360,7 +381,7 @@ void MAIN {
                     /* cb_cur_sum += cb_prev_sum */
                     reconfig_data_format(cb_cur_sum, cb_prev_sum);  // DEBUG
                     pack_reconfig_data_format(cb_cur_sum);
-                    add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    add_block(cb_cur_sum, cb_prev_sum, cb_prev_sum, Sq_chunk_t);
 
                     /* cb_out_accumulate_im += cb_out_im */
                     reconfig_data_format(cb_out_accumulate_im, cb_out_im);  // DEBUG
@@ -371,13 +392,12 @@ void MAIN {
                 if (k_chunk < k_chunk_end - 1 || do_reduce) {
                     reconfig_data_format(cb_cur_max, cb_cur_max);  // DEBUG
                     pack_reconfig_data_format(cb_prev_max);
-                    std::swap(cb_cur_sum, cb_prev_sum);
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
                 } else {
                     // Write o, m, l into cb_out
                     move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
                     move_block<true>(cb_cur_max, cb_out_m, Sq_chunk_t);
-                    move_block<true>(cb_cur_sum, cb_out_l, Sq_chunk_t);
+                    move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
                 }
             }
         }

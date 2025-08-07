@@ -539,7 +539,7 @@ def test_yolov8x(device, model_type, res, reset_seeds):
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov10x(device, model_type, res, use_program_cache, reset_seeds):
     from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
-    from models.demos.yolov10x.tests.common import load_torch_model
+    from models.demos.yolov10x.common import load_torch_model
 
     if model_type == "torch_model":
         model = load_torch_model()

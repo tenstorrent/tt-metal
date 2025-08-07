@@ -13,6 +13,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
 
 #include <tt-metalium/hal.hpp>
@@ -98,16 +99,13 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
 
-    uint32_t log2_page_size = 0;
-    std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};
+    std::vector<uint32_t> compile_time_args = {cb_index};
     if (!tilized) {
-        bool page_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
-        log2_page_size = page_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;
-        compile_time_args.push_back((uint32_t)page_size_is_power_of_two);
+        compile_time_args.push_back(page_size);
     }
+    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
     KernelHandle kernel_id = CreateKernel(
         program,
@@ -174,9 +172,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
             (uint32_t)logical_multicast_regions.back().size(),
             (uint32_t)do_third_multicast};
         if (!tilized) {
-            runtime_args.push_back(page_size);
             runtime_args.push_back(aligned_page_size);
-            runtime_args.push_back(log2_page_size);
         }
         SetRuntimeArgs(program, kernel_id, core, runtime_args);
         pages_handled_per_core += num_pages_per_core;
