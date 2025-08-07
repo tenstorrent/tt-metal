@@ -120,6 +120,7 @@ void kernel_main() {
 
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
+    bool needs_barrier = false;
     noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_addr, 0);
 
@@ -151,7 +152,8 @@ void kernel_main() {
 
                 if (dest_device_idx == linearized_mesh_coord) {
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
-                    noc_async_write_barrier();
+                    needs_barrier = true;
+                    noc_async_writes_flushed();
                 } else {
                     if constexpr (is_1d_topology<topology>()) {
                         fabric_send_chip_unicast_noc_unicast_1d<
@@ -191,10 +193,13 @@ void kernel_main() {
                 }
             }
         }
+
         cb_pop_front(metadata_cb_id, 1);
     }
     cb_pop_front(local_experts_cb_id, 1);
-
+    if (needs_barrier) {
+        noc_async_write_barrier();
+    }
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
     // "multicast" semaphore increment to let other devices know we are done
     for(uint32_t device_idx=0;device_idx < num_devices;++device_idx){
@@ -204,8 +209,6 @@ void kernel_main() {
             noc_semaphore_inc(global_noc_semaphore_addr, 1);
             noc_async_atomic_barrier();
         } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
-            const auto& dest_mesh_id = dest_mesh_ids[device_idx];
-
             if constexpr (is_1d_topology<topology>()) {
                 fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
                     linearized_mesh_coord,
@@ -213,6 +216,7 @@ void kernel_main() {
                     mesh_rows,
                     mesh_cols>(fabric_connections, packet_headers[1], device_idx, global_noc_semaphore_addr, 1, true);
             } else {
+                const auto& dest_mesh_id = dest_mesh_ids[device_idx];
                 const auto& dest_chip_id = dest_chip_ids[device_idx];
                 fabric_send_chip_unicast_noc_unicast_semaphore_only<src_chip_id, mesh_rows, mesh_cols>(
                     fabric_connections,
@@ -221,7 +225,7 @@ void kernel_main() {
                     dest_mesh_id,
                     global_noc_semaphore_addr,
                     1,
-                    true);
+                    false);
             }
         }
     }
