@@ -158,6 +158,7 @@ class TtMotionDeformableAttention:
             )
             device = reference_trajs_ego.device()
             reference_trajs_ego = ttnn.to_torch(reference_trajs_ego)
+            # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/25517>
             reference_trajs_ego[..., 0] -= self.bev_range[0]
             reference_trajs_ego[..., 1] -= self.bev_range[1]
             reference_trajs_ego[..., 0] /= self.bev_range[3] - self.bev_range[0]
