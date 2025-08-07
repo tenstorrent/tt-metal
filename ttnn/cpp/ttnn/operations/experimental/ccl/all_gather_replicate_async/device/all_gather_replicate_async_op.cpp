@@ -306,7 +306,7 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_FATAL(input_tensors.size() == 4, "Error, Input tensor size should be 4 but has {}", input_tensors.size());
+    TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
@@ -395,28 +395,65 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    // All Gather shape
-    ttnn::TensorSpec all_gather_output_shape =
-        this->all_gather_replicate_async_struct.compute_output_specs({input_tensors[0]})[0];
+    // Create aggregated tensor spec based on intermediate tensor
+    const auto& intermediate_tensor = input_tensors[2];
+    auto intermediate_shape = intermediate_tensor.padded_shape();
+    auto intermediate_shard_shape = intermediate_tensor.memory_config().shard_spec()->shape;
+    std::cout << "LLONG DEBUG: intermediate_shape: " << intermediate_shape[0] << " " << intermediate_shape[1] << " "
+              << intermediate_shape[2] << " " << intermediate_shape[3] << std::endl;
+    std::cout << "LLONG DEBUG: intermediate_shard_shape: " << intermediate_shard_shape[0] << " "
+              << intermediate_shard_shape[1] << " " << std::endl;
 
-    // Matmul shape
+    // Calculate aggregated tensor shape and shard specs
+    auto aggregated_shape = intermediate_shape;
+    aggregated_shape[-1] = intermediate_shape[-1] * 60;
+
+    auto aggregated_shard_shape = intermediate_shard_shape;
+    aggregated_shard_shape[1] = intermediate_shard_shape[1] * this->all_gather_replicate_async_struct.ring_size;
+    std::cout << "LLONG DEBUG: this->all_gather_replicate_async_struct.ring_size: "
+              << this->all_gather_replicate_async_struct.ring_size << std::endl;
+    std::cout << "LLONG DEBUG: aggregated_shape: " << aggregated_shape[0] << " " << aggregated_shape[1] << " "
+              << aggregated_shape[2] << " " << aggregated_shape[3] << std::endl;
+    std::cout << "LLONG DEBUG: aggregated_shard_shape: " << aggregated_shard_shape[0] << " "
+              << aggregated_shard_shape[1] << " " << std::endl;
+
+    // Create aggregated tensor memory config
+    MemoryConfig aggregated_mem_config = MemoryConfig(
+        TensorMemoryLayout::WIDTH_SHARDED,
+        BufferType::L1,
+        tt::tt_metal::ShardSpec(
+            ttnn::CoreRangeSet({ttnn::CoreRange(ttnn::CoreCoord(1, 0), ttnn::CoreCoord(6, 9))}),  // MCAST_CRS
+            aggregated_shard_shape,
+            tt::tt_metal::ShardOrientation::ROW_MAJOR));
+
+    TensorSpec aggregated_tensor_spec = TensorSpec(
+        aggregated_shape,
+        TensorLayout(
+            intermediate_tensor.dtype(), intermediate_tensor.tensor_spec().page_config(), aggregated_mem_config));
+
+    // Matmul output spec - using aggregated tensor as input to matmul
     ttnn::TensorSpec matmul_output_specs =
         this->matmul_struct.compute_output_specs({input_tensors[0], input_tensors[1]}, {})[0];
     log_info(tt::LogOp, "LLONG matmul_output_specs: {}", matmul_output_specs);
 
-    return {all_gather_output_shape, matmul_output_specs};
+    return {aggregated_tensor_spec, matmul_output_specs};
 }
 
 std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
-    // All Gather output tensor
-    auto& all_gather_output_tensor = input_tensors.at(2);
+    // Create aggregated tensor internally with exact same specs as pytest
+    const auto& intermediate_tensor = input_tensors[2];
+
+    auto specs = compute_output_specs(input_tensors);
+    auto aggregated_tensor_spec = specs[0];
+
+    ttnn::Tensor aggregated_tensor = create_device_tensor(aggregated_tensor_spec, intermediate_tensor.device());
 
     // Matmul output tensor
     ttnn::Tensor matmul_output_tensor =
-        this->matmul_struct.create_output_tensors({all_gather_output_tensor, input_tensors[1]})[0];
+        this->matmul_struct.create_output_tensors({aggregated_tensor, input_tensors[1]})[0];
 
-    return {all_gather_output_tensor, matmul_output_tensor};
+    return {aggregated_tensor, matmul_output_tensor};
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks LlamaAllGatherMatmulAsync::create_mesh_workload(
@@ -482,7 +519,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
                 input_tensors[0],   // in0
                 input_tensors[1],   // in1
                 input_tensors[2],   // intermediate_tensor
-                input_tensors[3],   // aggregated_tensor
+                output_tensors[0],  // aggregated_tensor (now output)
                 output_tensors[1],  // mm output tensor
                 target_device,
                 forward_device,
@@ -567,7 +604,6 @@ Tensor llama_all_gather_matmul_async_impl(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
-    const Tensor& aggregated_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -653,12 +689,14 @@ Tensor llama_all_gather_matmul_async_impl(
     // return input_tensor;  // TODO: Implement the actual logic
     // return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
     //     .at(0);
-    return tt::tt_metal::operation::run(
-               llama_all_gather_matmul_async_struct,
-               {input_tensor, input_tensor_b, intermediate_tensor, aggregated_tensor},
-               optional_input_tensors,
-               optional_output_tensors)
-        .at(1);
+    auto tensors_out = tt::tt_metal::operation::run(
+        llama_all_gather_matmul_async_struct,
+        {input_tensor, input_tensor_b, intermediate_tensor},
+        optional_input_tensors,
+        optional_output_tensors);
+    tensors_out.at(0).deallocate(
+        true);  // deallocate the aggregated tensor, it's allocated in the op and no longer needed outside the op.
+    return tensors_out.at(1);
 }
 }  // namespace
 
@@ -666,7 +704,6 @@ Tensor llama_all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
-    const Tensor& aggregated_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -684,7 +721,6 @@ Tensor llama_all_gather_matmul_async(
         input_tensor,
         input_tensor_b,
         intermediate_tensor,
-        aggregated_tensor,
         dim,
         cluster_axis,
         mesh_device,

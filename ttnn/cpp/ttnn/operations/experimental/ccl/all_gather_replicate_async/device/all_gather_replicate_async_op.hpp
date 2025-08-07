@@ -197,7 +197,6 @@ Tensor llama_all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
-    const Tensor& aggregated_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,

@@ -29,7 +29,6 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& input_tensor_b,
                const ttnn::Tensor& intermediate_tensor,
-               const ttnn::Tensor& aggregated_tensor,
                const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
@@ -47,7 +46,6 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
                     input_tensor,    // in0 for matmul, need AG first
                     input_tensor_b,  // in1 for matmul
                     intermediate_tensor,
-                    aggregated_tensor,
                     dim,
                     cluster_axis,
                     mesh_device,
@@ -66,7 +64,6 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
             py::arg("input_tensor"),
             py::arg("input_tensor_b"),
             py::arg("intermediate_tensor"),
-            py::arg("aggregated_tensor"),
             py::arg("dim"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
