@@ -17,9 +17,9 @@ If the test involves multiple words you have to do "test_file":
 END
 
 cd $TT_METAL_HOME
-./create_venv.sh
-source ./venv/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
+./create_venv.sh
+source ./python_env/bin/activate
 
 timeout_duration=2m
 patch=""
