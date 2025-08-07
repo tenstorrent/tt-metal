@@ -25,6 +25,7 @@ parameters = {
             [1, 320, 48, 48, 36, 36, 1, 1, 0, 0, 1, 1, True],  # massive kernel, wide, ceil mode
             [1, 320, 47, 47, 36, 36, 1, 1, 0, 0, 1, 1, True],  # non-tile multiple NHW, ceil mode
             [1, 32, 6, 6, 3, 3, 1, 1, 1, 1, 1, 1, False],  # partial grid on WH to use noop cores
+            [1, 32, 13, 8, 4, 3, 6, 5, 2, 1, 1, 1, True],  # ceil mode output shape adjustment edge case
             # requires reversed local reads on some cores, and forward reads on others
             [8, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, True],
             # requires reversed local reads on some cores, and forward reads on others, large kernel

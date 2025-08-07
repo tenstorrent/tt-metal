@@ -147,9 +147,16 @@ def run_avg_pool2d(
     out_c = (
         max(in_c, 32) if dtype == ttnn.bfloat8_b else in_c
     )  # TTNN will pad the output channels to 32 for bfloat8_b only
+    ceil_mode_out_shape_adj = False
     if ceil_mode:
         out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
         out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        if ((out_h - 1) * stride_h) >= (in_h + pad_t):
+            ceil_mode_out_shape_adj = True
+            out_h -= 1
+        if ((out_w - 1) * stride_w) >= (in_w + pad_l):
+            ceil_mode_out_shape_adj = True
+            out_w -= 1
     else:
         out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
         out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
@@ -208,8 +215,10 @@ def run_avg_pool2d(
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
-    # for avg pool we only do this when necessary as it will lead to an expensive correction process
     if padding_is_4d:
+        assert (
+            not ceil_mode_out_shape_adj
+        ), "current test infrastructure does not support ceil mode output shape adjustments with 4D padding"
         torch_input_padded = torch.nn.functional.pad(
             torch_input,
             (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
