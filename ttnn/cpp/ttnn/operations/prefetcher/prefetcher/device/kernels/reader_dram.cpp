@@ -13,20 +13,20 @@ void kernel_main() {
     // Compile time args
     constexpr uint32_t num_layers = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t read_cb_size = get_compile_time_arg_val(3);
-    constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t max_block_size = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t addrs_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(8);
-    constexpr bool skip_ptr_update = get_compile_time_arg_val(9);
+    constexpr uint32_t read_cb_size = get_compile_time_arg_val(2);
+    constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t max_block_size = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t addrs_cb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(7);
+    constexpr bool skip_ptr_update = get_compile_time_arg_val(8);
 
     // Runtime args
     uint32_t rt_args_idx = 0;
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t total_num_blocks_in_buffer = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t* num_blocks = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* page_sizes = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* block_num_pages = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* block_num_tiles = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
@@ -63,7 +63,7 @@ void kernel_main() {
             }
             uint32_t l1_write_addr = l1_write_addr_start;
 
-            for (uint32_t block = 0; block < num_blocks; block++) {
+            for (uint32_t block = 0; block < num_blocks[t]; block++) {
                 // Set trid for current block
                 noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
 
@@ -86,7 +86,7 @@ void kernel_main() {
                 }
 
                 // We still have blocks to read
-                if (block != num_blocks - 1) {
+                if (block != num_blocks[t] - 1) {
                     // Increment block_trid, wrap around to 1 if it reaches total_num_blocks_in_buffer
                     curr_block_trid = curr_block_trid == total_num_blocks_in_buffer ? 1 : (curr_block_trid + 1);
 

@@ -14,8 +14,11 @@ Tensor ExecuteDramPrefetcher::invoke(
     std::vector<ttnn::Tensor>& tensors,
     const uint32_t num_layers,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const bool enable_performance_mode) {
-    return tt::tt_metal::operation::run(DramPrefetcher{global_cb, num_layers, enable_performance_mode}, tensors).at(0);
+    const bool enable_performance_mode,
+    std::optional<std::vector<uint32_t>> num_blocks_per_tensor) {
+    return tt::tt_metal::operation::run(
+               DramPrefetcher{global_cb, num_layers, enable_performance_mode, num_blocks_per_tensor}, tensors)
+        .at(0);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher

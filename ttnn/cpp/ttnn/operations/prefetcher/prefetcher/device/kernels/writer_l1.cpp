@@ -18,17 +18,17 @@ void kernel_main() {
     // Compile time args
     constexpr uint32_t num_layers = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
-    constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t local_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t remote_cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(7);
-    constexpr bool skip_ptr_update = get_compile_time_arg_val(8);
+    constexpr uint32_t num_receivers = get_compile_time_arg_val(2);
+    constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t local_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t remote_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(6);
+    constexpr bool skip_ptr_update = get_compile_time_arg_val(7);
 
     // Runtime args
     // Note: Coalesced sizes -> wrt to receiver cores, sizes -> wrt to dram reader cores
     uint32_t rt_args_idx = 0;
+    const uint32_t* num_blocks = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* coalesced_page_sizes = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* coalesced_num_pages = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* block_num_tiles = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
@@ -49,7 +49,7 @@ void kernel_main() {
 
             experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
 
-            for (uint32_t block = 0; block < num_blocks; ++block) {
+            for (uint32_t block = 0; block < num_blocks[t]; ++block) {
                 {
                     cb_wait_front(local_cb_id, max_block_num_tiles);
                     experimental::remote_cb_reserve_back(remote_cb_id, 1);

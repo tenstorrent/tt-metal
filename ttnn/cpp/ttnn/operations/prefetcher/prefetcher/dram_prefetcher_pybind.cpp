@@ -29,6 +29,9 @@ void bind_dram_prefetcher_operation(py::module& module) {
                     across dram reader cores, and downstream consumer cores.
                 enable_performance_mode (bool, optional): If set to true, the operation will be optimized for performance.
                     May lead to ND behavior on wormhole 4U systems!
+                num_blocks_per_tensor (Optional[List[int]], optional): A list of integers specifying the number of blocks
+                    per tensor to be pre-fetched. If not provided, it defaults to a value based on the number of reader cores
+                    and the number of receivers per reader core.
 
             Returns:
                 ttnn.Tensor: empty tensor (TODO: Should return None)
@@ -40,6 +43,7 @@ void bind_dram_prefetcher_operation(py::module& module) {
             py::arg("global_cb"),
             py::kw_only(),
             py::arg("enable_performance_mode") = false,
+            py::arg("num_blocks_per_tensor") = std::nullopt,
         });
 }
 
