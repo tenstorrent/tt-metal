@@ -294,6 +294,7 @@ int main() {
 
     // JSON test
     messages::EndpointDefinitionMessage msg {
+        .host = "sjc-wh-05",
         .endpoints = { { 200, "from", "to" } }
     };
 
@@ -301,6 +302,7 @@ int main() {
     std::cout << "json: " << j << std::endl;;
 
     messages::EndpointStateChangeMessage msg2 {
+        .host = "sjc-wh-05",
         .endpoints = { { 100, true } }
     };
 
