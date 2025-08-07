@@ -1209,16 +1209,16 @@ FORCE_INLINE void noc_async_write_page(
 /**
  * Initiates an asynchronous read of a shard from a source noc address into a local L1 address.
  * The size of the transaction and the source address are determined by the TensorAccessor object.
+ * This function only works for sharded tensors.
  *
  * Return value: None
  *
- * | Argument                   | Description                            | Type           | Valid Range                                              | Required |
- * |----------------------------|----------------------------------------|----------------|----------------------------------------------------------|----------|
- * | shard_id                   | Shard id                               | uint32_t       | Any uint32_t number                                      | True     |
- * | s                          | TensorAccessor object                  | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
- * | dst_local_l1_addr          | Destination address in local L1 memory | uint32_t       | 0..1MB                                                   | True     |
- * | noc                        | Which NOC to use for the transaction   | uint8_t        | 0 or 1                                                   | False    |
- * | DSpec (template parameter) | DistributionSpec type                  | typename       | Any DistributionSpec object, refer to \a dspec.h         | True     |
+ * | Argument                   | Description                                      | Type           | Valid Range                                              | Required |
+ * |----------------------------|--------------------------------------------------|----------------|----------------------------------------------------------|----------|
+ * | shard_id                   | Row-major index of a shard in the sharded tensor | uint32_t       | Any uint32_t number                                      | True     |
+ * | s                          | TensorAccessor object                            | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
+ * | dst_local_l1_addr          | Destination address in local L1 memory           | uint32_t       | 0..1MB                                                   | True     |
+ * | noc                        | Which NOC to use for the transaction             | uint8_t        | 0 or 1                                                   | False    |
  */
 // clang-format on
 template <typename DSpec>
@@ -1232,16 +1232,16 @@ FORCE_INLINE void noc_async_read_shard(
 /**
  * Initiates an asynchronous write of a shard from a local L1 address to a destination noc address.
  * The size of the transaction and the destination address are determined by the TensorAccessor object.
+ * This function only works for sharded tensors.
  *
  * Return value: None
  *
- * | Argument                   | Description                            | Type           | Valid Range                                              | Required |
- * |----------------------------|----------------------------------------|----------------|----------------------------------------------------------|----------|
- * | shard_id                   | Shard id                               | uint32_t       | Any uint32_t number                                      | True     |
- * | s                          | TensorAccessor object                  | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
- * | src_local_l1_addr          | Source address in local L1 memory      | uint32_t       | 0..1MB                                                   | True     |
- * | noc                        | Which NOC to use for the transaction   | uint8_t        | 0 or 1                                                   | False    |
- * | DSpec (template parameter) | DistributionSpec type                  | typename       | Any DistributionSpec object, refer to \a dspec.h         | True     |
+ * | Argument                   | Description                                      | Type           | Valid Range                                              | Required |
+ * |----------------------------|--------------------------------------------------|----------------|----------------------------------------------------------|----------|
+ * | shard_id                   | Row-major index of a shard in the sharded tensor | uint32_t       | Any uint32_t number                                      | True     |
+ * | s                          | TensorAccessor object                            | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
+ * | src_local_l1_addr          | Source address in local L1 memory                | uint32_t       | 0..1MB                                                   | True     |
+ * | noc                        | Which NOC to use for the transaction             | uint8_t        | 0 or 1                                                   | False    |
  */
 // clang-format on
 template <typename DSpec>
