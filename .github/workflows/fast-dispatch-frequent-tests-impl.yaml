@@ -31,7 +31,7 @@ jobs:
             timeout: 15
           - name: "WH N300 dispatch bandwidth nightly"
             arch: wormhole_b0
-            runs-on: ["N300", "pipeline-perf"]
+            runs-on: ["cloud-virtual-machine", "N300", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
               ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json
