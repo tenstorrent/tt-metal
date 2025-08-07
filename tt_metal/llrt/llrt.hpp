@@ -112,6 +112,7 @@ void send_msg_to_eth_mailbox(
     chip_id_t device_id,
     const CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
+    int mailbox_index,
     std::vector<uint32_t> args,
     bool wait_for_ack = true,
     int timeout_ms = 10000);

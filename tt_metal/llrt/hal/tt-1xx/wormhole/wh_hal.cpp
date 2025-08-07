@@ -302,7 +302,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t { return 0; };
+    this->eth_fw_arg_addr_func_ = [&](int, uint32_t) -> uint32_t { return 0; };
 
     this->device_features_func_ = [](DeviceFeature feature) -> bool {
         switch (feature) {

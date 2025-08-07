@@ -212,7 +212,7 @@ public:
     using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
     using NOCAddrFunc = std::function<uint64_t(uint64_t)>;
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
-    using EthFwArgAddrFunc = std::function<uint32_t(uint32_t)>;
+    using EthFwArgAddrFunc = std::function<uint32_t(int, uint32_t)>;
     using DeviceFeatureListFunc = std::function<bool(DeviceFeature)>;
     using EthLiveLinkStatusFunc = std::function<EthLiveLinkStatus(std::span<uint32_t>)>;
 
@@ -328,8 +328,9 @@ public:
         return this->virtualized_core_types_;
     }
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
-    uint32_t get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const;
+    uint32_t get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
+    uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
@@ -533,8 +534,8 @@ inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
     return this->core_info_[index].eth_fw_mailbox_msgs_[utils::underlying_type<FWMailboxMsg>(msg)];
 }
 
-inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const {
-    return this->eth_fw_arg_addr_func_(arg_index);
+inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {
+    return this->eth_fw_arg_addr_func_(mailbox_index, arg_index);
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
@@ -542,6 +543,12 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
     TT_ASSERT(index < this->core_info_.size());
     // -1 for the message
     return (this->core_info_[index].get_dev_size(HalL1MemAddrType::ETH_FW_MAILBOX) / sizeof(uint32_t)) - 1;
+}
+
+inline uint32_t Hal::get_eth_fw_mailbox_address(int mailbox_index) const {
+    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    return get_eth_fw_mailbox_arg_addr(mailbox_index, 0) - sizeof(uint32_t);
 }
 
 inline bool Hal::get_core_has_kernel_config_buffer(HalProgrammableCoreType programmable_core_type) const {

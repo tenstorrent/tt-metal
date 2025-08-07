@@ -300,8 +300,10 @@ void Hal::initialize_bh() {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t {
-        return get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) +
+    this->eth_fw_arg_addr_func_ = [&](int mailbox_index, uint32_t arg_index) -> uint32_t {
+        // +1 because of the message
+        uint32_t mailbox_base = MEM_SYSENG_ETH_MAILBOX_ADDR + (mailbox_index * (MEM_SYSENG_ETH_MAILBOX_NUM_ARGS + 1) * sizeof(uint32_t));
+        return mailbox_base +
                offsetof(blackhole::EthFwMailbox, arg) + (arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]));
     };
 

@@ -309,6 +309,7 @@ void send_msg_to_eth_mailbox(
     chip_id_t device_id,
     const CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
+    int mailbox_index,
     std::vector<uint32_t> args,
     bool wait_for_ack,
     int timeout_ms) {
@@ -325,7 +326,8 @@ void send_msg_to_eth_mailbox(
         "target core for send_msg_to_eth_mailbox {} (virtual) must be an active ethernet core",
         virtual_core.str());
 
-    const auto mailbox_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_FW_MAILBOX);
+    const auto max_args = hal.get_eth_fw_mailbox_arg_count();
+    const auto mailbox_addr = hal.get_eth_fw_mailbox_address(mailbox_index);
     const auto status_mask = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_STATUS_MASK);
     const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
     const auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
@@ -361,12 +363,11 @@ void send_msg_to_eth_mailbox(
 
     // Must write args first.
     auto write_arg = [&](int index, uint32_t val) {
-        uint32_t arg_addr = hal.get_eth_fw_mailbox_arg_addr(index);
+        uint32_t arg_addr = hal.get_eth_fw_mailbox_arg_addr(mailbox_index, index);
         write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{val}, arg_addr);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     };
 
-    const auto max_args = hal.get_eth_fw_mailbox_arg_count();
     TT_ASSERT(args.size() <= max_args, "Too many args provided {} max args {}", args.size(), max_args);
     // Pad remaining args to zero
     args.resize(max_args, 0);
