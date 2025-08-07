@@ -155,7 +155,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         topk_is_dram,
         mapping_is_dram,
         metadata_is_dram,
-        local_reduce};
+        local_reduce,
+        flat_mesh_idx};
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -166,7 +167,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     const auto output_datum_size_bytes = tt::datum_size(output_mapping_data_format);
     const auto reduction_size = operation_attributes.reduction_size;
-    const std::vector<uint32_t> writer_ct_args = {
+    std::vector<uint32_t> writer_ct_args = {
         local_experts_cb_id,
         metadata_cb_id,
         topk_cb_id,
@@ -193,7 +194,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
 
     const auto [core_page_increments, all_cores] =
-        tt::tt_metal::split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
+        split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
 
     const auto mapping_tensor_addr = mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
     const auto metadata_tensor_addr = metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();

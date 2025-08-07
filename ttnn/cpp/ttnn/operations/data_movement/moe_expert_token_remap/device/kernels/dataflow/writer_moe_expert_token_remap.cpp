@@ -37,9 +37,10 @@ void kernel_main() {
     constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(8);
     constexpr uint32_t output_reduced_page_size_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t reduction_size = get_compile_time_arg_val(10);
-    
-    constexpr auto output_mapping_args = TensorAccessorArgs<10>();
-    constexpr auto output_reduced_args = TensorAccessorArgs<output_mapping_args::output_mapping_args()>();
+
+    constexpr auto output_mapping_args = TensorAccessorArgs<11>();
+    constexpr auto output_reduced_args =
+        TensorAccessorArgs<decltype(output_mapping_args)::next_compile_time_args_offset()>();
 
     using data_addr_t = detail::DataTypeHolder<datum_size_bytes>::type;
 
