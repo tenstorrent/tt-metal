@@ -21,7 +21,11 @@ DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 
 
 def _get_rich_table(
-    mesh_device: "ttnn.MeshDevice", style_cell: Optional[Callable] = None, annotate_cell: Optional[Callable] = None
+    mesh_device: "ttnn.MeshDevice",
+    tensor: "ttnn.Tensor" = None,
+    on_mesh_device: bool = True,
+    style_cell: Optional[Callable] = None,
+    annotate_cell: Optional[Callable] = None,
 ):
     from rich import box, padding
     from rich.align import Align
@@ -32,17 +36,30 @@ def _get_rich_table(
     CELL_SIZE = 30
 
     # Setup rich table
-    try:
-        rows, cols = mesh_device.shape
-    except AttributeError as e:
-        logger.error("Error getting device mesh shape: {}.", e)
-        rows, cols = 0, 0
+    if on_mesh_device:
+        try:
+            rows, cols = mesh_device.shape
+            view = mesh_device.get_view()
+            fully_local = view.fully_local()
+        except AttributeError as e:
+            logger.error("Error with mesh device setup: {}.", e)
+            rows, cols = 0, 0
+    else:
+        try:
+            distributed_host_buffer = tensor.get_distributed_host_buffer()
+            rows, cols = distributed_host_buffer.shape()
+            fully_local = distributed_host_buffer.fully_local()
+        except AttributeError as e:
+            logger.error("Error getting distributed host buffer shape: {}.", e)
+            rows, cols = 0, 0
 
-    view = mesh_device.get_view()
-    fully_local = view.fully_local()
+    if tensor:
+        table_title = f"Tensor(storage: {tensor.storage_type()})"
+    else:
+        table_title = f"MeshDevice(rows={rows}, cols={cols})"
 
-    mesh_table = Table(
-        title=f"MeshDevice(rows={rows}, cols={cols}):",
+    table_view = Table(
+        title=table_title,
         show_header=False,
         show_footer=False,
         box=box.SQUARE,
@@ -52,7 +69,7 @@ def _get_rich_table(
     )
 
     for _ in range(cols):
-        mesh_table.add_column(justify="center", vertical="middle", width=CELL_SIZE)
+        table_view.add_column(justify="center", vertical="middle", width=CELL_SIZE)
 
     # Populate table
     for row_idx in range(rows):
@@ -60,10 +77,16 @@ def _get_rich_table(
         for col_idx in range(cols):
             try:
                 coord = ttnn.MeshCoordinate(row_idx, col_idx)
-                locality = "Local\n" if view.is_local(coord) else "Remote\n"
+                if on_mesh_device:
+                    locality = "Local\n" if view.is_local(coord) else "Remote\n"
+                    device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
+                    device_id_str = f"Dev. ID: {device_id}\n" if view.is_local(coord) else "Unknown\n"
+                else:
+                    locality = "Local\n" if distributed_host_buffer.is_local_at(coord) else "Remote\n"
+                    device_id = row_idx * cols + col_idx
+                    device_id_str = ""
+
                 locality = "" if fully_local else locality
-                device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
-                device_id_str = f"Dev. ID: {device_id}\n" if view.is_local(coord) else "Unknown\n"
                 coords = f"({row_idx}, {col_idx})\n"
                 annotation = annotate_cell(device_id) if annotate_cell and device_id is not None else ""
 
@@ -78,8 +101,8 @@ def _get_rich_table(
             if cell_style:
                 cell.style = cell_style
             row_cells.append(cell)
-        mesh_table.add_row(*row_cells)
-    return mesh_table
+        table_view.add_row(*row_cells)
+    return table_view
 
 
 def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" = None):
@@ -100,6 +123,7 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
     from loguru import logger
 
     mesh_device = tensor.device()
+
     try:
         shards = ttnn.get_device_tensors(tensor)
 
@@ -117,7 +141,12 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
             return ""
 
         # Generate the mesh table with shard annotations
-        mesh_table = _get_rich_table(mesh_device, annotate_cell=annotate_with_shard_info)
+        mesh_table = _get_rich_table(
+            mesh_device,
+            tensor,
+            annotate_cell=annotate_with_shard_info,
+            on_mesh_device=ttnn.is_tensor_storage_on_device(tensor),
+        )
 
         Console().print(mesh_table)
 

@@ -296,6 +296,9 @@ public:
     T& at(const MeshCoordinate& coord);
     const T& at(const MeshCoordinate& coord) const;
 
+    // Returns true if all elements in the container are local, false otherwise.
+    bool fully_local();
+
     // Allows to iterate over the container elements, returning a pair of (coordinate, value reference).
     // Note: End iterators have undefined coordinates and should not be dereferenced, following C++ iterator conventions.
     class Iterator {
@@ -374,7 +377,26 @@ private:
     MeshShape shape_;
     MeshCoordinateRange coord_range_;
     std::vector<T> values_;
+    std::optional<bool> fully_local_;
 };
+
+// Template method implementations
+template <typename T>
+bool MeshContainer<T>::fully_local() {
+    if (fully_local_.has_value()) {
+        return fully_local_.value();
+    }
+
+    for (const auto& coord : coord_range()) {
+        if (!this->at(coord).is_local()) {
+            fully_local_ = false;
+            return false;
+        }
+    }
+
+    fully_local_ = true;
+    return true;
+}
 
 /**
  * A specialized MeshContainer where some values may be locally present and some are remote.

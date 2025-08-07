@@ -21,6 +21,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -81,6 +82,7 @@ void py_module_types(py::module& module) {
     py::class_<MeshCoordinateRangeSet>(
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
     py::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
+    py::class_<DistributedHostBuffer>(module, "DistributedHostBuffer");
 }
 
 void py_module(py::module& module) {
@@ -551,6 +553,12 @@ void py_module(py::module& module) {
             str << config;
             return str.str();
         });
+
+    auto py_distributed_host_buffer =
+        static_cast<py::class_<DistributedHostBuffer>>(module.attr("DistributedHostBuffer"));
+    py_distributed_host_buffer.def("is_local_at", &DistributedHostBuffer::is_local_at, py::arg("coord"))
+        .def("fully_local", &DistributedHostBuffer::fully_local)
+        .def("shape", &DistributedHostBuffer::shape, py::return_value_policy::reference_internal);
 
     module.def(
         "get_device_tensors",

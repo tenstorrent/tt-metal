@@ -36,6 +36,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -1655,6 +1656,16 @@ void pytensor_module(py::module& m_tensor) {
 
                     py_list = tt_tensor.to_list()
             )doc")
+        .def(
+            "get_distributed_host_buffer",
+            [](Tensor& self) { return self.host_storage().buffer(); },
+            R"doc(
+                Get the distributed host buffer that tensor is stored on.
+
+                .. code-block:: python
+
+                    distributed_host_buffer = tt_tensor.get_distributed_host_buffer()
+                )doc")
         .def_property(
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
