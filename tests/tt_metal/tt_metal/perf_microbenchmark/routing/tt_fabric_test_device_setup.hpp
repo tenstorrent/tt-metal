@@ -508,8 +508,9 @@ inline void TestDevice::create_sync_kernel() {
     std::vector<uint32_t> ct_args = {
         is_2d_fabric,
         use_dynamic_routing,
-        sync_sender.sync_fabric_connections_.size(), /* num sync fabric connections */
-        static_cast<uint32_t>(senders_.size() + 1)   /* num local sync cores (all senders + sync core) */
+        sync_sender.sync_fabric_connections_.size(),        /* num sync fabric connections */
+        static_cast<uint32_t>(senders_.size() + 1),         /* num local sync cores (all senders + sync core) */
+        sender_memory_map_->common.get_kernel_config_size() /* kernel config buffer size */
     };
 
     // Runtime args: memory map args, then sync fabric connection args
@@ -588,11 +589,12 @@ inline void TestDevice::create_sender_kernels() {
         std::vector<uint32_t> ct_args = {
             is_2d_fabric,
             use_dynamic_routing,
-            sender.fabric_connections_.size(), /* num fabric connections */
-            sender.configs_.size(),            /* num traffic configs */
-            (uint32_t)benchmark_mode_,         /* benchmark mode */
-            (uint32_t)global_sync_,            /* line sync enabled */
-            num_local_sync_cores               /* num local sync cores */
+            sender.fabric_connections_.size(),                  /* num fabric connections */
+            sender.configs_.size(),                             /* num traffic configs */
+            (uint32_t)benchmark_mode_,                          /* benchmark mode */
+            (uint32_t)global_sync_,                             /* line sync enabled */
+            num_local_sync_cores,                               /* num local sync cores */
+            sender_memory_map_->common.get_kernel_config_size() /* kernel config buffer size */
         };
 
         // Runtime args: memory map args, then fabric connection args
@@ -665,7 +667,9 @@ inline void TestDevice::create_receiver_kernels() {
 
         // Compile-time args
         std::vector<uint32_t> ct_args = {
-            receiver.configs_.size(), benchmark_mode_ ? 1u : 0u /* benchmark mode */
+            receiver.configs_.size(),                             /* num traffic configs */
+            benchmark_mode_ ? 1u : 0u,                            /* benchmark mode */
+            receiver_memory_map_->common.get_kernel_config_size() /* kernel config buffer size */
         };
 
         // Runtime args: memory map args - receivers don't have fabric connections

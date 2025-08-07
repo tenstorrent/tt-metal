@@ -125,6 +125,7 @@ std::vector<Tensor> matmul_reduce_scatter_async(
     const std::optional<const Tensor>& bias = std::nullopt,
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_rs = std::nullopt,
+    const std::optional<MemoryConfig>& intermediate_memory_config_rs = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,

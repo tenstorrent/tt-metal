@@ -277,7 +277,7 @@ def get_ops(timeseries):
                                 assertMsg = f"This is before other cores are finished with this op. Data corruption could be the cause of this. Please retry your run"
                             else:
                                 assertMsg = f"This is before other cores have reported any activity on this op. Other cores might have their profiler buffer filled up. "
-                                assertMsg += "Please either decrease the number of ops being profiled or run dump device profiler more often"
+                                assertMsg += "Please either decrease the number of ops being profiled or run read device profiler more often"
                         else:
                             assertMsg = f"This is before a FW end was received for this op. Data corruption could be the cause of this. Please retry your run"
                         assert (

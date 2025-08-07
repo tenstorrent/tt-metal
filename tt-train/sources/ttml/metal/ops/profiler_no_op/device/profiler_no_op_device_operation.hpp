@@ -32,7 +32,9 @@ struct ProfilerNoopOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor, const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+        const ttnn::Tensor& input_tensor,
+        const std::string& identifier,
+        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::profiler_no_op::device

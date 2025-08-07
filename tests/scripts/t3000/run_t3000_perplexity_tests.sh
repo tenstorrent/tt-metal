@@ -8,7 +8,7 @@ run_t3000_falcon7b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_falcon7b_perplexity_tests"
 
   # Falcon7B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py --timeout=1500 ; fail+=$?
+  pytest -n auto models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py --timeout=1500 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -27,7 +27,7 @@ run_t3000_falcon40b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_perplexity_tests"
 
   # Falcon40B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
+  pytest -n auto models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -50,7 +50,7 @@ run_t3000_llama70b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_llama70b_perplexity_tests"
 
   # Llama-70B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
+  pytest -n auto models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -69,8 +69,8 @@ run_t3000_mixtral8x7b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral8x7b_perplexity_tests"
 
   # Mixtral8x7B perplexity tests
-  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -121,7 +121,6 @@ run_t3000_mistral_perplexity_tests() {
 
   echo "LOG_METAL: Running run_t3000_mistral_perplexity_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
   hf_model="mistralai/Mistral-7B-Instruct-v0.3"
   WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_accuracy.py --timeout=3600
@@ -178,7 +177,7 @@ run_t3000_qwen25_perplexity_tests() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen72b=Qwen/Qwen2.5-72B-Instruct
 
-  HF_MODEL=$qwen72b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout 3600; fail+=$?
+  HF_MODEL=$qwen72b pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout 3600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -202,7 +201,7 @@ run_t3000_qwen3_perplexity_tests() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen32b=Qwen/Qwen3-32B
 
-  HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout 3600; fail+=$?
+  HF_MODEL=$qwen32b pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout 3600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

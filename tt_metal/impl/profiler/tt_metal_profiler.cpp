@@ -154,9 +154,9 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     tt_metal::detail::WaitProgramDone(device, sync_program, false);
     std::vector<CoreCoord> cores = {core};
     tt_metal_device_profiler_map.at(device_id).readResults(
-        device, cores, ProfilerDumpState::NORMAL, ProfilerDataBufferSource::L1);
+        device, cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
     tt_metal_device_profiler_map.at(device_id).processResults(
-        device, cores, ProfilerDumpState::NORMAL, ProfilerDataBufferSource::L1);
+        device, cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
 
     log_info(tt::LogMetal, "SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime)) {
@@ -307,8 +307,8 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     if (device_profiler_it != tt_metal_device_profiler_map.end()) {
         DeviceProfiler& device_profiler = device_profiler_it->second;
         device_profiler.device_sync_new_events.clear();
-        device_profiler.readResults(device, worker_cores, ProfilerDumpState::NORMAL, ProfilerDataBufferSource::L1);
-        device_profiler.processResults(device, worker_cores, ProfilerDumpState::NORMAL, ProfilerDataBufferSource::L1);
+        device_profiler.readResults(device, worker_cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
+        device_profiler.processResults(device, worker_cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
         for (auto& event : device_profiler.device_events) {
             const ZoneDetails zone_details = device_profiler.getZoneDetails(event.timer_id);
             if (zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::SYNC_ZONE)]) {
@@ -650,7 +650,7 @@ void InitDeviceProfiler(IDevice* device) {
         const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
 
         auto& profiler = tt_metal_device_profiler_map.at(device_id);
-        profiler.setLastFDDumpAsNotDone();
+        profiler.setLastFDReadAsNotDone();
         profiler.profile_buffer_bank_size_bytes = bank_size_bytes;
         profiler.profile_buffer.resize(profiler.profile_buffer_bank_size_bytes * num_dram_banks / sizeof(uint32_t));
 
@@ -686,20 +686,20 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
     return true;
 }
 
-bool skipReadingDeviceProfilerResults(const ProfilerDumpState state) {
+bool skipReadingDeviceProfilerResults(const ProfilerReadState state) {
     return !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
-           state == ProfilerDumpState::ONLY_DISPATCH_CORES;
+           state == ProfilerReadState::ONLY_DISPATCH_CORES;
 }
 
-bool onlyProfileDispatchCores(const ProfilerDumpState state) {
+bool onlyProfileDispatchCores(const ProfilerReadState state) {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
-           state == ProfilerDumpState::ONLY_DISPATCH_CORES;
+           state == ProfilerReadState::ONLY_DISPATCH_CORES;
 }
 
 void ReadDeviceProfilerResults(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
-    ProfilerDumpState state,
+    ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -762,7 +762,7 @@ void ReadDeviceProfilerResults(
 void ProcessDeviceProfilerResults(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
-    ProfilerDumpState state,
+    ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -784,7 +784,7 @@ void ProcessDeviceProfilerResults(
 #endif
 }
 
-std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const ProfilerDumpState state) {
+std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const ProfilerReadState state) {
     std::vector<CoreCoord> virtual_cores;
 
     const chip_id_t device_id = device->id();
@@ -815,8 +815,8 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
     return virtual_cores;
 }
 
-void DumpDeviceProfileResults(
-    IDevice* device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
+void ReadDeviceProfilerResults(
+    IDevice* device, ProfilerReadState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -826,11 +826,11 @@ void DumpDeviceProfileResults(
         DeviceProfiler& profiler = profiler_it->second;
 
         if (useFastDispatch(device)) {
-            if (profiler.isLastFDDumpDone() && state == ProfilerDumpState::LAST_FD_DUMP) {
+            if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
                 ZoneScopedN("Skipping! Last FD dispatch is done");
                 return;
-            } else if (state == ProfilerDumpState::LAST_FD_DUMP) {
-                profiler.setLastFDDumpAsDone();
+            } else if (state == ProfilerReadState::LAST_FD_READ) {
+                profiler.setLastFDReadAsDone();
             }
             for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
                 Finish(device->command_queue(cq_id));
@@ -871,9 +871,9 @@ uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, 
 
 }  // namespace detail
 
-void DumpMeshDeviceProfileResults(
+void ReadMeshDeviceProfilerResults(
     distributed::MeshDevice& mesh_device,
-    ProfilerDumpState state,
+    ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -885,11 +885,11 @@ void DumpMeshDeviceProfileResults(
                 TT_ASSERT(profiler_it != detail::tt_metal_device_profiler_map.end());
                 DeviceProfiler& profiler = profiler_it->second;
 
-                if (profiler.isLastFDDumpDone() && state == ProfilerDumpState::LAST_FD_DUMP) {
+                if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
                     ZoneScopedN("Skipping! Last FD dispatch is done");
                     return;
-                } else if (state == ProfilerDumpState::LAST_FD_DUMP) {
-                    profiler.setLastFDDumpAsDone();
+                } else if (state == ProfilerReadState::LAST_FD_READ) {
+                    profiler.setLastFDReadAsDone();
                 }
             }
 

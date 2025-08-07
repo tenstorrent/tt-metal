@@ -30,21 +30,6 @@
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to_device(
-    const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, target_device, mem_config);
-    if (input_tensor.storage_type() == StorageType::DEVICE) {
-        TT_FATAL(input_tensor.device() == target_device, "Currently do not support moving between devices");
-        GraphTracker::instance().track_function_end(input_tensor);
-        return input_tensor;
-    }
-    auto device_tensor = tensor_impl::to_device_wrapper(input_tensor, target_device, mem_config, cq_id);
-    device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
-    GraphTracker::instance().track_function_end(device_tensor);
-    return device_tensor;
-}
-
-Tensor tensor_to_device(
     const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);

@@ -6,6 +6,8 @@
 
 #include <optional>
 
+#include "core/tt_profiler.hpp"
+
 namespace ttml::autograd {
 
 std::mt19937& AutoContext::get_generator() {
@@ -55,6 +57,10 @@ void AutoContext::open_device(
     m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids);
 }
 
+void AutoContext::close_profiler() {
+    m_profiler = nullptr;
+}
+
 void AutoContext::close_device() {
     m_device = nullptr;
 }
@@ -87,6 +93,13 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
     }
     DistributedContext::create(argc, argv);
     m_distributed_context = DistributedContext::get_current_world();
+}
+
+core::TTProfiler& AutoContext::get_profiler() {
+    if (!m_profiler) {
+        m_profiler = std::make_unique<core::TTProfiler>();
+    }
+    return *m_profiler;
 }
 
 }  // namespace ttml::autograd

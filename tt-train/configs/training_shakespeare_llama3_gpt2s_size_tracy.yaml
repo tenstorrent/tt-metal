@@ -1,0 +1,33 @@
+training_config:
+  project_name: "tt_train_nano_gpt" # not really nanogpt, but want to use the same wandb project name for now
+  model_type: "llama"
+  seed: 5489
+  model_save_interval: 500
+  batch_size: 4
+  num_epochs: 1
+  max_steps: 4
+  gradient_accumulation_steps: 2
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  use_clip_grad_norm: false
+  tokenizer_type: bpe
+  tokenizer_path: "data/gpt2-tokenizer.json"
+
+  transformer_config:
+    num_heads: 12
+    num_groups: 3
+    embedding_dim: 768
+    dropout_prob: 0.2
+    num_blocks: 12
+    vocab_size: 96
+    max_sequence_length: 1024
+    runner_type: memory_efficient
+    theta: 10000.0
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

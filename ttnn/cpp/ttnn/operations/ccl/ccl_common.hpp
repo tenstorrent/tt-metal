@@ -51,6 +51,11 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
 // Returns a vector of devices that the given tensor is stored on.
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 
+// Returns a vector of devices that `tensor_shards` are stored on.
+// Each `tensor_shard` is assumed to be allocated on a 1x1 "unit-mesh"; the function returns the devices that the shards
+// to run a CCL over the unit-meshes.
+std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
+
 struct SyncModeSpec {
     uint32_t num_signals = 0;
     CoreCoord core;
@@ -704,6 +709,17 @@ private:
 };
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device);
+
+std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
+    size_t ring_size, size_t ring_index, Topology topology, bool static_alternate);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
+    Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device, uint32_t num_targets_forward, uint32_t num_targets_backward);
+
 
 }  // namespace ccl
 }  // namespace ttnn

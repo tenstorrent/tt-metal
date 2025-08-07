@@ -92,52 +92,41 @@ class TtResnetBlock2D(nn.Module):
 
         self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
+        self.compute1_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv1")
         if self.split_conv:
             (
-                self.compute1_config,
                 self.tt_conv1_weights,
                 self.tt_conv1_bias,
                 self.conv1_params,
             ) = prepare_split_conv_params(
-                device,
                 conv_weights_1,
                 conv_bias_1,
                 self.conv1_config.weights_dtype,
                 split_in,
                 split_out,
-                fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
-                and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
             )
         else:
             (
-                self.compute1_config,
                 self.tt_conv1_weights,
                 self.tt_conv1_bias,
                 self.conv1_params,
             ) = prepare_conv_params(
-                device,
                 conv_weights_1,
                 conv_bias_1,
                 self.conv1_config.weights_dtype,
-                fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
-                and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
             )
-
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
+        self.compute2_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv2")
+
         (
-            self.compute2_config,
             self.tt_conv2_weights,
             self.tt_conv2_bias,
             self.conv2_params,
         ) = prepare_conv_params(
-            device,
             conv_weights_2,
             conv_bias_2,
             self.conv2_config.weights_dtype,
-            fp32_dest_acc_en=(self.conv2_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv2_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
-
         if conv_shortcut:
             self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(
                 device, conv_weights_3, conv_bias_3, model_config.conv_w_dtype
@@ -220,6 +209,20 @@ class TtResnetBlock2D(nn.Module):
                 groups=self.groups,
             )
         else:
+            # Workaround for #25898
+            # Conv calls to_mem_cfg, which doesn't call reshard but calls s2i -> i2s with dram mem config.
+            # Do that here, as s2i -> i2s with L1 mem config is faster than dram mem config.
+            if (
+                self.conv1_config.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                and hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            ):
+                if hidden_states.memory_config().shard_spec.shape[1] % 32 != 0 or (
+                    H == 64
+                    and W == 64
+                    and self.conv1_params["input_channels"] == 1280
+                    and self.conv1_params["output_channels"] == 640
+                ):
+                    hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
             [hidden_states, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
                 input_tensor=hidden_states,
                 weight_tensor=self.tt_conv1_weights,
@@ -284,6 +287,15 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.silu(hidden_states)
 
+        # Workaround for #25898
+        # Conv calls to_mem_cfg, which doesn't call reshard but calls s2i -> i2s with dram mem config.
+        # Do that here, as s2i -> i2s with L1 mem config is faster than dram mem config.
+        if (
+            self.conv2_config.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            and hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        ):
+            if hidden_states.memory_config().shard_spec.shape[1] % 32 != 0:
+                hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,

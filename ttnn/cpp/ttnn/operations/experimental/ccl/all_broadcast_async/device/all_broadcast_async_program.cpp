@@ -115,7 +115,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         cb_src0_config = tt::tt_metal::CircularBufferConfig(3 * buffer_page_size, {{src0_cb_index, df}})
                              .set_page_size(src0_cb_index, buffer_page_size);
     }
-    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
@@ -125,8 +125,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // Tensor Info
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
@@ -285,7 +284,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
-            const auto& output = output_tensors[0];
 
             auto semaphore = static_cast<const ttnn::AllBroadcastAsync*>(operation)->semaphore;
 

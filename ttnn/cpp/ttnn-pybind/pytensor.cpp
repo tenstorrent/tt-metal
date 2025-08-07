@@ -952,34 +952,6 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<IDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
-            py::arg("device").noconvert(),
-            py::arg("mem_config").noconvert() = MemoryConfig{},
-            py::arg("cq_id") = ttnn::DefaultQueueId,
-            py::keep_alive<0, 2>(),
-            R"doc(
-            Move TT Tensor from host device to TT accelerator device.
-
-            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
-
-            If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
-
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | Argument  | Description                                     | Data type                  | Valid range           | Required |
-            +===========+=================================================+============================+=======================+==========+
-            | arg0      | Device to which tensor will be moved            | ttnn.Device                | TT accelerator device | Yes      |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | arg1      | MemoryConfig of tensor of TT accelerator device | ttnn.MemoryConfig          |                       | No       |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | arg2      | CQ ID of TT accelerator device to use           | uint8_t                    |                       | No       |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-
-            .. code-block:: python
-
-                tt_tensor = tt_tensor.to(tt_device)
-        )doc")
-        .def(
-            "to",
             py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{},

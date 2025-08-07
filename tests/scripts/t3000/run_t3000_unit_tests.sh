@@ -61,13 +61,16 @@ run_t3000_ttfabric_tests() {
   #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
   # these tests cover mux fixture as well
+  TT_METAL_FABRIC_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+  TT_METAL_FABRIC_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
 
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
   TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-  TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_t3k.yaml
+  TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
+  TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
 
   # Record the end time
   end_time=$(date +%s)
@@ -91,9 +94,9 @@ run_t3000_ttnn_tests() {
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
   ./build/test/ttnn/unit_tests_ttnn_accessor
   ./build/test/ttnn/test_ccl_multi_cq_multi_device
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
+  pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
+  pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
+  pytest tests/ttnn/unit_tests/operations/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/test_multi_device_async.py ; fail+=$?
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
@@ -145,7 +148,7 @@ run_t3000_falcon40b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
+  pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
 
 
   # Record the end time
@@ -164,7 +167,6 @@ run_t3000_llama3-small_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3-small_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.2-1B
   llama1b=meta-llama/Llama-3.2-1B-Instruct
   # Llama3.2-3B
@@ -200,7 +202,6 @@ run_t3000_llama3.2-11b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3.2-11b_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.2-11B weights
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
@@ -228,7 +229,6 @@ run_t3000_llama3.1-70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3.1-70b_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.1-70B weights
   llama70b=meta-llama/Llama-3.1-70B-Instruct
 
@@ -256,7 +256,6 @@ run_t3000_llama3.2-90b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3.2-90b_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.2-90B weights
   # use repacked weights to shorten unit test time by loading only the necessary weights
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
@@ -283,17 +282,16 @@ run_t3000_mistral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mistral_unit_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
   hf_model="mistralai/Mistral-7B-Instruct-v0.3"
 
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention_prefill.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_embedding.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_mlp.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_rms_norm.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder.py
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention.py
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention_prefill.py
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_embedding.py
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_mlp.py
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_rms_norm.py
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder.py
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py
 
 }
 
@@ -304,7 +302,6 @@ run_t3000_llama3.2-11b-vision_unit_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3.2-11b-vision_unit_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.2-11B
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
@@ -334,7 +331,6 @@ run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests() {
 
   echo "LOG_METAL: Running run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.2-11B
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
   # Use MESH_DEVICE env variable to run on an N300 mesh
@@ -366,7 +362,6 @@ run_t3000_llama3.2-90b-vision_unit_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3.2-90b-vision_unit_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # use repacked weights to shorten unit test time by loading only the necessary weights
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
 
@@ -396,15 +391,15 @@ run_t3000_mixtral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_rms_norm.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_embedding.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_rms_norm.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_embedding.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py ; fail+=$?
   # Mixtral prefill tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp_prefill.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe_prefill.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp_prefill.py ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe_prefill.py ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
@@ -421,10 +416,10 @@ run_t3000_grok_tests() {
 
   echo "LOG_METAL: Running run_t3000_grok_tests"
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
+  pytest -n auto models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
+  pytest -n auto models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
+  pytest -n auto models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
+  pytest -n auto models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -442,7 +437,7 @@ run_t3000_unet_shallow_tests() {
 
   echo "LOG_METAL: Running run_t3000_unet_shallow_tests"
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests/test_unet_multi_device.py; fail+=$?
+  pytest -n auto models/experimental/functional_unet/tests/test_unet_multi_device.py; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -453,6 +448,48 @@ run_t3000_unet_shallow_tests() {
   fi
 }
 
+run_t3000_qwen25_vl_unit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  # install qwen25_vl requirements
+  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  qwen25_vl_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-32B-Instruct/
+  qwen25_vl_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-72B-Instruct/
+
+  for qwen_dir in "$qwen25_vl_32b" "$qwen25_vl_72b"; do
+    # test_mlp.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_mlp.py --timeout 400 || fail=1
+    echo "LOG_METAL: Unit tests in test_mlp.py for $qwen_dir on T3K completed"
+    # test_rms_norm.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_rms_norm.py --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_rms_norm.py for $qwen_dir on T3K completed"
+    # test_vision_attention.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_vision_attention.py --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_vision_attention.py for $qwen_dir on T3K completed"
+    # test_vision_block.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_vision_block.py --timeout 600 || fail=1
+    echo "LOG_METAL: Unit tests in test_vision_block.py for $qwen_dir on T3K completed"
+    # test_patch_merger.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_patch_merger.py --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_patch_merger.py for $qwen_dir on T3K completed"
+    # test_model.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_model.py -k two_layers --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_model.py for $qwen_dir on T3K completed"
+    # test_wrapped_model.py
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_wrapped_model.py -k two_layers --timeout 180 || fail=1
+    echo "LOG_METAL: Unit tests in test_wrapped_model.py for $qwen_dir on T3K completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
 
 run_t3000_tests() {
   # Run ttmetal tests

@@ -8,6 +8,7 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from tests.scripts.common import get_updated_device_params
 
 
@@ -59,7 +60,7 @@ def mesh_device(request, device_params):
 
 @pytest.fixture(scope="session")
 def model_path():
-    return Path(os.getenv("HF_MODEL", "models/demos/deepseek_v3/reference"))
+    return Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
 
 
 @pytest.fixture(scope="session")
@@ -82,3 +83,12 @@ def mesh_row(mesh_device):
         yield rows[0]
     else:
         yield mesh_device
+
+
+@pytest.fixture
+def ccl(mesh_device):
+    """
+    Fixture to create a CCL1D instance for testing.
+    This is used to test distributed operations in DeepSeek modules.
+    """
+    return CCL1D(mesh_device)

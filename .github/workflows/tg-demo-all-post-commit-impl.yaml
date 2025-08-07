@@ -30,7 +30,7 @@ jobs:
           {
             name: "Galaxy Llama3 demo tests",
             arch: wormhole_b0,
-            cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/demo/text_demo.py -k apc',
+            cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc',
             model: llama3,
             timeout: 10,
             owner_id: U053W15B6JF

@@ -40,20 +40,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  ttnn-unit-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/ttnn-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150b"]') }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.card_type }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   blackhole-llmbox-demo-tests:
     needs: build-artifact
     secrets: inherit

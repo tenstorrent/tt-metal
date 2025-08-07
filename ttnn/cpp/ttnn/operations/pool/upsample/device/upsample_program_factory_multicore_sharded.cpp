@@ -205,7 +205,7 @@ static Tensor create_config_tensor(
 operation::ProgramWithCallbacks upsample_multi_core_sharded(
     const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     Program program = CreateProgram();
-    IDevice* device = input.device();
+    distributed::MeshDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());

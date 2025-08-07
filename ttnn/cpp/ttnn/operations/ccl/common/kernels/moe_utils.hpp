@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <tuple>
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
@@ -78,7 +79,7 @@ std::pair<uint32_t, uint32_t> get_mesh_coords(uint32_t linearized_mesh_coord) {
 }
 
 template <tt::tt_fabric::Topology Topology>
-uint32_t distance(uint32_t position_1, uint32_t position_2, uint32_t axis_size) {
+uint32_t topological_distance(uint32_t position_1, uint32_t position_2, uint32_t axis_size) {
     if (position_1 == position_2) {
         return 0;
     }
@@ -90,11 +91,21 @@ uint32_t distance(uint32_t position_1, uint32_t position_2, uint32_t axis_size) 
     }
 }
 
+template <uint32_t AxisSize>
+uint32_t directional_wrap_distance(uint32_t position_1, uint32_t position_2, bool is_forward) {
+    if (is_forward) {
+        return (position_2 - position_1 + AxisSize) % AxisSize;
+    } else {
+        return (position_1 - position_2 + AxisSize) % AxisSize;
+    }
+}
+
 template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
 uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
     auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
-    return distance<Topology>(src_row, dest_row, MeshRows) + distance<Topology>(src_col, dest_col, MeshCols);
+    return topological_distance<Topology>(src_row, dest_row, MeshRows) +
+           topological_distance<Topology>(src_col, dest_col, MeshCols);
 }
 
 template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
@@ -107,8 +118,8 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             return src_col < dest_col ? eth_chan_directions::EAST : eth_chan_directions::WEST;
         } else {
             // with wrap around, we can go either East or West. Choose the shorter route
-            uint32_t east_distance = distance<tt::tt_fabric::Topology::Mesh>(src_col, dest_col, MeshCols);
-            uint32_t west_distance = distance<tt::tt_fabric::Topology::Mesh>(src_col, dest_col, MeshCols);
+            uint32_t east_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, true);
+            uint32_t west_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, false);
             return east_distance < west_distance ? eth_chan_directions::EAST : eth_chan_directions::WEST;
         }
     } else if (src_col == dest_col) {
@@ -116,8 +127,8 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route
-            uint32_t north_distance = distance<tt::tt_fabric::Topology::Mesh>(src_row, dest_row, MeshRows);
-            uint32_t south_distance = distance<tt::tt_fabric::Topology::Mesh>(src_row, dest_row, MeshRows);
+            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, false);
+            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, true);
             return north_distance < south_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
         }
     } else {
@@ -127,8 +138,8 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route
-            uint32_t north_distance = distance<tt::tt_fabric::Topology::Mesh>(src_row, dest_row, MeshRows);
-            uint32_t south_distance = distance<tt::tt_fabric::Topology::Mesh>(src_row, dest_row, MeshRows);
+            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, false);
+            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, true);
             return north_distance < south_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
         }
     }
@@ -380,4 +391,21 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 }
 
+template <typename T, uint32_t Size, bool ReturnIdx>
+inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
+    for (uint32_t i = 0; i < Size; ++i) {
+        if (ptr[i] == val) {
+            if constexpr (ReturnIdx) {
+                return std::make_tuple(true, i);
+            } else {
+                return true;
+            }
+        }
+    }
+    if constexpr (ReturnIdx) {
+        return std::make_tuple(false, 0ul);
+    } else {
+        return false;
+    }
+}
 }  // namespace ttnn::operations::ccl::common

@@ -30,24 +30,20 @@ void kernel_main() {
     constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(7);
     constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(8);
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(9);
+    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
+    constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    constexpr DataFormat input_tensor_data_format = get_dataformat(input_tensor_cb_index);
-    const InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_dram = {
-        .bank_base_address = input_tensor_buffer_addr,
-        .page_size = input_tensor_tile_size_bytes,
-        .data_format = input_tensor_data_format};
+    const auto input_tensor_dram =
+        TensorAccessor(input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
 
     // Output tensor config
     constexpr uint32_t output_tensor_tile_size_bytes = get_tile_size(output_tensor_cb_index);
-    constexpr DataFormat output_tensor_data_format = get_dataformat(output_tensor_cb_index);
-    const InterleavedAddrGenFast<output_tensor_is_dram> output_tensor_dram = {
-        .bank_base_address = output_tensor_buffer_addr,
-        .page_size = output_tensor_tile_size_bytes,
-        .data_format = output_tensor_data_format};
+    const auto output_tensor_dram =
+        TensorAccessor(output_tensor_args, output_tensor_buffer_addr, output_tensor_tile_size_bytes);
 
     const auto start_tile_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
     uint32_t current_index_tile_id = start_tile_id;

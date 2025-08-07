@@ -1,5 +1,9 @@
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)
 
+add_library(test_common_utils STATIC)
+target_sources(test_common_utils PUBLIC common_test_utils.cpp)
+target_link_libraries(test_common_utils PRIVATE TTNN::CPP)
+
 function(setup_ttnn_test_target target_name)
     target_link_libraries(
         ${target_name}
@@ -23,7 +27,6 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(
     unit_tests_ttnn_smoke
     PRIVATE
-        common_test_utils.cpp
         test_reflect.cpp
         test_to_and_from_json.cpp
         test_sliding_window_infra.cpp
@@ -37,6 +40,7 @@ target_link_libraries(
     unit_tests_ttnn_smoke
     PRIVATE
         test_common_libs
+        test_common_utils
         TTNN::CPP
 )
 
@@ -113,6 +117,7 @@ add_executable(unit_tests_ttnn_multihost_ccl_ops)
 target_sources(
     unit_tests_ttnn_multihost_ccl_ops
     PRIVATE
+        multihost_ccl/main.cpp
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost/fabric_tests/intermesh_routing_test_utils.cpp
         multihost_ccl/test_send_recv_ops.cpp
 )
@@ -193,6 +198,7 @@ target_link_libraries(
     PRIVATE
         Boost::asio
         Boost::lockfree
+        test_common_utils
 )
 
 # unit_tests_ttnn_emitc

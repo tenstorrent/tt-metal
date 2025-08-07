@@ -12,7 +12,6 @@ BRISC
 BRISCs
 BUF
 BUFs
-BeginTraceCapture
 BertIntermediate
 BinaryOpType
 BorrowedStorage
@@ -58,17 +57,15 @@ DeviceOperation
 DeviceStorage
 DeviceZoneScopedN
 DstMode
-DumpDeviceProfileResults
-DumpMeshDeviceProfileResults
+ReadDeviceProfilerResults
+ReadMeshDeviceProfilerResults
 ENDL
 ETH
 EltwiseUnary
-EndTraceCapture
 EnqueueProgram
 EnqueueReadBuffer
 EnqueueReadSubBuffer
 EnqueueRecordEvent
-EnqueueTrace
 EnqueueWaitForEvent
 EnqueueWriteBuffer
 EnqueueWriteSubBuffer
@@ -138,8 +135,6 @@ RISCVs
 RISCs
 ReadFromDevice
 ReduceDim
-RepeatTrace
-ReplayTrace
 ResNet
 RuntimeArgs
 SETPRECISION

@@ -31,14 +31,14 @@ jobs:
           {
             name: "Llama Galaxy Accuracy Test",
             arch: wormhole_b0,
-            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_subdevices/tests/test_llama_accuracy.py",
+            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/tests/test_llama_accuracy.py",
             timeout: 30,
             owner_id: U053W15B6JF
           }, # Djordje Ivanovic
           {
             name: "Llama Galaxy Long Stress Test",
             arch: wormhole_b0,
-            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_subdevices/demo/demo_decode.py  -k 'stress-test and not mini-stress-test'",
+            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py  -k 'stress-test and not mini-stress-test'",
             timeout: 240,
             owner_id: U053W15B6JF
           }, # Djordje Ivanovic

@@ -111,7 +111,6 @@ from ttnn._ttnn.multi_device import (
     create_mesh_composer,
     aggregate_tensor,
     distribute_tensor,
-    get_t3k_physical_device_ids_ring,
 )
 
 from ttnn._ttnn.events import (
@@ -134,6 +133,9 @@ from ttnn._ttnn.global_circular_buffer import (
 )
 
 from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
+
+# Import cluster functions and types
+from ttnn._ttnn import cluster
 
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
@@ -187,6 +189,7 @@ from ttnn.types import (
     StorageType,
     DEVICE_STORAGE_TYPE,
     CoreGrid,
+    CoreType,
     CoreRange,
     Shape,
     TensorSpec,
@@ -213,6 +216,7 @@ from ttnn.types import (
     KernelDescriptor,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    TensorAccessorArgs,
 )
 
 from ttnn.device import (
@@ -234,7 +238,7 @@ from ttnn.device import (
     CreateDevices,
     CloseDevice,
     CloseDevices,
-    DumpDeviceProfiler,
+    ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
     format_input_tensor,

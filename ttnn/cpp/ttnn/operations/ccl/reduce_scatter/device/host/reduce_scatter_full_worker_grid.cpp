@@ -85,7 +85,6 @@ static void add_worker_config_to_edm_builders(
     EdmInterfaceAddresses& edm_interface_addresses) {
     bool is_linear = topology_config.is_linear;
     for (std::size_t c = 0; c < num_channels_per_edm; ++c) {
-        std::size_t num_workers_per_eth_buffer = 1;
         auto global_worker_index = get_global_worker_id(link, c, num_channels_per_edm);
         TT_ASSERT(global_worker_index < all_worker_attributes.size());
         WorkerAttributes const& worker_attrs = all_worker_attributes[global_worker_index];
@@ -219,7 +218,6 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
         (topology_config.ring_index == 0 || topology_config.ring_index == topology_config.ring_size - 1);
 
     // If we we implementing a line, and are at the end of the line
-    bool worker_grid_split_in_half = is_start_chip_in_line;
 
     KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id, worker_reduce_kernel_id;
     std::optional<KernelHandle> line_start_sender_kernel_id;
@@ -442,7 +440,6 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
     TT_ASSERT(page_size_in_bytes > 0);
     log_trace(tt::LogOp, "WorkerTransferInfo");
     const std::size_t num_links = topology_config.num_links;
-    std::size_t total_num_workers = num_edm_channels * num_links;
 
     auto get_iter_begin = [num_edm_channels](auto& vec, std::size_t link) -> auto {
         return vec.begin() + (link * num_edm_channels);
@@ -772,9 +769,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         std::min(input_tensor_num_units_per_tensor_slice, (edm_buffer_size_bytes / op_config.get_page_size())) * 2;
     uint32_t cb_num_pages_per_packet = cb_num_pages / 2;
     log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
-    auto const& [cb_src0_workers, cb_src1_workers, cb_dst0_sender_workers, cb_short_circuit_sender_workers, optional_cb_src0_workers_2, optional_cb_src1_workers_2, optional_cb_dst0_sender_workers_2, optional_cb_short_circuit_sender_workers_2] =
-        create_worker_circular_buffers(
-            input_tensor, op_config, worker_core_range, second_worker_core_range, cb_num_pages, program);
+    create_worker_circular_buffers(
+        input_tensor, op_config, worker_core_range, second_worker_core_range, cb_num_pages, program);
 
     uint32_t max_worker_slice_in_bytes = compute_maximum_worker_slice_in_bytes(
         topology, cb_num_pages, cb_num_pages, cb_num_pages, edm_buffer_size_bytes, op_config.get_page_size());

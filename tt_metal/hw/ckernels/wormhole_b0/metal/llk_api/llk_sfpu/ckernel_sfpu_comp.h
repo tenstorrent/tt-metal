@@ -12,6 +12,27 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// These constants and function should ideally go to SFPI
+// Copied from ckernel_sfpu_int_sum.h to avoid dependency complications
+#ifndef SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
+#define SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
+
+#define BIT_MASK_32 0xFFFFFFFF
+#define SIGN 0x80000000
+#define MAGNITUDE 0x7FFFFFFF
+
+// Convert from sign-magnitude to two's complement format
+sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
+    v_if(value & SIGN) {
+        vInt magnitude = value & MAGNITUDE;
+        value = (~magnitude + 1) & BIT_MASK_32;
+    }
+    v_endif;
+    return value;
+}
+
+#endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
+
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
     const vFloat zero = 0.0f;
@@ -121,46 +142,34 @@ inline void calculate_comp_int() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
+    // Convert both operands to two's complement format
+    //
+    // LOGIC:
+    // - Scalar is already in two's complement (from host)
+    // - Convert SFPU input data from sign-magnitude to two's complement
+    // - Perform comparison with both in two's complement format
+
+    // Scalar stays in original two's complement format
+    vInt converted_scalar = scalar;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
         vInt val = 0;
-        vInt s = scalar;
 
-        // a[i] != scalar
+        // Convert input data from sign-magnitude to two's complement
+        v = sfpu_sign_mag_to_twos_comp(v);
+
+        // Now both operands are in two's complement format
+        // Use simple comparison like Blackhole
         if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v >= 0) {
-                v_if(v != scalar) { val = 1; }
-                v_endif;
-            }  // negative comparison not working as expected in WH hence alternate implementation
-            v_else {
-                v_if(s < 0) {
-                    vInt xor_val = reinterpret<vInt>(sfpi::abs(reinterpret<vFloat>(v))) ^ -s;
-                    v_if(xor_val != 0) { val = 1; }
-                    v_endif;
-                }
-                v_else { val = 1; }
-                v_endif;
-            }
+            v_if(v != converted_scalar) { val = 1; }
+            v_endif;
+        } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
+            v_if(v == converted_scalar) { val = 1; }
             v_endif;
         }
-        // a[i] == scalar
-        else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v >= 0) {
-                v_if(v == scalar) { val = 1; }
-                v_endif;
-            }
-            v_else {
-                v_if(s < 0) {
-                    vInt xor_val = reinterpret<vInt>(sfpi::abs(reinterpret<vFloat>(v))) ^ -s;
-                    v_if(xor_val == 0) { val = 1; }
-                    v_endif;
-                }
-                v_else { val = 0; }
-                v_endif;
-            }
-            v_endif;
-        }
+
         dst_reg[0] = val;
         dst_reg++;
     }

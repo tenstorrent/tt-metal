@@ -305,6 +305,6 @@ def get_num_devices(device):
         raise ValueError(f"Unrecognized device type {type(device)}")
 
 
-def dump_device_profiler(device):
+def read_device_profiler(device):
     # device is either a ttnn.MeshDevice or a ttnn.Device
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)

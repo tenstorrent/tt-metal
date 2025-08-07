@@ -25,24 +25,24 @@ void kernel_main() {
     uint32_t front_pad_h = get_arg_val<uint32_t>(6);
     tt_l1_ptr uint32_t* start_dim_offset = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t N = get_compile_time_arg_val(1);
-    constexpr uint32_t H = get_compile_time_arg_val(2);
-    constexpr uint32_t C = get_compile_time_arg_val(3);
-    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t N_padded = get_compile_time_arg_val(5);
-    constexpr uint32_t H_padded = get_compile_time_arg_val(6);
-    constexpr uint32_t C_padded = get_compile_time_arg_val(7);
-    constexpr uint32_t stick_size_padded = get_compile_time_arg_val(8);
-    constexpr uint32_t stick_size_padded_front = get_compile_time_arg_val(9);
-    constexpr uint32_t stick_size_padded_end = get_compile_time_arg_val(10);
-    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(11);
-    constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(12);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(21);
+    constexpr uint32_t N = get_compile_time_arg_val(0);
+    constexpr uint32_t H = get_compile_time_arg_val(1);
+    constexpr uint32_t C = get_compile_time_arg_val(2);
+    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t N_padded = get_compile_time_arg_val(4);
+    constexpr uint32_t H_padded = get_compile_time_arg_val(5);
+    constexpr uint32_t C_padded = get_compile_time_arg_val(6);
+    constexpr uint32_t stick_size_padded = get_compile_time_arg_val(7);
+    constexpr uint32_t stick_size_padded_front = get_compile_time_arg_val(8);
+    constexpr uint32_t stick_size_padded_end = get_compile_time_arg_val(9);
+    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(10);
+    constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(11);
+    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(18);
 
-    constexpr bool not_pad_by_zero = get_compile_time_arg_val(13) == 1;
-    constexpr uint32_t front_padding = get_compile_time_arg_val(9);
-    constexpr bool unaligned = get_compile_time_arg_val(22) == 1;
+    constexpr bool not_pad_by_zero = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t front_padding = get_compile_time_arg_val(8);
+    constexpr bool unaligned = get_compile_time_arg_val(19) == 1;
+    constexpr auto src_args = TensorAccessorArgs<20>();
 
     uint32_t packed_pad_value = 0;
     uint32_t row_major_min_bytes = 0;
@@ -50,23 +50,18 @@ void kernel_main() {
     uint32_t num_end_pad_sticks_read = 0;
     uint32_t num_sticks_padded_read = 0;
     if constexpr (not_pad_by_zero) {
-        packed_pad_value = kernel_compile_time_args[14];
-        row_major_min_bytes = kernel_compile_time_args[15];
-        num_front_pad_sticks_read = kernel_compile_time_args[16];
-        num_end_pad_sticks_read = kernel_compile_time_args[17];
-        num_sticks_padded_read = kernel_compile_time_args[18];
+        packed_pad_value = kernel_compile_time_args[13];
+        row_major_min_bytes = kernel_compile_time_args[14];
+        num_front_pad_sticks_read = kernel_compile_time_args[15];
+        num_end_pad_sticks_read = kernel_compile_time_args[16];
+        num_sticks_padded_read = kernel_compile_time_args[17];
     }
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_pad = tt::CBIndex::c_1;
     constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
 
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(19) == 1;
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(20);
-    constexpr uint32_t page_size = get_compile_time_arg_val(20);
-
-    const auto s =
-        get_interleaved_addr_gen<src_is_dram, stick_size_is_pow2>(src_addr, page_size, log_base_2_of_page_size);
+    const auto s = TensorAccessor(src_args, src_addr, stick_size_bytes);
 
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
 

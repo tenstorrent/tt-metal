@@ -40,6 +40,7 @@ class Emb(torch.nn.Module):
         (2048, 150, 0.085),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_model_perf(
     t3k_mesh_device,
     generation_start_pos,
@@ -103,7 +104,7 @@ def test_mixtral_model_perf(
     profiler.print(units="ms")
     compile_and_iter_time = profiler.get("e2e_decode_compile")
 
-    ttnn.DumpDeviceProfiler(t3k_mesh_device)
+    ttnn.ReadDeviceProfiler(t3k_mesh_device)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
@@ -240,8 +241,8 @@ def test_mixtral_model_with_prefill_perf(
     profiler.print(units="ms")
     prefill_warmup_time = profiler.get("e2e_prefill_warmup")
 
-    # Profiler dump, ready for real run
-    ttnn.DumpDeviceProfiler(t3k_mesh_device)
+    # Profiler read, ready for real run
+    ttnn.ReadDeviceProfiler(t3k_mesh_device)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("prefill perf run")
@@ -253,8 +254,8 @@ def test_mixtral_model_with_prefill_perf(
     profiler.print(units="ms")
     prefill_time = profiler.get("e2e_prefill_1_user")
 
-    # profile dump
-    ttnn.DumpDeviceProfiler(t3k_mesh_device)
+    # profile read
+    ttnn.ReadDeviceProfiler(t3k_mesh_device)
 
     # Decode (Run 1 warmup iteration before running 1 perf iteration)
     generation_start_pos = prefill_seqlen
@@ -269,8 +270,8 @@ def test_mixtral_model_with_prefill_perf(
     profiler.print(units="ms")
     decode_warmup_time = profiler.get("e2e_decode_warmup")
 
-    # Profiler dump, ready for real run
-    ttnn.DumpDeviceProfiler(t3k_mesh_device)
+    # Profiler read, ready for real run
+    ttnn.ReadDeviceProfiler(t3k_mesh_device)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("decode perf run")

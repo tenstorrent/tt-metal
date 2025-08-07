@@ -3,7 +3,7 @@ set -e
 
 run_falcon7b_func() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
+  pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
 
 }
 
@@ -11,7 +11,7 @@ run_mistral7b_func() {
 
   mistral7b=mistralai/Mistral-7B-Instruct-v0.3
   mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
-  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 1200; fail+=$?
+  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 1200; fail+=$?
 
 }
 
@@ -22,31 +22,33 @@ run_qwen7b_func() {
 }
 
 run_segformer_func() {
-
   #Segformer Segmentation Demo
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
 
+  ## Commenting out Segformer Classification Demo. Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
   #Segformer Classification Demo
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
+  # pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
 
 }
 
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference --timeout 600; fail+=$?
+  pytest --disable-warnings models/demos/sentence_bert/demo/demo.py --timeout 600; fail+=$?
 
   #SentenceBERT eval
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval --timeout 600; fail+=$?
+  # comment out SentenceBERT eval from CI tests for now unitl dataset_evaluation test is available in CIv2 (issue: #25866)
+
+  #pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py--timeout 600; fail+=$?
 
 }
 
-#run_yolov11_func() {
-#
-#  #Yolov11 Demo
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
-#
-#}
+run_yolov11_func() {
+
+ #Yolov11 Demo
+ pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
+
+}
 
 run_llama3_func() {
   fail=0
@@ -74,24 +76,25 @@ run_llama3_func() {
 ## comment out ufld_v2 from CI tests for now unitl dataset_evaluation test failure is debugged.
 run_ufld_v2_func() {
   #ufld_v2
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
+  pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
   #ufld_v2 eval
   ## Commenting out UFLDv2 eval since CIv2 does not support dataset download from Kaggle
-  #WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
+  # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+  #pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
 }
 run_vgg_func() {
 
   #VGG11/VGG16
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg/demo/demo.py --timeout 600
+  pytest -n auto models/demos/vgg/demo/demo.py --timeout 600
 
 }
 
 run_bert_tiny_func() {
   fail=0
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/bert_tiny/demo/demo.py --timeout 600 || fail=1
+  pytest -n auto models/demos/bert_tiny/demo/demo.py --timeout 600 || fail=1
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/bert_tiny/demo/demo.py --timeout 600 || fail=1
+  pytest -n auto models/demos/wormhole/bert_tiny/demo/demo.py --timeout 600 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -103,7 +106,7 @@ run_bert_func() {
   fail=0
 
   pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
+  pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -113,13 +116,13 @@ run_bert_func() {
 
 run_resnet_stability() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
+  pytest -n auto --disable-warnings models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
 
 }
 
 run_resnet_func() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/wormhole/resnet50/demo/demo.py
+  pytest -n auto --disable-warnings models/demos/wormhole/resnet50/demo/demo.py
 
 }
 
@@ -132,7 +135,7 @@ run_distilbert_func() {
 
   pytest --disable-warnings models/demos/distilbert/demo/demo.py --timeout 600 || fail=1
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/distilbert/demo/demo.py --timeout 600 || fail=1
+  pytest --disable-warnings models/demos/wormhole/distilbert/demo/demo.py --timeout 600 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -166,7 +169,7 @@ run_roberta_func() {
 
 run_stable_diffusion_func() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900
+  pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900
 
 }
 
@@ -176,9 +179,9 @@ run_mistral7b_perf() {
   mistral7b=mistralai/Mistral-7B-Instruct-v0.3
   mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
   # Run Mistral-7B-v0.3 for N150
-  MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
   # Run Mistral-7B-v0.3 for N300
-  MESH_DEVICE=N300 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  MESH_DEVICE=N300 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
 
 }
 
@@ -215,83 +218,100 @@ run_llama3_perf() {
 run_falcon7b_perf() {
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
 
 }
 
 run_mamba_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420
 
 }
 
 run_whisper_perf() {
 
   # Whisper conditional generation
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  pytest -n auto models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
 
 }
 
 run_yolov9c_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov9c/demo/demo.py --timeout 600
+  pytest -n auto --disable-warnings models/demos/yolov9c/demo/demo.py --timeout 600
 
 }
 run_yolov8s_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8s/demo/demo.py --timeout 600
+  pytest -n auto --disable-warnings models/demos/yolov8s/demo/demo.py --timeout 600
 
 }
 
 # commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
-#run_mobilenetv2_perf(){
-#
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
-#
-#}
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+# run_mobilenetv2_perf(){
+
+#  pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
+
+# }
 
 run_yolov8s_world_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8s_world/demo/demo.py --timeout 600
+  pytest -n auto --disable-warnings models/demos/yolov8s_world/demo/demo.py --timeout 600
 
 }
 
-#comment out vanilla unet for now unitl data and weights loading issues are resolved.
-#run_vanilla_unet_demo() {
-#
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/vanilla_unet/demo/demo.py::test_unet_demo_single_image
-#
-#}
+
+run_vanilla_unet_demo() {
+ # vanilla_unet demo
+ pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+}
 run_yolov8x_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
+  pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
 
 }
 run_yolov4_perf() {
 ## Removed coco dataset evaluation for now because CIv2 does not support downloading of the dataset.
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4 --timeout 600
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_dp --timeout 600
+  pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4 --timeout 600
+  pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_dp --timeout 600
 }
 run_yolov10x_demo() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings  models/demos/yolov10x/demo/demo.py --timeout 600
+  pytest -n auto --disable-warnings  models/demos/yolov10x/demo/demo.py --timeout 600
 
 }
 
 run_yolov7_demo() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov7/demo/demo.py --timeout 600
+  pytest -n auto models/demos/yolov7/demo/demo.py --timeout 600
 
 }
 
-# comment out vgg_unet from CI until data and weights loading problems are resolved
-#run_vgg_unet_demo() {
-#
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
-#
-#}
+run_yolov6l_perf() {
 
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov6l/demo/demo.py --timeout 600
 
+}
+
+# Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+# run_vgg_unet_demo() {
+
+#  pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
+
+# }
+
+run_yolov6l_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov6l/demo/demo.py
+
+}
+
+run_yolov12x_demo() {
+
+  pytest -n auto --disable-warnings  models/demos/yolov12x/demo/demo.py --timeout 600
+
+}
 
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
