@@ -48,6 +48,18 @@ void validate_pool2d(
             input_shape[3],
             num_shards_c);
     }
+
+    // check that the input shape isn't too large for indices in uint16
+    if (sliding_window_config.return_indices) {
+        auto in_h = sliding_window_config.input_hw.first;
+        auto in_w = sliding_window_config.input_hw.second;
+        TT_FATAL(
+            in_h * in_w <= std::numeric_limits<uint16_t>::max(),
+            "input HW shape ({} * {}) is too large for indices stored in uint16 with a limit of {}",
+            in_h,
+            in_w,
+            std::numeric_limits<uint16_t>::max());
+    }
 }
 
 void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
@@ -121,8 +133,17 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
 Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    auto output_spec = compute_output_specs(op_attr, tensors);
-    return create_device_tensor(output_spec, tensors.input_tensor_.device());
+    auto output_spec_data = compute_output_specs(op_attr, tensors);
+    if (op_attr.sliding_window_config_.return_indices) {
+        auto output_spec_ind = output_spec_data;
+        auto& tensor_layout = const_cast<tt::tt_metal::TensorLayout&>(output_spec_ind.tensor_layout());
+        tensor_layout.set_data_type(DataType::UINT16);  // change the data type for the index output tensor
+        return {
+            create_device_tensor(output_spec_data, tensors.input_tensor_.device()),
+            create_device_tensor(output_spec_ind, tensors.input_tensor_.device())};
+    } else {
+        return {create_device_tensor(output_spec_data, tensors.input_tensor_.device())};
+    }
 }
 
 tt::stl::hash::hash_t Pool2D::compute_program_hash(
@@ -140,7 +161,7 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t> Pool2D::create_op_performance_model(
-    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const tensor_return_value_t& outputs) {
     const auto& input = inputs.input_tensor_;
     const auto& input_shape = input.logical_shape();
     auto sliding_window_config = op_attr.sliding_window_config_;
@@ -172,7 +193,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t
     int ideal_dev_clock_cycles = std::ceil((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
-        {input}, {output}, ideal_dev_clock_cycles);
+        {input}, {outputs}, ideal_dev_clock_cycles);
     return result;
 }
 

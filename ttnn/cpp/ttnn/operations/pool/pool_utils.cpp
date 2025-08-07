@@ -176,6 +176,7 @@ uint32_t calculate_L1_usage(
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
+    bool return_indices,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t out_h,
@@ -237,6 +238,11 @@ uint32_t calculate_L1_usage(
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.in_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
+    uint32_t indices_cb_config_size = 0;
+    if (return_indices) {
+        indices_cb_config_size = out_cb_config_size;
+    }
+
     uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
     auto align = [alignment_bytes](uint32_t size) {
         uint32_t factor = (size + alignment_bytes - 1) / alignment_bytes;
@@ -244,7 +250,8 @@ uint32_t calculate_L1_usage(
     };
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           align(out_cb_config_size) /* global, involved */;
+           align(out_cb_config_size) + align(indices_cb_config_size); /* global, involved */
+    ;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
@@ -297,6 +304,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             sliding_window_config.get_ceil_pad_h(),
             sliding_window_config.get_ceil_pad_w(),
             sliding_window_config.ceil_mode,
+            sliding_window_config.return_indices,
             sliding_window_config.window_hw.first,
             sliding_window_config.window_hw.second,
             sliding_window_config.get_output_shape()[1],

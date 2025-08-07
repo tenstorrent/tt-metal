@@ -209,7 +209,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const Tensor& input,
     const Tensor& reader_indices,
     uint32_t reader_indices_size,
-    Tensor& output,
+    std::vector<Tensor>& outputs,
     Pool2DType pool_type,
     uint32_t in_n,
     uint32_t in_h,
@@ -227,6 +227,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
+    bool return_indices,
     bool count_include_pad,
     uint32_t dilation_h,
     uint32_t dilation_w,
@@ -241,7 +242,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // distributing out_hw across the grid
     const auto all_cores = input.shard_spec().value().grid;
     const uint32_t ncores = all_cores.num_cores();
-    const uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
+    const uint32_t out_nhw_per_core = outputs[0].shard_spec()->shape[0];
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
@@ -252,7 +253,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
     const auto& input_shape = input.padded_shape();
-    const auto& output_shape = output.padded_shape();
+    const auto& output_shape = outputs[0].padded_shape();
     const uint32_t in_nbytes_c = input_shape[3] / num_shards_c * params.nbytes;  // row of input (channels)
 
     TT_FATAL(
@@ -350,16 +351,21 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // output of reduce == writer to write
     // output rows in RM
     // after reduction
-    const uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) *
+    const uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, outputs[0].shard_spec().value().shape[1]) *
                                      params.nbytes;  // there is just one row of channels after each reduction (or 1
                                                      // block of c if its greater than 8 tiles)
-    const uint32_t out_cb_npages = output.shard_spec().value().shape[0] * params.in_ntiles_c;
+    const uint32_t out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.in_ntiles_c;
 
     const auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, output.buffer());
+        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, outputs[0].buffer());
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
-    TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
+    for (int i = 0; i < outputs.size(); ++i) {
+        TT_FATAL(
+            outputs[i].memory_config().is_sharded(),
+            "Output memory config needs to be sharded, but got {}",
+            outputs[i].memory_config());
+    }
 
     /**
      * Reader Kernel: input rows -> input cb
@@ -499,12 +505,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         ceil_pad_h,
         ceil_pad_w,
         ceil_mode,
+        return_indices,
         kernel_h,
         kernel_w,
         out_h,
         out_w,
         input.memory_config(),
-        output.memory_config(),
+        outputs[0].memory_config(),
         pool_type,
         count_include_pad,
         divisor_override);
@@ -556,7 +563,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "multi_buffering_factor: {}", params.multi_buffering_factor);
         log_debug(tt::LogOp, "is_wide_reduction: {}", params.is_wide_reduction);
         log_debug(tt::LogOp, "is_in_sharded: {}", input.memory_config().is_sharded());
-        log_debug(tt::LogOp, "is_out_sharded: {}", output.memory_config().is_sharded());
+        log_debug(tt::LogOp, "is_out_sharded: {}", outputs[0].memory_config().is_sharded());
     }
 
     // Capture reader_indices_storage to cache this with the program
@@ -573,7 +580,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 }
 
 Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
-    const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     const auto& input = tensor_args.input_tensor_;
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
@@ -608,6 +615,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto ceil_pad_h = sliding_window_config.get_ceil_pad_h();
     auto ceil_pad_w = sliding_window_config.get_ceil_pad_w();
     auto ceil_mode = sliding_window_config.ceil_mode;
+    auto return_indices = sliding_window_config.return_indices;
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
@@ -628,7 +636,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         input,
         reader_indices_on_device,
         top_left_indices[0].size(),
-        output_tensor,
+        output_tensors,
         pool_type,
         in_n,
         in_h,
@@ -646,6 +654,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ceil_pad_h,
         ceil_pad_w,
         ceil_mode,
+        return_indices,
         count_include_pad,
         dilation_h,
         dilation_w,
@@ -659,7 +668,7 @@ void Pool2D::MultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& output_tensors) {
     auto& program = cached_program.program;
     auto& raw_in_cb = cached_program.shared_variables.raw_in_cb;
     auto& cb_out = cached_program.shared_variables.cb_out;
@@ -669,8 +678,8 @@ void Pool2D::MultiCore::override_runtime_arguments(
     auto src_buffer = input_tensor.buffer();
     bool input_sharded = input_tensor.is_sharded();
 
-    auto dst_buffer = output_tensor.buffer();
-    bool out_sharded = output_tensor.is_sharded();
+    auto dst_buffer = output_tensors[0].buffer();
+    bool out_sharded = output_tensors[0].is_sharded();
 
     if (input_sharded) {
         UpdateDynamicCircularBufferAddress(program, raw_in_cb, *src_buffer);
