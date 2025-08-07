@@ -62,24 +62,51 @@ static const std::vector<int64_t> PAGE_SIZE_ARGS = benchmark::CreateRange(32, 20
 static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
 static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
 
+static const std::vector<int64_t> SHARD_ENABLE_ARGS = {false, true};
+
+static BufferShardingArgs get_sharding_args(std::shared_ptr<MeshDevice> mesh_device, BufferType buffer_type) {
+    // These are pulled out of TTNN for WH
+    static const std::array<uint32_t, 2> PAGE_SHAPE = {32, 32};
+    static const std::array<uint32_t, 2> TENSOR2D_SHAPE_IN_PAGES = {64, 32};
+
+    static const std::array<uint32_t, 2> L1_SHARD_SHAPE = {32, 1024};
+    static const std::array<uint32_t, 2> DRAM_SHARD_SHAPE = {192, 1024};
+
+    auto device_grid_size =
+        buffer_type == BufferType::L1 ? mesh_device->compute_with_storage_grid_size() : mesh_device->dram_grid_size();
+    CoreRangeSet core_range_set(
+        {CoreRange(CoreCoord(0, 0), CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))});
+    ShardSpec shard_spec(core_range_set, buffer_type == BufferType::L1 ? L1_SHARD_SHAPE : DRAM_SHARD_SHAPE);
+    ShardSpecBuffer shard_spec_buffer(shard_spec, PAGE_SHAPE, TENSOR2D_SHAPE_IN_PAGES);
+
+    return BufferShardingArgs(shard_spec_buffer, TensorMemoryLayout::HEIGHT_SHARDED);
+}
+
 static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto buffer_type = BUFFER_TYPES[state.range(1)];
-    auto device_id = state.range(2);
+    auto shard_enable = state.range(2);
+    auto device_id = state.range(3);
 
     log_debug(
         LogTest,
-        "Running Write Benchmark for Page Size: {}, Buffer Type: {}, Device ID: {}",
+        "Running Write Benchmark for Page Size: {}, Buffer Type: {}, Shard Enable: {}, Device ID: {}",
         page_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        shard_enable,
         device_id);
 
     auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto host_buffer = create_random_vector_of_bfloat16(TRANSFER_SIZE, 1000, random_buffer_seed);
 
+    BufferShardingArgs sharding_args;
+    if (shard_enable) {
+        sharding_args = get_sharding_args(mesh_device, buffer_type);
+    }
+
     auto device_buffer = MeshBuffer::create(
         ReplicatedBufferConfig{TRANSFER_SIZE},
-        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type, .sharding_args = sharding_args},
         mesh_device.get());
 
     for (auto _ : state) {
@@ -92,18 +119,25 @@ static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_d
 static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto buffer_type = BUFFER_TYPES[state.range(1)];
-    auto device_id = state.range(2);
+    auto shard_enable = state.range(2);
+    auto device_id = state.range(3);
 
     log_debug(
         LogTest,
-        "Running Read Benchmark for Page Size: {}, Buffer Type: {}, Device ID: {}",
+        "Running Read Benchmark for Page Size: {}, Buffer Type: {}, Shard Enable: {}, Device ID: {}",
         page_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        shard_enable,
         device_id);
+
+    BufferShardingArgs sharding_args;
+    if (shard_enable) {
+        sharding_args = get_sharding_args(mesh_device, buffer_type);
+    }
 
     auto device_buffer = MeshBuffer::create(
         ReplicatedBufferConfig{TRANSFER_SIZE},
-        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type, .sharding_args = sharding_args},
         mesh_device.get());
     std::vector<uint32_t> host_buffer;
 
@@ -133,7 +167,7 @@ int main(int argc, char** argv) {
     auto devices = MeshDevice::create_unit_meshes(device_ids);
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
-        auto benchmark_args = {PAGE_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
+        auto benchmark_args = {PAGE_SIZE_ARGS, BUFFER_TYPE_ARGS, SHARD_ENABLE_ARGS, {device_id}};
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
         // benchmark
         benchmark::RegisterBenchmark("Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();
