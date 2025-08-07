@@ -693,7 +693,7 @@ void noc_async_write_one_packet(
     std::uint64_t dst_noc_addr,
     std::uint32_t size,
     uint8_t noc = noc_index,
-    uint32_t virtual_channel = 0) {
+    uint32_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWPW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -705,7 +705,7 @@ void noc_async_write_one_packet(
         src_local_l1_addr,
         dst_noc_addr,
         size,
-        virtual_channel,
+        vc,
         false /* mcast */,
         false /* linked */,
         1 /* num_dests */,
