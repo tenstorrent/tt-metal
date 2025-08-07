@@ -45,6 +45,9 @@ void kernel_main() {
     InterleavedAddrGen<output_is_dram> output_addrgen{
         .bank_base_address = output_base_addr, .page_size = output_page_size_bytes};
 
+    InterleavedAddrGen<output_is_dram> output_addrgen2{
+        .bank_base_address = output_base_addr, .page_size = output_page_size_bytes};
+
     // scratch space
     cb_reserve_back(output_cb_id, 1);
     const uint32_t output_l1_addr = get_write_ptr(output_cb_id);
