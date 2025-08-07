@@ -37,8 +37,8 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
 
             Example:
 
-                >>> input_a = ttnn.rand(1, 2), dtype=torch.bfloat16, device=device)
-                >>> output = {1}(input_a, dim, memory_config)
+                input_a = ttnn.rand(1, 2), dtype=torch.bfloat16, device=device)
+                output = {1}(input_a, dim, memory_config)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());

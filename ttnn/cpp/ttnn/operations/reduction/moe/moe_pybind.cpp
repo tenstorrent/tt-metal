@@ -44,14 +44,14 @@ void bind_reduction_moe_operation(py::module& module) {
                 * :attr:`queue_id` (Optional[uint8]): command queue id
 
             Example:
-                >>> N, C, H, W = 1, 1, 32, 64
-                >>> k = 32
+                N, C, H, W = 1, 1, 32, 64
+                k = 32
 
-                >>> input_tensor = ttnn.rand([N, C, H, W], device=device)
-                >>> expert_mask = ttnn.zeros([N, C, 1, W], device=device)
-                >>> topE_mask = ttnn.zeros([N, C, 1, k],  device=device)
+                input_tensor = ttnn.rand([N, C, H, W], device=device)
+                expert_mask = ttnn.zeros([N, C, 1, W], device=device)
+                topE_mask = ttnn.zeros([N, C, 1, k],  device=device)
 
-                >>> ttnn.moe(input_tensor, expert_mask, topE_mask, k)
+                ttnn.moe(input_tensor, expert_mask, topE_mask, k)
         )doc";
 
     using OperationType = decltype(ttnn::moe);

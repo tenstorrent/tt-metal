@@ -40,9 +40,9 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
                 List of ttnn.Tensor: the output tensor.
 
             Example::
-                >>> tensor = ttnn.rand((1,2), device=device)
-                >>> output = {1}(tensor, dim=0)
-                >>> output_all_dims = {1}(tensor)
+                tensor = ttnn.rand((1,2), device=device)
+                output = {1}(tensor, dim=0)
+                output_all_dims = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
