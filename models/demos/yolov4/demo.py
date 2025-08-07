@@ -79,8 +79,7 @@ def run_yolov4(
     nms_thresh = 0.4
     boxes = post_processing(torch_images, conf_thresh, nms_thresh, tt_output)
 
-    namesfile = "models/demos/yolov4/resources/coco.names"
-    class_names = load_coco_class_names(namesfile)
+    class_names = load_coco_class_names()
     output_dir = "yolov4_predictions"
     os.makedirs(output_dir, exist_ok=True)
 
