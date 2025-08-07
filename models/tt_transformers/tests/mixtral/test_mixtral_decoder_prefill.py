@@ -9,7 +9,7 @@ from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerB
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc
 
-# pytest /models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py::test_mixtral_decoder_inference[wormhole_b0-True-16]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
 
 
 def convert2ref(state_dict):
@@ -18,7 +18,7 @@ def convert2ref(state_dict):
         if "block_sparse_moe" in key:
             new_key = key.replace("block_sparse_moe", "feed_forward")
             out[new_key] = value
-        elif "feed_forward" not in key:  # ensure we don’t duplicate/overwrite
+        elif "feed_forward" not in key:
             out[key] = value
     return out
 

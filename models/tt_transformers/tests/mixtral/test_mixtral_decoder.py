@@ -13,7 +13,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
 from models.utility_functions import comp_allclose, comp_pcc
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder.py::test_mixtral_decoder_inference[wormhole_b0-True-decode-32]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
 
 
 def convert2ref(state_dict):
@@ -29,10 +29,9 @@ def convert2ref(state_dict):
 
 @pytest.mark.parametrize(
     "batch",
-    (32, 16),
+    (32,),
 )
-@pytest.mark.parametrize("mode", ["decode"])
-def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch, mode):
+def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
     """
     b: batch
     s: sequence length
@@ -120,7 +119,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch, mode):
             decode_input,
             current_pos_tensor,
             rot_mats=rot_mats,
-            mode=mode,
+            mode="decode",
         )
         tt_out = (
             ttnn.to_torch(

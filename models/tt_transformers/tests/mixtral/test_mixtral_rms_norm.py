@@ -14,7 +14,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py::test_rms_norm_inference[wormhole_b0-True-prefill-128-1-8]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py
 
 
 @torch.no_grad()

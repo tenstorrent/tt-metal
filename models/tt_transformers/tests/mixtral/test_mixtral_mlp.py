@@ -9,7 +9,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_mlp.py::test_mixtral_mlp_inference[wormhole_b0-True-prefill]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
 
 
 def convert2ref(state_dict):

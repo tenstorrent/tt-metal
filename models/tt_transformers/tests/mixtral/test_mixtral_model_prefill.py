@@ -16,7 +16,7 @@ from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 from models.utility_functions import comp_pcc, skip_for_grayskull
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-1layer-performance-max128k-128-page_params0-paged_attention-8]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-1layer-performance-max128k-32768-page_params0-paged_attention-8]
 
 
 def convert2ref(state_dict):
@@ -48,12 +48,9 @@ def convert2ref(state_dict):
     "paged_attention",
     (
         True,
-        # False,
+        False,
     ),
-    ids=(
-        "paged_attention",
-        # "default_attention"
-    ),
+    ids=("paged_attention", "default_attention"),
 )
 @pytest.mark.parametrize(
     "page_params",

@@ -15,7 +15,7 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-8-performance-256-1-page_params0-paged_attention-quick]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_model.py
 
 
 def convert2ref(state_dict):
@@ -37,7 +37,7 @@ def convert2ref(state_dict):
     "weights, layers",
     [
         ("random", 1),
-        ("instruct", None),
+        ("instruct", 32),
     ],
     ids=["quick", "full"],
 )
@@ -102,7 +102,7 @@ def test_model_inference(
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
-    layers = 2
+    layers = layers
     test_id = request.node.callspec.id
     mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
@@ -120,7 +120,6 @@ def test_model_inference(
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
     )
-    layers = 2
     # Define minimum PCC for each iteration
     if layers == 1:
         pcc = 0.88 if mode_accuracy else 0.86
