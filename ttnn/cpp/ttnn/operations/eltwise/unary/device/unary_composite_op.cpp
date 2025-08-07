@@ -361,16 +361,6 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
         output_memory_config);
 }
 
-// hardtanh
-Tensor _hardtanh(
-    const Tensor& a,
-    float low /* = -1.0f */,
-    float high /* = +1.0f */,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    return ExecuteUnaryCompositeClamp::invoke(a, low, high, output_memory_config);
-}
-
 // Theano defines this differently...
 /**
  *

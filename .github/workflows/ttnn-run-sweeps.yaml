@@ -520,6 +520,7 @@ on:
           - data_movement.repeat_interleave.repeat_interleave
           - data_movement.nonzero.nonzero
           - data_movement.backward.concat_bw.concat_bw
+          - data_movement.pad.pad
           - conv_transpose2d.short.conv_transpose2d_short_sweep
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding

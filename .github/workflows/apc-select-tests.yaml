@@ -25,10 +25,10 @@ on:
       tests-json:
         description: |
           JSON object specifying which tests to run.
-          Example: {"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":false,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":false,"run-profiler-regression":true,"t3000-fast-tests":false,"build-docs":true,"test-ttnn-tutorials":true}
+          Example: {"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-fast-tests":true,"test-ttnn-tutorials":true}
         required: false
         type: string
-        default: '{"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-fast-tests":true,"build-docs":true,"test-ttnn-tutorials":true}'
+        default: '{"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-fast-tests":true,"test-ttnn-tutorials":true}'
       commit:
         required: false
         type: string
@@ -250,16 +250,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       runner-label: ${{ matrix.test-group.runner-label }}
-
-  build-docs:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'build-docs') }}
-    uses: ./.github/workflows/docs-latest-public.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   test-ttnn-tutorials:
     needs: [parse-tests-json, build-artifact]

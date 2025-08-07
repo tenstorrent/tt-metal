@@ -90,8 +90,8 @@ class MLA1D(AbstractModule):
 
         def convert_linear_weight(
             hf_name: str | None,
-            shape: tuple[int, ...] | None,
-            mesh_dims: tuple[int, ...],
+            shape: tuple[int] | None,
+            mesh_dims: tuple[int],
             dtype: ttnn.DataType = ttnn.bfloat8_b,
             mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
             layout: ttnn.Layout = ttnn.TILE_LAYOUT,
@@ -103,7 +103,7 @@ class MLA1D(AbstractModule):
             if ttnn_name is None:
                 ttnn_name = cls.HF_TTNN_MAPPING[hf_name]
             if torch_weights is None:
-                torch_weights = get_state_dicts(state_dicts, f"{hf_name}.weight", shape, torch.float32)
+                torch_weights = get_state_dicts(state_dicts, f"{hf_name}.weight", shape, torch.bfloat16)
                 torch_weights = torch.transpose(torch_weights, -2, -1)
 
             ttnn_weight = ttnn.as_tensor(
@@ -126,8 +126,7 @@ class MLA1D(AbstractModule):
         def convert_norm_weight(hf_name: str) -> dict:
             """Helper to convert normalization weights."""
             ttnn_name = cls.HF_TTNN_MAPPING[hf_name]
-            norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.weight")
-            norm_state_dicts = [{"weight": item[""].to(torch.bfloat16)} for item in norm_state_dicts]
+            norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.")
             return {
                 ttnn_name: RMSNorm.convert_weights(hf_config, norm_state_dicts, output_path / ttnn_name, mesh_device)
             }
@@ -174,7 +173,7 @@ class MLA1D(AbstractModule):
             state_dicts,
             f"{hf_name}.weight",
             shape=shape,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
         )
 
         # This weight needs to be split
@@ -266,6 +265,8 @@ class MLA1D(AbstractModule):
         max_seq_len = hf_config.max_seq_len
 
         mesh_shape = list(mesh_device.shape)
+
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -395,6 +396,7 @@ class MLA1D(AbstractModule):
 
         return {
             "hf_config": hf_config,
+            "input_memory_config": input_memory_config,
             "mesh_shape": mesh_shape,
             "wq_a": wq_a_config,
             "wq_b": wq_b_config,
@@ -445,6 +447,8 @@ class MLA1D(AbstractModule):
 
         mesh_shape = list(mesh_device.shape)
         num_heads_local = even_int_div(num_heads, mesh_shape[1])
+
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -699,6 +703,7 @@ class MLA1D(AbstractModule):
         return {
             "hf_config": hf_config,
             "mesh_shape": mesh_shape,
+            "input_memory_config": input_memory_config,
             "wq_a": wq_a_config,
             "wq_b": wq_b_config,
             "wkv_a": wkv_a_config,
@@ -850,40 +855,26 @@ class MLA1D(AbstractModule):
     def create_state(
         cls,
         hf_config: PretrainedConfig,
-        mesh_device: ttnn.Device,
-        dp_factor: int,
+        mesh_device: ttnn.MeshDevice,
         paged_config: PagedAttentionConfig,
         ccl: CCL1D,
     ) -> Any:
         kv_lora_rank = hf_config.kv_lora_rank
         qk_rope_head_dim = hf_config.qk_rope_head_dim
-        max_seq_len = hf_config.max_seq_len
 
         kvpe_dim = kv_lora_rank + qk_rope_head_dim
         kvpe_cache_dtype = ttnn.bfloat8_b
         kvpe_cache_layout = ttnn.TILE_LAYOUT
         kvpe_cache_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-        mesh_shape = list(mesh_device.shape)
-
-        if paged_config:
-            cache = torch.zeros(
-                (
-                    paged_config.max_num_blocks,
-                    1,  # 1 latent kv heads
-                    paged_config.block_size,
-                    kvpe_dim,
-                )
+        cache = torch.zeros(
+            (
+                paged_config.max_num_blocks,
+                1,  # 1 latent kv heads
+                paged_config.block_size,
+                kvpe_dim,
             )
-        else:
-            cache = torch.zeros(
-                (
-                    even_int_div(MLA1D.MAX_BATCH_SIZE, dp_factor),
-                    1,  # 1 latent kv heads
-                    max_seq_len,
-                    kvpe_dim,
-                )
-            )
+        )
 
         tt_cache = ttnn.as_tensor(
             cache,
@@ -931,12 +922,18 @@ class MLA1D(AbstractModule):
         }
 
     @classmethod
-    def row_to_device_coords(cls, row: int, mesh_shape: list[int]) -> set[ttnn.MeshCoordinate]:
+    def get_mesh_coores(cls, mesh_shape: list[int], row: int = None, col: int = None) -> set[ttnn.MeshCoordinate]:
         """
         Get the devices in the current row.
         """
-        assert 0 <= row < mesh_shape[0], "Row index out of bounds"
-        device_coords = {(row, col) for col in range(mesh_shape[1])}
+        if row:
+            assert 0 <= row < mesh_shape[0], "Row index out of bounds"
+        if col:
+            assert 0 <= col < mesh_shape[1], "Column index out of bounds"
+
+        row_select = range(mesh_shape[0]) if row is None else [row]
+        col_select = range(mesh_shape[1]) if col is None else [col]
+        device_coords = {(r, c) for r in row_select for c in col_select}
         return {ttnn.MeshCoordinate(*coord) for coord in device_coords}
 
     @classmethod
@@ -962,10 +959,12 @@ class MLA1D(AbstractModule):
 
         """
         mesh_shape = cfg["mesh_shape"]
+        sdpa_dp_factor = mesh_shape[1]
+        mla_tp_factor = mesh_shape[1]
 
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
-        num_heads_local = even_int_div(num_heads, mesh_shape[1])
+        num_heads_local = even_int_div(num_heads, mla_tp_factor)
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -975,7 +974,7 @@ class MLA1D(AbstractModule):
         kvpe_cache = cfg["kvpe_cache"]
 
         bsz = x.shape[2]
-        scale = 1.0 / mesh_shape[1]
+        scale = 1.0 / mla_tp_factor
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
@@ -1076,7 +1075,7 @@ class MLA1D(AbstractModule):
             tt_kvpe,
             update_idxs_tensor=position_idxs,
             page_table=page_table,
-            mesh_coords=cls.row_to_device_coords(row_idx, mesh_shape),
+            mesh_coords=cls.get_mesh_coores(mesh_shape, row_idx),
         )
 
         # FlashMLA
@@ -1116,26 +1115,36 @@ class MLA1D(AbstractModule):
         return out
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, user_id: int, rope_tensors: dict) -> ttnn.Tensor:
-        """Forward pass of the MLP.
-
-        Prefill mode we reshape to respect cfg["max_rows"] and generate program configs from the seq-len lambda.
+    def forward_prefill(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunPrefillConfig,
+        batch_idx: int,
+        rope_tensors: dict,
+        page_table: ttnn.Tensor,
+        row_idx: int,
+    ) -> ttnn.Tensor:
+        """Forward pass of MLA1D in prefill mode.
 
         Args:
             x: Input tensor
             cfg: RunConfig containing weights and op configurations
-            user_id: Batch index for cache updates
+            batch_idx: Batch index for cache updates (wrt to global batch size)
             rope_tensors: Dictionary containing RoPE tensors
+            page_table: Page table tensor for paged attention
+            row_idx: Row index in the mesh
 
         Returns:
             Output tensor after MLP computation
         """
 
         mesh_shape = cfg["mesh_shape"]
+        sdpa_dp_factor = mesh_shape[0]
+        mla_tp_factor = mesh_shape[1]
 
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
-        num_heads_local = even_int_div(num_heads, mesh_shape[1])
+        num_heads_local = even_int_div(num_heads, mla_tp_factor)
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -1210,10 +1219,14 @@ class MLA1D(AbstractModule):
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
 
         # Update KVPE Cache
-        ttnn.fill_cache(
+        local_batch_idx = batch_idx % sdpa_dp_factor  # Local batch index within the DP shard
+        col_idx = batch_idx // sdpa_dp_factor  # Which DP shard the batch belongs to
+        ttnn.experimental.paged_fill_cache(
             kvpe_cache,
             tt_kvpe,
-            batch_idx=user_id,
+            page_table=page_table,
+            batch_idx=local_batch_idx,
+            mesh_coords=cls.get_mesh_coores(mesh_shape, row_idx, col_idx),
         )
 
         # FlashMLA
