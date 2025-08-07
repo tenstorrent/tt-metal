@@ -149,6 +149,8 @@ class MLP(LightweightModule):
             #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
             if self.dim == 8192 or mode == "prefill":
                 input_mem_cfg = w1_out.memory_config()
+                # TODO: 26411
+                # Remove this blackhole condition once fabric CCLs are working on blackhole
                 if is_blackhole():
                     w1_out = ttnn.reduce_scatter(
                         w1_out,
@@ -240,6 +242,8 @@ class MLP(LightweightModule):
         ttnn.deallocate(w1_out)
 
         if TG and (self.dim == 8192 or mode == "prefill"):
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
                 w2_in = ttnn.all_gather(
                     w2_in,

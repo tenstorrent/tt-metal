@@ -107,6 +107,8 @@ class TtLlamaImageFeedForward(LightweightModule):
 
         # All reduce
         if self.args.num_devices > 1:  # replace with reduce_scatter and all_gather
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
                 w2_out_gathered = ttnn.all_gather(c_proj_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
             else:

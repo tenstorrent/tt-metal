@@ -563,7 +563,9 @@ class Attention(LightweightModule):
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )
 
-            # TODO: (GR) Fused fabric AGMM has pcc issues
+            # TODO: #26349
+            # Fused AGMM currently has a PCC bug on small shapes
+            # Using the non-fused version is a temporary workaround
 
             all_gather_output = ttnn.experimental.all_gather_async(
                 attn_output_cat,

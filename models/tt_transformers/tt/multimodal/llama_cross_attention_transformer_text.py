@@ -344,6 +344,8 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             )
 
             if self.configuration.num_devices > 1:
+                # TODO: 26411
+                # Remove this blackhole condition once fabric CCLs are working on blackhole
                 if is_blackhole():
                     output = ttnn.all_gather(output, dim=3, num_links=1, topology=ttnn.Topology.Linear)
                 else:

@@ -13,6 +13,8 @@ def device_params(request, galaxy_type):
     params = getattr(request, "param", {}).copy()
 
     if "fabric_config" in params:
+        # TODO: 26411
+        # Remove this blackhole condition once fabric CCLs are working on blackhole
         if is_blackhole():
             params["fabric_config"] = None
         elif params["fabric_config"] == True:

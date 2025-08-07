@@ -221,6 +221,8 @@ class TtLlamaImageAttention(LightweightModule):
 
         # All reduce
         if self.num_devices > 1:  # replace with reduce_scatter and all_gather
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
                 dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
             else:

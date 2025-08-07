@@ -546,6 +546,8 @@ class Attention(LightweightModule):
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )
 
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
                 _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
                     attn_output_cat,
@@ -559,7 +561,9 @@ class Attention(LightweightModule):
                     memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
                 )
             else:
-                # TODO: (GR) Fused fabric AGMM has pcc issues
+                # TODO: #26349
+                # Fused AGMM currently has a PCC bug on small shapes
+                # Using the non-fused version is a temporary workaround
 
                 all_gather_output = ttnn.experimental.all_gather_async(
                     attn_output_cat,
@@ -854,6 +858,8 @@ class Attention(LightweightModule):
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
                 attn_output_11SH = ttnn.all_gather(
                     attn_output_11SH,

@@ -70,6 +70,9 @@ def test_decoder_inference(mesh_device, reset_seeds):
         )
 
         # Run TT model
+
+        # TODO: 26411
+        # Remove this blackhole condition once fabric CCLs are working on blackhole
         if is_blackhole():
             tt_out = ttnn.all_gather(
                 decode_input, dim=3, num_links=1, topology=model_args.ccl_topology(), memory_config=mem_cfg
