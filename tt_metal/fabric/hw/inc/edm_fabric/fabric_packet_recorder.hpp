@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 
+template <typename HEADER_TYPE>
 struct PacketHeaderRecorder {
     volatile uint32_t* buffer_ptr;
     size_t buffer_n_headers;
@@ -16,11 +16,11 @@ struct PacketHeaderRecorder {
         buffer_ptr(buffer_ptr), buffer_n_headers(buffer_n_headers), buffer_index(0) {}
 
     void record_packet_header(volatile uint32_t* packet_header_ptr) {
-        uint32_t dest_l1_addr = (uint32_t)buffer_ptr + buffer_index * sizeof(PACKET_HEADER_TYPE);
+        uint32_t dest_l1_addr = (uint32_t)buffer_ptr + buffer_index * sizeof(HEADER_TYPE);
         noc_async_write(
             (uint32_t)packet_header_ptr,
             get_noc_addr(my_x[0], my_y[0], dest_l1_addr),
-            sizeof(PACKET_HEADER_TYPE),
+            sizeof(HEADER_TYPE),
             1 - noc_index  // avoid the contention on main noc
         );
         buffer_index++;

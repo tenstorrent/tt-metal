@@ -299,10 +299,10 @@ template <
     uint8_t SENDER_NUM_BUFFERS,
     uint8_t RECEIVER_NUM_BUFFERS>
 FORCE_INLINE void send_next_data(
-    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& sender_buffer_channel,
+    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& sender_buffer_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& sender_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& receiver_buffer_channel) {
+    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& receiver_buffer_channel) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     auto& local_sender_write_counter = sender_worker_interface.local_write_counter;
@@ -368,7 +368,7 @@ FORCE_INLINE void receiver_send_received_ack(
     // decoupling of those jobs yet to separate pointrers
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     BufferIndex receiver_buffer_index,
-    const tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
+    const tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
     // Set the acknowledgement bits
     invalidate_l1_cache();
     volatile tt_l1_ptr auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
@@ -1078,11 +1078,11 @@ template <
     uint8_t SENDER_NUM_BUFFERS,
     uint8_t RECEIVER_NUM_BUFFERS>
 void run_sender_channel_step_impl(
-    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel,
+    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& local_sender_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& remote_receiver_channel,
-    PacketHeaderRecorder& packet_header_recorder,
+    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& remote_receiver_channel,
+    PacketHeaderRecorder<PACKET_HEADER_TYPE>& packet_header_recorder,
     bool& channel_connection_established,
     uint32_t sender_channel_free_slots_stream_id,
     SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits) {
@@ -1199,7 +1199,7 @@ FORCE_INLINE void run_sender_channel_step(
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
     RemoteEthReceiverChannels& remote_receiver_channels,
-    std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
+    std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
     std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered,
     std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits) {
@@ -1228,7 +1228,7 @@ template <
     uint8_t RECEIVER_NUM_BUFFERS,
     uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS>
 void run_receiver_channel_step_impl(
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_channel,
+    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& local_receiver_channel,
     std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_interface,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
@@ -1420,7 +1420,7 @@ void run_fabric_edm_main_loop(
         downstream_edm_noc_interfaces,
     RemoteEthReceiverChannels& remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
-    std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
+    std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
     TransactionIdTrackerCH0& receiver_channel_0_trid_tracker,
     TransactionIdTrackerCH1& receiver_channel_1_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
@@ -1862,28 +1862,27 @@ void kernel_main() {
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
     // resolve the semaphore addresses on the EDM core
 
-    std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
-        PacketHeaderRecorder(
+    std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
+        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
             reinterpret_cast<volatile uint32_t*>(sender_0_completed_packet_header_cb_address),
             sender_0_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder(
+        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
             reinterpret_cast<volatile uint32_t*>(sender_1_completed_packet_header_cb_address),
             sender_1_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder(
+        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
             reinterpret_cast<volatile uint32_t*>(sender_2_completed_packet_header_cb_address),
             sender_2_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder(
+        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
             reinterpret_cast<volatile uint32_t*>(sender_3_completed_packet_header_cb_address),
             sender_3_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder(
+        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
             reinterpret_cast<volatile uint32_t*>(sender_4_completed_packet_header_cb_address),
-            sender_4_completed_packet_header_cb_size_headers)
-    };
-    std::array<PacketHeaderRecorder, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_packet_recorders{
-        PacketHeaderRecorder(
+            sender_4_completed_packet_header_cb_size_headers)};
+    std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_packet_recorders{
+        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
             reinterpret_cast<volatile uint32_t*>(receiver_0_completed_packet_header_cb_address),
             receiver_0_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder(
+        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
             reinterpret_cast<volatile uint32_t*>(receiver_1_completed_packet_header_cb_address),
             receiver_1_completed_packet_header_cb_size_headers)};
 
@@ -2072,15 +2071,17 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_4});
 
     // create the remote receiver channel buffers with input array of number of buffers
-    auto remote_receiver_channels = tt::tt_fabric::EthChannelBuffers<REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make(
-        std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
+    auto remote_receiver_channels =
+        tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make(
+            std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
     // create the local receiver channnel buffers with input array of number of buffers
-    auto local_receiver_channels = tt::tt_fabric::EthChannelBuffers<RECEIVER_NUM_BUFFERS_ARRAY>::make(
-        std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
+    auto local_receiver_channels =
+        tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS_ARRAY>::make(
+            std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
     // create the sender channnel buffers with input array of number of buffers
-    auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<SENDER_NUM_BUFFERS_ARRAY>::make(
+    auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =

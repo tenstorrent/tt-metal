@@ -35,7 +35,7 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
-template <uint8_t NUM_BUFFERS>
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 class EthChannelBuffer final {
 public:
     // The channel structure is as follows:
@@ -61,7 +61,7 @@ public:
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
-            for (size_t j = 0; j < sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t); j++) {
+            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
                 reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
             }
         }
@@ -113,11 +113,10 @@ private:
     uint8_t channel_id;
 };
 
-
 // A tuple of EthChannelBuffer
-template <size_t... BufferSizes>
+template <typename HEADER_TYPE, size_t... BufferSizes>
 struct EthChannelBufferTuple {
-    std::tuple<tt::tt_fabric::EthChannelBuffer<BufferSizes>...> channel_buffers;
+    std::tuple<tt::tt_fabric::EthChannelBuffer<HEADER_TYPE, BufferSizes>...> channel_buffers;
 
     void init(
         const size_t channel_base_address[],
@@ -145,11 +144,11 @@ struct EthChannelBufferTuple {
     }
 };
 
-template <auto& ChannelBuffers>
+template <typename HEADER_TYPE, auto& ChannelBuffers>
 struct EthChannelBuffers {
     template <size_t... Is>
     static auto make(std::index_sequence<Is...>) {
-        return EthChannelBufferTuple<ChannelBuffers[Is]...>{};
+        return EthChannelBufferTuple<HEADER_TYPE, ChannelBuffers[Is]...>{};
     }
 };
 
