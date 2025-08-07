@@ -116,7 +116,7 @@ jobs:
             BASE_REF="HEAD^"
           fi
 
-                    # Find all changed C++ files in the current PR/commit
+          # Find all changed C++ files in the current PR/commit
           CHANGED_FILES=$(git diff --name-only --diff-filter=AM $BASE_REF HEAD | grep -E '\.(cpp|hpp|h|cc|cxx)$' || true)
 
           # Check if any changed C++ files contain new InterleavedAddrGen usages
