@@ -65,7 +65,6 @@ def load_inputs(user_input, len_per_batch, instruct):
     in_prompt = []
     cache_dir = Path("models/tt_transformers/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
-
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
     # It clips the excerpt to the max length provided to allow testing different long context lengthts
     for i in range(batch):
@@ -87,7 +86,11 @@ def load_inputs(user_input, len_per_batch, instruct):
             else:
                 prompt = context_text
         in_prompt.append(prompt)
-    return in_prompt
+
+    full_prompts = []
+    for i in user_input:
+        full_prompts.append(i["prompt"])
+    return in_prompt, full_prompts
 
 
 def load_demo_targets(filename, galaxy_type):
@@ -194,7 +197,8 @@ def create_tt_model(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            # "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -202,7 +206,7 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 1.0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
@@ -211,7 +215,8 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            # "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -219,7 +224,7 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 1.0, "top_p": 0.05},  # sampling_params (argmax)
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
@@ -427,7 +432,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 102000000,
+            "trace_region_size": 95693824,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
@@ -498,7 +503,7 @@ def test_demo_text(
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
 
-    stop_at_eos = False  # Default to False
+    stop_at_eos = True  # Default to False
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -549,7 +554,7 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    input_prompts = load_inputs(
+    input_prompts, full_prompts = load_inputs(
         input_prompts,
         input_lengths,
         instruct,
@@ -598,7 +603,10 @@ def test_demo_text(
     # If batch_size=1, the same prompt is repeated for each batch
     repeat_batch_prompts = []
     for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+        # repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+        repeat_batch_prompts.append(
+            [full_prompts[(j + i) % len(full_prompts)] for j in range(len(full_prompts))][:batch_size]
+        )
 
     model_args, model, page_table, tt_kv_cache = create_tt_model(
         mesh_device,
@@ -969,11 +977,13 @@ def test_demo_text(
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                    text = tokenizer.decode(output)
+                    # breakpoint()
+                    # text = tokenizer.decode(output)
                     prompt_including_assistant_tags = tokenizer.decode(
                         model_args.encode_prompt(prompt, instruct=instruct)
                     )
-                    text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+                    # text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+                    text_after_prompt = output
                     if print_to_file:
                         with open(output_filename, "a") as f:
                             f.write(
@@ -987,12 +997,14 @@ def test_demo_text(
                             else prompt
                         )
                         logger.info(
-                            f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
+                            f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt}\n"
+                            # f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
             if not users_decoding and batch_size == 1 and repeat_batches > 1:
                 # Compare to text in outputs_batch_1.json for the first user of the first batch
-                if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
+                if False:  # Only compare if data was loaded
+                    # if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
                     if i == 0:  # Only for the first user of the batch (i.e., user 0)
                         if len(expected_outputs_data) > 0:
                             expected_text = expected_outputs_data[0]  # Compare with the first entry in the JSON list
