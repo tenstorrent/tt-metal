@@ -178,11 +178,12 @@ ALWI void unpack_tilizeA_B_block(
     uint32_t icb0,
     uint32_t icb1,
     uint32_t block,
+    uint32_t tile_idx_a,
     uint32_t tile_idx_b,
     uint32_t num_faces = 4,
     uint32_t srca_face_r_dim = 16) {
     UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
-        icb0, icb1, block, tile_idx_b, num_faces, srca_face_r_dim)));
+        icb0, icb1, block, tile_idx_a, tile_idx_b, num_faces, srca_face_r_dim)));
 }
 
 // clang-format off
