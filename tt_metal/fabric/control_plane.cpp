@@ -236,6 +236,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         }
     };
 
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
     // For each mesh in the system
     for (auto mesh_id : user_meshes) {
         const auto& mesh_shape = this->get_physical_mesh_shape(MeshId{mesh_id});
@@ -291,11 +292,21 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
             // TODO: specialize by topology for better perf
             if (topology == Topology::Mesh || topology == Topology::Torus) {
+                const auto& mesh_host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
                 const auto rows_min = std::min_element(row_min_planes.begin(), row_min_planes.end());
                 const auto cols_min = std::min_element(col_min_planes.begin(), col_min_planes.end());
-                const auto mesh_min = std::min(*rows_min, *cols_min);
-                std::fill(row_min_planes.begin(), row_min_planes.end(), mesh_min);
-                std::fill(col_min_planes.begin(), col_min_planes.end(), mesh_min);
+                auto mesh_min = std::min(*rows_min, *cols_min);
+
+                std::vector<size_t> recv_buf(*distributed_context.size());
+                distributed_context.all_gather(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&mesh_min), sizeof(size_t)),
+                    tt::stl::as_writable_bytes(tt::stl::Span<size_t>{recv_buf.data(), recv_buf.size()}));
+
+                distributed_context.barrier();
+
+                auto global_mesh_min = std::min(recv_buf.begin(), recv_buf.end());
+                std::fill(row_min_planes.begin(), row_min_planes.end(), *global_mesh_min);
+                std::fill(col_min_planes.begin(), col_min_planes.end(), *global_mesh_min);
             }
 
             // Second pass: Apply minimums to each device
