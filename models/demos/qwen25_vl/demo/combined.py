@@ -5,7 +5,6 @@
 
 import os
 
-import nltk
 import pytest
 import torch
 from loguru import logger
@@ -35,6 +34,7 @@ def test_qwen_vl_end_to_end(
     mesh_device,
     reset_seeds,
     ensure_gc,
+    ensure_nltk,
     use_tt_vision,
 ):
     """Test end-to-end Qwen2.5-VL model with options to replace vision component."""
@@ -90,11 +90,6 @@ def test_qwen_vl_end_to_end(
 
     # Verify output
     # Token-level BLEU score (standard for text generation)
-    try:
-        nltk.data.find("tokenizers/punkt_tab")
-    except LookupError:
-        nltk.download("punkt_tab", quiet=True)
-
     expected_output = "The image depicts a serene beach scene with a person and a dog. The person is sitting on the sandy beach, facing the ocean. They are wearing a plaid shirt and black pants, and they have long hair. The dog, which appears to be a Labrador Retriever, is sitting on the sand and is interacting with the person by placing its paw on their hand. The dog is wearing a harness with a colorful collar. The background shows the ocean with gentle waves, and the sky is clear with a soft light, suggesting it might be early morning or late afternoon. The overall atmosphere of the image is peaceful and joyful."
     for i, output_text in enumerate(output_texts):
         logger.info(f"Expected output: {expected_output}")
