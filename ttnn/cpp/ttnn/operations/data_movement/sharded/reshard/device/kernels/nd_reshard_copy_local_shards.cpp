@@ -35,17 +35,15 @@ void kernel_main() {
 
     for (uint32_t shard_id = first_shard_id; shard_id < num_shards; shard_id += shard_id_stride) {
         if constexpr (is_reader) {
-            auto shard_pages_begin = accessor_src.shard_pages_begin(shard_id);
-            auto shard_pages_end = accessor_src.shard_pages_end(shard_id);
-            for (auto it = shard_pages_begin; it != shard_pages_end; ++it) {
-                noc_async_write_page(it.page_id(), accessor_dst, *it);
+            auto shard_pages = accessor_src.shard_pages(shard_id);
+            for (const auto& page : shard_pages) {
+                noc_async_write_page(page.page_id(), accessor_dst, page.get_noc_addr());
                 noc_async_writes_flushed();
             }
         } else {
-            auto shard_pages_begin = accessor_dst.shard_pages_begin(shard_id);
-            auto shard_pages_end = accessor_dst.shard_pages_end(shard_id);
-            for (auto it = shard_pages_begin; it != shard_pages_end; ++it) {
-                noc_async_read_page(it.page_id(), accessor_src, *it);
+            auto shard_pages = accessor_dst.shard_pages(shard_id);
+            for (const auto& page : shard_pages) {
+                noc_async_read_page(page.page_id(), accessor_src, page.get_noc_addr());
             }
         }
     }

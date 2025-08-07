@@ -8,6 +8,21 @@
 #include <cstddef>
 #include <iterator>
 
+class ShardPage {
+public:
+    ShardPage(uint64_t noc_addr, uint32_t global_page_id, uint32_t shard_id) :
+        noc_addr_(noc_addr), global_page_id_(global_page_id), shard_id_(shard_id) {}
+
+    uint64_t get_noc_addr() const { return noc_addr_; }
+    uint32_t page_id() const { return global_page_id_; }
+    uint32_t shard_id() const { return shard_id_; }
+
+private:
+    uint64_t noc_addr_;
+    uint32_t global_page_id_;
+    uint32_t shard_id_;
+};
+
 template <typename Accessor>
 class ShardPagesAddressIterator {
 public:
@@ -15,10 +30,10 @@ public:
     using PageMapping = typename Accessor::PageMapping;
 
     using iterator_category = std::forward_iterator_tag;
-    using value_type = const uint64_t;
+    using value_type = ShardPage;
     using difference_type = std::ptrdiff_t;
-    using reference = const uint64_t&;
-    using pointer = const uint64_t*;
+    using reference = const ShardPage&;
+    using pointer = const ShardPage*;
 
     // Constructor that initializes the iterator at a starting position
     ShardPagesAddressIterator(
@@ -31,6 +46,7 @@ public:
         calculate_current_location(shard_id, start_page_offset);
         current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
         ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
+        update_current_page();
     }
 
     // Getters
@@ -41,7 +57,9 @@ public:
         }
         return page_id;
     }
-    reference operator*() const { return current_noc_addr; }
+
+    reference operator*() const { return current_page; }
+    pointer operator->() const { return &current_page; }
 
     // Arithmetic operators
     ShardPagesAddressIterator& operator++() {
@@ -57,6 +75,7 @@ public:
                 break;
             }
         } while (!update_local_global_page_coord());
+        update_current_page();
         return *this;
     }
 
@@ -80,6 +99,7 @@ public:
                 break;
             }
         } while (!update_local_global_page_coord(steps));
+        update_current_page();
         return *this;
     }
 
@@ -89,7 +109,7 @@ public:
         return tmp;
     }
 
-    const uint64_t& operator[](difference_type n) const {
+    const ShardPage& operator[](difference_type n) const {
         auto temp = *this;
         temp += n;
         return *temp;
@@ -124,6 +144,14 @@ private:
     ArrayU32 local_page_coord = {};
     ArrayU32 global_page_coord = {};
     ArrayU32 shard_coord = {};
+
+    mutable ShardPage current_page{0, 0, 0};
+
+    void update_current_page() {
+        if (current_page_id_in_shard < accessor.dspec().shard_volume()) {
+            current_page = ShardPage(current_noc_addr, page_id(), current_shard_id);
+        }
+    }
 
     // Calculates global page coordinate and checks if it's within logical tensor bounds
     bool update_global_page_coord() {
@@ -193,4 +221,31 @@ private:
 
         return update_global_page_coord();
     }
+};
+
+template <typename Accessor>
+class ShardPages {
+public:
+    using iterator = ShardPagesAddressIterator<Accessor>;
+    using const_iterator = ShardPagesAddressIterator<Accessor>;
+
+    ShardPages(const Accessor& accessor, uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) :
+        accessor_(accessor), shard_id_(shard_id), start_page_offset_(start_page_offset), noc_(noc) {}
+
+    iterator begin() const {
+        return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, start_page_offset_, noc_);
+    }
+
+    iterator end() const {
+        return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, accessor_.dspec().shard_volume(), noc_);
+    }
+
+    const_iterator cbegin() const { return begin(); }
+    const_iterator cend() const { return end(); }
+
+private:
+    const Accessor& accessor_;
+    uint32_t shard_id_;
+    uint32_t start_page_offset_;
+    uint8_t noc_;
 };

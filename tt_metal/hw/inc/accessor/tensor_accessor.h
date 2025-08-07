@@ -206,20 +206,11 @@ public:
         return is_local_bank(bank_x, bank_y, noc);
     }
 
-    // Shard iterator
-    const ShardPagesAddressIterator<TensorAccessor> shard_pages_address_iterator(
+    // Returns a proxy for shard pages iterator
+    ShardPages<TensorAccessor> shard_pages(
         uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
-        static_assert(DSpec::has_static_rank, "ShardPagesAddressIterator is only supported for static rank");
-        return ShardPagesAddressIterator<TensorAccessor>(*this, shard_id, start_page_offset, noc);
-    }
-
-    const ShardPagesAddressIterator<TensorAccessor> shard_pages_begin(
-        uint32_t shard_id, uint8_t noc = noc_index) const {
-        return shard_pages_address_iterator(shard_id, 0, noc);
-    }
-
-    const ShardPagesAddressIterator<TensorAccessor> shard_pages_end(uint32_t shard_id, uint8_t noc = noc_index) const {
-        return shard_pages_address_iterator(shard_id, dspec().shard_volume(), noc);
+        static_assert(DSpec::has_static_rank, "ShardPages is only supported for static rank");
+        return ShardPages<TensorAccessor>(*this, shard_id, start_page_offset, noc);
     }
 
 private:
