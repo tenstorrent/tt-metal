@@ -184,7 +184,6 @@ void MetalContext::initialize(
         std::atexit([]() { MetalContext::instance().teardown(); });
         teardown_registered_ = true;
     }
-
 }
 
 void MetalContext::teardown() {
@@ -418,10 +417,12 @@ void MetalContext::set_fabric_config(
     const tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes) {
-    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
+    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
+    // config, not through this function exposed in the detail API.
     force_reinit_ = true;
 
-    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED || fabric_config == tt_fabric::FabricConfig::DISABLED) {
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
+        fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
     } else {
@@ -485,14 +486,13 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->fabric_reliability_mode_);
 }
 
-tt_fabric::FabricConfig MetalContext::get_fabric_config() const {
-    return fabric_config_;
-}
+tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
+        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+            mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
     }
@@ -521,12 +521,14 @@ void MetalContext::initialize_control_plane() {
     if (cluster_type == tt::ClusterType::GALAXY && fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
         mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                "tt_metal/fabric/mesh_graph_descriptors" /
-                               "single_galaxy_torus_xy_graph_descriptor.yaml";                                                           
-
+                               "single_galaxy_torus_xy_graph_descriptor.yaml";
     }
 
     TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
-    TT_FATAL(std::filesystem::exists(mesh_graph_desc_path), "Mesh graph descriptor file not found: {}", mesh_graph_desc_path.string());
+    TT_FATAL(
+        std::filesystem::exists(mesh_graph_desc_path),
+        "Mesh graph descriptor file not found: {}",
+        mesh_graph_desc_path.string());
 
     this->construct_control_plane(mesh_graph_desc_path);
 }

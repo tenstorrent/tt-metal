@@ -188,8 +188,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             board_name_to_topology.find(board_name) == board_name_to_topology.end(),
             "MeshGraph: Duplicate board name: {}",
             board_name);
-        auto fabric_type =
-            enchantum::cast<FabricType>(board["type"].as<std::string>(), ttsl::ascii_caseless_comp);
+        auto fabric_type = enchantum::cast<FabricType>(board["type"].as<std::string>(), ttsl::ascii_caseless_comp);
         TT_FATAL(
             fabric_type.has_value(), "MeshGraph: Invalid yaml fabric board type: {}", board["type"].as<std::string>());
 
@@ -520,7 +519,8 @@ std::optional<HostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip
 
 const MeshContainer<HostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) const { return mesh_host_ranks_[*mesh_id]; }
 
-std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(tt::ClusterType cluster_type, const std::string& root_dir) {
+std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+    tt::ClusterType cluster_type, const std::string& root_dir) {
     auto it = cluster_type_to_mesh_graph_descriptor.get().find(cluster_type);
     if (it != cluster_type_to_mesh_graph_descriptor.get().end()) {
         return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / it->second;
