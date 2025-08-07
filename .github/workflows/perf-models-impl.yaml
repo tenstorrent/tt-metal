@@ -61,16 +61,24 @@ jobs:
               - models/demos/wormhole/distilbert/tests/test_perf_distilbert.py
               - models/demos/segformer/tests/perf/
               - models/demos/metal_BERT_large_11/tests/
+
               - models/demos/yolov8s_world/tests/perf/
               - models/demos/yolov8s/tests/perf/
-              - models/experimental/yolov6l/tests/perf/
+              - models/demos/yolov6l/tests/perf/
               - models/demos/mobilenetv2/tests/perf/
               - models/demos/vgg_unet/tests/
               - models/demos/yolov9c/tests/perf/
-              - models/experimental/vanilla_unet/tests/perf/
+              - models/demos/vanilla_unet/tests/perf/
               - models/demos/yolov8x/tests/perf/
               # e2e performant test is present in .../vit/demo folder only
               - models/demos/wormhole/vit/demo/
+              - models/experimental/swin_v2/tests/perf/
+              - models/experimental/swin_s/tests/perf/
+              - models/experimental/yolov5x/tests/perf/
+              - models/experimental/vovnet/tests/perf/
+              - models/demos/yolov12x/tests/perf/
+              - models/demos/ufld_v2/tests/perf/
+              - models/experimental/efficientnetb0/tests/perf/
 
     name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
     defaults:
@@ -113,11 +121,7 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
           run_args: |
-            export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-            export WH_ARCH_YAML=$MAGIC_ENV
-
             if [[ "${{ matrix.model-group.name }}" == "other" ]]; then
-              unset WH_ARCH_YAML
               echo "No environment variable engineering needed for other models"
             elif [[ "${{ matrix.model-group.name }}" == "tt_transformers" ]]; then
               export QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct

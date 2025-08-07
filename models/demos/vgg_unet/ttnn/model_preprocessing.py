@@ -9,20 +9,31 @@ import ttnn
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
 
 
-def custom_preprocessor(model, name):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    return custom_mesh_preprocessor
+
+
+def custom_preprocessor(model, name, mesh_mapper=None):
     parameters = {}
 
-    def process_conv_bn_pair(conv_layer, bn_layer, base_name):
+    def process_conv_bn_pair(conv_layer, bn_layer, base_name, mesh_mapper=None):
         conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
-        return ttnn.from_torch(conv_weight), ttnn.from_torch(torch.reshape(conv_bias, (1, 1, 1, -1)))
+        return ttnn.from_torch(conv_weight, mesh_mapper=mesh_mapper), ttnn.from_torch(
+            torch.reshape(conv_bias, (1, 1, 1, -1)), mesh_mapper=mesh_mapper
+        )
 
-    def process_conv_param(conv_layer, base_name):
+    def process_conv_param(conv_layer, base_name, mesh_mapper=None):
         conv_weight, conv_bias = conv_layer.weight, conv_layer.bias
         conv_bias = torch.reshape(conv_bias, (1, 1, 1, -1))
-        return ttnn.from_torch(conv_weight), ttnn.from_torch(conv_bias)
+        return ttnn.from_torch(conv_weight, mesh_mapper=mesh_mapper), ttnn.from_torch(
+            conv_bias, mesh_mapper=mesh_mapper
+        )
 
     # Recursive function to process all layers
-    def process_layers(layers, prefix=""):
+    def process_layers(layers, prefix="", mesh_mapper=None):
         i = 0
         while i < len(layers):
             layer_name, layer = layers[i]
@@ -34,19 +45,25 @@ def custom_preprocessor(model, name):
                 conv_transpose_weight = conv_transpose_layer.weight
                 conv_transpose_bias = conv_transpose_layer.bias
                 parameters[base_name]["up"] = {}
-                parameters[base_name]["up"]["weight"] = ttnn.from_torch(conv_transpose_weight)
-                parameters[base_name]["up"]["bias"] = ttnn.from_torch(torch.reshape(conv_transpose_bias, (1, 1, 1, -1)))
+                parameters[base_name]["up"]["weight"] = ttnn.from_torch(conv_transpose_weight, mesh_mapper=mesh_mapper)
+                parameters[base_name]["up"]["bias"] = ttnn.from_torch(
+                    torch.reshape(conv_transpose_bias, (1, 1, 1, -1)), mesh_mapper=mesh_mapper
+                )
 
                 # Process the ConvBlock layers (conv1, bn1, conv2, bn2)
                 conv_block = layer.conv_block
 
                 # Process conv1 + bn1
-                conv1_weight, conv1_bias = process_conv_bn_pair(conv_block.conv1, conv_block.bn1, f"{layer_name}_conv1")
+                conv1_weight, conv1_bias = process_conv_bn_pair(
+                    conv_block.conv1, conv_block.bn1, f"{layer_name}_conv1", mesh_mapper=mesh_mapper
+                )
                 parameters[base_name]["conv1"] = {}
                 parameters[base_name]["conv1"]["weight"] = conv1_weight
                 parameters[base_name]["conv1"]["bias"] = conv1_bias
                 # Process conv2 + bn2
-                conv2_weight, conv2_bias = process_conv_bn_pair(conv_block.conv2, conv_block.bn2, f"{layer_name}_conv2")
+                conv2_weight, conv2_bias = process_conv_bn_pair(
+                    conv_block.conv2, conv_block.bn2, f"{layer_name}_conv2", mesh_mapper=mesh_mapper
+                )
                 parameters[base_name]["conv2"] = {}
                 parameters[base_name]["conv2"]["weight"] = conv2_weight
                 parameters[base_name]["conv2"]["bias"] = conv2_bias
@@ -55,19 +72,19 @@ def custom_preprocessor(model, name):
                 if isinstance(layer, torch.nn.Conv2d):
                     # Check if the next layer is BatchNorm2d
                     if i + 1 < len(layers) and isinstance(layers[i + 1][1], torch.nn.BatchNorm2d):
-                        weight, bias = process_conv_bn_pair(layer, layers[i + 1][1], full_name)
+                        weight, bias = process_conv_bn_pair(layer, layers[i + 1][1], full_name, mesh_mapper=mesh_mapper)
                         parameters[full_name] = {}
                         parameters[full_name]["weight"] = weight
                         parameters[full_name]["bias"] = bias
                         i += 1  # Skip the BatchNorm layer in the next iteration
                     else:
                         # Handle Conv2d without BatchNorm2d (e.g., store as-is or skip)
-                        weight, bias = process_conv_param(layer, full_name)
+                        weight, bias = process_conv_param(layer, full_name, mesh_mapper=mesh_mapper)
                         parameters[full_name] = {}
                         parameters[full_name]["weight"] = weight
                         parameters[full_name]["bias"] = bias
                 elif isinstance(layer, torch.nn.ConvTranspose2d):
-                    weight, bias = process_conv_param(layer, full_name)
+                    weight, bias = process_conv_param(layer, full_name, mesh_mapper=mesh_mapper)
                     parameters[full_name] = {}
                     parameters[full_name]["weight"] = weight
                     parameters[full_name]["bias"] = bias
@@ -83,10 +100,23 @@ def custom_preprocessor(model, name):
     return parameters
 
 
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = None
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
 def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tensor, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
 
