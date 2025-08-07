@@ -116,13 +116,7 @@ void kernel_main() {
     constexpr std::array<bool, num_directions> directions = DIRECTIONS;
 
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_directions> fabric_connections;
-    for (uint32_t i = 0; i < directions.size(); i++) {
-        if (directions[i] == true) {
-            fabric_connections[i] =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-            fabric_connections[i].open_start();
-        }
-    }
+    open_direction_connections_async(directions, fabric_connections, rt_args_idx);
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
     detail::zero_buffer_async(
@@ -150,21 +144,17 @@ void kernel_main() {
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
 
     detail::zero_buffer_barrier();
-    for (uint32_t i = 0; i < directions.size(); i++) {
-        if (directions[i] == true) {
-            fabric_connections[i].open_finish();
-        }
-    }
+    open_direction_connections_barrier(directions, fabric_connections);
 
     // Send initialization semaphore to configured targets for synchronization
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
+        src_chip_id,
         mesh_rows,
         mesh_cols,
         axis,
-        src_chip_id,
         num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     // Wait for all devices to complete initialization synchronization

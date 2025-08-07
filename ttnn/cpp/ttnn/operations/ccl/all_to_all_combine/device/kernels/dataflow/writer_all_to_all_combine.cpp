@@ -86,7 +86,7 @@ void kernel_main() {
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
     const std::array<bool, Num_Directions> directions = DIRECTIONS;
 
-    uint32_t rt_arg_count = 0;
+    size_t rt_arg_count = 0;
     const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
@@ -94,7 +94,7 @@ void kernel_main() {
     const uint32_t token_end_idx = get_arg_val<uint32_t>(rt_arg_count++);
 
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
-    open_direction_connections(directions, fabric_connections, rt_arg_count);
+    open_direction_connections_async(directions, fabric_connections, rt_arg_count);
 
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){
@@ -105,13 +105,14 @@ void kernel_main() {
     }
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
 
+    open_direction_connections_barrier(directions, fabric_connections);
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
+        src_chip_id,
         mesh_rows,
         mesh_cols,
         replicate_axis,
-        src_chip_id,
         num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     InterleavedAddrGen<output_is_dram> output_addrgen{

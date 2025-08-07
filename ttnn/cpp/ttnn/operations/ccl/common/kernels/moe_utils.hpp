@@ -24,6 +24,30 @@ inline void open_direction_connections(
 }
 
 template <size_t Size>
+inline void open_direction_connections_async(
+    const std::array<bool, Size>& directions,
+    std::array<WorkerToFabricEdmSender, Size>& connections,
+    size_t& rt_args_idx) {
+    for (uint32_t i = 0; i < Size; i++) {
+        if (directions[i]) {
+            connections[i] =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+            connections[i].open_start();
+        }
+    }
+}
+
+template <size_t Size>
+inline void open_direction_connections_barrier(
+    const std::array<bool, Size>& directions, std::array<WorkerToFabricEdmSender, Size>& connections) {
+    for (uint32_t i = 0; i < Size; i++) {
+        if (directions[i]) {
+            connections[i].open_finish();
+        }
+    }
+}
+
+template <size_t Size>
 inline void close_direction_connections(
     const std::array<bool, Size>& directions, std::array<WorkerToFabricEdmSender, Size>& connections) {
     for (size_t i = 0; i < Size; ++i) {
@@ -413,10 +437,10 @@ inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
 template <
     uint32_t LinearizedSrcMeshCoord,
     tt::tt_fabric::Topology Topology,
+    uint32_t SrcChipId,
     uint32_t MeshRows,
     uint32_t MeshCols,
     ReplicateGroup Axis,
-    uint32_t SrcChipId,
     uint32_t NumDevices>
 inline void send_init_semaphore_to_configured_targets(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
