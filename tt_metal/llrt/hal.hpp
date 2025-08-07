@@ -343,7 +343,7 @@ public:
     const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
 
     const HalJitBuildQueryInterface& get_jit_build_query() const {
-        TT_ASSERT(hal_jit_build_query_ != nullptr);
+        TT_ASSERT(jit_build_query_ != nullptr);
         return *jit_build_query_;
     }
 };
