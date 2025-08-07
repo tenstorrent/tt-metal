@@ -1778,7 +1778,6 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
     for (auto& info : routing_info) {
         fabric_hops[info.dir] = info.num_hops;
     }
@@ -1808,7 +1807,6 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
     CoreCoord receiver_virtual_core = receiver_devices.back()->worker_core_from_logical_core(receiver_logical_core);
 
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
 
     tt_metal::Program sender_program = tt_metal::CreateProgram();
     tt_metal::Program receiver_program = tt_metal::CreateProgram();
@@ -2014,7 +2012,6 @@ void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type
     log_info(tt::LogTest, "Mcast Receiver Core (Logical): {},{}", receiver_logical_core.x, receiver_logical_core.y);
 
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
 
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
