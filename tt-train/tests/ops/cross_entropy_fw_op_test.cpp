@@ -123,7 +123,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
@@ -172,7 +172,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
@@ -220,7 +220,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
@@ -268,7 +268,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Huge_Forward) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},

@@ -32,7 +32,7 @@ protected:
 TEST_F(ReduceOpTest, TestMeanDim0) {
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{xtensor_a.data(), xtensor_a.size()},
@@ -59,7 +59,7 @@ TEST_F(ReduceOpTest, TestMeanDim0) {
 TEST_F(ReduceOpTest, TestSumDim0) {
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{xtensor_a.data(), xtensor_a.size()},
@@ -86,7 +86,7 @@ TEST_F(ReduceOpTest, TestSumDim0) {
 TEST_F(ReduceOpTest, TestMeanDim3) {
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{xtensor_a.data(), xtensor_a.size()},
@@ -113,7 +113,7 @@ TEST_F(ReduceOpTest, TestMeanDim3) {
 TEST_F(ReduceOpTest, TestSumDim3) {
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{xtensor_a.data(), xtensor_a.size()},
@@ -140,7 +140,7 @@ TEST_F(ReduceOpTest, TestSumDim3) {
 TEST_F(ReduceOpTest, TestMeanLargeDim3) {
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({1024 * 1024});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{xtensor_a.data(), xtensor_a.size()},

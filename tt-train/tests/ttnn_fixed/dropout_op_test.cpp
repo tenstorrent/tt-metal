@@ -36,7 +36,7 @@ TEST_F(DropoutTest, TestSeed) {
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);
         xt::xarray<float> xtensor_a = xt::empty<float>(shape);
-        auto rng = ttml::autograd::ctx().get_generator();
+        auto& rng = ttml::autograd::ctx().get_generator();
         uint32_t seed = rng();
         ttml::core::parallel_generate(
             std::span{xtensor_a.data(), xtensor_a.size()},

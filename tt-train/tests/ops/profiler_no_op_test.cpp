@@ -36,7 +36,7 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
     const uint32_t N = 2U, C = 1U, H = 91U, W = 187U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},

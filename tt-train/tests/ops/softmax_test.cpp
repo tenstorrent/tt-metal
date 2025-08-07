@@ -52,7 +52,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
@@ -89,7 +89,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
@@ -123,7 +123,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Huge_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},

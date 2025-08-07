@@ -118,7 +118,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> xtensor_data = xt::empty<float>({32 * 32});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{xtensor_data.data(), xtensor_data.size()},
@@ -147,7 +147,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> xtensor_data = xt::empty<float>({32});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{xtensor_data.data(), xtensor_data.size()},
@@ -192,7 +192,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> xtensor_a_data = xt::empty<float>({128 * 64});
-    auto rng = ttml::autograd::ctx().get_generator();
+    auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{xtensor_a_data.data(), xtensor_a_data.size()},

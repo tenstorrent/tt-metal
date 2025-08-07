@@ -11,22 +11,6 @@
 
 namespace ttml::init {
 
-namespace {
-struct constant_distribution {
-    using result_type = float;
-
-    constant_distribution(float value) : value(value) {
-    }
-
-    template <typename G>
-    float operator()([[maybe_unused]] G& g) {
-        return value;
-    }
-
-    float value;
-};
-}  // namespace
-
 xt::xarray<float> uniform_init(const ttnn::Shape& shape, UniformRange range) {
     std::vector<float> data(shape.volume());
     uniform_init(data, range);
@@ -69,8 +53,7 @@ void normal_init(std::vector<float>& vec, NormalParams params) {
 void constant_init(std::vector<float>& vec, float value) {
     auto& gen = autograd::ctx().get_generator();
     uint32_t seed = gen();
-    core::parallel_generate(
-        std::span{vec.data(), vec.size()}, [value]() { return constant_distribution{value}; }, seed);
+    std::fill(vec.begin(), vec.end(), value);
 }
 
 void xavier_uniform_init(std::vector<float>& vec, FanParams params) {
