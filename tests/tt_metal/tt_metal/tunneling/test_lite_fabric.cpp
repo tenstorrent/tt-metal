@@ -22,7 +22,6 @@
 #include "lite_fabric.hpp"
 #include "hal_types.hpp"
 #include "kernel.hpp"
-#include "lite_fabric_constants.hpp"
 #include "rtoptions.hpp"
 #include "llrt/hal.hpp"
 #include "tt_cluster.hpp"
@@ -76,7 +75,7 @@ TEST(Tunneling, LiteFabricInit) {
     lite_fabric::WaitForState(*cluster.get(), desc, lite_fabric::InitState::TERMINATED);
 }
 
-TEST(Tunneling, LiteFabricWrites) {
+TEST(Tunneling, LiteFabricWriteAllCores) {
     CHECK_TEST_REQS();
 
     auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
@@ -87,10 +86,7 @@ TEST(Tunneling, LiteFabricWrites) {
     log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
 
     uint32_t sender_channel_base = lite_fabric::LiteFabricMemoryMap::get_send_channel_addr();
-    lite_fabric::HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE> host_interface;
-    host_interface.host_interface_on_device_addr = lite_fabric::LiteFabricMemoryMap::get_host_interface_addr();
-    host_interface.sender_channel_base = lite_fabric::LiteFabricMemoryMap::get_send_channel_addr();
-    host_interface.receiver_channel_base = lite_fabric::LiteFabricMemoryMap::get_receiver_channel_addr();
+    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
 
     // This will wrap the sender channel multiple times and write to all worker cores
     uint32_t payload_size_bytes = (128 * 1024) + 512;
@@ -118,9 +114,7 @@ TEST(Tunneling, LiteFabricWrites) {
         }
     }
 
-    // Checking written data using PCIe. Sleep because barrier is not implemented yet
     host_interface.barrier(tunnel.mmio_cxy_virtual());
-    std::this_thread::sleep_for(std::chrono::seconds(5));
 
     for (int worker_x = 0; worker_x < devices[1]->compute_with_storage_grid_size().x; ++worker_x) {
         for (int worker_y = 0; worker_y < devices[1]->compute_with_storage_grid_size().y; ++worker_y) {
@@ -151,10 +145,7 @@ TEST(Tunneling, LiteFabricReads) {
     const auto& tunnel = desc.tunnels_from_mmio[0];
     log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
 
-    lite_fabric::HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE> host_interface;
-    host_interface.host_interface_on_device_addr = lite_fabric::LiteFabricMemoryMap::get_host_interface_addr();
-    host_interface.sender_channel_base = lite_fabric::LiteFabricMemoryMap::get_send_channel_addr();
-    host_interface.receiver_channel_base = lite_fabric::LiteFabricMemoryMap::get_receiver_channel_addr();
+    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
 
     uint32_t payload_size_bytes = 4 * 1024;
     uint32_t max_payload_size = host_interface.get_max_payload_data_size_bytes();
@@ -171,10 +162,8 @@ TEST(Tunneling, LiteFabricReads) {
 
     auto allOnes = create_random_vector_of_bfloat16(
         payload_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
-    allOnes = std::vector<uint32_t>(payload_size_bytes / sizeof(uint32_t), 0x11111111);
     auto allTwos = create_random_vector_of_bfloat16(
         payload_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count(), 2.0f);
-    allTwos = std::vector<uint32_t>(payload_size_bytes / sizeof(uint32_t), 0x22222222);
 
     uint64_t onesNocAddr = dest_noc_addr;
     uint64_t twosNocAddr = dest_noc_addr + payload_size_bytes;
@@ -184,11 +173,8 @@ TEST(Tunneling, LiteFabricReads) {
 
     // Try reading back the data we just wrote
     host_interface.barrier(tunnel.mmio_cxy_virtual());
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    log_info(tt::LogMetal, "Reading back ones data from Device 1 worker core {}", logical_worker.str());
-    uint32_t receiver_channel_base = lite_fabric::LiteFabricMemoryMap::get_receiver_channel_addr();
 
-    log_info(tt::LogMetal, "Reading back ones data from Device 1 worker core {}", logical_worker.str());
+    log_info(tt::LogMetal, "Reading back data from Device 1 worker core {}", logical_worker.str());
     {
         // Read out
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
@@ -203,7 +189,7 @@ TEST(Tunneling, LiteFabricReads) {
         ASSERT_EQ(read_data, allOnes);
     }
 
-    log_info(tt::LogMetal, "Reading back twos data from Device 1 worker core {}", logical_worker.str());
+    log_info(tt::LogMetal, "Reading back data from Device 1 worker core {}", logical_worker.str());
     {
         // Read out
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
@@ -218,6 +204,24 @@ TEST(Tunneling, LiteFabricReads) {
         ASSERT_EQ(read_data, allTwos);
     }
 
+    lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
+    tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
+
+    tt::tt_metal::detail::CloseDevices(devices);
+}
+
+TEST(Tunneling, LiteFabricBarrier) {
+    CHECK_TEST_REQS();
+
+    auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+
+    auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+
+    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+
+    host_interface.barrier(tunnel.mmio_cxy_virtual());
     lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
     tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
 
