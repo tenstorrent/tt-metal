@@ -476,7 +476,7 @@ void noc_async_read_one_packet(
     uint32_t dst_local_l1_addr,
     uint32_t size,
     uint8_t noc = noc_index,
-    uint32_t read_req_vc = 1) {
+    uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -517,7 +517,7 @@ inline void noc_async_read(
     uint32_t dst_local_l1_addr,
     uint32_t size,
     uint8_t noc = noc_index,
-    uint32_t read_req_vc = 1) {
+    uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
