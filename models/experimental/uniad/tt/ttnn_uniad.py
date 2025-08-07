@@ -25,7 +25,9 @@ from models.experimental.uniad.tt.ttnn_memory_bank import TtMemoryBank
 # from models.experimental.uniad.reference.detr_track_3d_coder import DETRTrack3DCoder
 from models.experimental.uniad.tt.ttnn_detr_track_3d_coder import TtDETRTrack3DCoder
 from models.experimental.uniad.tt.ttnn_planning_head import TtPlanningHeadSingleMode
-from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
+from models.experimental.uniad.tt.ttnn_pan_segformer_head import TtPansegformerHead
+
+# from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
 from models.experimental.uniad.tt.ttnn_motion_head import TtMotionHead
 from models.experimental.uniad.tt.ttnn_occ_head import TtOccHead
 
@@ -277,13 +279,17 @@ class TtUniAD:
         self.bev_h, self.bev_w = self.pts_bbox_head.bev_h, self.pts_bbox_head.bev_w
         self.freeze_bev_encoder = freeze_bev_encoder
         if seg_head:
-            self.seg_head = PansegformerHead(
+            self.seg_head = TtPansegformerHead(
+                params=parameters.seg_head,
+                device=device,
+                args=(),
                 bev_h=50,
                 bev_w=50,
                 canvas_size=(50, 50),
                 pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
                 with_box_refine=True,
                 as_two_stage=False,
+                parameters_branches=parameters.seg_head.reg_branches,
                 **{
                     "num_query": 300,
                     "num_classes": 4,
@@ -490,10 +496,16 @@ class TtUniAD:
         bev_embed = result_track[0]["bev_embed"]
 
         if self.with_seg_head:
+            # bev_embed = ttnn.from_torch(bev_embed, device=self.device, layout=ttnn.TILE_LAYOUT)
+
+            # gt_lane_labels = [ttnn.from_torch(label, device=self.device, layout=ttnn.TILE_LAYOUT) for label in gt_lane_labels]
+
+            # gt_lane_masks = [ttnn.from_torch(mask, device=self.device, layout=ttnn.TILE_LAYOUT) for mask in gt_lane_masks]
+
             result_seg = self.seg_head.forward_test(
-                ttnn.to_torch(bev_embed).to(torch.float),
-                [ttnn.to_torch(gt_lane_labels[0]).to(torch.int32)],
-                [ttnn.to_torch(gt_lane_masks[0]).to(torch.int32)],
+                bev_embed,
+                [gt_lane_labels[0]],
+                [gt_lane_masks[0]],
                 img_metas,
                 rescale,
             )
@@ -594,29 +606,29 @@ class TtUniAD:
                 result_track[0]["labels_3d_det"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
 
-            result_seg[0]["args_tuple"] = [
-                ttnn.from_torch(
-                    result_seg[0]["args_tuple"][0], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                ),
-                ttnn.from_torch(
-                    result_seg[0]["args_tuple"][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                ),
-                ttnn.from_torch(
-                    result_seg[0]["args_tuple"][2], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                ),
-                ttnn.from_torch(
-                    result_seg[0]["args_tuple"][3], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                ),
-                None,
-                ttnn.from_torch(
-                    result_seg[0]["args_tuple"][5], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                ),
-                [
-                    ttnn.from_torch(
-                        torch.zeros(50, 50), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                    )
-                ],
-            ]
+            # result_seg[0]["args_tuple"] = [
+            #     ttnn.from_torch(
+            #         result_seg[0]["args_tuple"][0], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #     ),
+            #     ttnn.from_torch(
+            #         result_seg[0]["args_tuple"][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #     ),
+            #     ttnn.from_torch(
+            #         result_seg[0]["args_tuple"][2], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #     ),
+            #     ttnn.from_torch(
+            #         result_seg[0]["args_tuple"][3], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #     ),
+            #     None,
+            #     ttnn.from_torch(
+            #         result_seg[0]["args_tuple"][5], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #     ),
+            #     [
+            #         ttnn.from_torch(
+            #             torch.zeros(50, 50), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+            #     ],
+            # ]
 
             result_motion, outs_motion = self.motion_head.forward_test(
                 bev_embed, outs_track=result_track[0], outs_seg=result_seg[0]
