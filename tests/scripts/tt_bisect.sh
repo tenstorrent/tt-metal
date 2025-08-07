@@ -19,7 +19,6 @@ END
 cd $TT_METAL_HOME
 ./create_venv.sh
 source ./venv/bin/activate
-cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
 timeout_duration=2m
