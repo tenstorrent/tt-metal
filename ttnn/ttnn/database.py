@@ -55,6 +55,7 @@ class Buffer:
     address: int
     max_size_per_bank: int
     buffer_type: ttnn.BufferType
+    buffer_layout: ttnn.TensorMemoryLayout
 
     def __post_init__(self):
         self.buffer_type = ttnn.BufferType(self.buffer_type) if self.buffer_type is not None else None
@@ -199,7 +200,7 @@ def get_or_create_sqlite_db(report_path):
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS buffers
-                (operation_id int, device_id int, address int, max_size_per_bank int, buffer_type int)"""
+                (operation_id int, device_id int, address int, max_size_per_bank int, buffer_type int, buffer_layout int)"""
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS buffer_pages
@@ -401,7 +402,8 @@ def insert_buffers(report_path, operation_id, devices):
                 {buffer.device_id},
                 {buffer.address},
                 {buffer.max_size_per_bank},
-                {buffer.buffer_type.value}
+                {buffer.buffer_type.value},
+                {buffer.buffer_layout.value if buffer.buffer_layout is not None else 'NULL'}
             )"""
         )
     sqlite_connection.commit()
