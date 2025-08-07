@@ -821,6 +821,8 @@ void ReadDeviceProfilerResults(
     ZoneScoped;
 
     if (getDeviceProfilerState()) {
+        TT_ASSERT(device->is_initialized());
+
         auto profiler_it = tt_metal_device_profiler_map.find(device->id());
         TT_ASSERT(profiler_it != tt_metal_device_profiler_map.end());
         DeviceProfiler& profiler = profiler_it->second;
@@ -879,6 +881,8 @@ void ReadMeshDeviceProfilerResults(
     ZoneScoped;
 
     if (getDeviceProfilerState()) {
+        TT_ASSERT(mesh_device.is_initialized());
+
         if (useFastDispatch(&mesh_device)) {
             for (IDevice* device : mesh_device.get_devices()) {
                 auto profiler_it = detail::tt_metal_device_profiler_map.find(device->id());
