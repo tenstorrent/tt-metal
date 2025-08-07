@@ -59,6 +59,12 @@ fi
 
 found=false
 
+echo "Current location: `pwd`"
+echo "Current branch: `git rev-parse --abbrev-ref HEAD`"
+echo "Current commit: `git rev-parse HEAD`"
+echo "Current status:"
+echo `git status`
+
 git bisect start $bad_commit $good_commit --
 
 while [[ "$found" = "false" ]]; do
