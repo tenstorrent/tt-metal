@@ -218,7 +218,7 @@ def run_avg_pool2d(
     if padding_is_4d:
         assert (
             not ceil_mode_out_shape_adj
-        ), "current test infrastructure does not support ceil mode output shapae adjustments with 4D padding"
+        ), "current test infrastructure does not support ceil mode output shape adjustments with 4D padding"
         torch_input_padded = torch.nn.functional.pad(
             torch_input,
             (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
