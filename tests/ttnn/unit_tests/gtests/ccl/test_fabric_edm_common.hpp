@@ -1539,14 +1539,19 @@ inline bool TestMultiInputReaderKernel(
         log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return true;
     }
-    Fabric1DFixture test_fixture;
-
-    auto view = *(test_fixture.view_);
+    MeshFabric1DFixture test_fixture;
+    auto mesh_device = test_fixture.mesh_device_;
 
     std::vector<IDevice*> devices;
     devices.reserve(fabric_num_devices);
     for (size_t i = 0; i < fabric_num_devices; i++) {
-        devices.push_back(view.get_device(MeshCoordinate(0, i)));
+        devices.push_back(mesh_device->get_device(MeshCoordinate(0, i)));
+    }
+
+    std::vector<std::shared_ptr<distributed::MeshDevice>> mesh_devices;
+    mesh_devices.reserve(fabric_num_devices);
+    for (size_t i = 0; i < fabric_num_devices; i++) {
+        mesh_devices.push_back(mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, i)));
     }
 
     std::vector<Program> programs(1);
@@ -1565,25 +1570,17 @@ inline bool TestMultiInputReaderKernel(
     std::vector<Tensor> output0_tensors_device;
     std::vector<Tensor> output1_tensors_device;
 
-    // Create per-device MeshDevice wrappers for tensor allocation
-    std::vector<std::shared_ptr<distributed::MeshDevice>> mesh_devices;
-    mesh_devices.reserve(devices.size());
-    for (auto* dev : devices) {
-        mesh_devices.push_back(distributed::MeshDevice::create_unit_mesh(dev->id()));
-    }
-
     // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
     // multicast to a consistent destination address
     for (size_t i = 0; i < devices.size(); i++) {
-        auto* mesh_dev = mesh_devices[i].get();
         input0_tensors_device.push_back(
-            input_tensor0.to_device(mesh_dev, input_tensor0_mem_config, ttnn::DefaultQueueId));
+            input_tensor0.to_device(mesh_devices.at(i).get(), input_tensor0_mem_config, ttnn::DefaultQueueId));
         input1_tensors_device.push_back(
-            input_tensor1.to_device(mesh_dev, input_tensor1_mem_config, ttnn::DefaultQueueId));
+            input_tensor1.to_device(mesh_devices.at(i).get(), input_tensor1_mem_config, ttnn::DefaultQueueId));
         output0_tensors_device.push_back(
-            output_tensor0.to_device(mesh_dev, output_tensor0_mem_config, ttnn::DefaultQueueId));
+            output_tensor0.to_device(mesh_devices.at(i).get(), output_tensor0_mem_config, ttnn::DefaultQueueId));
         output1_tensors_device.push_back(
-            output_tensor1.to_device(mesh_dev, output_tensor1_mem_config, ttnn::DefaultQueueId));
+            output_tensor1.to_device(mesh_devices.at(i).get(), output_tensor1_mem_config, ttnn::DefaultQueueId));
     }
     auto launch_ccl_command_interpreter_workers = [&](std::vector<Program>& _programs) {
         return RunLocalTestWithMultiInputReaders(
@@ -1813,11 +1810,11 @@ bool RunPipelinedWorkersTest(
     auto programs = std::vector<Program>(1);
     Program& program = programs[0];
 
-    Fabric1DFixture test_fixture;
-    auto view = *(test_fixture.view_);
+    MeshFabric1DFixture test_fixture;
+    auto full_mesh_device = test_fixture.mesh_device_;
 
-    IDevice* device = view.get_device(MeshCoordinate(0, 0));
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device->id());
+    IDevice* device = full_mesh_device->get_device(MeshCoordinate(0, 0));
+    std::shared_ptr<distributed::MeshDevice> mesh_device = full_mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
 
     // General setup is as follows:
     // Worker 1 reads input tensor as a sequence of slices - it forwards to an output tensor and after each slice, it
