@@ -256,11 +256,8 @@ def evaluation(
             "YOLOv8x",
             "YOLOv11n",
             "YOLOv7",
-<<<<<<< HEAD
             "YOLOv12x",
-=======
             "YOLOv6l",
->>>>>>> e184ba0151 (#25157: add yolov6 eval)
         ]:
             ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout, device=device)
         elif model_name == "YOLOv12x":

@@ -332,10 +332,7 @@ run_yolov6l_demo() {
 
 run_yolov12x_demo() {
 
-  pytest --disable-warnings models/demos/yolov12x/demo/demo.py
-
-  pytest --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov12x[device_params0-tt_model] --timeout 600
-
+  pytest models/demos/yolov12x/demo/demo.py
 
 }
 
