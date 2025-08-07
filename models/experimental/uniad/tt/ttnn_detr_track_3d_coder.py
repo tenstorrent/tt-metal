@@ -81,6 +81,7 @@ class TtDETRTrack3DCoder(TtBaseBBoxCoder):
         obj_idxes = ttnn.to_torch(obj_idxes)
         bbox_preds = ttnn.to_torch(bbox_preds)
 
+        # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/15553>
         labels = labels[bbox_index]
         bbox_preds = bbox_preds[bbox_index]
         track_scores = track_scores[bbox_index]

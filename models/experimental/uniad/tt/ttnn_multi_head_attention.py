@@ -21,7 +21,9 @@ def _canonical_mask(
     if mask is not None:
         _mask_is_float = torch.is_floating_point(mask)
         if not _mask_is_float:
-            mask = torch.zeros_like(mask, dtype=target_type).masked_fill_(mask, float("-inf"))
+            mask = torch.zeros_like(mask, dtype=target_type)
+            mask = mask.masked_fill_(mask, float("-inf"))
+
     return mask
 
 
@@ -137,11 +139,9 @@ def multi_head_attention_forward(
         else:
             attn_output_weights = ttnn.matmul(q_scaled, ttnn.transpose(k, -2, -1))
 
-        attn_output_weights = ttnn.to_torch(attn_output_weights)
-        attn_output_weights = torch.softmax(attn_output_weights, dim=-1)  # check
-        attn_output_weights = ttnn.from_torch(
-            attn_output_weights, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
+        attn_output_weights = ttnn.to_layout(attn_output_weights, layout=ttnn.ROW_MAJOR_LAYOUT)
+        attn_output_weights = ttnn.softmax(attn_output_weights, -1)  # check
+
         attn_output = ttnn.matmul(attn_output_weights, v)  # [B, N, D]
 
         attn_output = ttnn.transpose(attn_output, 0, 1)

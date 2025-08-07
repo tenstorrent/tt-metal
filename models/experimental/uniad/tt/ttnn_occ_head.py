@@ -53,7 +53,9 @@ class TtOccHead:
     def get_ins_seg_gt(self, gt_instance):
         ins_gt_old = ttnn.to_torch(gt_instance)  # Not consecutive, 0 for bg, otherwise ins_ind(start from 1)
         ins_gt_new = torch.zeros_like(ins_gt_old).to(ins_gt_old)  # Make it consecutive
-        ins_inds_unique = torch.unique(ins_gt_old)
+        ins_inds_unique = torch.unique(
+            ins_gt_old
+        )  # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/26437>
         new_id = 1
         for uni_id in ins_inds_unique:
             if uni_id.item() in [0, self.ignore_index]:  # ignore background_id
