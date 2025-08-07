@@ -154,7 +154,7 @@ jobs:
       - name: 🛠️ Baseline Build
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
         run: |
-          nice -n 19 cmake --build --preset clang-tidy
+          cmake --build --preset clang-tidy
 
       - name: Publish Ccache summary
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
@@ -187,7 +187,7 @@ jobs:
 
       - name: 🔍 Analyze code with clang-tidy
         run: |
-          nice -n 19 cmake --build --preset clang-tidy
+          cmake --build --preset clang-tidy
 
       - name: Publish Ccache summary
         run: |
