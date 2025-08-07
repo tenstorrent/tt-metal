@@ -145,8 +145,6 @@ target_link_libraries(
         detail
         distributed
         fabric
-        HAL::wormhole
-        HAL::blackhole
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
 )
