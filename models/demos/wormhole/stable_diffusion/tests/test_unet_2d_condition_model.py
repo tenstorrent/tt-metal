@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import time
 
 import pytest
 import torch
@@ -113,30 +112,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     model = UNet2D(device, parameters, batch_size, input_height, input_width)
 
-    first_iter = time.time()
-    use_signpost = True
-    try:
-        from tracy import signpost
-    except ModuleNotFoundError:
-        use_signpost = False
-    if use_signpost:
-        signpost(header="start")
-    ttnn_output_ = model(
-        input,
-        timestep=ttnn_timestep,
-        encoder_hidden_states=encoder_hidden_states,
-        class_labels=class_labels,
-        attention_mask=attention_mask,
-        cross_attention_kwargs=cross_attention_kwargs,
-        return_dict=return_dict,
-        config=config,
-    )
-    if use_signpost:
-        signpost(header="stop")
-    first_iter = time.time() - first_iter
-    print(f"First iteration took {first_iter} seconds")
-
-    second_iter = time.time()
     ttnn_output = model(
         input,
         timestep=ttnn_timestep,
@@ -147,8 +122,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         return_dict=return_dict,
         config=config,
     )
-    second_iter = time.time() - second_iter
-    print(f"Second iteration took {second_iter} seconds")
 
     ttnn_output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, 0.995)
