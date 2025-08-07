@@ -198,6 +198,10 @@ class DropInVisionTransformer(torch.nn.Module):
     def dtype(self):
         return self.reference_model.dtype
 
+    @property
+    def spatial_merge_size(self):
+        return self.model_args.hf_config.vision_config.spatial_merge_size
+
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         """
         Forward pass mimicking the Qwen2_5_VisionTransformerPretrainedModel interface.
