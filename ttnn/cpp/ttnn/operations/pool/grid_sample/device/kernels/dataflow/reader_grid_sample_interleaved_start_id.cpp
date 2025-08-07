@@ -173,7 +173,6 @@ void kernel_main() {
 
         cb_push_back(scalar_cb_index, 1);
 
-        DeviceZoneScopedN("Read barrier");
         // Ensure all reads are complete before proceeding
         noc_async_read_barrier();
 
