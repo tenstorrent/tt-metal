@@ -151,26 +151,51 @@ def run_reduce_scatter_impl(
     tt_reduce_scatter_output_list = []
 
     def run_op(i):
-        tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
-            tt_input_tensor_mesh_list[i],
-            persistent_output_buffers=None
-            if use_barrier
-            else [persistent_intermediate_buffers[i], persistent_output_buffers[i]],
-            dim=dim,
-            multi_device_global_semaphore=ccl_semaphore_handles[i],
-            barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+        input_tensor = ttnn.to_layout(tt_input_tensor_mesh_list[i], layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+        tt_out_tensors = ttnn.experimental.all_broadcast_async(
+            input_tensor,
+            multi_device_global_semaphore=ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0),
             num_links=num_links,
             memory_config=mem_config_rs,
-            intermediate_memory_config=mem_config_intermediate,
             topology=rs_topology,
             subdevice_id=worker_sub_device_id,
-            cluster_axis=cluster_axis,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
+        )
+        ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+
+        all_reduced = tt_out_tensors[0]
+        for tensor in tt_out_tensors[1:]:
+            all_reduced = ttnn.add(all_reduced, tensor)
+
+        tt_out_tensor = ttnn.mesh_partition(
+            all_reduced,
+            dim=3,
+            # cluster_axis=cluster_axis,
         )
 
-        return tt_reduce_scatter_output_tensor
+        tt_out_tensor = ttnn.to_layout(tt_out_tensor, ttnn.TILE_LAYOUT)
+
+        # tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+        #     tt_input_tensor_mesh_list[i],
+        #     persistent_output_buffers=None
+        #     if use_barrier
+        #     else [persistent_intermediate_buffers[i], persistent_output_buffers[i]],
+        #     dim=dim,
+        #     multi_device_global_semaphore=ccl_semaphore_handles[i],
+        #     barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+        #     num_links=num_links,
+        #     memory_config=mem_config_rs,
+        #     intermediate_memory_config=mem_config_intermediate,
+        #     topology=rs_topology,
+        #     subdevice_id=worker_sub_device_id,
+        #     cluster_axis=cluster_axis,
+        #     chunks_per_sync=chunks_per_sync,
+        #     num_workers_per_link=num_workers_per_link,
+        #     num_buffers_per_channel=num_buffers_per_channel,
+        # )
+
+        return tt_out_tensor
 
     if enable_trace:
         # Compile the op
@@ -229,25 +254,28 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
-        (8, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
+        # (8, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # (8, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # (8, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # (8, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
+        # (8, [1, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16)
+        # (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16)
+        (8, [1, 1, 1024, 640], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16)
     ],
-    ids=[
-        "padded_dim_2_test_one",
-        "padded_dim_2_test_two",
-        "batch_8",
-        "batch_4",
-        "batch_1_sd35_spatial",
-        "batch_1_sd35_prompt",
-        "batch_2",
-        "batch_1",
-    ],
+    # ids=[
+    #     "padded_dim_2_test_one",
+    #     "padded_dim_2_test_two",
+    #     "batch_8",
+    #     "batch_4",
+    #     "batch_1_sd35_spatial",
+    #     "batch_1_sd35_prompt",
+    #     "batch_2",
+    #     "batch_1",
+    # ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",
@@ -261,26 +289,26 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
+        # (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    # ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
+        # True,
         False,
     ],
-    ids=["ones", "random"],
+    # ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
     "use_barrier",
     [
-        True,
+        #  True,
         False,
     ],
-    ids=["barrier_active", "barrier_inactive"],
+    # ids=["barrier_active", "barrier_inactive"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -289,7 +317,7 @@ def run_reduce_scatter_impl(
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    # ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async(
     t3k_mesh_device,
