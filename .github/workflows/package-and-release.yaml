@@ -221,7 +221,7 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
-            models/MODEL_UPDATES.md
+            models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:
