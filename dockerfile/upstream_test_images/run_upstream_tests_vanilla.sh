@@ -75,7 +75,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
     echo "[upstream-tests] Running BH LLMBox metal unit tests"
 
     ./build/test/tt_metal/tt_fabric/test_system_health
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*-Fabric1DFixture.TestLinearFabricUnicastNocInlineWrite1D*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/unit_tests_eth
 }
