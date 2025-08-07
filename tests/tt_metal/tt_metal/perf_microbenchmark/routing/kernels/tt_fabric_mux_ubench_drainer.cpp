@@ -25,7 +25,7 @@ constexpr size_t channel_base_address = get_compile_time_arg_val(7);
 constexpr size_t my_eth_channel_id = get_compile_time_arg_val(8);
 
 namespace tt::tt_fabric {
-using DrainerChannelBuffer = EthChannelBuffer<NUM_BUFFERS>;
+using DrainerChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, NUM_BUFFERS>;
 using DrainerChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
 using DrainerChannelWorkerInterface = EdmChannelWorkerInterface<NUM_BUFFERS>;
 using DrainerStatus = EDMStatus;
