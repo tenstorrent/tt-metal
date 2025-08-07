@@ -17,39 +17,37 @@
 #include "models/llama.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
-#include "optimizers/optimizer_base.hpp"
 #include "tokenizers/char_tokenizer.hpp"
-
 namespace {
-// works around design of autocontext
-static std::optional<bool> arch_is_wormhole_b0 = std::nullopt;
-}  // namespace
+/*
+Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1
+or setting 'is_nigthly_tt_train_tests_enabled' variable to true.
+*/
+constexpr bool is_nigthly_tt_train_tests_enabled = false;
 
-bool is_wormhole_b0() {
-    if (!arch_is_wormhole_b0.has_value()) {
+[[nodiscard]] bool is_wormhole_b0() {
+    static bool arch_is_wormhole_b0 = []() {
         auto shape = tt::tt_metal::distributed::MeshShape(1, 1);
-        ttml::autograd::ctx().open_device(shape);
-        auto &device = ttml::autograd::ctx().get_device();
-        fmt::println("opened dummy device");
-        arch_is_wormhole_b0 = device.arch() == tt::ARCH::WORMHOLE_B0;
-        ttml::autograd::ctx().close_device();
-    }
-    return *arch_is_wormhole_b0;
+        ttml::core::MeshDevice device(shape, {});
+
+        return device.get_device().arch() == tt::ARCH::WORMHOLE_B0;
+    }();
+    return arch_is_wormhole_b0;
 }
 
-bool should_run_nightly_tests() {
+[[nodiscard]] bool should_run_nightly_tests() {
     const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
     bool is_whb0 = is_wormhole_b0();
-    bool is_ci = env_var || ENABLE_NIGHTLY_TT_TRAIN_TESTS;
+    bool is_ci = env_var || is_nigthly_tt_train_tests_enabled;
     return is_whb0 && is_ci;
 }
 
-bool should_run_multi_device_tests() {
+[[nodiscard]] bool should_run_multi_device_tests() {
     bool enable_nightly = should_run_nightly_tests();
     bool sufficient_devices = tt::tt_metal::GetNumAvailableDevices() >= 2;
     return enable_nightly && sufficient_devices;
 }
-
+}  // namespace
 class NanoLlamaTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -295,8 +293,14 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     // verify program cache
     auto program_cache_entries = device->num_program_cache_entries();
 
-    float abs_tol = 1e-4;
-    std::string run_type = use_tensor_parallel ? "TP" : use_ddp ? "DDP" : "SingleDevice";
+    float abs_tol = 1e-4F;
+    std::string run_type = "SingleDevice";
+    if (use_tensor_parallel) {
+        run_type = "TP";
+    } else if (use_ddp) {
+        run_type = "DDP";
+    }
+
     fmt::print("run_type: {}\n", run_type);
     std::unordered_map<std::string, uint32_t> expected_program_cache_entries_map = {
         {"SingleDevice", 80}, {"DDP", 94}, {"TP", 103}};
