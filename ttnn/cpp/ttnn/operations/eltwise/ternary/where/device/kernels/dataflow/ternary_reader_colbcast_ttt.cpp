@@ -8,19 +8,14 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(1);
-    const uint32_t src_num_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(4);
+    // Standard first 5 arguments (same as ternary_reader_nobcast_ttt.cpp)
+    const uint32_t src0_addr = get_arg_val<uint32_t>(0);  // predicate address
+    const uint32_t src1_addr = get_arg_val<uint32_t>(1);  // true tensor address
+    const uint32_t src2_addr = get_arg_val<uint32_t>(2);  // false tensor address
+    const uint32_t num_tiles = get_arg_val<uint32_t>(3);  // num_tiles_per_core
+    const uint32_t start_id = get_arg_val<uint32_t>(4);   // start_tile_id
 
-    // DEBUG: Print binary_ng reader kernel entry
-    DPRINT << "=== BINARY_NG READER KERNEL START ===" << ENDL();
-    DPRINT << "src_addr = " << src_addr << ENDL();
-    DPRINT << "start_tile_id = " << start_tile_id << ENDL();
-    DPRINT << "src_num_tiles = " << src_num_tiles << ENDL();
-    DPRINT << "dst_num_tiles = " << dst_num_tiles << ENDL();
-    DPRINT << "dst_shard_width = " << dst_shard_width << ENDL();
+    // Additional arguments for column broadcast (args 5-26)
     const uint32_t nD_stride = get_arg_val<uint32_t>(5);
     const uint32_t d_stride = get_arg_val<uint32_t>(6);
     const uint32_t n_stride = get_arg_val<uint32_t>(7);
@@ -31,18 +26,33 @@ void kernel_main() {
     const uint32_t Ht = get_arg_val<uint32_t>(12);
     const uint32_t Wt = get_arg_val<uint32_t>(13);
     const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
-    const uint32_t true_addr = get_arg_val<uint32_t>(15);
-    const uint32_t true_nD_stride = get_arg_val<uint32_t>(16);
-    const uint32_t true_d_stride = get_arg_val<uint32_t>(17);
-    const uint32_t true_n_stride = get_arg_val<uint32_t>(18);
-    const uint32_t true_c_stride = get_arg_val<uint32_t>(19);
-    const uint32_t true_num_tiles = get_arg_val<uint32_t>(20);
-    const uint32_t false_addr = get_arg_val<uint32_t>(21);
-    const uint32_t false_nD_stride = get_arg_val<uint32_t>(22);
-    const uint32_t false_d_stride = get_arg_val<uint32_t>(23);
-    const uint32_t false_n_stride = get_arg_val<uint32_t>(24);
-    const uint32_t false_c_stride = get_arg_val<uint32_t>(25);
-    const uint32_t false_num_tiles = get_arg_val<uint32_t>(26);
+    const uint32_t true_nD_stride = get_arg_val<uint32_t>(15);
+    const uint32_t true_d_stride = get_arg_val<uint32_t>(16);
+    const uint32_t true_n_stride = get_arg_val<uint32_t>(17);
+    const uint32_t true_c_stride = get_arg_val<uint32_t>(18);
+    const uint32_t true_num_tiles = get_arg_val<uint32_t>(19);
+    const uint32_t false_nD_stride = get_arg_val<uint32_t>(20);
+    const uint32_t false_d_stride = get_arg_val<uint32_t>(21);
+    const uint32_t false_n_stride = get_arg_val<uint32_t>(22);
+    const uint32_t false_c_stride = get_arg_val<uint32_t>(23);
+    const uint32_t false_num_tiles = get_arg_val<uint32_t>(24);
+    const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
+    const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
+
+    // For compatibility, map to old variable names
+    const uint32_t src_addr = src0_addr;       // predicate address
+    const uint32_t true_addr = src1_addr;      // true tensor address
+    const uint32_t false_addr = src2_addr;     // false tensor address
+    const uint32_t start_tile_id = start_id;   // start tile id
+    const uint32_t dst_num_tiles = num_tiles;  // num tiles per core
+
+    // DEBUG: Print kernel entry
+    DPRINT << "=== WHERE COL_BCAST READER KERNEL START ===" << ENDL();
+    DPRINT << "src0_addr (predicate) = " << src0_addr << ENDL();
+    DPRINT << "src1_addr (true) = " << src1_addr << ENDL();
+    DPRINT << "src2_addr (false) = " << src2_addr << ENDL();
+    DPRINT << "num_tiles = " << num_tiles << ENDL();
+    DPRINT << "start_id = " << start_id << ENDL();
 
     constexpr auto predicate_cb = tt::CBIndex::c_0;
     constexpr auto true_cb = tt::CBIndex::c_1;
