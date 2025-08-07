@@ -128,31 +128,19 @@ def test_benchmark_from_torch(
 @pytest.mark.parametrize(
     "size_multiplier",
     [
-        1,
-        2,
-        4,
-        8,
+        # 1,
+        # 2,
+        # 4,
+        # 8,
         16,
     ],
 )
-def test_benchmark_to_torch(
-    benchmark, device, use_device, ttnn_dtype, torch_dtype, size_multiplier, ttnn_layout, tmp1, request
-):
+def test_benchmark_to_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, size_multiplier, ttnn_layout):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
         pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
 
-    import logging
-
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
-    )
-
-    log = logging.getLogger(__name__)
-
     height = int(8096 / 16) * size_multiplier
     width = int(8100 / 16) * size_multiplier
-    log.info("Create initial tensor")
     match ttnn_dtype:
         case ttnn.int32 | ttnn.uint8:
             tmp_torch = torch.randint(0, 100, (height, width), dtype=torch.int32)
@@ -161,8 +149,6 @@ def test_benchmark_to_torch(
             tmp_torch = torch.rand(height, width, dtype=torch.float32)
 
     ttnn_input_tensor = ttnn.from_torch(tmp_torch, device=device, dtype=ttnn_dtype, layout=ttnn_layout)
-
-    log.info("Tensor create OK")
 
     def to_torch():
         ttnn.to_torch(ttnn_input_tensor, device=device if use_device else None, dtype=torch_dtype)

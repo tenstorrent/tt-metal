@@ -409,7 +409,7 @@ def to_torch(
 
     torch_tensor = tensor
 
-    if dtype is not None and not on_device_typecast:
+    if dtype:
         torch_tensor = torch_tensor.to(dtype=dtype)
 
     return torch_tensor

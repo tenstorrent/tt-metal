@@ -47,6 +47,9 @@ def run_dtype_conversion_on_device(
         ):
             conversion_pcc = 1
 
+        elif ttnn_dtype == ttnn.bfloat4_b:
+            conversion_pcc = 0.960
+
         elif ttnn_is_float != torch_is_float:
             conversion_pcc = 0.98
 
@@ -121,25 +124,27 @@ def run_dtype_conversion_on_device(
 @pytest.mark.parametrize(
     "ttnn_dtype",
     [
-        ttnn.float32,
-        ttnn.bfloat16,
         ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
         ttnn.bfloat16,
+        ttnn.float32,
         ttnn.uint8,
-        ttnn.int32,
+        ttnn.uint16,
         ttnn.uint32,
+        ttnn.int32,
     ],
 )
 @pytest.mark.parametrize(
     "torch_dtype",
     [
-        torch.float64,
-        torch.int64,
         torch.bfloat16,
         torch.float16,
         torch.float32,
-        torch.int32,
+        torch.float64,
         torch.uint8,
+        torch.int16,
+        torch.int32,
+        torch.int64,
     ],
 )
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -246,8 +251,6 @@ def test_typecast_accuracy(shape, device, ttnn_dtype_from, ttnn_dtype_to):
     format_message = f"""
 {pcc_message}
     """
-
-    print(format_message)
 
     assert pcc_passed, format_message
 
