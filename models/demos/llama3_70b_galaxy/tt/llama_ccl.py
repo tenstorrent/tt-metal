@@ -95,6 +95,9 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             self.support_seqlens = [8192, 4096, 1024, 2048, 128]
+            # self.support_seqlens = [256, 128]
+            # self.support_seqlens = []
+            # self.support_seqlens = [128, 256, 512, 1024, 2048, 4096]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
