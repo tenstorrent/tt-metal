@@ -325,7 +325,7 @@ run_yolov6l_perf() {
 # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
 # run_swin_s_demo() {
 
-#   pytest -n auto models/experimental/swin_s/demo/demo.py --timeout 600
+#   pytest -n auto models/experimental/swin_s/demo/demo.py
 
 # }
 
