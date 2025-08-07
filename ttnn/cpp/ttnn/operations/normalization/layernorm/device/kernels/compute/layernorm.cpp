@@ -22,6 +22,8 @@
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "dprint_tensix.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
