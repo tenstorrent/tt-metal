@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/comp.h"
@@ -116,8 +117,19 @@ void MAIN {
             cb_wait_front(cb_add, 1);
             tile_regs_acquire();
 
+#ifdef TANH_BF16
             mul_tiles_init(cb_sub, cb_add);
             mul_tiles(cb_sub, cb_add, 0, 0, 0);
+#endif
+
+#ifdef TANH_FP32
+            copy_tile_to_dst_init_short(cb_sub);
+            copy_tile(cb_sub, 0, 0);
+            copy_tile_to_dst_init_short(cb_add);
+            copy_tile(cb_add, 0, 1);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1);
+#endif
 
             tile_regs_commit();
             tile_regs_wait();
@@ -130,8 +142,8 @@ void MAIN {
             cb_pop_front(cb_add, 1);
 
             // output = cb_tanh_lut if x > 3.5, otherwise cb_tanh_exp
-            cb_wait_front(cb_tanh_exp, 1);
             cb_wait_front(cb_tanh_lut, 1);
+            cb_wait_front(cb_tanh_exp, 1);
             cb_wait_front(cb_input, 1);
 
             tile_regs_acquire();
@@ -146,7 +158,12 @@ void MAIN {
             copy_tile_to_dst_init_short(cb_tanh_exp);
             copy_tile(cb_tanh_exp, 0, 2);
             where_tile_init();
+#ifdef TANH_FP32
+            where_fp32_tile(0, 1, 2);
+#endif
+#ifdef TANH_BF16
             where_tile(0, 1, 2);
+#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, cb_output);
