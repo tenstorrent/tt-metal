@@ -1,4 +1,442 @@
-<html>
-    <h1>Telemetry Server</h1>
-    <p>Coming soon!</p>
+<!-- Example of a Lit frontend -->
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hierarchical Telemetry Dashboard</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+            min-height: 100vh;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #fff;
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <h1>System Telemetry Dashboard</h1>
+    <telemetry-dashboard></telemetry-dashboard>
+
+    <script type="module">
+         import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
+
+        // 1. STATUS BOX COMPONENT - Individual clickable status boxes
+        class StatusBox extends LitElement {
+            static styles = css`
+                :host {
+                    display: block;
+                }
+
+                .status-box {
+                    aspect-ratio: 1;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    border-radius: 10px;
+                    cursor: pointer;
+                    font-weight: bold;
+                    transition: all 0.2s ease;
+                    border: 2px solid transparent;
+                    position: relative;
+                    overflow: hidden;
+                    min-height: 100px;
+                }
+
+                .status-box:hover {
+                    transform: scale(1.05);
+                    border-color: rgba(255, 255, 255, 0.3);
+                    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+                }
+
+                .status-box.good {
+                    background: linear-gradient(135deg, #4ade80, #22c55e);
+                    color: white;
+                    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+                }
+
+                .status-box.bad {
+                    background: linear-gradient(135deg, #f87171, #ef4444);
+                    color: white;
+                    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+                }
+
+                .status-box.level-1 {
+                    font-size: 24px;
+                    min-height: 200px;
+                }
+
+                .status-box.level-2 {
+                    font-size: 18px;
+                    min-height: 120px;
+                }
+
+                .status-box.level-3 {
+                    font-size: 14px;
+                    min-height: 100px;
+                }
+
+                .status-box.not-clickable {
+                    cursor: default;
+                }
+
+                .status-box.not-clickable:hover {
+                    transform: none;
+                    border-color: transparent;
+                    box-shadow: none;
+                }
+
+                .status-indicator {
+                    position: absolute;
+                    top: 10px;
+                    right: 10px;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 50%;
+                    background: rgba(255, 255, 255, 0.8);
+                    border: 2px solid currentColor;
+                }
+            `;
+
+            static properties = {
+                name: { type: String },
+                status: { type: Boolean },
+                level: { type: Number },
+                clickable: { type: Boolean }
+            };
+
+            constructor() {
+                super();
+                this.name = '';
+                this.status = true;
+                this.level = 1;
+                this.clickable = true;
+            }
+
+            _handleClick() {
+                if (this.clickable) {
+                    this.dispatchEvent(new CustomEvent('box-click', {
+                        detail: { name: this.name },
+                        bubbles: true
+                    }));
+                }
+            }
+
+            render() {
+                const statusClass = this.status ? 'good' : 'bad';
+                const levelClass = `level-${this.level}`;
+                const clickableClass = this.clickable ? '' : 'not-clickable';
+
+                return html`
+                    <div class="status-box ${statusClass} ${levelClass} ${clickableClass}" 
+                         @click="${this._handleClick}">
+                        <div class="status-indicator"></div>
+                        ${this.name}
+                    </div>
+                `;
+            }
+        }
+
+        // 2. STATUS GRID COMPONENT - Manages layout of multiple status boxes
+        class StatusGrid extends LitElement {
+            static styles = css`
+                :host {
+                    display: block;
+                    padding: 20px;
+                }
+
+                .grid {
+                    display: grid;
+                    gap: 15px;
+                    max-width: 1200px;
+                    margin: 0 auto;
+                }
+
+                .grid.level-1 {
+                    grid-template-columns: 1fr;
+                    max-width: 300px;
+                }
+
+                .grid.level-2 {
+                    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                }
+
+                .grid.level-3 {
+                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                }
+            `;
+
+            static properties = {
+                items: { type: Array },
+                level: { type: Number }
+            };
+
+            constructor() {
+                super();
+                this.items = [];
+                this.level = 1;
+            }
+
+            _handleBoxClick(event) {
+                // Bubble up the box click event
+                this.dispatchEvent(new CustomEvent('grid-box-click', {
+                    detail: event.detail,
+                    bubbles: true
+                }));
+            }
+
+            render() {
+                const gridClass = `grid level-${this.level}`;
+                const isLeafLevel = this.level === 3;
+
+                return html`
+                    <div class="${gridClass}" @box-click="${this._handleBoxClick}">
+                        ${this.items.map(item => html`
+                            <status-box 
+                                name="${item.name}"
+                                .status="${item.status}"
+                                .level="${this.level}"
+                                .clickable="${!isLeafLevel}">
+                            </status-box>
+                        `)}
+                    </div>
+                `;
+            }
+        }
+
+        // 3. MAIN DASHBOARD COMPONENT - Manages navigation and data
+        class TelemetryDashboard extends LitElement {
+            static styles = css`
+                :host {
+                    display: block;
+                }
+
+                .controls {
+                    margin-bottom: 20px;
+                    text-align: center;
+                }
+
+                .controls button {
+                    background: #444;
+                    color: white;
+                    border: 1px solid #666;
+                    padding: 10px 20px;
+                    margin: 0 5px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    transition: background-color 0.2s;
+                }
+
+                .controls button:hover {
+                    background: #666;
+                }
+
+                .navigation {
+                    margin-bottom: 20px;
+                    text-align: center;
+                }
+
+                .breadcrumb {
+                    font-size: 18px;
+                    color: #ccc;
+                    margin-bottom: 10px;
+                }
+
+                .back-button {
+                    background: #444;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    transition: background-color 0.2s;
+                }
+
+                .back-button:hover {
+                    background: #666;
+                }
+
+                .back-button:disabled {
+                    opacity: 0.5;
+                    cursor: not-allowed;
+                }
+            `;
+
+            static properties = {
+                currentLevel: { type: Number },
+                currentPath: { type: Array },
+                hostname: { type: String },
+                cpuCount: { type: Number },
+                conditionCount: { type: Number },
+                systemStatus: { type: Object }
+            };
+
+            constructor() {
+                super();
+                this.currentLevel = 1;
+                this.currentPath = [];
+                this.hostname = 'SERVER-01';
+                this.cpuCount = 4;
+                this.conditionCount = 4;
+                this.initializeSystemStatus();
+            }
+
+            initializeSystemStatus() {
+                this.systemStatus = {};
+                
+                for (let i = 0; i < this.cpuCount; i++) {
+                    const cpuName = `CPU${i}`;
+                    this.systemStatus[cpuName] = {};
+                    
+                    for (let j = 0; j < this.conditionCount; j++) {
+                        const condName = `COND${j}`;
+                        this.systemStatus[cpuName][condName] = Math.random() > 0.7;
+                    }
+                }
+            }
+
+            setCpuCount(count) {
+                this.cpuCount = count;
+                this.currentLevel = 1;
+                this.currentPath = [];
+                this.initializeSystemStatus();
+            }
+
+            setConditionCount(count) {
+                this.conditionCount = count;
+                this.currentLevel = 1;
+                this.currentPath = [];
+                this.initializeSystemStatus();
+            }
+
+            randomizeStatus() {
+                for (let cpuName in this.systemStatus) {
+                    for (let condName in this.systemStatus[cpuName]) {
+                        this.systemStatus[cpuName][condName] = Math.random() > 0.7;
+                    }
+                }
+                this.requestUpdate();
+            }
+
+            getStatusForCpu(cpuName) {
+                const conditions = this.systemStatus[cpuName];
+                return Object.values(conditions).every(status => status === true);
+            }
+
+            getOverallSystemStatus() {
+                for (let cpuName in this.systemStatus) {
+                    if (!this.getStatusForCpu(cpuName)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            _handleGridBoxClick(event) {
+                const itemName = event.detail.name;
+                
+                if (this.currentLevel === 1) {
+                    // From hostname to CPUs
+                    this.currentLevel = 2;
+                    this.currentPath = [this.hostname];
+                } else if (this.currentLevel === 2) {
+                    // From CPU to conditions
+                    this.currentLevel = 3;
+                    this.currentPath = [...this.currentPath, itemName];
+                }
+            }
+
+            _handleBackClick() {
+                if (this.currentLevel > 1) {
+                    this.currentLevel--;
+                    this.currentPath.pop();
+                }
+            }
+
+            _getBreadcrumb() {
+                if (this.currentLevel === 1) {
+                    return 'System Overview';
+                } else if (this.currentLevel === 2) {
+                    return `${this.hostname} > CPUs`;
+                } else {
+                    return `${this.hostname} > ${this.currentPath[1]} > Conditions`;
+                }
+            }
+
+            _getCurrentItems() {
+                if (this.currentLevel === 1) {
+                    return [{
+                        name: this.hostname,
+                        status: this.getOverallSystemStatus()
+                    }];
+                } else if (this.currentLevel === 2) {
+                    const items = [];
+                    for (let i = 0; i < this.cpuCount; i++) {
+                        const cpuName = `CPU${i}`;
+                        items.push({
+                            name: cpuName,
+                            status: this.getStatusForCpu(cpuName)
+                        });
+                    }
+                    return items;
+                } else {
+                    // Level 3 - conditions for current CPU
+                    const currentCpu = this.currentPath[1];
+                    const items = [];
+                    for (let i = 0; i < this.conditionCount; i++) {
+                        const condName = `COND${i}`;
+                        items.push({
+                            name: condName,
+                            status: this.systemStatus[currentCpu][condName]
+                        });
+                    }
+                    return items;
+                }
+            }
+
+            render() {
+                return html`
+                    <div class="controls">
+                        <button @click="${this.randomizeStatus}">Randomize Status</button>
+                        <button @click="${() => this.setCpuCount(2)}">2 CPUs</button>
+                        <button @click="${() => this.setCpuCount(4)}">4 CPUs</button>
+                        <button @click="${() => this.setCpuCount(8)}">8 CPUs</button>
+                        <button @click="${() => this.setConditionCount(3)}">3 Conditions</button>
+                        <button @click="${() => this.setConditionCount(6)}">6 Conditions</button>
+                    </div>
+
+                    <div class="navigation">
+                        <div class="breadcrumb">${this._getBreadcrumb()}</div>
+                        <button class="back-button" 
+                                ?disabled="${this.currentLevel === 1}"
+                                @click="${this._handleBackClick}">
+                            ← Back
+                        </button>
+                    </div>
+
+                    <status-grid 
+                        .items="${this._getCurrentItems()}"
+                        .level="${this.currentLevel}"
+                        @grid-box-click="${this._handleGridBoxClick}">
+                    </status-grid>
+                `;
+            }
+        }
+
+        // Register all custom elements
+        customElements.define('status-box', StatusBox);
+        customElements.define('status-grid', StatusGrid);
+        customElements.define('telemetry-dashboard', TelemetryDashboard);
+    </script>
+</body>
 </html>
