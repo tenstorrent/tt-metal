@@ -9,6 +9,11 @@ from loguru import logger
 import ttnn
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_type": ttnn.DispatchCoreType.WORKER}, {"dispatch_core_type": ttnn.DispatchCoreType.ETH}],
+    indirect=True,
+)
 def test_with_ops(device):
     torch.manual_seed(0)
 
@@ -39,8 +44,14 @@ def test_with_ops(device):
 
 
 @pytest.mark.parametrize("num_devices", [(8)])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_type": ttnn.DispatchCoreType.WORKER}, {"dispatch_core_type": ttnn.DispatchCoreType.ETH}],
+    indirect=True,
+)
 def test_all_devices(
     all_devices,
     num_devices,
+    device_params,
 ):
     logger.debug("Testing All Devices")
