@@ -208,19 +208,14 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        update_on_device=False,
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
         argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
 
-        assert (
-            not update_on_device or argmax_on_device
-        ), "update_on_device is only supported when sampling on device (argmax_on_device=True)"
-
-        reset_inputs = not update_on_device
-        if update_on_device and (self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item()):
+        reset_inputs = not argmax_on_device
+        if self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item():
             reset_inputs = True
             self.prev_page_table = page_table
 
@@ -235,7 +230,6 @@ class Generator:
             "page_table": page_table,
             "kv_cache": kv_cache,
             "argmax_on_device": argmax_on_device,
-            "update_on_device": update_on_device,
         }
         if enable_trace:
             tt_logits = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
@@ -255,7 +249,6 @@ class Generator:
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
-        update_on_device=False,
     ):
         """
         Performs text decode step.
@@ -287,7 +280,6 @@ class Generator:
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
-                update_on_device=update_on_device,
             )
             tt_logits.append(tt_logits_i)
 
@@ -300,7 +292,6 @@ class Generator:
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
-        update_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -308,12 +299,7 @@ class Generator:
 
         # Compile run
         self._decode_forward_no_trace_text(
-            tokens,
-            current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            argmax_on_device=argmax_on_device,
-            update_on_device=update_on_device,
+            tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
         )
         logger.info("Done Compiling Model")
 
@@ -336,10 +322,7 @@ class Generator:
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
-                    *device_inputs[i],
-                    kv_cache=user_kv_cache,
-                    argmax_on_device=argmax_on_device,
-                    update_on_device=update_on_device,
+                    *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
@@ -366,7 +349,6 @@ class Generator:
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
-        update_on_device=False,
         reset_inputs=False,
     ):
         """
@@ -374,12 +356,7 @@ class Generator:
         """
         if not hasattr(self, "trace_ids_text"):
             trace_ids, tt_out_trace, *device_inputs = self._capture_trace_text(
-                tokens,
-                current_pos,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                argmax_on_device=argmax_on_device,
-                update_on_device=update_on_device,
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
             )
             self.trace_ids_text = trace_ids
             self.trace_inputs_text = device_inputs

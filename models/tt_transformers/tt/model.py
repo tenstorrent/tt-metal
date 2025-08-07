@@ -329,7 +329,6 @@ class Transformer(LightweightModule):
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
-        update_on_device=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -364,16 +363,15 @@ class Transformer(LightweightModule):
 
         if argmax_on_device:
             tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
-        elif not self.args.is_galaxy:
-            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
-        if argmax_on_device and update_on_device:
             # Update device tensors for the next iteration
             current_pos, rot_mat_idxs = self._update_decode_inputs_device(current_pos, rot_mat_idxs)
 
             # Update input tokens with sampled tokens for the next iteration
             ttnn.copy(tt_logits.reshape(x.shape), x)
+        elif not self.args.is_galaxy:
+            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
+            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits
 
