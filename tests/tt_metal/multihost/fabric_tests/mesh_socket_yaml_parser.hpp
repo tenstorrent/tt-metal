@@ -28,9 +28,8 @@ enum class RoutingType : uint32_t {
     Dynamic = 1,
 };
 
-enum class PatternType {
-    AllToAll,
-    RandomPairing,
+enum class PatternType : uint32_t {
+    AllToAll = 0,
 };
 
 // Data structures for parsed YAML configuration
@@ -109,7 +108,6 @@ public:
     CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {}
 
     std::optional<std::string> get_yaml_config_path();
-    std::optional<uint32_t> get_master_seed();
     bool has_help_option();
     void print_help();
     bool print_configs();
@@ -154,8 +152,6 @@ private:
         const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
     static std::vector<TestSocketConfig> expand_all_to_all_pattern(
         const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
-    static std::vector<TestSocketConfig> expand_random_pairing_pattern(
-        const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
 
     // Memory config expansion methods
     static std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);
@@ -168,6 +164,7 @@ private:
 
     // Validation helper methods
     static void validate_memory_config(const MemoryConfig& memory);
+    static void validate_socket_config(const TestSocketConfig& socket_config, const MeshSocketTestRunner& test_runner);
 
     // Error handling
     static void throw_parse_error(const std::string& message, const YAML::Node& node = YAML::Node());

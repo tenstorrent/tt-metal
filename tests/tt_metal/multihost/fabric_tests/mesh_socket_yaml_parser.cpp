@@ -7,6 +7,7 @@
 #include <sstream>
 #include <algorithm>
 #include <random>
+#include <set>
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_runner.hpp"
 
 #include <tt-logger/tt-logger.hpp>
@@ -28,17 +29,6 @@ std::optional<std::string> CmdlineParser::get_yaml_config_path() {
         return fpath.string();
     }
 
-    return std::nullopt;
-}
-
-std::optional<uint32_t> CmdlineParser::get_master_seed() {
-    if (test_args::has_command_option(input_args_, "--master-seed")) {
-        uint32_t master_seed = test_args::get_command_option_uint32(input_args_, "--master-seed", 0);
-        log_info(tt::LogTest, "Using master seed from command line: {}", master_seed);
-        return std::make_optional(master_seed);
-    }
-
-    log_info(LogTest, "No master seed provided. Use --master-seed to reproduce.");
     return std::nullopt;
 }
 
@@ -145,11 +135,18 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
 
         // Start with explicit sockets if they exist
         if (test_config.sockets.has_value()) {
-            parsed_configs.emplace_back(ParsedTestConfig{
+            ParsedTestConfig parsed_config{
                 .name = test_name,
                 .num_iterations = test_config.num_iterations,
                 .memory_config = memory_config,
-                .sockets = test_config.sockets.value()});
+                .sockets = test_config.sockets.value()};
+
+            // Validate each socket configuration
+            for (const auto& socket_config : parsed_config.sockets) {
+                validate_socket_config(socket_config, test_runner);
+            }
+
+            parsed_configs.emplace_back(std::move(parsed_config));
         } else if (test_config.pattern_expansions
                        .has_value()) {  // Expand patterns and add to sockets, cannot have both
             for (const auto& pattern : test_config.pattern_expansions.value()) {
@@ -175,7 +172,6 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(
     const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
     switch (pattern.type) {
         case PatternType::AllToAll: return expand_all_to_all_pattern(pattern, test_config, test_runner);
-        case PatternType::RandomPairing: return expand_random_pairing_pattern(pattern, test_config, test_runner);
         default: TT_THROW("Unknown pattern type");
     }
 }
@@ -216,18 +212,6 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(
     }
 
     log_info(tt::LogTest, "Generated {} sockets for all-to-all pattern", sockets.size());
-    return sockets;
-}
-
-std::vector<TestSocketConfig> MeshSocketYamlParser::expand_random_pairing_pattern(
-    const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
-    std::vector<TestSocketConfig> sockets;
-
-    // TODO: Implement actual random pairing expansion
-    // This would require knowledge of available devices which isn't available at parse time
-    // For now, return empty vector - this should be handled by the test runner
-    log_warning(tt::LogTest, "Random pairing pattern expansion not implemented at parse time");
-
     return sockets;
 }
 
@@ -442,10 +426,8 @@ CoreCoord MeshSocketYamlParser::parse_core_coordinate(const YAML::Node& node) {
 PatternType MeshSocketYamlParser::parse_pattern_type(const std::string& pattern_string) {
     if (pattern_string == "all_to_all") {
         return PatternType::AllToAll;
-    } else if (pattern_string == "random_pairing") {
-        return PatternType::RandomPairing;
     } else {
-        TT_THROW("Invalid pattern type: '{}'. Valid types are: all_to_all, random_pairing", pattern_string);
+        TT_THROW("Invalid pattern type: '{}'. Valid types are: all_to_all", pattern_string);
     }
 }
 
@@ -490,6 +472,107 @@ void MeshSocketYamlParser::validate_memory_config(const MemoryConfig& memory) {
     }
     for (uint32_t num_transactions : memory.num_transactions) {
         TT_FATAL(num_transactions > 0, "All num_transactions values must be greater than 0");
+    }
+}
+
+void MeshSocketYamlParser::validate_socket_config(
+    const TestSocketConfig& socket_config, const MeshSocketTestRunner& test_runner) {
+    const auto& distributed_context = test_runner.get_distributed_context();
+    const auto& mesh_graph = test_runner.get_mesh_graph();
+    const auto& rank_to_mesh_mapping = test_runner.get_rank_to_mesh_mapping();
+    const auto& mesh_device = test_runner.get_mesh_device();
+
+    auto world_size = *distributed_context->size();
+
+    // 1. Check if sender and receiver ranks are < distributed context world size
+    TT_FATAL(
+        *socket_config.sender_rank < world_size,
+        "Sender rank {} is >= world size {}",
+        *socket_config.sender_rank,
+        world_size);
+    TT_FATAL(
+        *socket_config.receiver_rank < world_size,
+        "Receiver rank {} is >= world size {}",
+        *socket_config.receiver_rank,
+        world_size);
+
+    TT_FATAL(socket_config.sender_rank != socket_config.receiver_rank, "Sender and receiver ranks must be different");
+
+    auto sender_mesh_id = rank_to_mesh_mapping.at(socket_config.sender_rank);
+    auto receiver_mesh_id = rank_to_mesh_mapping.at(socket_config.receiver_rank);
+
+    // Get mesh shapes for validation
+    auto sender_mesh_shape = mesh_graph.get_mesh_shape(sender_mesh_id);
+    auto receiver_mesh_shape = mesh_graph.get_mesh_shape(receiver_mesh_id);
+
+    // Create coordinate ranges for bounds checking
+    tt::tt_metal::distributed::MeshCoordinateRange sender_coord_range(sender_mesh_shape);
+    tt::tt_metal::distributed::MeshCoordinateRange receiver_coord_range(receiver_mesh_shape);
+
+    // Collections to check for duplicate endpoints
+    std::set<MeshCoordinate> sender_endpoints;
+    std::set<MeshCoordinate> receiver_endpoints;
+    auto device_compute_grid = mesh_device->compute_with_storage_grid_size();
+    // 2. & 3. For each connection, validate mesh coordinates and check for duplicates
+    for (const auto& connection : socket_config.connections) {
+        const auto& sender_mesh_coord = connection.sender.mesh_coord;
+        const auto& receiver_mesh_coord = connection.receiver.mesh_coord;
+
+        // Validate sender mesh coordinate is within bounds
+        TT_FATAL(
+            sender_coord_range.contains(sender_mesh_coord),
+            "Sender mesh coordinate {} is out of bounds for mesh shape {} (mesh_id {})",
+            sender_mesh_coord,
+            sender_mesh_shape,
+            *sender_mesh_id);
+
+        // Validate receiver mesh coordinate is within bounds
+        TT_FATAL(
+            receiver_coord_range.contains(receiver_mesh_coord),
+            "Receiver mesh coordinate {} is out of bounds for mesh shape {} (mesh_id {})",
+            receiver_mesh_coord,
+            receiver_mesh_shape,
+            *receiver_mesh_id);
+
+        // Check for duplicate sender endpoints
+        auto sender_insert_result = sender_endpoints.insert(sender_mesh_coord);
+        TT_FATAL(
+            sender_insert_result.second, "Duplicate sender endpoint found at mesh coordinate {}", sender_mesh_coord);
+
+        // Check for duplicate receiver endpoints
+        auto receiver_insert_result = receiver_endpoints.insert(receiver_mesh_coord);
+        TT_FATAL(
+            receiver_insert_result.second,
+            "Duplicate receiver endpoint found at mesh coordinate {}",
+            receiver_mesh_coord);
+
+        // Validate core coordinates for each connection
+        // Only checks if same rank
+        if (distributed_context->rank() == socket_config.sender_rank) {
+            TT_FATAL(
+                connection.sender.core_coord.x < device_compute_grid.x &&
+                    connection.sender.core_coord.y < device_compute_grid.y,
+                "Sender core coordinate ({}, {}) is out of bounds for device compute grid ({}, {}) at mesh coordinate "
+                "{}",
+                connection.sender.core_coord.x,
+                connection.sender.core_coord.y,
+                device_compute_grid.x,
+                device_compute_grid.y,
+                sender_mesh_coord);
+        }
+
+        if (distributed_context->rank() == socket_config.receiver_rank) {
+            TT_FATAL(
+                connection.receiver.core_coord.x < device_compute_grid.x &&
+                    connection.receiver.core_coord.y < device_compute_grid.y,
+                "Receiver core coordinate ({}, {}) is out of bounds for device compute grid ({}, {}) at mesh "
+                "coordinate {}",
+                connection.receiver.core_coord.x,
+                connection.receiver.core_coord.y,
+                device_compute_grid.x,
+                device_compute_grid.y,
+                receiver_mesh_coord);
+        }
     }
 }
 
@@ -567,7 +650,13 @@ void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfigur
             log_info(tt::LogTest, "  Pattern Expansions: {} defined", test.pattern_expansions.value().size());
             for (size_t pattern_idx = 0; pattern_idx < test.pattern_expansions.value().size(); ++pattern_idx) {
                 const auto& pattern = test.pattern_expansions.value()[pattern_idx];
-                std::string pattern_type = (pattern.type == PatternType::AllToAll) ? "all_to_all" : "random_pairing";
+                std::string pattern_type;
+
+                // switch if we add more patterns
+                switch (pattern.type) {
+                    case PatternType::AllToAll: pattern_type = "all_to_all"; break;
+                    default: TT_THROW("Invalid pattern type: {}", static_cast<int>(pattern.type));
+                }
                 log_info(
                     tt::LogTest,
                     "    Pattern {}: type={}, core_coord=({}, {})",

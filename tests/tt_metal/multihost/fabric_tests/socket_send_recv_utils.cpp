@@ -96,12 +96,10 @@ void test_socket_send_recv(
     std::generate(src_vec_per_core.begin(), src_vec_per_core.end(), [&]() { return dis(gen); });
     std::vector<uint32_t> src_vec;
     src_vec.reserve(data_size * sender_core_range_set.num_cores() / sizeof(uint32_t));
+
+    // duplicate data for all cores; this is non-ideal but there is no elegant way to not do this with current APIs
     for (int i = 0; i < sender_core_range_set.num_cores(); i++) {
         src_vec.insert(src_vec.end(), src_vec_per_core.begin(), src_vec_per_core.end());
-    }
-    for (int i = 0; i < 8; i++) {
-        log_info(tt::LogTest, "Src vec: {}", src_vec[i]);
-        log_info(tt::LogTest, "Src vec per core: {}", src_vec_per_core[i]);
     }
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
 
