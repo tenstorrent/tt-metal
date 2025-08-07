@@ -35,6 +35,7 @@ from ....stable_diffusion_35_large.reference.attention import Attention as Torch
         (1, 4096, 333),  # SD3.5 large config
     ],
 )
+@pytest.mark.parametrize("context_pre_only", [True, False])
 # TODO: add more parametrizations of Attention module options
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_sd35_joint_attention(
@@ -44,6 +45,7 @@ def test_sd35_joint_attention(
     B: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
+    context_pre_only: bool,
 ) -> None:
     torch_dtype = torch.bfloat16
 
@@ -54,7 +56,6 @@ def test_sd35_joint_attention(
     query_dim = 2432
     head_dim = 64
     heads = 38
-    context_pre_only = False
     bias = True
     out_bias = True
     eps = 1e-6
