@@ -8,9 +8,9 @@
 #include <cstddef>
 #include <iterator>
 
-class ShardPage {
+class Page {
 public:
-    ShardPage(uint64_t noc_addr, uint32_t global_page_id, uint32_t shard_id) :
+    Page(uint64_t noc_addr, uint32_t global_page_id, uint32_t shard_id) :
         noc_addr_(noc_addr), global_page_id_(global_page_id), shard_id_(shard_id) {}
 
     uint64_t get_noc_addr() const { return noc_addr_; }
@@ -23,6 +23,14 @@ private:
     uint32_t shard_id_;
 };
 
+/**
+ * Iterator over pages in a shard.
+ * The iterator is initialized with a shard_id and a start_page_offset.
+ * It can be incremented by one page at a time, or by a given number of pages.
+ * It can be compared to another iterator to check if they are equal.
+ * It can be dereferenced to get the current Page
+ * It can be indexed to get the n-th page.
+ */
 template <typename Accessor>
 class ShardPagesAddressIterator {
 public:
@@ -30,10 +38,10 @@ public:
     using PageMapping = typename Accessor::PageMapping;
 
     using iterator_category = std::forward_iterator_tag;
-    using value_type = ShardPage;
+    using value_type = Page;
     using difference_type = std::ptrdiff_t;
-    using reference = const ShardPage&;
-    using pointer = const ShardPage*;
+    using reference = const Page&;
+    using pointer = const Page*;
 
     // Constructor that initializes the iterator at a starting position
     ShardPagesAddressIterator(
@@ -109,7 +117,7 @@ public:
         return tmp;
     }
 
-    const ShardPage& operator[](difference_type n) const {
+    const Page& operator[](difference_type n) const {
         auto temp = *this;
         temp += n;
         return *temp;
@@ -145,11 +153,11 @@ private:
     ArrayU32 global_page_coord = {};
     ArrayU32 shard_coord = {};
 
-    mutable ShardPage current_page{0, 0, 0};
+    mutable Page current_page{0, 0, 0};
 
     void update_current_page() {
         if (current_page_id_in_shard < accessor.dspec().shard_volume()) {
-            current_page = ShardPage(current_noc_addr, page_id(), current_shard_id);
+            current_page = Page(current_noc_addr, page_id(), current_shard_id);
         }
     }
 
@@ -223,6 +231,9 @@ private:
     }
 };
 
+/**
+ * Proxy for ShardPagesAddressIterator, to enable range-based for loop over pages in a shard.
+ */
 template <typename Accessor>
 class ShardPages {
 public:
