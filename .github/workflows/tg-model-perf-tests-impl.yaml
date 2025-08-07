@@ -23,7 +23,6 @@ on:
 
 jobs:
   tg-model-perf-tests:
-    if: ${{ matrix.name != 'Galaxy DiT SD3.5 model perf tests' || inputs.topology != 'config-tg' }}
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +82,7 @@ jobs:
       TT_METAL_HOME: ${{ github.workspace }}
       PYTHONPATH: ${{ github.workspace }}
     runs-on: ${{ matrix.test-group.runs-on }}
+    if: ${{ matrix['test-group'].name != 'Galaxy DiT SD3.5 model perf tests' || inputs.topology != 'config-tg' }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
