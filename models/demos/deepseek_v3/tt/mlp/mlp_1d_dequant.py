@@ -30,6 +30,7 @@ class MLP1DDequant(MLP1D):
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
         weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
+
         return {
             models_name: {
                 "input_tensor_b": save_and_get_path(

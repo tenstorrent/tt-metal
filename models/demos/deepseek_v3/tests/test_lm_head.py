@@ -53,7 +53,7 @@ def test_forward_pass(
     batch_size = 1
     torch.manual_seed(0)
 
-    reference_model = DeepseekV3LMHead(hf_config)
+    reference_model = DeepseekV3LMHead(hf_config).eval()
     hf_state_dict = reference_model.state_dict()
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
     reference_output = reference_model(torch_input)
