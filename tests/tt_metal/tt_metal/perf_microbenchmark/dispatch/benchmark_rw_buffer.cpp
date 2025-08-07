@@ -67,13 +67,13 @@ static const std::vector<int64_t> SHARD_ENABLE_ARGS = {false, true};
 
 static BufferShardingArgs get_sharding_args(std::shared_ptr<MeshDevice> mesh_device, BufferType buffer_type) {
     // These are pulled out of TTNN for WH,
-    // This is modeled with a 2048 x 1024 tensor,
-    // which if containing uint32, would occupy 64MB (our transfer size).
+    // This is modeled with a 4096 x 4096 tensor,
+    // which if containing float32, would occupy 64MB (our transfer size).
     static const std::array<uint32_t, 2> PAGE_SHAPE = {32, 32};
-    static const std::array<uint32_t, 2> TENSOR2D_SHAPE_IN_PAGES = {64, 32};
+    static const std::array<uint32_t, 2> TENSOR2D_SHAPE_IN_PAGES = {128, 128};
 
-    static const std::array<uint32_t, 2> L1_SHARD_SHAPE = {32, 1024};
-    static const std::array<uint32_t, 2> DRAM_SHARD_SHAPE = {192, 1024};
+    static const std::array<uint32_t, 2> L1_SHARD_SHAPE = {64, 4096};
+    static const std::array<uint32_t, 2> DRAM_SHARD_SHAPE = {352, 4096};
 
     auto device_grid_size =
         buffer_type == BufferType::L1 ? mesh_device->compute_with_storage_grid_size() : mesh_device->dram_grid_size();
