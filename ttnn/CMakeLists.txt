@@ -715,6 +715,4 @@ add_subdirectory(cpp/ttnn/operations/normalization)
 add_subdirectory(cpp/ttnn/operations/rand)
 add_subdirectory(cpp/ttnn/operations/debug)
 add_subdirectory(cpp/ttnn/deprecated)
-
 add_subdirectory(examples)
-add_subdirectory(cpp/ttnn/operations/test)

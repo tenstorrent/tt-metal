@@ -483,16 +483,18 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
+    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_ptr_; });
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
     }
-#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+
     if (thread_exception_ptr_) {
-        std::rethrow_exception(thread_exception_ptr_);
+        num_outstanding_reads_.store(0);
+        auto exception_ptr = thread_exception_ptr_;
+        thread_exception_ptr_ = nullptr;
+        std::rethrow_exception(exception_ptr);
     }
-#endif
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -722,13 +724,18 @@ void FDMeshCommandQueue::read_completion_queue() {
                 auto mesh_read_descriptor = *(completion_queue_reads_.pop());
                 std::visit(
                     [&](auto&& mesh_read_descriptor) {
-                        using T = std::decay_t<decltype(mesh_read_descriptor)>;
-                        if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
-                            this->copy_buffer_data_to_user_space(mesh_read_descriptor);
-                        } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
-                            this->read_completion_queue_event(mesh_read_descriptor);
-                        } else {
-                            this->read_l1_data_from_completion_queue(mesh_read_descriptor);
+                        try {
+                            using T = std::decay_t<decltype(mesh_read_descriptor)>;
+                            if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
+                                this->copy_buffer_data_to_user_space(mesh_read_descriptor);
+                            } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
+                                this->read_completion_queue_event(mesh_read_descriptor);
+                            } else {
+                                this->read_l1_data_from_completion_queue(mesh_read_descriptor);
+                            }
+                        } catch (const std::runtime_error& e) {
+                            // Re-throw to be caught by the outer try-catch block
+                            throw;
                         }
                     },
                     mesh_read_descriptor);
@@ -738,13 +745,14 @@ void FDMeshCommandQueue::read_completion_queue() {
             if (num_outstanding_reads_ == 0) {
                 reads_processed_cv_.notify_one();
             }
-        } catch (std::runtime_error e) {
-            // Let's clean up the state so the main thread can handle it.
+        } catch (const std::runtime_error& e) {
+            // Just to clarify, this is a weird case and it is an unrecoverable error.
+            // If we are here, its likely the device is hung, meaning that the whole program is stuck.
+            // We don't have a recovery mechanism for this, so we just need to clean up the state and let the main
+            // thread handle it.
             thread_exception_ptr_ = std::current_exception();
             exit_condition_.store(true);
-            exit_condition_.notify_all();
             num_outstanding_reads_.store(0);
-            num_outstanding_reads_.notify_all();
             reads_processed_cv_.notify_all();
             return;
         }

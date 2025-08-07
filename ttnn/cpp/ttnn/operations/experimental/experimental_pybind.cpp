@@ -107,7 +107,7 @@ void py_module(py::module& module) {
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
 
-    test::bind_test_hang_operation(module);
+    test::bind_test_hang_device_operation(module);
     // CCL ops
     auto m_experimental_ccl =
         module.def_submodule("ccl_experimental", "experimental collective communication operations");

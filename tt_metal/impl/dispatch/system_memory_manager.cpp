@@ -7,9 +7,6 @@
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <atomic>
-#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
-#include <chrono>
-#endif
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -30,6 +27,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
 #include <tracy/Tracy.hpp>
+#include <utils.hpp>
 
 enum class CoreType;
 
@@ -395,36 +393,35 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
 uint32_t SystemMemoryManager::completion_queue_wait_front(
     const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
-    uint32_t write_ptr_and_toggle;
-    uint32_t write_ptr;
-    uint32_t write_toggle;
-    const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
-    auto start_time = std::chrono::high_resolution_clock::now();
-#endif
-    do {
-        write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
-        write_ptr = write_ptr_and_toggle & 0x7fffffff;
-        write_toggle = write_ptr_and_toggle >> 31;
-#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
+    // Define the wait operation as a lambda
+    auto wait_operation = [this, cq_id, &exit_condition]() -> uint32_t {
+        uint32_t write_ptr_and_toggle;
+        uint32_t write_ptr;
+        uint32_t write_toggle;
+        const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
-        if (elapsed_time.count() > TTNN_OPERATION_TIMEOUT_SECONDS) {
-            TT_THROW(
-                "TIMEOUT: device {} timeout after {} seconds, potential hang detected, you can use the following tool "
-                "to "
-                "troubleshoot this: "
-                "https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md "
-                "or increasing the operation timeout by building with ./build_metal.sh --operation-timeout-seconds=X",
-                this->device_id,
-                TTNN_OPERATION_TIMEOUT_SECONDS);
-        }
-#endif
-    } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
-             cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition.load());
+        do {
+            write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
+            write_ptr = write_ptr_and_toggle & 0x7fffffff;
+            write_toggle = write_ptr_and_toggle >> 31;
 
-    return write_ptr_and_toggle;
+            // Check exit condition
+            if (exit_condition.load()) {
+                break;
+            }
+
+        } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
+                 cq_interface.completion_fifo_rd_toggle == write_toggle);
+
+        return write_ptr_and_toggle;
+    };
+
+    return tt::utils::timeout_function(
+        wait_operation, tt::utils::get_timeout_seconds_for_operations(), [&exit_condition]() {
+            exit_condition.store(true);
+            throw std::runtime_error(
+                "TIMEOUT: device timeout, potential hang detected, please check out the documentation");
+        });
 }
 
 void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {

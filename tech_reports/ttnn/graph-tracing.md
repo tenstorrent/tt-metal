@@ -347,9 +347,12 @@ Please note that we have over 300.000 lines in the json file, so we just include
 Sometimes there might be cases where an operation hangs and the arguments can be quite handy to troubleshoot the issue or even adding extra coverage.
 We have added the following configuration
 
-./build_metal.sh --build-all --debug --operation-timeout-seconds=10
+```
+export TT_METAL_OPERATION_TIMEOUT=30
+```
 
-operation-timeout-seconds will enable a timeout mechanism for operations, the value is the amount of seconds we will wait for the operation to finish.
+
+This environment variable will enable a timeout mechanism for operations, the value is the amount of seconds we will wait for the operation to finish.
 
 Here is an example of how to use it:
 ```

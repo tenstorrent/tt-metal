@@ -56,6 +56,12 @@ const std::string& get_reports_dir() {
     return outpath;
 }
 
+float get_timeout_seconds_for_operations() {
+    const char* env_value = std::getenv("TT_METAL_OPERATION_TIMEOUT");
+    // If is not configured, is infinite
+    float timeout_seconds = env_value ? std::stof(env_value) : 0.f;
+    return timeout_seconds;
+}
 }  // namespace utils
 
 }  // namespace tt
