@@ -678,6 +678,20 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
             )
+            self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"] = (
+                ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
+                if self.is_galaxy
+                else ttnn.create_sharded_memory_config(
+                    (
+                        self.tile_padded_batch_rows,
+                        self.dim // residual_grid.num_cores // self.num_devices * 2,
+                    ),
+                    residual_grid,
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            )
 
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
@@ -1394,7 +1408,7 @@ class ModelArgs:
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps",text_config.get("layer_norm_eps")))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
@@ -1613,7 +1627,8 @@ class ModelArgs:
         module_map = {
             "MLP": "feed_forward",
             "mlp": "mlp",  
-            "Attention": "self_attn",
+            "attention": "attention",
+            "self_attn": "self_attn",
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
