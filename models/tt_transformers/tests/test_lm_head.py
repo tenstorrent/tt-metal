@@ -38,19 +38,27 @@ from models.tt_transformers.tt.model_config import ModelArgs
 def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, cache_hf=True)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
+    state_dict_ref = model_args.load_state_dict_ref()
 
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
         "weight": state_dict[f"{state_dict_prefix}output.weight"],
     }
+    partial_state_dict_ref = {
+        "weight": state_dict_ref[f"{state_dict_prefix}lm_head.weight"],
+    }
+    # 只有当 bias 存在时才添加到字典中
+    bias_key = f"{state_dict_prefix}lm_head.bias"
+    if bias_key in state_dict_ref:
+        partial_state_dict_ref["bias"] = state_dict_ref[bias_key]
 
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_lm_head()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(partial_state_dict_ref)
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = LMHead(

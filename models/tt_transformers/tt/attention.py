@@ -55,6 +55,7 @@ class Attention(LightweightModule):
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
+        self.partial_rotary_factor = configuration.partial_rotary_factor
 
         self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
@@ -737,27 +738,46 @@ class Attention(LightweightModule):
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
-        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot,
+        # Partial rotary embedding
+        rotary_ndims = self.head_dim * self.partial_rotary_factor
+        query_rot, query_pass = ttnn.chunk(q_heads_1QSD_pre_rot, 2, dim=-1)
+        key_rot, key_pass = ttnn.chunk(k_heads_1KSD_pre_rot, 2, dim=-1)
+
+        q_heads_1QSD_rot = ttnn.experimental.rotary_embedding_llama(
+            query_rot,
             rot_mats[0],
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
+        ttnn.deallocate(query_rot)
 
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
-        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot,
+        k_heads_1KSD_rot = ttnn.experimental.rotary_embedding_llama(
+            key_rot,
             rot_mats[0],
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
+        ttnn.deallocate(key_rot)
+
+        q_heads_1QSD = ttnn.concat(
+            [q_heads_1QSD_rot, query_pass], dim=-1
+        )  # Concatenate the rotary and pass-through parts of the query heads
+        k_heads_1KSD = ttnn.concat(
+            [k_heads_1KSD_rot, key_pass], dim=-1
+        )  # Concatenate the rotary and pass-through parts of the key heads 
+
+        ttnn.deallocate(q_heads_1QSD_rot)
+        ttnn.deallocate(query_pass)
+        ttnn.deallocate(k_heads_1KSD_rot)
+        ttnn.deallocate(key_pass)
 
         # Fill KV-Cache
         if kv_cache:

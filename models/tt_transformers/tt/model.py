@@ -75,6 +75,7 @@ class Transformer(LightweightModule):
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
+                args.partial_rotary_factor,
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()

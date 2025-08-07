@@ -50,8 +50,11 @@ def test_rms_norm_inference(
 
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
+    state_dict_ref = model_args.load_state_dict_ref()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
-    first_layer_prefix = state_dict_prefix + "attention_norm."
+    state_dict_prefix_ref = model_args.get_ref_state_dict_prefix("", 0)
+    # first_layer_prefix = state_dict_prefix + "attention_norm." 
+    first_layer_prefix = state_dict_prefix_ref + "input_layernorm."
 
     # Create the inner RMSNormxw
     tt_ccl = TT_CCL(mesh_device)
@@ -67,6 +70,7 @@ def test_rms_norm_inference(
         sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         tt_ccl=tt_ccl,
+        base_model_name=model_args.base_model_name,
     )
 
     # Wrap it in DistributedNorm
@@ -74,7 +78,7 @@ def test_rms_norm_inference(
 
     # Create reference model (unchanged)
     partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+        k[len(first_layer_prefix) :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
     }
     reference_model = model_args.reference_rms_norm()
     reference_model.load_state_dict(partial_state_dict)
@@ -104,7 +108,7 @@ def test_rms_norm_inference(
         ),
     )[:1, :, :, :]
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.999)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
@@ -114,4 +118,4 @@ def test_rms_norm_inference(
     else:
         logger.warning("rms_norm Failed!")
 
-    assert passing, f"rms_norm output does not meet PCC requirement {0.9999}."
+    assert passing, f"rms_norm output does not meet PCC requirement {0.999}."

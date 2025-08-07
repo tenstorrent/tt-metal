@@ -52,6 +52,7 @@ class RMSNorm(LightweightModule):
         output_mem_config=None,
         ccl_topology=ttnn.Topology.Ring,
         tt_ccl=None,
+        base_model_name=None,
     ):
         super().__init__()
         self.device = device
@@ -59,18 +60,26 @@ class RMSNorm(LightweightModule):
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
+        self.base_model_name = base_model_name
+        self.layernorm_model = ["phi-1","phi-1_5"]
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
+            bias_name = f"{state_dict_prefix}{weight_key}.bias"
         else:
             if layer_num is None:
                 weight_name = f"{weight_key}.weight"
+                bias_name = f"{weight_key}.bias"
             else:
                 weight_name = f"layers.{layer_num}.{weight_key}.weight"
+                bias_name = f"layers.{layer_num}.{weight_key}.bias"
 
         torch_weight = (
             state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
         )
+        torch_bias = (
+            state_dict[bias_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
+        ) if bias_name in state_dict else None
 
         # Add offset before caching
         if add_unit_offset:
@@ -88,6 +97,15 @@ class RMSNorm(LightweightModule):
             cache_file_name=None if weight_cache_path is None else weight_cache_path / weight_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
+        self.bias = ttnn.as_tensor(
+            torch_bias,
+            device=device,
+            dtype=weight_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=weight_memory_config,
+            cache_file_name=cache_name,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        ) if torch_bias is not None else None
 
         if self.is_distributed:
             self.weight_distributed = ttnn.as_tensor(
@@ -105,6 +123,17 @@ class RMSNorm(LightweightModule):
                     else None
                 ),
             )
+            self.bias_distributed = ttnn.as_tensor(
+                torch_bias,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=weight_memory_config,
+                cache_file_name=cache_name,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
+                if is_mesh_device
+                else None,
+            ) if torch_bias is not None else None
 
         self.sharded_output_config = sharded_output_config
         self.sharded_program_config = sharded_program_config
@@ -122,8 +151,12 @@ class RMSNorm(LightweightModule):
         program_config = self.sharded_program_config if in_sharded else None
         memory_config = self.sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
-        norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
+        if self.base_model_name is None or self.base_model_name not in self.layernorm_model:
+            norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
+        else:  
+            norm = self._distributed_rmsnorm if distributed else ttnn.layer_norm
         weight = self.weight_distributed if distributed else self.weight
+        bias = self.bias_distributed if distributed else self.bias
 
         if in_sharded:
             assert not distributed, "Distributed RMSNorm does not support sharded inputs"
@@ -134,6 +167,7 @@ class RMSNorm(LightweightModule):
             x,
             epsilon=self.eps,
             weight=weight,
+            bias=bias,
             program_config=program_config,
             memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config_hifi2,
@@ -152,7 +186,10 @@ class RMSNorm(LightweightModule):
         assert self.tt_ccl is not None, "Distributed RMSNorm requires tt_ccl"
 
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+        if self.base_model_name is None or self.base_model_name not in self.layernorm_model:
+            tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+        else:
+            tt_stats = ttnn.layer_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
         # AllGather stats
         tt_stats = ttnn.experimental.all_gather_async(
             tt_stats,
@@ -168,17 +205,25 @@ class RMSNorm(LightweightModule):
             num_buffers_per_channel=2,
         )
         # Run distributed rmsnorm part 2
-        tt_out = ttnn.rms_norm_post_all_gather(
-            inp,
-            tt_stats,
-            epsilon=epsilon,
-            weight=weight,
-            compute_kernel_config=compute_kernel_config,
-        )
+        if self.base_model_name is None or self.base_model_name not in self.layernorm_model:
+            tt_out = ttnn.rms_norm_post_all_gather(
+                inp,
+                tt_stats,
+                epsilon=epsilon,
+                weight=weight,
+                compute_kernel_config=compute_kernel_config,
+            )
+        else:
+            tt_out = ttnn.layer_norm_post_all_gather(
+                inp,
+                tt_stats,
+                epsilon=epsilon,
+                weight=weight,
+                compute_kernel_config=compute_kernel_config,
+            )
         tt_stats.deallocate(True)
 
         return tt_out
-
 
 class LayerNorm(LightweightModule):
 
