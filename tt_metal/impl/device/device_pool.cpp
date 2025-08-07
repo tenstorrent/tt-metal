@@ -243,6 +243,9 @@ void DevicePool::initialize(
         static DevicePool device_pool{};
         _inst = &device_pool;
     }
+
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
     _inst->l1_small_size = l1_small_size;
     _inst->trace_region_size = trace_region_size;
     _inst->worker_l1_size = worker_l1_size;
@@ -251,10 +254,21 @@ void DevicePool::initialize(
     _inst->init_profiler_ = init_profiler;
     _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
     _inst->using_fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+    _inst->user_requested_devices_.resize(cluster.number_of_devices());
+
+    // Record IDs that the user requested to be opened.
+    for (auto dev_id : device_ids) {
+        // Device can be active but not user requested if it was opened by DevicePool automatically.
+        TT_FATAL(
+            !_inst->is_device_active(dev_id) || !_inst->user_requested_devices_[dev_id],
+            "Device {} already opened",
+            dev_id);
+        _inst->user_requested_devices_[dev_id] = true;
+    }
 
     std::vector<chip_id_t> device_ids_to_open = device_ids;
     // Never skip for TG Cluster
-    bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
+    bool is_galaxy = cluster.is_galaxy_cluster();
     bool skip = !is_galaxy;
     bool any_remote_devices = false;
 
@@ -264,8 +278,7 @@ void DevicePool::initialize(
         // Check if fabric needs to be enabled (any remote devices).
         // Note, all devices must be open to use fabric. This check will happen in add_devices_to_pool.
         for (auto dev_id : device_ids_to_open) {
-            any_remote_devices =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id) != dev_id;
+            any_remote_devices = cluster.get_associated_mmio_device(dev_id) != dev_id;
             if (any_remote_devices) {
                 break;
             }
@@ -276,7 +289,7 @@ void DevicePool::initialize(
         // Must open all devices in cluster to use fabric
         if (any_remote_devices) {
             device_ids_to_open.clear();
-            for (int id = 0; id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); ++id) {
+            for (int id = 0; id < cluster.number_of_devices(); ++id) {
                 device_ids_to_open.push_back(id);
             }
         }
@@ -285,19 +298,17 @@ void DevicePool::initialize(
     std::vector<chip_id_t> target_mmio_ids;
     for (const auto& device_id : device_ids_to_open) {
         TT_FATAL(
-            tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(device_id) !=
-                tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
+            cluster.all_chip_ids().find(device_id) != cluster.all_chip_ids().end(),
             "Device index {} out of range. There are {} devices available.",
             device_id,
-            tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
-        const auto& mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+            cluster.number_of_devices());
+        const auto mmio_device_id = cluster.get_associated_mmio_device(device_id);
         if (std::find(target_mmio_ids.begin(), target_mmio_ids.end(), mmio_device_id) == target_mmio_ids.end()) {
             target_mmio_ids.push_back(mmio_device_id);
         }
         skip &= (device_id == mmio_device_id);
     }
-    if (target_mmio_ids.size() != tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices()) {
+    if (target_mmio_ids.size() != cluster.number_of_pci_devices()) {
         log_warning(
             tt::LogMetal,
             "Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, "
@@ -491,15 +502,13 @@ void DevicePool::activate_device(chip_id_t id) {
         id,
         tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
     const std::lock_guard<std::mutex> lock(this->lock);
-    if (this->devices.size() < id + 1) {
-        this->devices.reserve(id + 1);
-    }
-    auto device = get_device(id);
+    devices_.reserve(id + 1);
+    auto* device = get_device(id);
     if (!device) {
         log_debug(tt::LogMetal, "DevicePool new device {}", id);
         int worker_core_thread_core = this->worker_thread_to_cpu_core_map.at(id);
         int completion_queue_reader_core = this->completion_queue_reader_to_cpu_core_map.at(id);
-        device = new Device(
+        devices_.emplace_back(std::make_unique<Device>(
             id,
             this->num_hw_cqs,
             this->l1_small_size,
@@ -508,35 +517,23 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core,
-            this->worker_l1_size);
-        this->devices.emplace_back(std::unique_ptr<IDevice>(device));
+            this->worker_l1_size));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
-        if (not device->is_initialized()) {
-            device->initialize(
-                num_hw_cqs, this->l1_small_size, this->trace_region_size, this->worker_l1_size, this->l1_bank_remap);
-        } else {
-            TT_THROW("Cannot re-initialize device {}, must first call close()", id);
-        }
+        TT_FATAL(!device->is_initialized(), "Cannot re-initialize device {}, must first call close()", id);
+        device->initialize(
+            num_hw_cqs, this->l1_small_size, this->trace_region_size, this->worker_l1_size, this->l1_bank_remap);
     }
 }
 
 bool DevicePool::is_device_active(chip_id_t id) const {
-    auto device = get_device(id);
-    if (!device) {
-        return false;
-    }
-
-    return device->is_initialized();
+    auto* device = get_device(id);
+    return device != nullptr && device->is_initialized();
 }
 
 IDevice* DevicePool::get_device(chip_id_t id) const {
-    auto it = std::find_if(devices.begin(), devices.end(), [&id](const auto& device) { return device->id() == id; });
-    if (it == devices.end()) {
-        return nullptr;
-    }
-
-    return it->get();
+    auto it = std::find_if(devices_.begin(), devices_.end(), [&id](const auto& device) { return device->id() == id; });
+    return it == devices_.end() ? nullptr : it->get();
 }
 
 std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
@@ -549,7 +546,7 @@ std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
     // available and will dispatch to/wait on the correct number of cores (effectively ignoring the
     // value host dispatch provides, if its incorrect).
     std::size_t max_eth_core_count = 0;
-    for (const auto& device : this->devices) {
+    for (const auto& device : devices_) {
         max_eth_core_count = std::max(
             MetalContext::instance()
                 .get_control_plane()
@@ -584,7 +581,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     }
 
     for (const auto& device_id : devices_to_activate) {
-        if (not this->is_device_active(device_id)) {
+        if (!this->is_device_active(device_id)) {
             this->activate_device(device_id);
         }
     }
@@ -613,9 +610,7 @@ void DevicePool::wait_for_fabric_router_sync() const {
     const auto& fabric_context = control_plane.get_fabric_context();
 
     auto wait_for_handshake = [&](IDevice* dev) {
-        if (!dev) {
-            TT_THROW("Fabric router sync on null device. All devices must be opened for Fabric.");
-        }
+        TT_FATAL(dev, "Fabric router sync on null device. All devices must be opened for Fabric.");
         if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
             return;
         }
@@ -721,7 +716,7 @@ IDevice* DevicePool::get_active_device(chip_id_t device_id) const {
 
 std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     std::vector<IDevice*> user_devices;
-    for (const auto& device : this->devices) {
+    for (const auto& device : devices_) {
         if (device && device->is_initialized()) {
             user_devices.push_back(device.get());
         }
@@ -749,7 +744,7 @@ void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_clo
 
 bool DevicePool::is_dispatch_firmware_active() const { return this->dispatch_firmware_active_; }
 
-bool DevicePool::close_device(chip_id_t device_id) {
+void DevicePool::close_device(chip_id_t device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
@@ -767,7 +762,7 @@ bool DevicePool::close_device(chip_id_t device_id) {
     return close_devices(devices_to_close);
 }
 
-bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
+void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     ZoneScoped;
 
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
@@ -874,19 +869,17 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
-    bool pass = true;
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        pass &= dev->close();
+        dev->close();
+        user_requested_devices_[dev_id] = false;
     }
 
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-
-    return pass;
 }
 
 DevicePool::~DevicePool() {
-    for (const auto& dev : this->devices) {
+    for (const auto& dev : devices_) {
         if (dev != nullptr and dev->is_initialized()) {
             // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
@@ -894,7 +887,8 @@ DevicePool::~DevicePool() {
             dev->close();
         }
     }
-    this->devices.clear();
+    devices_.clear();
+    user_requested_devices_.clear();
 }
 
 }  // namespace tt

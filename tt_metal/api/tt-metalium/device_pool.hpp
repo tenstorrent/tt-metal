@@ -55,8 +55,8 @@ public:
 
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
-    bool close_device(chip_id_t device_id);
-    bool close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
+    void close_device(chip_id_t device_id);
+    void close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
     bool is_device_active(chip_id_t id) const;
     // True if dispatch firmware is active on this device pool
     bool is_dispatch_firmware_active() const;
@@ -82,7 +82,8 @@ private:
     bool dispatch_firmware_active_ = false;
 
     std::mutex lock;
-    std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
+    ttsl::SmallVector<std::unique_ptr<tt_metal::IDevice>> devices_;
+    ttsl::SmallVector<bool> user_requested_devices_;
 
     bool skip_remote_devices;
     // Issue #19729: use_max_eth_core_count_on_all_devices_ is a workaround

@@ -144,7 +144,7 @@ public:
     void configure_fabric() override;
     void init_fabric() override;
     // Puts device into reset
-    bool close() override;
+    void close() override;
 
     // Program cache interface. Synchronize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops

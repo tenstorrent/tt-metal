@@ -574,7 +574,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     view_ = std::move(new_view);
 }
 
-bool MeshDevice::close() {
+void MeshDevice::close() {
     ZoneScoped;
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
@@ -591,7 +591,6 @@ bool MeshDevice::close() {
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
-    return true;
 }
 
 std::string MeshDevice::to_string() const {

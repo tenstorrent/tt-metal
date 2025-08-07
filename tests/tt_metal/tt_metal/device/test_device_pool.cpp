@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <gtest/gtest.h>
+#include <gmock/gmock.h>
+
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device_pool.hpp>
@@ -142,6 +143,29 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
     ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
     ASSERT_TRUE(dev->is_initialized());
+    CloseDevicesInPool();
+}
+
+TEST(DevicePool, DevicePoolSameDeviceId) {
+    std::vector<chip_id_t> device_ids{*tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin()};
+    int num_hw_cqs = 1;
+    int l1_small_size = 1024;
+    const auto& dispatch_core_config = tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+    auto devices = DevicePool::instance().get_all_active_devices();
+    for (const auto& dev : devices) {
+        ASSERT_EQ((int)(dev->allocator()->get_config().l1_small_size), l1_small_size);
+        ASSERT_EQ((int)(dev->num_hw_cqs()), num_hw_cqs);
+        ASSERT_TRUE(dev->is_initialized());
+    }
+
+    EXPECT_ANY_THROW(DevicePool::instance().initialize(
+        device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config));
+
+    // Close then get devices again
+    for (const auto& dev : devices) {
+        dev->close();
+    }
     CloseDevicesInPool();
 }
 
