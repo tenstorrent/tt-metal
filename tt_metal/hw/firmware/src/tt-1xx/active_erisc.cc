@@ -134,9 +134,11 @@ void __attribute__((noinline)) Application() {
     debug_dump_addr[3] = mailbox_pointer[1];
     debug_dump_addr[4] = mailbox_pointer[2];
 
-    do {
-        __asm__ volatile("fence");
-    } while (gEnableFwFlag[0] != 1);
+    // do {
+    //     __asm__ volatile("fence");
+    // } while (gEnableFwFlag[0] != 1);
+    // This flag must be set to 1 before launching this firmware
+    gEnableFwFlag[0] = 1;
 
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;

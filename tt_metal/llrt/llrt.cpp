@@ -148,7 +148,6 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
 
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         (void*)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
-    tt_driver_atomics::sfence();
     if (send_go) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
@@ -326,14 +325,12 @@ void send_msg_to_eth_mailbox(
     const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
     const auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
 
-    tt_driver_atomics::lfence();
     // Check mailbox is empty/ready
     uint32_t msg_status =
         read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] & status_mask;
     {
         const auto start_time = std::chrono::steady_clock::now();
         while (msg_status != done_message && msg_status != 0) {
-            tt_driver_atomics::lfence();
             uint32_t mailbox_val = read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
@@ -385,7 +382,6 @@ void send_msg_to_eth_mailbox(
     if (wait_for_ack) {
         const auto start_time = std::chrono::steady_clock::now();
         do {
-            tt_driver_atomics::lfence();
             uint32_t mailbox_val = read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
@@ -429,7 +425,6 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
 
     while (heartbeat_val == previous_heartbeat_val) {
         std::this_thread::sleep_for(k_sleep_time);
-        tt_driver_atomics::lfence();
         previous_heartbeat_val = heartbeat_val;
         heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
         if (timeout_ms > 0) {

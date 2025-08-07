@@ -969,6 +969,7 @@ void MetalContext::initialize_firmware(
             } else {
                 // Active ethernet firmware launched immediately. Set the enable flag to 1 so FW doesn't exit
                 // immediately.
+                // tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
                     device_id,
                     virtual_core,
@@ -976,7 +977,6 @@ void MetalContext::initialize_firmware(
                     mailbox_index,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
                     true);
-                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
                 // There are 4 mailboxes. wrap to 0 after 3
                 mailbox_index = (mailbox_index + 1) % 4;
             }
