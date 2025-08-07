@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     MAX_START_POS,
+    add_inv_scale_to_state_dict,
     load_reference_io_tensors_for_module,
     load_state_dict,
 )
@@ -86,7 +87,10 @@ def test_forward_pass(
     logger.info("Setting up reference model")
     if module_path is None:
         reference_model = load_reference_model(hf_config, reference_layer_idx)
-        state_dict = reference_model.to(torch.bfloat16).state_dict()
+        state_dict = add_inv_scale_to_state_dict(
+            reference_model.to(torch.bfloat16).state_dict(),
+            block_shape=hf_config.quantization_config["weight_block_size"],
+        )
     else:
         state_dict = load_state_dict(model_path, module_path)
 
