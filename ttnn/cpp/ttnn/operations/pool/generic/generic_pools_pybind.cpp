@@ -42,10 +42,11 @@ void bind_max_pool2d_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`, which should be used with pre-sharded input tensors.
             in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
+            return_indices (bool, optional): whether to return both values and indices. When True, returns a tuple (values, indices). Defaults to `False`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
-            ttnn.Tensor: the max pool convolved output tensor.
+            ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
 
         Example:
             >>> import ttnn
@@ -95,8 +96,9 @@ void bind_max_pool2d_operation(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(
+               bool return_indices,
+               QueueId queue_id) -> py::object {
+                auto result = self(
                     queue_id,
                     input_tensor,
                     batch_size,
@@ -110,7 +112,16 @@ void bind_max_pool2d_operation(py::module& module) {
                     ceil_mode,
                     memory_config,
                     applied_shard_scheme,
-                    in_place_halo);
+                    in_place_halo,
+                    return_indices);
+
+                // Handle variant return type
+                if (std::holds_alternative<std::pair<ttnn::Tensor, ttnn::Tensor>>(result)) {
+                    auto pair = std::get<std::pair<ttnn::Tensor, ttnn::Tensor>>(result);
+                    return py::make_tuple(pair.first, pair.second);
+                } else {
+                    return py::cast(std::get<ttnn::Tensor>(result));
+                }
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -126,6 +137,7 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("in_place_halo") = false,
+            py::arg("return_indices") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
 
