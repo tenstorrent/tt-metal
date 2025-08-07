@@ -389,6 +389,11 @@ BEGIN_MAIN_FUNCTION() {
     noc_async_atomic_barrier();
 
     DPRINT << "lite_fabric: out " << (uint32_t)structs->config.routing_enabled << ENDL();
+
+#if !defined(METAL_LAUNCH)
+    lite_fabric::ConnectedRisc1Interface::assert_connected_dm1_reset();
+#endif
+
     structs->config.current_state = lite_fabric::InitState::TERMINATED;
 }
 END_MAIN_FUNCTION()
