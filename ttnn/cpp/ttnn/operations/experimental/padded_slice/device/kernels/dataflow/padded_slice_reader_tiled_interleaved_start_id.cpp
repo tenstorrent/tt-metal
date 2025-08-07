@@ -68,6 +68,7 @@ void kernel_main() {
                 }
             }
         }
+        noc_async_full_barrier();
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, num_tiles_per_barrier);
     }
