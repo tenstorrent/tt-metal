@@ -51,33 +51,35 @@ run_qwen25_vl_func() {
 
 run_segformer_func() {
   #Segformer Segmentation Demo
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation --timeout 600; fail+=$?
+  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation
 
   #Segformer Classification Demo
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo --timeout 600; fail+=$?
+  pytest models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo
 
+  #Segformer Segmentation Eval DP
+  pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp
   #Segformer Segmentation Eval
-  pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer --timeout 600; fail+=$?
+  pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval
 
 }
 
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference_dp --timeout 600; fail+=$?
+  pytest models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference_dp
 
   #SentenceBERT eval
-  pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval_dp --timeout 600; fail+=$?
+  pytest models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval_dp
 
 }
 
 run_yolov11_func() {
 
  #Yolov11 Demo
- pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
+ pytest models/demos/yolov11/demo/demo.py
 
  #Yolov11 Eval
- pytest --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov11n --timeout 600; fail+=$?
+ pytest models/experimental/yolo_eval/evaluate.py::test_yolov11n
 
 }
 
@@ -107,23 +109,23 @@ run_llama3_func() {
 
 run_ufld_v2_func() {
   #ufld_v2
-  pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
+  pytest models/demos/ufld_v2/demo/demo.py
   #ufld_v2 eval
-  pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
+  pytest models/demos/ufld_v2/demo/dataset_evaluation.py
 }
 run_vgg_func() {
 
   #VGG11/VGG16
-  pytest -n auto models/demos/vgg/demo/demo.py --timeout 600
+  pytest models/demos/vgg/demo/demo.py
 
 }
 
 run_bert_tiny_func() {
   fail=0
 
-  pytest -n auto models/demos/bert_tiny/demo/demo.py --timeout 600 || fail=1
+  pytest models/demos/bert_tiny/demo/demo.py || fail=1
 
-  pytest -n auto models/demos/wormhole/bert_tiny/demo/demo.py --timeout 600 || fail=1
+  pytest models/demos/wormhole/bert_tiny/demo/demo.py || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -134,8 +136,8 @@ run_bert_tiny_func() {
 run_bert_func() {
   fail=0
 
-  pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
-  pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
+  pytest models/demos/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
+  pytest models/demos/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -145,26 +147,26 @@ run_bert_func() {
 
 run_resnet_stability() {
 
-  pytest -n auto --disable-warnings models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
+  pytest models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
 
 }
 
 run_resnet_func() {
 
-  pytest -n auto --disable-warnings models/demos/wormhole/resnet50/demo/demo.py
+  pytest models/demos/wormhole/resnet50/demo/demo.py
 
 }
 
 run_sdxl_func() {
-  pytest --disable-warnings models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2
+  pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2
 }
 
 run_distilbert_func() {
   fail=0
 
-  pytest --disable-warnings models/demos/distilbert/demo/demo.py --timeout 600 || fail=1
+  pytest models/demos/distilbert/demo/demo.py || fail=1
 
-  pytest --disable-warnings models/demos/wormhole/distilbert/demo/demo.py --timeout 600 || fail=1
+  pytest models/demos/wormhole/distilbert/demo/demo.py || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -174,31 +176,31 @@ run_distilbert_func() {
 
 run_covnet_mnist_func() {
 
-  pytest --disable-warnings models/demos/convnet_mnist/demo/demo.py --timeout 600
+  pytest models/demos/convnet_mnist/demo/demo.py
 
 }
 
 run_mnist_func() {
 
-  pytest --disable-warnings models/demos/mnist/demo/demo.py --timeout 600
+  pytest models/demos/mnist/demo/demo.py
 
 }
 
 run_squeezebert_func() {
 
-  pytest --disable-warnings models/demos/squeezebert/demo/demo.py --timeout 600
+  pytest models/demos/squeezebert/demo/demo.py
 
 }
 
 run_roberta_func() {
 
-  pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600
+  pytest models/demos/roberta/demo/demo.py
 
 }
 
 run_stable_diffusion_func() {
 
-  pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900
+  pytest --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo
 
 }
 
@@ -260,23 +262,23 @@ run_mamba_perf() {
 run_whisper_perf() {
 
   # Whisper conditional generation
-  pytest -n auto models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
 
 }
 
 run_yolov9c_perf() {
   # yolov9c demo
-  pytest -n auto --disable-warnings models/demos/yolov9c/demo/demo.py --timeout 600
+  pytest models/demos/yolov9c/demo/demo.py
   # yolov9c eval
-  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov9c --timeout 600
+  pytest models/experimental/yolo_eval/evaluate.py::test_yolov9c
 
 }
 run_yolov8s_perf() {
 
   # yolov8s demo
-  pytest -n auto --disable-warnings models/demos/yolov8s/demo/demo.py --timeout 600
+  pytest models/demos/yolov8s/demo/demo.py
   # yolov8s eval
-  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov8s --timeout 600
+  pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s
 
 }
 
@@ -284,88 +286,81 @@ run_yolov8s_perf() {
 run_mobilenetv2_perf(){
 
 #  mobilenetv2 demo
-#  comment until HF Imagenet-1k Dataset is accessible in CIv2 env
- pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp --timeout 600
+ pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp
 
 #  mobilenetv2 eval
-  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
+  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp
 
 }
 
 run_yolov8s_world_perf() {
 
   # yolov8s_world demo
-  pytest -n auto --disable-warnings models/demos/yolov8s_world/demo/demo.py --timeout 600
+  pytest models/demos/yolov8s_world/demo/demo.py
 
   # yolov8s_world eval
-  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov8s_world --timeout 600
+  pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s_world
 
 }
 
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image --timeout 600
+ pytest models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
  # vanilla_unet eval
- pytest -n auto models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet --timeout 1000
+ pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet
 }
 run_yolov8x_perf() {
 
   # yolov8x demo
-  pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
+  pytest models/demos/yolov8x/demo/demo.py
 
   # yolov8x eval
-  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov8x --timeout 600
+  pytest models/experimental/yolo_eval/evaluate.py::test_yolov8x
 
 }
 run_yolov4_perf() {
   #yolov4 demo
-  pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4 --timeout 600
-  pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_dp --timeout 600
+  pytest models/demos/yolov4/demo.py::test_yolov4
+  pytest models/demos/yolov4/demo.py::test_yolov4_dp
   #yolov4 eval
-  pytest --disable-warnings models/experimental/yolo_eval/evaluate.py::test_run_yolov4_eval --timeout 1200
+  pytest models/experimental/yolo_eval/evaluate.py::test_run_yolov4_eval
 }
 
 run_yolov10x_demo() {
   # yolov10x demo
-  pytest -n auto --disable-warnings  models/demos/yolov10x/demo/demo.py --timeout 600
+  pytest models/demos/yolov10x/demo/demo.py
   #yolov10x eval
-  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov10x --timeout 600
+  pytest models/experimental/yolo_eval/evaluate.py::test_yolov10x
 
 }
 
 run_yolov7_demo() {
   # yolov7 demo
-  pytest -n auto models/demos/yolov7/demo/demo.py --timeout 600
+  pytest models/demos/yolov7/demo/demo.py
   # yolov7 eval
-  pytest -n auto models/experimental/yolo_eval/evaluate.py::test_yolov7 --timeout 600
+  pytest models/experimental/yolo_eval/evaluate.py::test_yolov7
 
 }
 
 run_yolov6l_perf() {
 
-  pytest -n auto --disable-warnings models/demos/yolov6l/demo/demo.py --timeout 600
+  pytest models/demos/yolov6l/demo/demo.py
 
 }
 
 run_vgg_unet_demo() {
  # vgg_unet demo
-  pytest -n auto models/demos/vgg_unet/demo/demo.py::test_demo_dp --timeout 600
+  pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp
 
  # vgg_unet eval
-  pytest -n auto models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp --timeout 600
-
-}
-
-run_yolov6l_demo() {
-
-  pytest -n auto models/demos/yolov6l/demo/demo.py --timeout 600
+  pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
 
 }
 
 run_yolov12x_demo() {
 
-  pytest -n auto --disable-warnings  models/demos/yolov12x/demo/demo.py --timeout 600
+  pytest models/demos/yolov12x/demo/demo.py
 
 }
 
