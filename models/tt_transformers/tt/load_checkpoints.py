@@ -46,7 +46,7 @@ def standardize_hf_keys(state_dict):
     key_meta = "lm_head.weight"
     key_hf = "model.embed_tokens.weight"
 
-    if not key_meta in state_dict:
+    if not key_meta in state_dict and key_hf in state_dict:
         state_dict[key_meta] = state_dict[key_hf]
         del state_dict[key_hf]
 
