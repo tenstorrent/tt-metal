@@ -54,10 +54,9 @@ enum NocSendType : uint8_t {
     NOC_UNICAST_ATOMIC_INC = 2,
     NOC_FUSED_UNICAST_ATOMIC_INC = 3,
     NOC_UNICAST_SCATTER_WRITE = 4,
-    NOC_READ = 5,
-    NOC_MULTICAST_WRITE = 6,       // mcast has bug
-    NOC_MULTICAST_ATOMIC_INC = 7,  // mcast has bug
-    NOC_SEND_TYPE_LAST = NOC_READ
+    NOC_MULTICAST_WRITE = 5,       // mcast has bug
+    NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
 };
 // How to send the payload across the cluster
 // 1 bit
@@ -91,10 +90,6 @@ static_assert(
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
-struct NocReadCommandHeader {
-    uint64_t noc_address;
-    uint64_t event;
-};
 #define NOC_SCATTER_WRITE_MAX_CHUNKS 2
 struct NocUnicastScatterCommandHeader {
     uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
@@ -104,10 +99,7 @@ struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
     uint32_t value;
 };
-
 struct NocUnicastAtomicIncCommandHeader {
-    NocUnicastAtomicIncCommandHeader() = default;
-
     NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
         noc_address(noc_address), wrap(wrap), val(val), flush(flush) {}
 
@@ -117,8 +109,6 @@ struct NocUnicastAtomicIncCommandHeader {
     bool flush;
 };
 struct NocUnicastAtomicIncFusedCommandHeader {
-    NocUnicastAtomicIncFusedCommandHeader() = default;
-
     NocUnicastAtomicIncFusedCommandHeader(
         uint64_t noc_address, uint64_t semaphore_noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
         noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), wrap(wrap), val(val), flush(flush) {}
@@ -147,7 +137,6 @@ struct NocMulticastAtomicIncCommandHeader {
 };
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
-static_assert(sizeof(NocReadCommandHeader) == 16, "NocReadCommandHeader size is not 16 bytes");
 static_assert(sizeof(NocUnicastInlineWriteCommandHeader) == 16, "NocMulticastCommandHeader size is not 16 bytes");
 static_assert(sizeof(NocUnicastAtomicIncCommandHeader) == 16, "NocUnicastCommandHeader size is not 16 bytes");
 static_assert(
@@ -161,7 +150,6 @@ union NocCommandFields {
     NocUnicastAtomicIncFusedCommandHeader unicast_seminc_fused;
     NocMulticastAtomicIncCommandHeader mcast_seminc;
     NocUnicastScatterCommandHeader unicast_scatter_write;
-    NocReadCommandHeader read;
 };
 static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
 
@@ -206,9 +194,8 @@ struct PacketHeaderBase {
 
     inline Derived& to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
-        this->noc_send_type = NOC_UNICAST_WRITE;
-        this->payload_size_bytes = payload_size_bytes;
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        this->noc_send_type = NOC_UNICAST_WRITE;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
@@ -219,31 +206,16 @@ struct PacketHeaderBase {
         modified_command_header.noc_address = noc_addr;
 
         this->command_fields.unicast_write = modified_command_header;
-#else
-        // Called from the host. Always NOC0 address not edm_to_local_chip_noc
-        this->command_fields.unicast_write = noc_unicast_command_header;
-#endif
-        return *static_cast<Derived*>(this);
-    }
-
-    inline Derived& to_noc_read(const NocReadCommandHeader& noc_read_command_header, size_t payload_size_bytes) {
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        // This may only be called from the host
-        ASSERT(false);
-        DPRINT << "!to_noc_read" << ENDL();
-        while (true) {
-        }
-#else
-        this->noc_send_type = NOC_READ;
         this->payload_size_bytes = payload_size_bytes;
-        this->command_fields.read = noc_read_command_header;
+#else
+        TT_THROW("Calling to_noc_unicast_write from host is unsupported");
 #endif
         return *static_cast<Derived*>(this);
     }
 
     inline Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) {
-        this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
