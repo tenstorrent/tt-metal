@@ -15,8 +15,9 @@ from models.experimental.uniad.tt.ttnn_resnet import TtResNet
 from models.experimental.uniad.tt.ttnn_fpn import TtFPN
 from models.experimental.uniad.reference.runtime_tracker_base import RuntimeTrackerBase
 
-# from models.experimental.uniad.tt.ttnn_query_interaction import TtQueryInteractionModule
-from models.experimental.uniad.reference.query_interaction_module import QueryInteractionModule
+from models.experimental.uniad.tt.ttnn_query_interaction import TtQueryInteractionModule
+
+# from models.experimental.uniad.reference.query_interaction_module import QueryInteractionModule
 
 from models.experimental.uniad.tt.ttnn_memory_bank import TtMemoryBank
 
@@ -237,14 +238,14 @@ class TtUniAD:
             miss_tolerance=miss_tolerance,
         )  # hyper-param for removing inactive queries
 
-        self.query_interact = QueryInteractionModule(
+        self.query_interact = TtQueryInteractionModule(
             # qim_args,
             dim_in=embed_dims,
             hidden_dim=embed_dims,
             dim_out=embed_dims,
             update_query_pos=qim_args["update_query_pos"],
-            # params=parameters.query_interact,
-            # device=device,
+            params=parameters.query_interact,
+            device=device,
         )
 
         # {'type': 'DETRTrack3DCoder', 'post_center_range': [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0], 'pc_range': [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0], 'max_num': 300, 'num_classes': 10, 'score_threshold': 0.0, 'with_nms': False, 'iou_thres': 0.3}
@@ -1113,7 +1114,44 @@ class TtUniAD:
         tmp = {}
         tmp["init_track_instances"] = self._generate_empty_tracks()
         tmp["track_instances"] = track_instances
-        out_track_instances = self.query_interact(tmp)
+
+        tmp_ttnn = {}
+        tmp_ttnn["init_track_instances"] = TtInstances((1, 1), ttnn_device=self.device)
+        tmp_ttnn["track_instances"] = TtInstances((1, 1), ttnn_device=self.device)
+
+        tmp_ttnn["init_track_instances"].ref_pts = ttnn.from_torch(
+            tmp["init_track_instances"].ref_pts, device=self.device
+        )
+        tmp_ttnn["init_track_instances"].query = ttnn.from_torch(
+            tmp["init_track_instances"].query, device=self.device, layout=ttnn.TILE_LAYOUT
+        )
+        tmp_ttnn["init_track_instances"].output_embedding = ttnn.from_torch(
+            tmp["init_track_instances"].output_embedding, device=self.device
+        )
+        tmp_ttnn["init_track_instances"].obj_idxes = ttnn.from_torch(
+            tmp["init_track_instances"].obj_idxes, device=self.device
+        )
+
+        tmp_ttnn["track_instances"].ref_pts = ttnn.from_torch(tmp["track_instances"].ref_pts, device=self.device)
+        tmp_ttnn["track_instances"].query = ttnn.from_torch(
+            tmp["track_instances"].query, device=self.device, layout=ttnn.TILE_LAYOUT
+        )
+        tmp_ttnn["track_instances"].output_embedding = ttnn.from_torch(
+            tmp["track_instances"].output_embedding, device=self.device
+        )
+        tmp_ttnn["track_instances"].obj_idxes = ttnn.from_torch(
+            tmp["track_instances"].obj_idxes.to(dtype=torch.long), device=self.device
+        )
+
+        tt_out_track_instances = self.query_interact(tmp_ttnn)
+
+        out_track_instances = tmp["init_track_instances"]
+
+        out_track_instances.ref_pts = ttnn.to_torch(tt_out_track_instances.ref_pts)
+        out_track_instances.query = ttnn.to_torch(tt_out_track_instances.query)
+        out_track_instances.output_embedding = ttnn.to_torch(tt_out_track_instances.output_embedding)
+        out_track_instances.obj_idxes = ttnn.to_torch(tt_out_track_instances.obj_idxes)
+
         out["track_instances_fordet"] = track_instances
         out["track_instances"] = out_track_instances
         out["track_obj_idxes"] = track_instances.obj_idxes
