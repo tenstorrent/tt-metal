@@ -20,7 +20,7 @@ namespace operations::pool {
 // Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
 // maxpool.
-static Tensor pool2d_invoke(
+static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
     Pool2DType pool_type,
@@ -37,7 +37,8 @@ static Tensor pool2d_invoke(
     std::optional<int32_t> divisor_override = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
-    bool in_place_halo = false) {
+    bool in_place_halo = false,
+    bool return_indices = false) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     bool is_out_tiled = false;  // pool output is row major
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
@@ -197,10 +198,15 @@ static Tensor pool2d_invoke(
         output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
     }
 
-    return output_tensor;
+    if (return_indices && pool_type == Pool2DType::MAX_POOL2D) {
+        // For now, return the same tensor for both values and indices
+        return std::make_pair(output_tensor, output_tensor);
+    } else {
+        return output_tensor;
+    }
 }
 
-Tensor MaxPool2DOp::invoke(
+std::variant<Tensor, std::pair<Tensor, Tensor>> MaxPool2DOp::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,
@@ -214,7 +220,8 @@ Tensor MaxPool2DOp::invoke(
     bool ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool in_place_halo) {
+    bool in_place_halo,
+    bool return_indices) {
     return pool2d_invoke(
         queue_id,
         input_tensor,
@@ -232,7 +239,8 @@ Tensor MaxPool2DOp::invoke(
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
-        in_place_halo);
+        in_place_halo,
+        return_indices);
 }
 
 Tensor AvgPool2DOp::invoke(
@@ -251,7 +259,7 @@ Tensor AvgPool2DOp::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool in_place_halo) {
-    return pool2d_invoke(
+    auto result = pool2d_invoke(
         queue_id,
         input_tensor,
         Pool2DType::AVG_POOL2D,
@@ -268,7 +276,12 @@ Tensor AvgPool2DOp::invoke(
         divisor_override,
         memory_config,
         applied_shard_scheme,
-        in_place_halo);
+        in_place_halo,
+        false  // return_indices
+    );
+
+    // Average pool always returns just the tensor, never indices
+    return std::get<Tensor>(result);
 }
 
 }  // namespace operations::pool
