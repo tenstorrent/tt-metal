@@ -656,25 +656,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"] = "";   // No RHS activations for value_true
         kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";  // No post activations
 
-        // 3-tensor broadcast configuration - each tensor has specific defines
-        if (true_is_bcast) {
-            kernel_defines["BCAST_TRUE"] = "1";
-            kernel_defines["BCAST_PRED"] = "0";
-            kernel_defines["BCAST_FALSE"] = "0";
-        } else if (pred_is_bcast) {
-            kernel_defines["BCAST_TRUE"] = "0";
-            kernel_defines["BCAST_PRED"] = "1";
-            kernel_defines["BCAST_FALSE"] = "0";
-        } else if (false_is_bcast) {
-            kernel_defines["BCAST_TRUE"] = "0";
-            kernel_defines["BCAST_PRED"] = "0";
-            kernel_defines["BCAST_FALSE"] = "1";
-        } else {
-            // No broadcast case - shouldn't happen in COL_BCAST but handle gracefully
-            kernel_defines["BCAST_TRUE"] = "0";
-            kernel_defines["BCAST_PRED"] = "0";
-            kernel_defines["BCAST_FALSE"] = "0";
-        }
+        // 3-tensor broadcast configuration - set defines for each tensor independently
+        kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
 
         // Where-specific LLK functions (override binary operation with where logic)
         kernel_defines["WHERE_LLK"] = "where_tile";

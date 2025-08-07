@@ -216,22 +216,18 @@ WhereBroadcastType get_broadcast_type(
     auto true_w = true_shape[-1];
     auto false_w = false_shape[-1];
 
-    // Column broadcast: one of predicate, value_true, or value_false has width=1, others have same width
-    bool pred_false_same = (pred_w == false_w);
-    bool pred_true_same = (pred_w == true_w);
-    bool true_false_same = (true_w == false_w);
-    bool pred_is_broadcasted = (pred_w == 1 && true_w > 1);
-    bool true_is_broadcasted = (true_w == 1 && pred_w > 1);
-    bool false_is_broadcasted = (false_w == 1 && pred_w > 1);
+    // Column broadcast: any tensor can have width=1 while others have larger width
+    // Find the maximum width among all tensors
+    auto max_w = std::max({pred_w, true_w, false_w});
 
-    if (pred_false_same && true_is_broadcasted) {
-        return WhereBroadcastType::COL_BCAST;  // value_true broadcasts
-    }
-    if (pred_true_same && false_is_broadcasted) {
-        return WhereBroadcastType::COL_BCAST;  // value_false broadcasts
-    }
-    if (true_false_same && pred_is_broadcasted) {
-        return WhereBroadcastType::COL_BCAST;  // predicate broadcasts
+    // Check if any tensor is broadcasting (has width=1 while max_w > 1)
+    bool pred_is_broadcasted = (pred_w == 1 && max_w > 1);
+    bool true_is_broadcasted = (true_w == 1 && max_w > 1);
+    bool false_is_broadcasted = (false_w == 1 && max_w > 1);
+
+    // Column broadcast case: at least one tensor is broadcasting
+    if (pred_is_broadcasted || true_is_broadcasted || false_is_broadcasted) {
+        return WhereBroadcastType::COL_BCAST;
     }
 
     return WhereBroadcastType::NONE;
