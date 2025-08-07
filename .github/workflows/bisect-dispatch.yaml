@@ -54,14 +54,6 @@ on:
 
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      tracy: ${{ inputs.tracy }}
-      build-wheel: ${{ inputs.build-wheel }}
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 1440
@@ -70,29 +62,22 @@ jobs:
     runs-on:
       - ${{ inputs.runner-label }}
       - ${{ inputs.extra-label }}
+
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
+
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
+
       - name: Run Git Bisect
         shell: bash
         env:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          ./create_venv.sh
-          source ${{ github.workspace }}/venv/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} -p "${{ inputs.patch }}"
