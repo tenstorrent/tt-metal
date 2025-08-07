@@ -272,8 +272,26 @@ jobs:
         with:
           model_name: "vanilla_unet"
           commands: |
-            pytest models/experimental/vanilla_unet/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vanilla_unet/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: swin_v2 tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "swin_v2"
+          commands: |
+            pytest models/experimental/swin_v2/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: swin_s tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "swin_s"
+          commands: |
+            pytest models/experimental/swin_s/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov5x tests
@@ -299,7 +317,7 @@ jobs:
         with:
           model_name: "yolov12x"
           commands: |
-            pytest models/experimental/yolov12x/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov12x/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -314,6 +332,7 @@ jobs:
 
       - name: Merge test reports
         id: generate-device-perf-report
+        if: ${{ !cancelled() }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
@@ -329,7 +348,7 @@ jobs:
         id: check-device-perf-report
         if: ${{ !cancelled() }}
         run: |
-          ls -hal ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
+          test -f ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - name: Clean test name for artifact
         run: |
