@@ -84,11 +84,11 @@ struct CQPrefetchBaseCmd {
 } __attribute__((packed));
 
 struct CQPrefetchRelayLinearCmd {
-    uint8_t pad1;
-    uint16_t pad2;
+    uint16_t pad1;
+    uint8_t length_hi;
+    uint32_t length;
     uint32_t noc_xy_addr;
     uint32_t addr;
-    uint32_t length;
 } __attribute__((packed));
 ;
 
@@ -204,8 +204,7 @@ struct CQDispatchWriteHostCmd {
     uint8_t is_event;  // one flag, false=read buffer
     uint16_t pad1;
     uint32_t pad2;
-    uint32_t pad3;
-    uint32_t length;
+    uint64_t length;
 } __attribute__((packed));
 
 constexpr uint16_t CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX = 0xFFFF;

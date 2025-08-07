@@ -37,6 +37,10 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <cstring>
+#include <optional>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -588,6 +592,81 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
     for (auto& thread : threads) {
         thread.join();
     }
+}
+
+TEST_F(MeshBufferTestSuite, ReplicatedBufferWriteReadTest) {
+    // - REPLICATED layout for writing, SHARDED with ROW_MAJOR for reading
+    // - DRAM, bottom up allocation, size 4303355904 bytes, page size 2048 bytes, address 32
+
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    constexpr uint64_t replicated_buffer_size = (4ull << 30) - 2048;  // 134479872;//4303355904;
+    const ReplicatedBufferConfig buffer_config{.size = replicated_buffer_size};
+
+    // Create replicated buffer for writing with specific address 32
+    auto replicated_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get(), 32);
+
+    // Verify buffer properties
+    EXPECT_EQ(replicated_buffer->size(), replicated_buffer_size);
+    EXPECT_EQ(replicated_buffer->global_layout(), MeshBufferLayout::REPLICATED);
+    EXPECT_EQ(replicated_buffer->device_local_size(), replicated_buffer_size);
+    EXPECT_EQ(replicated_buffer->address(), 32);
+    EXPECT_TRUE(replicated_buffer->is_allocated());
+
+    // Create test data - use uint16_t for easy verification
+    uint32_t num_elements = replicated_buffer_size / sizeof(uint16_t);
+    std::vector<uint16_t> src_vec(num_elements, 0);
+
+    // Fill with test pattern - use a smaller pattern that repeats for large buffers
+    uint32_t pattern_size = std::min(num_elements, static_cast<uint32_t>(1024 * 1024));  // 1M elements max
+    for (uint32_t i = 0; i < pattern_size; i++) {
+        src_vec[i] = static_cast<uint16_t>(i & 0xFFFF);
+    }
+    // Repeat pattern for remaining elements
+    for (uint32_t i = pattern_size; i < num_elements; i++) {
+        src_vec[i] = src_vec[i % pattern_size];
+    }
+
+    // Create distributed host buffer for writing data to device
+    MeshShape host_buffer_shape(1, 1);
+    auto write_distributed_host_buffer = DistributedHostBuffer::create(host_buffer_shape);
+    distributed::MeshCoordinateRange coord_range(write_distributed_host_buffer.shape());
+    for (const auto& coord : coord_range) {
+        write_distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
+    }
+
+    // Initialize distributed host buffer with data
+    write_distributed_host_buffer = write_distributed_host_buffer.transform(
+        [&](const HostBuffer&) { return HostBuffer(src_vec); },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
+    // Write data to replicated mesh buffer using enqueue_write
+    mesh_device_->mesh_command_queue().enqueue_write(replicated_buffer, write_distributed_host_buffer, false);
+
+    // Create distributed host buffer for reading data from device
+    auto read_distributed_host_buffer = DistributedHostBuffer::create(host_buffer_shape);
+    for (const auto& coord : coord_range) {
+        read_distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
+    }
+
+    // Initialize read buffer with correct size
+    read_distributed_host_buffer = read_distributed_host_buffer.transform(
+        [&](const HostBuffer&) { return HostBuffer(std::vector<uint16_t>(num_elements)); },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
+    // Read data back from mesh buffer using enqueue_read
+    mesh_device_->mesh_command_queue().enqueue_read(
+        replicated_buffer, read_distributed_host_buffer, read_distributed_host_buffer.shard_coords(), true);
+
+    // Verify read data matches written data
+    auto read_host_buffer = read_distributed_host_buffer.get_shard(coord_range.start_coord());
+    ASSERT_TRUE(read_host_buffer.has_value());
+    ASSERT_EQ(read_host_buffer.value().view_as<uint16_t>().size(), src_vec.size());
+    ASSERT_TRUE(std::equal(
+        read_host_buffer.value().view_as<uint16_t>().begin(),
+        read_host_buffer.value().view_as<uint16_t>().end(),
+        src_vec.begin()));
 }
 
 }  // namespace

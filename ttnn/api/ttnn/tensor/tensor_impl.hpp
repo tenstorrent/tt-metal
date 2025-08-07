@@ -241,8 +241,6 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
 //                                         Print
 // ======================================================================================
 
-std::ostream& operator<<(std::ostream& os, const DataType& dtype);
-
 enum class TensorPrintProfile {
     Empty,
     Short,

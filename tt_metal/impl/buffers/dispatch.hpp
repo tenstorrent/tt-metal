@@ -35,7 +35,7 @@ struct ReadBufferDescriptor {
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
     const BufferCorePageMapping* core_page_mapping;
     void* dst;
-    uint32_t dst_offset;
+    uint64_t dst_offset;
     uint32_t num_pages_read;
 
     ReadBufferDescriptor(
