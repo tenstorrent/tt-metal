@@ -230,7 +230,6 @@ def run_max_pool(
         torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]
     )  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
-    ttnn_output = ttnn_output[:, :in_c, :, :]
 
     # test for equivalance
     pcc_thresh = 1.0
