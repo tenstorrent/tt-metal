@@ -938,6 +938,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         uint32_t approx_input_size_per_core = estimate_halo_output_bytes(
             halo_input_memory_config.shard_spec().value().shape,
             batch_size,
+            input_height,
             input_width,
             kernel_size,
             dilation,
@@ -946,10 +947,11 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         l1_usage.tensor_allocation_size += approx_input_size_per_core;
         log_debug(
             tt::LogOp,
-            "L1 usage for {}: {}, {}",
+            "L1 usage for {}: {}, {}, Halo Output : {}",
             conv_config.shard_layout,
             l1_usage.tensor_allocation_size,
-            l1_usage.CB_allocation_size);
+            l1_usage.CB_allocation_size,
+            approx_input_size_per_core);
         return core_count_and_size{
             .core_count = input_parallel_config.grid.num_cores(),
             .size = l1_usage.CB_allocation_size + l1_usage.tensor_allocation_size,
@@ -1031,17 +1033,22 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
 uint32_t estimate_halo_output_bytes(
     std::array<uint32_t, 2> halo_input_shard_shape,
     uint32_t batch_size,
+    uint32_t input_height,
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> dilation,
     std::array<uint32_t, 4> padding) {
     uint32_t shard_height = halo_input_shard_shape[0] / input_width;
-
-    uint32_t batch_boundary_multiplier = (batch_size > 1) ? 2 : 1;
+    uint32_t shard_batches = shard_height / input_height;
     // Halo adds the overlap region of the input tensor that is needed for the convolution.
     //  As width is the faster changing dimension, we typically have the entire width in every shard.
     //  For each shard, it's the additional height from adjacent shards that is needed to cover the kernel size and
-    //  dilation. At the boundary between two batches, the additional height is needed twice.
+    //  dilation.
+
+    // At the boundary between two batches, the additional height is needed another time. If a single shard contains
+    // more than one batch, then the additional height is needed for each batch in the shard.
+    uint32_t batch_boundary_multiplier = (batch_size > 1) ? (shard_batches + 2) : 1;
+
     // Multiplying by 2 as output is always BFloat16.
     uint32_t approx_max_halo_size = (shard_height + (dilation[0] * kernel_size[0] - 1) * batch_boundary_multiplier) *
                                     (input_width + padding[2] + padding[3]) * halo_input_shard_shape[1] * 2;
@@ -1167,7 +1174,13 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     // Output of padded slice is always BFloat16, so size is 2 bytes.
     uint32_t input_size = shard_shape[0] * shard_shape[1] * 2;
     uint32_t approx_max_halo_size = estimate_halo_output_bytes(
-        shard_shape, params.batch_size, input_slice_width, params.kernel_size, params.dilation, params.padding_n4);
+        shard_shape,
+        params.batch_size,
+        input_slice_height,
+        input_slice_width,
+        params.kernel_size,
+        params.dilation,
+        params.padding_n4);
 
     const float output_size_margin = 1.0f;
 
