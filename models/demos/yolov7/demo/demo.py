@@ -95,7 +95,7 @@ def run_yolov7_demo(model_location_generator, device, model_type, input_loc, bat
         model_location_generator, device, model_type, batch_size_per_device
     )
 
-    dataset = LoadImages(path=input_loc, batch=batch_size, img_size=640, stride=32)
+    dataset = LoadImages(path=input_loc, batch=batch_size, img_size=640, vid_stride=32)
     im_tensor, orig_images, paths_images, batch = process_images(dataset, (640, 640), batch_size)
     names = load_coco_class_names()
     save_dir = "models/demos/yolov7/demo/runs"
