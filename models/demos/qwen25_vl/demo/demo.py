@@ -256,6 +256,8 @@ def test_demo(
         pytest.skip("CI only runs the CI-only tests")
     if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
+    if is_ci_env and "bleu-score" in test_id and mesh_device.get_num_devices() <= 2:
+        pytest.skip("BLEU score is only supported for T3K for now")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
@@ -611,7 +613,8 @@ def test_demo(
                     all_match = False
         assert all_match, "text_outputs should be the same for all batches"
 
-    if is_ci_env and "bleu-score" in test_id and mesh_device.get_num_devices() > 2:
+    if is_ci_env and "bleu-score" in test_id:
+        assert mesh_device.get_num_devices() > 2, "BLEU score is only supported for T3K for now"
         expected_output = load_expected_text(model_args.base_model_name)
         from nltk.tokenize import word_tokenize
         from nltk.translate.bleu_score import sentence_bleu
