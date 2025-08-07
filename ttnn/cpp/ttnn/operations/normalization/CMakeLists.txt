@@ -28,6 +28,7 @@ target_sources(
         batch_norm/device/batch_norm_utils.cpp
         groupnorm/device/groupnorm_op.cpp
         groupnorm/device/multi_core/groupnorm_op_multi_core.cpp
+        groupnorm/device/multi_core/groupnorm_op_v3.cpp
         groupnorm/groupnorm.cpp
         layernorm/device/layernorm_op.cpp
         layernorm/device/multi_core/layernorm_op_multi_core.cpp
