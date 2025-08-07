@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <array>
-#include "fabric_edm_packet_header.hpp"
+#include "lite_fabric_header.hpp"
 
 // STREAM REGISTER ASSIGNMENT
 // senders update this stream
@@ -70,7 +70,8 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 
 static_assert(NUM_SENDER_CHANNELS == 1);
 
-constexpr uint32_t CHANNEL_BUFFER_SIZE = 4096 + sizeof(tt::tt_fabric::LowLatencyPacketHeader);
+// Additional 16B to be used only for unaligned reads/writes
+constexpr uint32_t CHANNEL_BUFFER_SIZE = 4096 + 16 + sizeof(lite_fabric::LiteFabricHeader);
 
 constexpr size_t RECEIVER_CHANNEL_BASE_ID = NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_BASE_ID = 0;
@@ -107,8 +108,6 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_2_free_slots_stream_id,
     sender_channel_3_free_slots_stream_id,
     sender_channel_4_free_slots_stream_id};
-
-static_assert(std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::LowLatencyPacketHeader>);
 
 constexpr bool use_posted_writes_for_connection_open = false;
 
