@@ -10,6 +10,7 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "groupnorm.hpp"
 #include "groupnorm_input_mask.hpp"
+#include "tt-metalium/constants.hpp"
 
 namespace ttnn::operations::normalization::detail {
 namespace py = pybind11;
@@ -153,6 +154,46 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
         )doc"
     );
+
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::group_norm_v3,
+        R"doc(
+                Compute group_norm over :attr:`input_tensor`.
+
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword args:
+                num_groups (int)
+                epsilon (float): 1e-12.
+                weight (ttnn.Tensor, optional): Defaults to `None`.
+                bias (ttnn.Tensor, optional): Defaults to `None`.
+                dtype (ttnn.DataType, optional): Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                core_grid (CoreGrid, optional): Defaults to `None`.
+                inplace (bool, optional): Defaults to `False`.
+                chunk_size (int, optional): Defaults to `ttnn.constants.TILE_HW`.
+                compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            )doc",
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("num_groups"),
+            py::arg("epsilon") = 1e-12,
+            py::arg("weight") = std::nullopt,
+            py::arg("bias") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("core_grid") = std::nullopt,
+            py::arg("inplace") = false,
+            py::arg("chunk_size") = tt::constants::TILE_HW,
+            py::arg("compute_kernel_config") = std::nullopt});
 }
 void bind_normalization_group_norm(py::module& module) { bind_normalization_group_norm_operation(module); }
 

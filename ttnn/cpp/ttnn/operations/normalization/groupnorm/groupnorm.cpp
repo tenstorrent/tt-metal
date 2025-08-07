@@ -172,4 +172,81 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     }
 }
 
+ttnn::Tensor ExecuteGroupNormV3::invoke(
+    const ttnn::Tensor& input_tensor,
+    const int num_groups,
+    const float epsilon,
+    const std::optional<ttnn::Tensor>& weight,
+    const std::optional<ttnn::Tensor>& bias,
+    const std::optional<ttnn::DataType> dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<CoreGrid> core_grid,
+    std::optional<bool> inplace,
+    std::optional<int> chunk_size,
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    if (!inplace.has_value()) {
+        inplace = false;
+    }
+
+    if (!chunk_size.has_value()) {
+        chunk_size = tt::constants::TILE_HW;
+    }
+
+    const auto& input_shape = input_tensor.logical_shape();
+    TT_FATAL(
+        input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());
+
+    const auto N = input_shape[0];
+    const auto C = input_shape[1];
+    const auto H = input_shape[2];
+    const auto W = input_shape[3];
+    TT_FATAL(
+        C % num_groups == 0,
+        "Invalid channel configuration: Number of channels ({}) must be divisible by the number of groups ({}).",
+        C,
+        num_groups);
+
+    const auto output_dtype = dtype.value_or(input_tensor.dtype());
+
+    const std::optional<ttnn::Tensor>& gamma =
+        weight.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(weight.value())) : std::nullopt;
+    const std::optional<ttnn::Tensor>& beta =
+        bias.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(bias.value())) : std::nullopt;
+
+    const MemoryConfig& dram_memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    const MemoryConfig& output_mem_config =
+        (inplace.value()) ? input_tensor.memory_config() : memory_config.value_or(dram_memory_config);
+
+    // Pick entire device's core grid if not provided
+    if (!core_grid.has_value()) {
+        const auto grid_size = input_tensor.device()->compute_with_storage_grid_size();
+        core_grid = CoreGrid{grid_size.x, grid_size.y};
+    }
+
+    // Initialize compute kernel config
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        /*default_math_fidelity=*/MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/false,
+        /*default_l1_acc=*/false,
+        /*default_dst_full_sync_en=*/false);
+
+    return operation::run(
+               GroupNormV3{
+                   .num_groups = static_cast<uint32_t>(num_groups),
+                   .eps = epsilon,
+                   .output_dtype = output_dtype,
+                   .output_mem_config = output_mem_config,
+                   .core_grid = core_grid.value().to_CoreCoord(),
+                   .inplace = inplace.value(),
+                   .chunk_size = chunk_size.value(),
+                   .compute_kernel_config = kernel_config_val},
+               {input_tensor},
+               {gamma, beta})
+        .at(0);
+}
+
 }  // namespace ttnn::operations::normalization

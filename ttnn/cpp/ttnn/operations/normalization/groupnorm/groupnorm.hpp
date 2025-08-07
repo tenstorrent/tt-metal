@@ -33,10 +33,28 @@ struct ExecuteGroupNorm {
         bool use_welford = false);
 };
 
+struct ExecuteGroupNormV3 {
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        int num_groups,
+        float epsilon,
+        const std::optional<ttnn::Tensor>& weight = std::nullopt,
+        const std::optional<ttnn::Tensor>& bias = std::nullopt,
+        std::optional<ttnn::DataType> dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<CoreGrid> core_grid = std::nullopt,
+        std::optional<bool> inplace = std::nullopt,
+        std::optional<int> chunk_size = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+};
+
 }  // namespace normalization
 }  // namespace operations
 
 constexpr auto group_norm =
     ttnn::register_operation<"ttnn::group_norm", ttnn::operations::normalization::ExecuteGroupNorm>();
+
+constexpr auto group_norm_v3 =
+    ttnn::register_operation<"ttnn::group_norm_v3", ttnn::operations::normalization::ExecuteGroupNormV3>();
 
 }  // namespace ttnn
