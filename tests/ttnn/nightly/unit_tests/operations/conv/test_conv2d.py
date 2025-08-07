@@ -4062,3 +4062,80 @@ def test_conv_sharded_rm_input(
         enable_act_double_buffer=act_db,
         enable_weights_double_buffer=w_db
     )
+
+
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, deallocate_activation, math_fidelity, enable_split_reader, act_db, w_db",
+    (
+        (1, 3, 64, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (7, 7), (2, 2), (0, 0), (1, 1), True, ttnn.MathFidelity.LoFi, True, True, True),
+    ),
+)
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_resnet50_1kX1k(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    output_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    deallocate_activation,
+    math_fidelity,
+    enable_split_reader,
+    act_db,
+    w_db,
+    input_layout,
+    output_layout,
+):
+
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
+    slice_config = ttnn.Conv2dSliceConfig(
+        slice_type=SliceHeight,
+        num_slices=3,
+    )
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=math_fidelity,
+        output_dtype=output_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel[0],
+        filter_width=kernel[1],
+        stride_h=stride[0],
+        stride_w=stride[1],
+        padding=padding,
+        config_override={},
+        dilation_h=dilation[0],
+        dilation_w=dilation[1],
+        output_layout=output_layout,
+        deallocate_activation=deallocate_activation,
+        groups=groups,
+        has_bias=True,
+        shard_layout=None,
+        auto_shard=True,
+        memory_config=None,
+        input_mesh_mapper=None,
+        weight_mesh_mapper=None,
+        output_mesh_composer=None,
+        enable_split_reader=enable_split_reader,
+        input_layout=input_layout,
+        enable_act_double_buffer=act_db,
+        enable_weights_double_buffer=w_db,
+        slice_config=slice_config,
+    )
