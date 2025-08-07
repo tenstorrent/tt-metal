@@ -182,13 +182,12 @@ Example of a sharded tensor copy
 ```c++
 for (uint32_t i = 0; i < num_shards; ++i) {
     uint32_t shard_id = first_shard_id + i * num_cores;
-    auto shard_pages_begin = tensor_accessor_src.shard_pages_begin(shard_id);
-    auto shard_pages_end = tensor_accessor_src.shard_pages_end(shard_id);
-    for (auto it = shard_pages_begin; it != shard_pages_end; ++it) {
+    auto shard_pages = accessor_src.shard_pages(shard_id);
+    for (const auto& page: shard_pages) {
         noc_async_write_page(
-            /*id = */ it.page_id(),
+            /*id = */ shard_page.page_id(),
             /*addrgen = */tensor_accessor_dst,
-            /*src_local_l1_addr = */*it
+            /*src_local_l1_addr = */shard_page.get_noc_addr()
         );
         noc_async_writes_flushed();
     }
