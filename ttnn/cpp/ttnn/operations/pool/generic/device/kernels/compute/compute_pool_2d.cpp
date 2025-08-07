@@ -108,7 +108,6 @@ void MAIN {
                     curr_in_cb_id,
                     curr_scalar_cb_id,
                     tiles_to_reduce,
-                    0,
                     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
                     num_faces_in_input_tile,
                     face_r_dim);
