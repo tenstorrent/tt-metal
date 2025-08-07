@@ -9,10 +9,15 @@
 #include "array_wrapper.h"
 #include "dspec.h"
 #include "helpers.h"
+#include "compile_time_args.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api_addrgen.h"
 #endif
+
+// Forward declared from dataflow_api.h
+template <typename T>
+T get_arg_val(int arg_idx);
 
 namespace tensor_accessor {
 // This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
@@ -271,3 +276,69 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
     -> TensorAccessor<decltype(tensor_accessor::make_dspec_from_args(args))>;
+
+namespace tensor_accessor::detail {
+template <typename... Args, uint32_t... Indexes>
+auto make_tensor_accessor_tuple(
+    const std::tuple<Args...>& args,
+    uint32_t address_rt_arg_index_start,
+    uint32_t page_size_ct_arg_index_start,
+    std::integer_sequence<uint32_t, Indexes...>) {
+    return std::make_tuple(TensorAccessor(
+        std::get<Indexes>(args),
+        get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes),
+        kernel_compile_time_args[page_size_ct_arg_index_start + Indexes])...);
+}
+}  // namespace tensor_accessor::detail
+
+template <typename... Args>
+auto make_tensor_accessor_tuple(
+    const std::tuple<Args...>& args, uint32_t address_rt_arg_index_start, uint32_t page_size_ct_arg_index_start) {
+    return tensor_accessor::detail::make_tensor_accessor_tuple(
+        args,
+        address_rt_arg_index_start,
+        page_size_ct_arg_index_start,
+        std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+}
+
+/**
+ * @brief AbstractTensorAccessorWrapper provides a unified interface over templated tensor accessors.
+ *
+ * The wrapper allows to use and iterate over different kinds of tensor accessors in a unified way.
+ */
+class AbstractTensorAccessorWrapper {
+public:
+    AbstractTensorAccessorWrapper() = default;
+
+    template <typename Accessor>
+    AbstractTensorAccessorWrapper(const Accessor& accessor) : accessor_ptr(&accessor) {
+        get_noc_addr_fn = [](const void* accessor, uint32_t page_idx) {
+            return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx);
+        };
+    }
+
+    uint64_t get_noc_addr(uint32_t page_idx) const { return get_noc_addr_fn(accessor_ptr, page_idx); }
+
+private:
+    using GetNocAddrFn = uint64_t (*)(const void*, uint32_t);
+
+    const void* accessor_ptr = nullptr;
+    GetNocAddrFn get_noc_addr_fn = nullptr;
+};
+
+namespace tensor_accessor::detail {
+template <typename... Accessors, uint32_t... Indexes>
+auto make_abstract_tensor_accessor_wrappers(
+    const std::tuple<Accessors...>& accessors, std::integer_sequence<uint32_t, Indexes...>)
+    -> std::array<AbstractTensorAccessorWrapper, sizeof...(Accessors)> {
+    return {AbstractTensorAccessorWrapper(std::get<Indexes>(accessors))...};
+}
+}  // namespace tensor_accessor::detail
+
+// Wraps a tuple of templated tensor accessors into an array of AbstractTensorAccessorWrapper,
+// allowing for easy iteration and runtime dispatch.
+template <typename... Accessors>
+auto make_abstract_tensor_accessor_wrappers(const std::tuple<Accessors...>& accessors) {
+    return tensor_accessor::detail::make_abstract_tensor_accessor_wrappers(
+        accessors, std::make_integer_sequence<uint32_t, sizeof...(Accessors)>());
+}
