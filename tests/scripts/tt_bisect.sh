@@ -65,6 +65,7 @@ echo "Current commit: `git rev-parse HEAD`"
 echo "Current status:"
 echo `git status`
 
+echo "git bisect start with good commit $good_commit and bad commit $bad_commit"
 git bisect start $bad_commit $good_commit --
 
 while [[ "$found" = "false" ]]; do
