@@ -353,7 +353,7 @@ def run_avg_pool2d(
 )
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
+    [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 def test_run_avg_pool2d(
     device,
