@@ -216,7 +216,7 @@ class Transformer(LightweightModule):
             )
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def transform_decode_inputs_device(self, tokens):
+    def _transform_decode_inputs_device(self, tokens):
         """
         Inputs are ttnn tensors on device. This function applies any on-device
         transformations which should happen before forward decode.
@@ -297,6 +297,30 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
+    def _update_decode_inputs_device(self, current_pos, rot_mat_idxs):
+        # Update only active positions (current_pos != -1)
+        predicate = ttnn.to_layout(ttnn.ne(current_pos, -1), layout=ttnn.TILE_LAYOUT)
+        result = ttnn.where(
+            predicate,
+            ttnn.add(current_pos, 1),
+            current_pos,
+        )
+        ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), current_pos)
+
+        # We need to cast to int32 to avoid issues with cast from float to uint32
+        rot_mat_idxs_signed = ttnn.typecast(ttnn.to_layout(rot_mat_idxs, layout=ttnn.TILE_LAYOUT), ttnn.int32)
+        # Update only active positions (current_pos != 0)
+        predicate = ttnn.nez(rot_mat_idxs_signed)
+        result = ttnn.where(
+            predicate,
+            ttnn.add(rot_mat_idxs_signed, 1),
+            rot_mat_idxs_signed,
+        )
+        result = ttnn.typecast(result, ttnn.uint32)
+        ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), rot_mat_idxs)
+
+        return current_pos, rot_mat_idxs
+
     def ttnn_decode_forward(
         self,
         x,
@@ -312,7 +336,7 @@ class Transformer(LightweightModule):
         It returns ttnn device tensors.
         """
         rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
-        x_embed = self.transform_decode_inputs_device(x)
+        x_embed = self._transform_decode_inputs_device(x)
 
         tt_logits = self.forward(
             x_embed,
@@ -346,8 +370,7 @@ class Transformer(LightweightModule):
 
         if argmax_on_device and update_on_device:
             # Update device tensors for the next iteration
-            ttnn.plus_one(current_pos)
-            ttnn.plus_one(rot_mat_idxs)
+            current_pos, rot_mat_idxs = self._update_decode_inputs_device(current_pos, rot_mat_idxs)
 
             # Update input tokens with sampled tokens for the next iteration
             ttnn.copy(tt_logits.reshape(x.shape), x)
