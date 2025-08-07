@@ -77,10 +77,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t& source_stick_size_bytes = source_stick_size * source_datum_size;
     const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
 
-    // check if row byte sizes are at least 32 and a power of 2 (for InterleavedAddrGen)
-
-    // for InterleavedAddrGen
-
     // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
     // BH available L1 mem size of nearly 1.5 MB...
     // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
