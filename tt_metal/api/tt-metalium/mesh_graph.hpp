@@ -19,9 +19,12 @@
 #include <utility>
 
 #include <vector>
+
 namespace tt {
 enum class ARCH;
+namespace tt_metal {
 enum class ClusterType : std::uint8_t;
+}  // namespace tt_metal
 }  // namespace tt
 namespace tt::tt_fabric {
 
@@ -112,7 +115,8 @@ public:
     chip_id_t coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const;
 
     // Static functions for mesh graph descriptor management
-    static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(tt::ClusterType cluster_type, const std::string& root_dir);
+    static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
+        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir);
 
 private:
     void validate_mesh_id(MeshId mesh_id) const;
@@ -136,8 +140,7 @@ private:
     std::vector<MeshContainer<HostRankId>> mesh_host_ranks_;
     std::unordered_map<std::pair<MeshId, HostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
 
-    static constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
-    static const tt::stl::Indestructible<std::unordered_map<tt::ClusterType, std::string_view>>&
+    static const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
         cluster_type_to_mesh_graph_descriptor;
 };
 
