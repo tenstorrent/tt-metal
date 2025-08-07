@@ -42,6 +42,8 @@ constexpr size_t kMmapThresholdBytes = 1 << 20;
 // Allocates memory on the host in batch; using either mmap for large allocations or std::vector for small allocations.
 using SharedMemoryPtr = std::shared_ptr<void>;
 SharedMemoryPtr allocate_host_data(size_t size_bytes) {
+    std::cout << "HERE: allocate_host_data - Allocating " << size_bytes << " bytes, using "
+              << (size_bytes >= kMmapThresholdBytes ? "mmap" : "vector") << std::endl;
     if (size_bytes >= kMmapThresholdBytes) {
         ZoneScopedN("AllocateBufferMmap");
         void* ptr = mmap(nullptr, size_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -63,22 +65,8 @@ namespace tensor_impl {
 
 TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE = TensorPrintProfile::Short;
 
-std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT8_B: os << "bfloat8_b"; break;
-        case DataType::BFLOAT4_B: os << "bfloat4_b"; break;
-        case DataType::BFLOAT16: os << "bfloat16"; break;
-        case DataType::FLOAT32: os << "float32"; break;
-        case DataType::UINT8: os << "uint8"; break;
-        case DataType::UINT16: os << "uint16"; break;
-        case DataType::UINT32: os << "uint32"; break;
-        case DataType::INT32: os << "int32"; break;
-        default: throw std::invalid_argument("Unknown data type");
-    }
-    return os;
-}
-
 uint32_t element_size_bytes(DataType dtype) {
+    std::cout << "HERE: element_size_bytes - Getting element size for dtype=" << static_cast<int>(dtype) << std::endl;
     switch (dtype) {
         case DataType::BFLOAT16: return sizeof(bfloat16);
         case DataType::FLOAT32: return sizeof(float);
@@ -94,6 +82,8 @@ uint32_t element_size_bytes(DataType dtype) {
 
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    std::cout << "HERE: allocate_mesh_buffer_on_device - Allocating mesh buffer on " << mesh_device->num_devices()
+              << " devices" << std::endl;
     const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
 
     distributed::DeviceLocalBufferConfig device_local_buffer_config{
@@ -116,6 +106,7 @@ Tensor pad_bfloat8_b(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     float pad_value) {
+    std::cout << "HERE: pad_bfloat8_b - Padding bfloat8_b tensor with pad_value=" << pad_value << std::endl;
     auto tile = tensor.tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 
@@ -570,6 +561,9 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_
 
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
+    std::cout << "HERE: to_host_mesh_tensor - Copying mesh tensor from device to host. Tensor shape: "
+              << tensor.logical_shape() << ", dtype: " << tensor.dtype() << ", blocking: " << std::boolalpha << blocking
+              << std::endl;
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.device_storage();
     const auto& mesh_buffer = storage.mesh_buffer;
@@ -730,6 +724,12 @@ Tensor to_device_mesh_tensor(
 template <typename T>
 void copy_to_host_tensor(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, ttnn::QueueId cq_id) {
     ZoneScoped;
+    {
+        // using namespace tt::tt_metal::tensor_impl;
+        std::cout << "HERE: copy_to_host_tensor - Copying tensor from device to host. Device tensor shape: "
+                  << device_tensor.logical_shape() << ", dtype: " << device_tensor.dtype()
+                  << ", blocking: " << std::boolalpha << blocking << std::endl;
+    }
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Source tensor is not on device.");
     TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Destination tensor is not on host.");
     TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");

@@ -47,6 +47,10 @@
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/arch.h"
 
+#include <random>
+
+// #define TT_METAL_DEBUG_PRINT_READBACK
+
 enum class CoreType;
 namespace tt {
 namespace tt_metal {
@@ -150,10 +154,70 @@ void clear_buffer(distributed::MeshCommandQueue& cq, std::shared_ptr<distributed
     distributed::WriteShard(cq, buffer, zeroes, distributed::MeshCoordinate(0, 0));
 }
 
-vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_configs(uint32_t max_buffer_size) {
+vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_configs(
+    uint64_t buffer_size,
+    uint32_t page_size,
+    uint32_t region_offset,
+    uint32_t region_size,
+    const CoreRange& cores,
+    const vector<TensorMemoryLayout>& layouts,
+    const vector<ShardOrientation>& orientations) {
     vector<ShardedSubBufferStressTestConfig> configs;
 
-    uint32_t buffer_size = 0;
+    uint32_t num_pages = buffer_size / page_size;
+    uint32_t num_shards = cores.size();
+    uint32_t num_pages_per_shard = tt::div_up(num_pages, num_shards);
+
+    uint32_t page_shape_height_div_factor = 1;
+    while (page_shape_height_div_factor <= num_pages_per_shard) {
+        uint32_t page_shape_width_div_factor = 1;
+        while (page_shape_width_div_factor <= num_pages_per_shard) {
+            if (page_shape_width_div_factor * page_shape_height_div_factor == num_pages_per_shard) {
+                uint32_t tensor2d_shape_in_pages_height = page_shape_height_div_factor;
+                while (tensor2d_shape_in_pages_height <= num_pages) {
+                    uint32_t tensor2d_shape_in_pages_width = page_shape_width_div_factor;
+                    while (tensor2d_shape_in_pages_width <= num_pages) {
+                        if (tensor2d_shape_in_pages_height * tensor2d_shape_in_pages_width == num_pages) {
+                            for (auto layout : layouts) {
+                                for (auto orientation : orientations) {
+                                    ShardedSubBufferStressTestConfig config{
+                                        .buffer_size = buffer_size,
+                                        .page_size = page_size,
+                                        .region_offset = region_offset,
+                                        .region_size = region_size,
+                                        .cores = CoreRangeSet(cores),
+                                        .shard_shape = {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                                        .page_shape =
+                                            {tt::constants::TILE_HEIGHT / page_shape_height_div_factor,
+                                             tt::constants::TILE_WIDTH / page_shape_width_div_factor},
+                                        .tensor2d_shape_in_pages =
+                                            {tensor2d_shape_in_pages_height, tensor2d_shape_in_pages_width},
+                                        .layout = layout,
+                                        .orientation = orientation};
+                                    configs.push_back(config);
+                                }
+                            }
+                        }
+                        tensor2d_shape_in_pages_width += page_shape_width_div_factor;
+                    }
+                    tensor2d_shape_in_pages_height += page_shape_height_div_factor;
+                }
+            }
+            page_shape_width_div_factor += 1;
+        }
+        page_shape_height_div_factor += 1;
+    }
+
+    return configs;
+}
+
+vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_configs(uint64_t max_buffer_size) {
+    vector<ShardedSubBufferStressTestConfig> configs;
+    const vector<TensorMemoryLayout> layouts = {
+        TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::BLOCK_SHARDED, TensorMemoryLayout::WIDTH_SHARDED};
+    const vector<ShardOrientation> orientations = {ShardOrientation::ROW_MAJOR, ShardOrientation::COL_MAJOR};
+
+    uint64_t buffer_size = 0;
     while (buffer_size <= max_buffer_size) {
         uint32_t page_size = 4;
         while (page_size <= buffer_size) {
@@ -165,57 +229,9 @@ vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_config
                     for (uint32_t end_core_idx = 3; end_core_idx <= 4; end_core_idx++) {
                         CoreCoord end(end_core_idx, end_core_idx);
                         CoreRange cores(start, end);
-                        const uint32_t num_pages = buffer_size / page_size;
-                        const uint32_t num_shards = cores.size();
-                        const uint32_t num_pages_per_shard = tt::div_up(num_pages, num_shards);
-                        uint32_t page_shape_height_div_factor = 1;
-                        while (page_shape_height_div_factor <= num_pages_per_shard) {
-                            uint32_t page_shape_width_div_factor = 1;
-                            while (page_shape_width_div_factor <= num_pages_per_shard) {
-                                if (page_shape_width_div_factor * page_shape_height_div_factor == num_pages_per_shard) {
-                                    uint32_t tensor2d_shape_in_pages_height = page_shape_height_div_factor;
-                                    while (tensor2d_shape_in_pages_height <= num_pages) {
-                                        uint32_t tensor2d_shape_in_pages_width = page_shape_width_div_factor;
-                                        while (tensor2d_shape_in_pages_width <= num_pages) {
-                                            if (tensor2d_shape_in_pages_height * tensor2d_shape_in_pages_width ==
-                                                num_pages) {
-                                                for (TensorMemoryLayout layout :
-                                                     {TensorMemoryLayout::HEIGHT_SHARDED,
-                                                      TensorMemoryLayout::BLOCK_SHARDED,
-                                                      TensorMemoryLayout::WIDTH_SHARDED}) {
-                                                    for (ShardOrientation orientation :
-                                                         {ShardOrientation::COL_MAJOR, ShardOrientation::ROW_MAJOR}) {
-                                                        ShardedSubBufferStressTestConfig config{
-                                                            .buffer_size = buffer_size,
-                                                            .page_size = page_size,
-                                                            .region_offset = region_offset,
-                                                            .region_size = region_size,
-                                                            .cores = CoreRangeSet(cores),
-                                                            .shard_shape =
-                                                                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                                                            .page_shape =
-                                                                {tt::constants::TILE_HEIGHT /
-                                                                     page_shape_height_div_factor,
-                                                                 tt::constants::TILE_WIDTH /
-                                                                     page_shape_width_div_factor},
-                                                            .tensor2d_shape_in_pages =
-                                                                {tensor2d_shape_in_pages_height,
-                                                                 tensor2d_shape_in_pages_width},
-                                                            .layout = layout,
-                                                            .orientation = orientation};
-                                                        configs.push_back(config);
-                                                    }
-                                                }
-                                            }
-                                            tensor2d_shape_in_pages_width += page_shape_width_div_factor;
-                                        }
-                                        tensor2d_shape_in_pages_height += page_shape_height_div_factor;
-                                    }
-                                }
-                                page_shape_width_div_factor += 1;
-                            }
-                            page_shape_height_div_factor += 1;
-                        }
+                        auto temp = generate_sharded_sub_buffer_test_configs(
+                            buffer_size, page_size, region_offset, region_size, cores, layouts, orientations);
+                        configs.insert(configs.end(), temp.begin(), temp.end());
                     }
                     region_size += 2 * page_size;
                 }
@@ -2423,4 +2439,358 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, StressWrapTest) {
 
 }  // end namespace stress_tests
 
+// Test equivalent to Python test_readback function
+// Creates a large tensor, writes to device, reads back, and verifies data integrity
+struct DRAMReadbackParams {
+    uint32_t page_size;
+    uint64_t dim0;
+    uint64_t dim1;
+    uint64_t dim2;
+};
+
+class DRAMReadbackFixture : public ::testing::TestWithParam<DRAMReadbackParams> {
+protected:
+    tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    DRAMReadback,
+    DRAMReadbackFixture,
+    ::testing::Values(
+        // 2048 B page size
+        DRAMReadbackParams{
+            // < 4 GB buffer
+            .page_size = 2048,
+            .dim0 = (1 << 5),
+            .dim1 = (1 << 12),
+            .dim2 = (1 << 12),
+        },
+        DRAMReadbackParams{
+            // 4 GB buffer
+            .page_size = 2048,
+            .dim0 = (1 << 5),
+            .dim1 = (1 << 13),
+            .dim2 = (1 << 13),
+        },
+        DRAMReadbackParams{
+            // 8 GB buffer
+            .page_size = 2048,
+            .dim0 = (1 << 6),
+            .dim1 = (1 << 13),
+            .dim2 = (1 << 13),
+        },
+        DRAMReadbackParams{
+            // almost 12 GB buffer (anymore would fail allocation on WH)
+            .page_size = 2048,
+            .dim0 = 1,
+            .dim1 = 1,
+            .dim2 = 6 * (1ull << 30) - (12 * 1024),
+        },
+        // 64 KB page size
+        DRAMReadbackParams{
+            // < 4 GB buffer
+            .page_size = (1 << 16),
+            .dim0 = (1 << 5),
+            .dim1 = (1 << 12),
+            .dim2 = (1 << 12),
+        },
+        DRAMReadbackParams{
+            // 4 GB buffer
+            .page_size = (1 << 16),
+            .dim0 = (1 << 5),
+            .dim1 = (1 << 13),
+            .dim2 = (1 << 13),
+        },
+        DRAMReadbackParams{
+            // 8 GB buffer
+            .page_size = (1 << 16),
+            .dim0 = (1 << 6),
+            .dim1 = (1 << 13),
+            .dim2 = (1 << 13),
+        },
+        DRAMReadbackParams{
+            // almost 12 GB buffer (anymore would fail allocation on WH)
+            .page_size = (1 << 16),
+            .dim0 = 1,
+            .dim1 = 1,
+            .dim2 = 6 * (1ull << 30) - (1 << 15),
+        },
+        // 1 MB page size ("large" page size)
+        DRAMReadbackParams{
+            // < 4 GB buffer
+            .page_size = (1 << 20),
+            .dim0 = (1 << 5),
+            .dim1 = (1 << 12),
+            .dim2 = (1 << 12),
+        },
+        DRAMReadbackParams{
+            // 4 GB buffer
+            .page_size = (1 << 20),
+            .dim0 = (1 << 5),
+            .dim1 = (1 << 13),
+            .dim2 = (1 << 13),
+        },
+        DRAMReadbackParams{
+            // 8 GB buffer
+            .page_size = (1 << 20),
+            .dim0 = (1 << 6),
+            .dim1 = (1 << 13),
+            .dim2 = (1 << 13),
+        },
+        DRAMReadbackParams{
+            // almost 12 GB buffer (anymore would fail allocation on WH)
+            .page_size = (1 << 20),
+            .dim0 = 1,
+            .dim1 = 1,
+            .dim2 = 6 * (1ull << 30) - (1 << 19),
+        }));
+
+TEST_P(DRAMReadbackFixture, TensixTestReadback) {
+    DRAMReadbackParams params = GetParam();
+
+    unsigned int num_devices = tt::tt_metal::GetNumAvailableDevices();
+    if (arch == tt::ARCH::GRAYSKULL && num_devices > 1) {
+        GTEST_SKIP();
+    }
+
+    ASSERT_TRUE(num_devices > 0);
+    vector<chip_id_t> ids;
+    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+        ids.push_back(id);
+    }
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+    const auto devices = tt::DevicePool::instance().get_all_active_devices();
+
+    // Create tensor with dimensions from test parameters
+    const uint64_t dim0 = params.dim0;
+    const uint64_t dim1 = params.dim1;
+    const uint64_t dim2 = params.dim2;
+    const uint64_t total_elements = dim0 * dim1 * dim2;
+    const DeviceAddr size_bytes = total_elements * sizeof(uint16_t);  // bfloat16 is 16-bit
+    // Create initialized input data
+    std::vector<uint16_t> input_data(total_elements);
+    uint16_t value = 0;
+    for (auto& v : input_data) {
+        v = value++;
+    }
+    // std::shuffle(input_data.begin(), input_data.end(), std::mt19937(std::random_device()()));
+
+#ifdef TT_METAL_DEBUG_PRINT_READBACK
+    auto& device = devices[0];
+#else
+    auto& device = devices[0];
+    // for (auto& device : devices)
+#endif
+    {
+        // Allocate buffer on device
+        auto buffer_config = InterleavedBufferConfig{
+            .device = device, .size = size_bytes, .page_size = 2048, .buffer_type = BufferType::DRAM};
+
+        auto buffer = CreateBuffer(buffer_config);
+
+        // Write data to device buffer
+        EnqueueWriteBuffer(device->command_queue(), buffer, input_data, true);
+#if 1
+        // Read data back from device buffer
+        std::vector<uint16_t> output_data(total_elements);
+#if 0
+        // just read
+        EnqueueReadBuffer(device->command_queue(), buffer, output_data, true);
+#else
+        EnqueueReadBuffer(device->command_queue(), buffer, output_data, true);
+
+        // Verify that input and output data match (equivalent to Python's torch.all(torch_tensor == output_tensor))
+        bool data_matches = (input_data == output_data);
+        EXPECT_TRUE(data_matches) << "Device " << device->id() << ": Readback data does not match input data";
+
+#ifdef TT_METAL_DEBUG_PRINT_READBACK
+        // Additional verification: check specific values
+        // Print a randomly sampled 2^16 unique values as a 2048x32 matrix from output_data, fixed width for neat
+        // columns
+        constexpr size_t num_rows = 2048;
+        constexpr size_t num_cols = 32;
+        constexpr size_t num_samples = num_rows * num_cols;  // 65536
+        const size_t start_number = (1ull << 31);            // total_elements - num_samples;
+        const size_t end_number = start_number + num_samples;
+        std::cout << "Total elements: " << total_elements << std::endl;
+        if (end_number <= total_elements) {
+            // Print as a matrix
+            for (size_t row = 0; row < num_rows; ++row) {
+                for (size_t col = 0; col < num_cols; ++col) {
+                    size_t idx = start_number + col + row * num_cols;
+                    uint16_t val = output_data[idx];
+                    std::cout << std::setw(6) << std::setfill('0') << std::hex << std::uppercase << val << " ";
+                }
+                std::cout << std::endl;
+            }
+            // Reset formatting
+            std::cout << std::dec << std::setfill(' ');
+        } else {
+            std::cout << "Desired range of elements to print exceeds total number of elements" << std::endl;
+        }
+#endif
+        // Successfully verified readback - just print count
+        EXPECT_GT(total_elements, 0) << "Successfully verified " << total_elements << " elements on device "
+                                     << device->id();
+#endif
+    }
+#endif
+    for (auto device : devices) {
+        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    }
+}
+
+// Creates a large tensor, writes to device, reads back, and verifies data integrity
+struct DRAMShardedReadbackParams {
+    uint32_t page_size;
+    uint64_t dim0;
+    uint64_t dim1;
+    uint64_t dim2;
+    std::array<uint32_t, 2> num_cores;
+};
+
+class DRAMShardedReadbackFixture : public ::testing::TestWithParam<DRAMShardedReadbackParams> {
+protected:
+    tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    DRAMShardedReadback,
+    DRAMShardedReadbackFixture,
+    ::testing::Values(
+        // Small buffer (< 4 GB) - expected to pass
+        DRAMShardedReadbackParams{
+            .page_size = 2048, .dim0 = (1 << 4), .dim1 = (1 << 11), .dim2 = (1 << 11), .num_cores = {2, 2}},
+
+        // Large buffers (> 4 GB) - 4 GB buffer size
+        DRAMShardedReadbackParams{
+            .page_size = 2048, .dim0 = (1 << 5), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {4, 1}
+            // For HEIGHT_SHARDED
+        },
+        DRAMShardedReadbackParams{
+            .page_size = 2048, .dim0 = (1 << 5), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {1, 4}
+            // For WIDTH_SHARDED
+        },
+        DRAMShardedReadbackParams{
+            .page_size = 2048, .dim0 = (1 << 5), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {2, 2}
+            // For BLOCK_SHARDED
+        },
+
+        // Large buffers (> 4 GB) - 8 GB buffer size
+        DRAMShardedReadbackParams{
+            .page_size = 2048, .dim0 = (1 << 6), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {6, 1}
+            // For HEIGHT_SHARDED
+        },
+        DRAMShardedReadbackParams{
+            .page_size = 2048, .dim0 = (1 << 6), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {1, 6}
+            // For WIDTH_SHARDED
+        },
+        DRAMShardedReadbackParams{
+            .page_size = 2048, .dim0 = (1 << 6), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {3, 2}
+            // For BLOCK_SHARDED
+        },
+
+        // Large buffer approaching 12 GB limit
+        DRAMShardedReadbackParams{
+            .page_size = 2048,
+            .dim0 = 1,
+            .dim1 = 1,
+            .dim2 = 6 * (1ull << 30) - (64 * 1024),  // ~12 GB - 64KB
+            .num_cores = {6, 1}  // Will test with all layouts but cores optimized for HEIGHT_SHARDED
+        }));
+
+TEST_P(DRAMShardedReadbackFixture, TensixTestShardedReadback) {
+    DRAMShardedReadbackParams params = GetParam();
+
+    unsigned int num_devices = tt::tt_metal::GetNumAvailableDevices();
+    if (arch == tt::ARCH::GRAYSKULL && num_devices > 1) {
+        GTEST_SKIP();
+    }
+
+    ASSERT_TRUE(num_devices > 0);
+    vector<chip_id_t> ids;
+    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+        ids.push_back(id);
+    }
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+    const auto devices = tt::DevicePool::instance().get_all_active_devices();
+
+    // Create tensor with dimensions from test parameters
+    const uint64_t dim0 = params.dim0;
+    const uint64_t dim1 = params.dim1;
+    const uint64_t dim2 = params.dim2;
+    const uint64_t total_elements = dim0 * dim1 * dim2;
+    const DeviceAddr size_bytes = total_elements * sizeof(uint16_t);  // bfloat16 is 16-bit
+
+    // Create initialized input data
+    std::vector<uint16_t> input_data(total_elements);
+    uint16_t value = 0;
+    for (auto& v : input_data) {
+        v = value++;
+    }
+
+    const std::vector<ShardedSubBufferStressTestConfig>& configs =
+        local_test_functions::generate_sharded_sub_buffer_test_configs(size_bytes);
+    for (IDevice* device : devices) {
+        log_info(tt::LogTest, "Running on Device {}", device->id());
+        for (const ShardedSubBufferStressTestConfig& config : configs) {
+            log_debug(
+                tt::LogTest,
+                "Device: {} buffer_size: {} page_size: {} region_offset: {} region_size: {} shard_shape: [{}, {}] "
+                "page_shape: [{}, {}] tensor2d_shape_in_pages: [{}, {}] layout: {} orientation: {} cores: {}",
+                device->id(),
+                config.buffer_size,
+                config.page_size,
+                config.region_offset,
+                config.region_size,
+                config.shard_shape.height(),
+                config.shard_shape.width(),
+                config.page_shape.height(),
+                config.page_shape.width(),
+                config.tensor2d_shape_in_pages.height(),
+                config.tensor2d_shape_in_pages.width(),
+                enchantum::to_string(config.layout).data(),
+                enchantum::to_string(config.orientation).data(),
+                config.cores.str());
+
+            ShardSpecBuffer shard_spec = ShardSpecBuffer(
+                config.cores,
+                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                config.orientation,
+                config.page_shape,
+                config.tensor2d_shape_in_pages);
+            auto buffer = Buffer::create(
+                device,
+                config.buffer_size,
+                config.page_size,
+                BufferType::DRAM,
+                BufferShardingArgs(shard_spec, config.layout));
+
+            // Write data to device buffer
+            EnqueueWriteBuffer(device->command_queue(), buffer, input_data, true);
+
+            // Read data back from device buffer
+            std::vector<uint16_t> output_data(input_data.size());
+            EnqueueReadBuffer(device->command_queue(), buffer, output_data, true);
+
+            // Verify that input and output data match
+            bool data_matches = (input_data == output_data);
+            EXPECT_TRUE(data_matches) << "Device " << device->id()
+                                      << ": Sharded readback data does not match input data for "
+                                      << enchantum::to_string(config.layout).data() << " "
+                                      << enchantum::to_string(config.orientation).data();
+
+            // Successfully verified readback
+            EXPECT_GT(total_elements, 0) << "Successfully verified " << total_elements << " elements on device "
+                                         << device->id() << " with " << enchantum::to_string(config.layout).data()
+                                         << " " << enchantum::to_string(config.orientation).data();
+        }
+    }
+
+    for (auto device : devices) {
+        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    }
+}
 }  // namespace tt::tt_metal

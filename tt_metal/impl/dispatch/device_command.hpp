@@ -57,7 +57,7 @@ public:
 
     void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
 
-    void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr);
+    void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr);
 
     void add_prefetch_relay_paged(
         uint8_t is_dram,
@@ -111,7 +111,7 @@ public:
         const void* data = nullptr);
 
     template <bool inline_data = false>
-    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, bool is_event, const void* data = nullptr);
+    void add_dispatch_write_host(bool flush_prefetch, uint64_t data_sizeB, bool is_event, const void* data = nullptr);
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
