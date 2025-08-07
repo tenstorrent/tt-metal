@@ -953,7 +953,7 @@ public:
 
 private:
     alignas(32) void* pointer = nullptr;
-    alignas(32) storage_t type_erased_storage;
+    alignas(32) storage_t type_erased_storage{};
 
     void (*delete_storage)(storage_t&) = nullptr;
     void* (*copy_storage)(storage_t& storage, const void*) = nullptr;
