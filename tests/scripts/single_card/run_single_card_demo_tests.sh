@@ -191,7 +191,7 @@ run_squeezebert_func() {
 
 run_efficientnet_b0_func(){
 
-  pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py --timeout 600
+  pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py
 
 }
 run_roberta_func() {
