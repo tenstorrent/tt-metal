@@ -354,9 +354,6 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(x)
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
-        logger.info(f"xqkv_fused_sharded.shape: {xqkv_fused_sharded.shape}")
-        logger.info(f"xqkv_fused_sharded memory config: {xqkv_fused_sharded.memory_config()}")
-
         ###
         # Reshape and rotary embeddings
         ###
@@ -372,13 +369,6 @@ class TtLlamaAttention(LightweightModule):
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-
-        logger.info(f"q_heads_pre_rot_1BQD.shape: {q_heads_pre_rot_1BQD.shape}")
-        logger.info(f"q_heads_pre_rot_1BQD memory config: {q_heads_pre_rot_1BQD.memory_config()}")
-        logger.info(f"k_heads_pre_rot_1BKD.shape: {k_heads_pre_rot_1BKD.shape}")
-        logger.info(f"k_heads_pre_rot_1BKD memory config: {k_heads_pre_rot_1BKD.memory_config()}")
-        logger.info(f"v_heads_1BKD.shape: {v_heads_1BKD.shape}")
-        logger.info(f"v_heads_1BKD memory config: {v_heads_1BKD.memory_config()}")
 
         if self.qk_norm:
             rm_mem_cfg_qkv = q_heads_pre_rot_1BQD.memory_config()

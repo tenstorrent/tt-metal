@@ -215,6 +215,8 @@ def test_qwen_attention_inference(
         )
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
+        logger.info("Starting attention computation")
+
         tt_out = tt_model(
             attention_input,
             current_pos_tensor,
