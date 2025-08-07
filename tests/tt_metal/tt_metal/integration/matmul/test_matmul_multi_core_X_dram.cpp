@@ -612,6 +612,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
         log_info(tt::LogTest, "This test is disabled in WH B0");
         GTEST_SKIP();
     }
+
     for (unsigned int id = 0; id < devices_.size(); id++) {
         ASSERT_TRUE(
             unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_single_dram(devices_.at(id)));
@@ -624,6 +625,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAM) {
         log_info(LogTest, "This test is not supported in slow dispatch mode, need to update move_tiles_to_dram..");
         GTEST_SKIP();
     }
+
     for (unsigned int id = 0; id < devices_.size(); id++) {
         if (this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE) {
             GTEST_SKIP();
