@@ -138,7 +138,6 @@ bool vecadd_multi_core(
         "kernels/add_multi_core.cpp",
         cores,
         ComputeConfig{.math_approx_mode = false, .compile_args = compute_compile_time_args, .defines = {}});
-
     for (int i = 0; i < num_core; ++i) {
         // Set runtime arguments for each core.
         CoreCoord core = {0, i};

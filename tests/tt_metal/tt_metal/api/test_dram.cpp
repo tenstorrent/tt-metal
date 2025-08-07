@@ -397,5 +397,4 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
 
     this->RunProgram(mesh_device, workload);
 }
-
 }  // namespace tt::tt_metal

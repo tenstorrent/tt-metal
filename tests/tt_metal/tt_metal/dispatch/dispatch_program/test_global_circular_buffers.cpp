@@ -101,6 +101,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
         sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();  // fifo_start_addr
         sender_runtime_args[sender_args_idx++] = global_cb.size();            // fifo_size
         sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();  // fifo_ptr
+
         for (const auto& receiver_noc_coord : receiver_noc_coords) {
             sender_runtime_args[sender_args_idx++] = receiver_noc_coord.x;  // remote_noc_x
             sender_runtime_args[sender_args_idx++] = receiver_noc_coord.y;  // remote_noc_y

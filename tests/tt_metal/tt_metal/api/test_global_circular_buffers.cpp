@@ -28,7 +28,6 @@ TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBuffers) {
     CoreRangeSet cores(CoreRange({1, 1}, {1, 1}));
     CoreRangeSet cores2(CoreRange({1, 1}, {2, 2}));
     CoreRangeSet cores3(CoreRange({3, 3}, {3, 3}));
-
     auto mesh_device = devices_[0];
     auto device = mesh_device->get_devices()[0];
 
