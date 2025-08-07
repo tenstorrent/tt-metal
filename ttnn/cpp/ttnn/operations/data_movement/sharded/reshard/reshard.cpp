@@ -503,7 +503,7 @@ ttnn::Tensor ReshardOperation::invoke(
     std::unordered_map<CoreCoord, std::vector<uint32_t>> rt_config_map_1;
     std::vector<Tensor> inputs;
     inputs.push_back(input_tensor);
-    if (!not_generic) {
+    if (!not_generic && output_tensor.shard_spec().has_value()) {
         std::unordered_map<CoreCoord, std::vector<detail::PageStride>> output_core_to_page_range_pair;
         if (input_tensor.buffer()->page_size() != output_tensor.buffer()->page_size()) {
             output_core_to_page_range_pair =
@@ -513,7 +513,6 @@ ttnn::Tensor ReshardOperation::invoke(
         }
         const auto& input = input_tensor;
         const auto& output = output_tensor;
-        auto input_shard_spec = input.shard_spec().value();
         auto output_shard_spec = output.shard_spec().value();
         auto all_cores = output_shard_spec.grid;
         auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
