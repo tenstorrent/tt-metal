@@ -141,14 +141,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         input_channels_padded % 8 == 0,
         "Expected input channels to be padded for 16 byte alignment in L1 ({} % 16 != 0)",
         input_channels_padded);
-    if (enable_split_reader) {
-        TT_FATAL(
-            (act_block_h_ntiles / block_config.out_subblock_h_ntiles) >= 2,
-            "split reader needs to have at leaset two subblocks");
-        TT_FATAL(
-            block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,
-            "Out_block_h must be divisible by out_subblock_h!");
-    }
 
     const uint32_t act_matrix_height_ntiles = out_block_h_ntiles * parallelization_config.num_cores_nhw;
     const uint32_t act_matrix_height = act_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
@@ -206,21 +198,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     // act block info
     uint32_t act_block_h_datums = act_matrix_height / num_blocks_act_h;
 
-    uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles / block_config.out_subblock_h_ntiles;
-    uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks;
+    uint32_t act_block_h_nsubblocks_split = block_config.act_block_h_ntiles;
     uint32_t act_block_h_nsubblocks_split_last = 0;
     if (enable_split_reader) {
-        act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
-        act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
+        act_block_h_nsubblocks_split_last = block_config.act_block_h_ntiles / 2;
+        act_block_h_nsubblocks_split = block_config.act_block_h_ntiles - act_block_h_nsubblocks_split_last;
     }
-    uint32_t act_block_h_datums_split =
-        act_block_h_nsubblocks_split * out_subblock_h_ntiles * tt::constants::TILE_HEIGHT;
-    uint32_t act_block_h_datums_split_last =
-        act_block_h_nsubblocks_split_last * out_subblock_h_ntiles * tt::constants::TILE_HEIGHT;
+    uint32_t act_block_h_datums_split = act_block_h_nsubblocks_split * tt::constants::TILE_HEIGHT;
+    uint32_t act_block_h_datums_split_last = act_block_h_nsubblocks_split_last * tt::constants::TILE_HEIGHT;
 
-    uint32_t act_block_num_tiles_split = act_block_h_nsubblocks_split * out_subblock_h_ntiles * act_block_w_ntiles;
-    uint32_t act_block_num_tiles_split_last =
-        act_block_h_nsubblocks_split_last * out_subblock_h_ntiles * act_block_w_ntiles;
+    uint32_t act_block_num_tiles_split = act_block_h_nsubblocks_split * act_block_w_ntiles;
+    uint32_t act_block_num_tiles_split_last = act_block_h_nsubblocks_split_last * act_block_w_ntiles;
 
     // weight block info
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
@@ -744,8 +732,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         act_num_subblocks,
         act_block_num_tiles,
         act_subblock_num_tiles,
-        act_subblock_h_ntiles,
-
+        enable_split_reader ? act_block_h_ntiles : act_subblock_h_ntiles * act_num_subblocks,  // reader_num_h_subblocks
         weight_num_subblocks,
         weight_block_num_tiles,
         weight_block_w_ntiles,
