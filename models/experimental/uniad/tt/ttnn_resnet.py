@@ -138,9 +138,11 @@ class TtModulatedDeformConv2dPack:
         offset = ttnn.concat((o1, o2), dim=3)
         ttnn.deallocate(o1)
         ttnn.deallocate(o2)
+        # mask = ttnn.to_torch(mask).to(dtype=torch.float)
+        mask = ttnn.sigmoid_accurate(mask)  # low pcc if we use ttnn sigmoid for mask
+        mask = ttnn.permute(mask, (0, 3, 1, 2))
+
         mask = ttnn.to_torch(mask).to(dtype=torch.float)
-        mask = torch.sigmoid(mask)  # low pcc if we use ttnn sigmoid for mask
-        mask = mask.permute(0, 3, 1, 2)
 
         x = ttnn.to_torch(x).permute(0, 3, 1, 2).to(dtype=torch.float)
         offset = ttnn.to_torch(offset).permute(0, 3, 1, 2).to(dtype=torch.float)
@@ -457,23 +459,29 @@ class TtResNet:
         """Forward function."""
         x, _, _ = self.conv1(x)
 
-        x = ttnn.to_torch(x)
-        x = x.reshape(6, 320, 180, 64).to(torch.float32)
-        x = x.permute(0, 3, 1, 2)
+        x = ttnn.sharded_to_interleaved(x)
+        x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
 
-        x = self.maxpool(x)
-
-        x = x.permute(0, 2, 3, 1).to(torch.float32)
-        x = x.reshape(1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3])
-        x = ttnn.from_torch(x, device=self.device, dtype=ttnn.bfloat16)
+        x = ttnn.max_pool2d(
+            input_tensor=x,
+            batch_size=6,
+            input_h=320,
+            input_w=180,
+            channels=x.shape[3],
+            kernel_size=[3, 3],
+            stride=[2, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ceil_mode=False,
+            in_place_halo=True,
+        )
 
         outs = []
         for i, layer_name in enumerate(self.res_layers):
             x = layer_name(x)
             if i == 0:
-                x = ttnn.from_device(x)
-                x = ttnn.to_dtype(x, dtype=ttnn.bfloat8_b)
-                x = ttnn.to_device(x, device=self.device)
+                x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
             if i in self.out_indices:
                 outs.append(x)
         return tuple(outs)

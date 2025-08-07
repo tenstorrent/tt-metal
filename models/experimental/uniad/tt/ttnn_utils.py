@@ -109,6 +109,7 @@ def multi_scale_deformable_attn_pytorch(
         value_l = ttnn.reshape(value_l, (bs * num_heads, head_dim, h_l, w_l))
         grid = ttnn.permute(sampling_grids[lvl], (0, 2, 1, 3, 4))
         grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
+        # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/21617>
         value_l = ttnn.to_torch(value_l).to(dtype=torch.float)
         grid = ttnn.to_torch(grid).to(dtype=torch.float)
         sampled = F.grid_sample(value_l, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
