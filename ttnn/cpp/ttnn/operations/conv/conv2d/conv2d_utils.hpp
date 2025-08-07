@@ -68,6 +68,7 @@ sliding_window::ParallelConfig determine_parallel_config(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t output_channels,
+    uint32_t input_channels_alignment,
     const CoreCoord& compute_grid_size,
     tt::tt_metal::ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
@@ -132,9 +133,8 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     std::array<uint32_t, 2> kernel_size,
     const CoreCoord& compute_grid);
 
-template <typename T>
 static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
-    T* device,
+    MeshDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
@@ -144,19 +144,17 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     uint32_t out_channels,
     bool is_mm_conv);
 
-template <typename DeviceType>
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
-    DeviceType* device,
+    MeshDevice* device,
     Layout input_tensor_layout,
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt);
 
-template <typename DeviceType>
-DeviceComputeKernelConfig get_conv_default_compute_kernel_config(DeviceType* device);
+DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device);
 
 Conv2dConfig determine_conv_config_for_auto_shard(
     const Conv2dConfig& conv_config_,
@@ -181,10 +179,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
 
 ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape);
 
-template <typename T>
 std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig>
 shard_or_reshard_tensor_if_required(
-    T* device,
+    MeshDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
@@ -195,10 +192,9 @@ shard_or_reshard_tensor_if_required(
     bool is_mm_conv,
     bool auto_shard);
 
-template <typename T>
 ttnn::Tensor fold_tensor(
     const ttnn::Tensor& tensor,
-    T* device,
+    MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4);

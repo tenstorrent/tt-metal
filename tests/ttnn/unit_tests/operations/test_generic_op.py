@@ -69,9 +69,9 @@ def test_eltwise_exp(device):
         format_descriptors=[out_cb_format],
     )
 
-    is_dram_input = 1
-    reader_compile_time_args = [is_dram_input]
-    writer_compile_time_args = [out_cb, is_dram_input]
+    reader_compile_time_args = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    writer_compile_time_args = [out_cb]
+    writer_compile_time_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     compute_compile_time_args = [num_tiles, 1]
     reader_rt_args = [input_tensor.buffer_address(), num_tiles, 0]
     writer_rt_args = [output_tensor.buffer_address(), num_tiles, 0]

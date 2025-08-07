@@ -13,12 +13,18 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent_attention_decode import (
+    page_table_setup,
+    to_paged_cache,
+    from_paged_cache,
+)
 import ttnn
 from loguru import logger
 import pytest
 from models.utility_functions import skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
+from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
 from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
@@ -592,11 +598,25 @@ def run_update_cache_impl(
     input_torch = torch.randn(shape).float()
     current_pos = torch.randint(0, max_seq_len, (bsz,))
 
+    paged_config = MLA1D.get_valid_paged_config(decode_cfg.args.max_seq_len, bsz, dp_factor=1)
+    page_table = page_table_setup(bsz, paged_config)
+
     #################
     ### TT-NN
     #################
-    tt_cache = ttnn.from_torch(
+    tt_page_table = ttnn.from_torch(
+        page_table,
+        device=device,
+        dtype=ttnn.int32,
+    )
+
+    paged_cache = to_paged_cache(
         cache_torch,
+        page_table,
+        paged_config,
+    )
+    tt_cache = ttnn.from_torch(
+        paged_cache,
         device=device,
         dtype=cache_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -621,8 +641,14 @@ def run_update_cache_impl(
         tt_cache,
         tt_input,
         update_idxs_tensor=tt_current_pos,
+        page_table=tt_page_table,
     )
     tt_cache_torch = ttnn.to_torch(tt_cache)
+    tt_cache_torch = from_paged_cache(
+        tt_cache_torch,
+        page_table,
+        paged_config,
+    )
 
     #################
     ### Validation
@@ -672,13 +698,27 @@ def run_fill_cache_impl(
     batch_idx = torch.randint(0, prefill_cfg.max_batch_size_per_device, (1,)).item()  # Randomly select a batch index
     logger.debug(f"Selected batch index: {batch_idx}")
 
-    cache_torch[batch_idx, :, :seq_len, :] = input_torch
+    paged_config = MLA1D.get_valid_paged_config(
+        prefill_cfg.args.max_seq_len, prefill_cfg.max_batch_size_per_device, dp_factor=1
+    )
+    page_table = page_table_setup(prefill_cfg.max_batch_size_per_device, paged_config)
 
     #################
     ### TT-NN
     #################
-    tt_cache = ttnn.from_torch(
+    tt_page_table = ttnn.from_torch(
+        page_table,
+        device=device,
+        dtype=ttnn.int32,
+    )
+
+    paged_cache = to_paged_cache(
         cache_torch,
+        page_table,
+        paged_config,
+    )
+    tt_cache = ttnn.from_torch(
+        paged_cache,
         device=device,
         dtype=cache_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -693,16 +733,24 @@ def run_fill_cache_impl(
         layout=layout,
     )
 
-    ttnn.fill_cache(
+    ttnn.experimental.paged_fill_cache(
         tt_cache,
         tt_input,
+        page_table=tt_page_table,
         batch_idx=batch_idx,
     )
     tt_cache_torch = ttnn.to_torch(tt_cache)
+    tt_cache_torch = from_paged_cache(
+        tt_cache_torch,
+        page_table,
+        paged_config,
+    )
 
     #################
     ### Validation
     #################
+    cache_torch[batch_idx, :, :seq_len, :] = input_torch
+
     pcc_threshold = 0.9999
     if cache_dtype == ttnn.bfloat4_b:
         pcc_threshold = 0.99

@@ -95,6 +95,7 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
         output_height,
         output_width,
         channels,
+        tt::constants::TILE_WIDTH,
         compute_grid_size,
         block_shard_orientation,
         enable_channels_padding,
