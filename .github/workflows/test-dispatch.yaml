@@ -73,6 +73,8 @@ jobs:
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
   test-dispatch:
+    # needs: setup
+    needs: build-artifact
     timeout-minutes: 1440
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
