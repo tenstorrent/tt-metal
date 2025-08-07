@@ -6,9 +6,10 @@ import pytest
 import torch
 from loguru import logger
 from tqdm import tqdm
-from transformers import AutoImageProcessor
 
 import ttnn
+from models.demos.mobilenetv2.common import load_torch_model
+from models.demos.mobilenetv2.demo.demo_utils import get_batch
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
@@ -17,7 +18,7 @@ from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_model_parameters,
     get_mesh_mappers,
 )
-from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
+from models.demos.ttnn_resnet.tests.demo_utils import get_data_loader
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 from models.utility_functions import profiler, run_for_wormhole_b0
 
@@ -42,13 +43,13 @@ def run_mobilenetv2_imagenet_demo(
 
     profiler.clear()
     with torch.no_grad():
-        num_devices = device.get_num_devices()
         inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
 
         torch_model = Mobilenetv2()
+        torch_model = load_torch_model(torch_model, model_location_generator)
         torch_model.eval()
-        model_parameters = create_mobilenetv2_model_parameters(torch_model, device=device)
 
+        model_parameters = create_mobilenetv2_model_parameters(torch_model, device=device)
         ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size_per_device)
 
         _, host_input_tensor = create_mobilenetv2_input_tensors(
@@ -94,16 +95,13 @@ def run_mobilenetv2_imagenet_demo(
         pipe.compile(host_input_tensor)
         profiler.end(f"compile")
 
-        model_version = "microsoft/resnet-50"
-        image_processor = AutoImageProcessor.from_pretrained(model_version)
-        logger.info("ImageNet-1k validation Dataset")
         input_loc = str(model_location_generator("ImageNet_data"))
         data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
 
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
-            inputs, labels = get_batch(data_loader, image_processor)
+            inputs, labels = get_batch(data_loader, 224)
             ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
             ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
             ttnn_input = ttnn.from_torch(
@@ -115,23 +113,24 @@ def run_mobilenetv2_imagenet_demo(
             )
             input_tensors_all.append(ttnn_input)
             input_labels_all.append(labels)
+
         logger.info("Processed ImageNet-1k validation Dataset")
 
         logger.info("Starting inference")
+        profiler.start(f"run")
+        outputs = pipe.enqueue(input_tensors_all).pop_all()
+        profiler.end(f"run")
+        total_inference_time = profiler.get(f"run")
+
+        logger.info("Running accuracy check...")
         correct = 0
-        total_inference_time = 0
         for iter in range(iterations):
             predictions = []
-            ttnn_input_tensor = input_tensors_all[iter]
+            output = outputs[iter]
             labels = input_labels_all[iter]
-            profiler.start(f"run")
-            outputs = pipe.enqueue([ttnn_input_tensor]).pop_all()
-            output = outputs[0]
             output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
             prediction = output.argmax(dim=-1)
 
-            profiler.end(f"run")
-            total_inference_time += profiler.get(f"run")
             for i in range(batch_size):
                 predictions.append(imagenet_label_dict[prediction[i].item()])
                 logger.info(
@@ -139,21 +138,22 @@ def run_mobilenetv2_imagenet_demo(
                 )
                 if imagenet_label_dict[labels[i]] == predictions[-1]:
                     correct += 1
+
         pipe.cleanup()
+
         accuracy = correct / (batch_size * iterations)
-        logger.info(f"=============")
         logger.info(
             f"Accuracy for total batch size: {batch_size* device.get_num_devices()} over {iterations} iterations is: {accuracy}"
         )
         if entire_imagenet_dataset:
-            assert (
-                accuracy < expected_accuracy
-            ), f"Accuracy {accuracy} does not match expected accuracy {expected_accuracy}"
+            assert accuracy >= expected_accuracy, f"Accuracy {accuracy} is below expected accuracy {expected_accuracy}"
 
         first_iter_time = profiler.get(f"compile")
-        inference_time_avg = total_inference_time / (iterations)
+        inference_time_avg = total_inference_time / (iterations * device.get_num_devices())
 
         compile_time = first_iter_time - 2 * inference_time_avg
+        logger.info(f"Compile time: {round(compile_time, 2)} s")
+        logger.info(f"Average inference time: {round(1000.0 * inference_time_avg, 2)} ms")
 
 
 @run_for_wormhole_b0()

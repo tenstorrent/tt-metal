@@ -79,20 +79,17 @@ class TracedModelExecutor(Executor):
     def _run_model_for_compilation(self, host_input):
         l1_input_for_compile = self._prepare_l1_input(host_input)
         output_for_compile = self.model(l1_input_for_compile)
-
         ttnn.deallocate(l1_input_for_compile)
         ttnn.deallocate(output_for_compile)
 
     def _capture_execution_trace(self, host_input):
-        # Prepare input for trace capture and record its address
         l1_input_for_trace, spec = self._prepare_input_for_trace_capture(host_input)
 
-        # Begin trace capture and run model
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.cq_id)
+
         self.output_tensor = self.model(l1_input_for_trace)
         ttnn.deallocate(l1_input_for_trace)
 
-        # Validate that persistent tensor allocation will use expected address
         self._validate_trace_address_consistency(spec)
 
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=self.cq_id)
@@ -194,13 +191,11 @@ class MultiCQTracedModelExecutor(Executor):
         self.dram_input_memory_config = dram_input_memory_config
         self.l1_input_memory_config = l1_input_memory_config
 
-        # Persistent tensors allocated during compilation
         self.dram_input_tensor = None
         self.l1_input_tensor = None
         self.output_tensor = None
         self._compilation_output_tensor = None
 
-        # Trace and synchronization state
         self.trace_id = None
         self.op_event = None
 
@@ -215,7 +210,6 @@ class MultiCQTracedModelExecutor(Executor):
         self._validate_input(host_input)
         self._allocate_persistent_tensors(host_input)
 
-        # Initialize synchronization with dummy event
         op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
         op_event = self._run_model_for_compilation(host_input, op_event)
         self._capture_execution_trace(host_input, op_event)
@@ -371,23 +365,19 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
         self.model = model
         self.device = device
 
-        # Memory configuration
         self.dram_input_memory_config = dram_input_memory_config
         self.l1_input_memory_config = l1_input_memory_config
         self.dram_output_memory_config = dram_output_memory_config
 
-        # Output tensor specification
         self.output_shape = output_shape
         self.output_dtype = output_dtype
 
-        # Persistent tensors allocated during compilation
         self.dram_input_tensor = None
         self.dram_output_tensor = None
         self.l1_input_tensor = None
         self.output_tensor = None
         self._compilation_output_tensor = None
 
-        # Trace and synchronization state
         self.trace_id = None
         self.first_op_event = None
         self.read_event = None
