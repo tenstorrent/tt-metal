@@ -787,6 +787,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t output_cb_index = tt::CBIndex::c_16;
     CBHandle cb_in0;
     CBHandle cb_output;
+    log_info(tt::LogOp, "Inplace mode!!");
     if (inplace) {
         std::map<uint8_t, tt::DataFormat> in0_out0_cb_data_format_spec{
             {in0_cb_index, in_data_format}, {output_cb_index, in_data_format}};
@@ -798,6 +799,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
 
         cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_out0_cb_config);
         cb_output = cb_in0;
+        log_info(tt::LogOp, "cb_in0/cb_output size: {}", in0_CB_size);
     } else {
         tt::tt_metal::CircularBufferConfig in0_cb_config =
             tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
@@ -812,6 +814,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     }
+
+    log_info(tt::LogOp, "negative_mask value {}", negative_mask.has_value());
 
     if (negative_mask.has_value() == false) {
         // in - stores tilized input
@@ -834,6 +838,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         tt::tt_metal::CircularBufferConfig in_cb_config =
             tt::tt_metal::CircularBufferConfig(in_CB_size, {{in_cb_index, in_data_format}})
                 .set_page_size(in_cb_index, in_single_tile_size);
+        log_info(tt::LogOp, "tt::CBIndex::c_1: {}", in_CB_size);
         auto cb_in = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config);
     }
     // in2 scaler - for partial Ex
@@ -904,6 +909,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         tt::tt_metal::CircularBufferConfig(x_CB_size, {{x_cb_index, cb_data_format}})
             .set_page_size(x_cb_index, single_tile_size);
     auto cb_x = tt::tt_metal::CreateCircularBuffer(program, all_cores, x_cb_config);
+    log_info(tt::LogOp, "x_CB_size: {}", x_CB_size);
 
     // ex_partial
     uint32_t ex_cb_partial_index = tt::CBIndex::c_8;
