@@ -137,9 +137,8 @@ class TtTemporalSelfAttention:
             sampling_offsets = ttnn.to_torch(sampling_offsets)
             offset_normalizer_xy = ttnn.to_torch(offset_normalizer_xy)
             sampling_locations = sampling_offsets / offset_normalizer_xy
-            reference_xy = ttnn.to_torch(reference_xy)
-            sampling_locations = reference_xy + sampling_locations
             sampling_locations = ttnn.from_torch(sampling_locations, device=self.device, dtype=ttnn.bfloat16)
+            sampling_locations = reference_xy + sampling_locations
 
         elif reference_points.shape[-1] == 4:
             reference_points_reshape = ttnn.reshape(

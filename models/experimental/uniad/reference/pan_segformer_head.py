@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-
-# SPDX-License-Identifier: Apache-2.0
-
 import copy
 import torch
 import torch.nn as nn
@@ -112,12 +108,8 @@ class PansegformerHead(nn.Module):
         self.overlap_threshold_stuff = overlap_threshold_stuff
         if self.as_two_stage:
             transformer["as_two_stage"] = self.as_two_stage
-        self.num_dec_things = 4  # thing_transformer_head['num_decoder_layers']
-        self.num_dec_stuff = 6  # stuff_transformer_head['num_decoder_layers']
-        # super(PansegformerHead, self).__init__(*args,
-        #                                     transformer=transformer,
-        #                                     train_cfg=train_cfg,
-        #                                     **kwargs)
+        self.num_dec_things = 4
+        self.num_dec_stuff = 6
         super(PansegformerHead, self).__init__()
 
         # self.loss_mask = build_loss(loss_mask)
@@ -216,7 +208,7 @@ class PansegformerHead(nn.Module):
             for m in self.reg_branches:
                 nn.init.constant_(m[-1].bias.data[2:], 0.0)
 
-    def forward(self, bev_embed):
+    def forward(self, bev_embed, level_embeds=None):
         _, bs, _ = bev_embed.shape
 
         mlvl_feats = [torch.reshape(bev_embed, (bs, self.bev_h, self.bev_w, -1)).permute(0, 3, 1, 2)]
@@ -226,9 +218,6 @@ class PansegformerHead(nn.Module):
         mlvl_masks = []
         mlvl_positional_encodings = []
         for feat in mlvl_feats:
-            # mlvl_masks.append(
-            # F.interpolate(img_masks[None],
-            #               size=feat.shape[-2:]).to(torch.bool).squeeze(0))
             img_masks_batched = img_masks[None]
             target_size = feat.shape[-2:]
             interpolated = F.interpolate(img_masks_batched, size=target_size)
@@ -241,6 +230,17 @@ class PansegformerHead(nn.Module):
         query_embeds = None
         if not self.as_two_stage:
             query_embeds = self.query_embedding.weight
+
+        out = self.transformer(
+            mlvl_feats,
+            mlvl_masks,
+            query_embeds,
+            mlvl_positional_encodings,
+            level_embeds=level_embeds,
+            reg_branches=self.reg_branches if self.with_box_refine else None,
+            cls_branches=self.cls_branches if self.as_two_stage else None,
+        )
+
         (
             (memory, memory_pos, memory_mask, query_pos),
             hs,
@@ -253,6 +253,7 @@ class PansegformerHead(nn.Module):
             mlvl_masks,
             query_embeds,
             mlvl_positional_encodings,
+            level_embeds=level_embeds,
             reg_branches=self.reg_branches if self.with_box_refine else None,
             cls_branches=self.cls_branches if self.as_two_stage else None,
         )
@@ -274,7 +275,9 @@ class PansegformerHead(nn.Module):
                 reference = init_reference
             else:
                 reference = inter_references[lvl - 1]
+
             reference = inverse_sigmoid(reference)
+
             outputs_class = self.cls_branches[lvl](hs[lvl])
 
             tmp = self.reg_branches[lvl](hs[lvl])
@@ -289,6 +292,7 @@ class PansegformerHead(nn.Module):
             outputs_coords.append(outputs_coord)
 
         outputs_classes = torch.stack(outputs_classes)
+
         outputs_coords = torch.stack(outputs_coords)
 
         outs = {
@@ -314,7 +318,7 @@ class PansegformerHead(nn.Module):
     ):
         bbox_list = [dict() for i in range(len(img_metas))]
 
-        pred_seg_dict = self(pts_feats)
+        pred_seg_dict = self(pts_feats, level_embeds=level_embeds)
         results = self.get_bboxes(
             pred_seg_dict["outputs_classes"],
             pred_seg_dict["outputs_coords"],
@@ -378,6 +382,7 @@ class PansegformerHead(nn.Module):
             cls_score = cls_score.sigmoid()
             scores, indexes = cls_score.view(-1).topk(max_per_img)
             det_labels = indexes % self.num_things_classes
+
             bbox_index = indexes // self.num_things_classes
             bbox_pred = bbox_pred[bbox_index]
         else:
@@ -394,7 +399,6 @@ class PansegformerHead(nn.Module):
         if rescale:
             det_bboxes /= det_bboxes.new_tensor(scale_factor)
         det_bboxes = torch.cat((det_bboxes, scores.unsqueeze(1)), -1)
-
         return bbox_index, det_bboxes, det_labels
 
     def get_bboxes(
@@ -468,7 +472,6 @@ class PansegformerHead(nn.Module):
             mask_pred = F.interpolate(mask_pred.unsqueeze(0), size=ori_shape[:2], mode="bilinear").squeeze(0)
 
             masks_all = mask_pred
-            # ss
             score_list.append(masks_all)
             drivable_list.append(masks_all[-1] > 0.5)
             masks_all = masks_all[: -self.num_stuff_classes]
@@ -497,6 +500,7 @@ class PansegformerHead(nn.Module):
             things_selected = labels_all < self.num_things_classes
             stuff_selected = labels_all >= self.num_things_classes
             bbox_th = bboxes_all[things_selected][:100]
+
             labels_th = labels_all[things_selected][:100]
             seg_th = seg_all[things_selected][:100]
             labels_st = labels_all[stuff_selected]

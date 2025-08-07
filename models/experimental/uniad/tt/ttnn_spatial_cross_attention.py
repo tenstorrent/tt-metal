@@ -179,9 +179,6 @@ class TtMSDeformableAttention3D:
         self.num_levels = num_levels
         self.num_heads = num_heads
         self.num_points = num_points
-        # self.sampling_offsets = nn.Linear(embed_dims, num_heads * num_levels * num_points * 2)
-        # self.attention_weights = nn.Linear(embed_dims, num_heads * num_levels * num_points)
-        # self.value_proj = nn.Linear(embed_dims, embed_dims)
 
     def __call__(
         self,
@@ -218,7 +215,6 @@ class TtMSDeformableAttention3D:
             mask = key_padding_mask[..., None]
             value = ttnn.where(mask, ttnn.zeros_like(value), value)
         value = ttnn.reshape(value, (bs, num_value, self.num_heads, -1))
-        # query = ttnn.from_torch(query, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT)
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
 
         sampling_offsets = ttnn.linear(query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias)
@@ -228,7 +224,6 @@ class TtMSDeformableAttention3D:
         attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
         ttnn.deallocate(params.attention_weights.weight)
         ttnn.deallocate(params.attention_weights.bias)
-        # ttnn.deallocate(query)
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels * self.num_points)
         )
@@ -241,9 +236,6 @@ class TtMSDeformableAttention3D:
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels, self.num_points)
         )
-        # reference_points = ttnn.from_torch(
-        #     reference_points, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
-        # )
         if reference_points.shape[-1] == 2:
             offset_normalizer = ttnn.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], dim=-1)
             bs_r, num_query, num_Z_anchors, _ = reference_points.shape
@@ -254,8 +246,6 @@ class TtMSDeformableAttention3D:
                 offset_normalizer, (1, 1, 1, offset_normalizer.shape[0], 1, offset_normalizer.shape[1])
             )
 
-            # sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
-            offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
             sampling_offsets = ttnn.to_torch(sampling_offsets)
             offset_normalizer_xy = ttnn.to_torch(offset_normalizer_xy)
             sampling_locations = sampling_offsets / offset_normalizer_xy

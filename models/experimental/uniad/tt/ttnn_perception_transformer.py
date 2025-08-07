@@ -173,7 +173,7 @@ class TtPerceptionTransformer:
         feat_flatten = ttnn.permute(feat_flatten, (0, 2, 1, 3))  # (num_cam, H*W, bs, embed_dims)
 
         bev_embed = self.encoder(
-            ttnn.to_torch(bev_queries),
+            bev_queries,
             ttnn.to_layout(feat_flatten, layout=ttnn.ROW_MAJOR_LAYOUT),
             ttnn.to_layout(feat_flatten, layout=ttnn.ROW_MAJOR_LAYOUT),
             bev_h=bev_h,
