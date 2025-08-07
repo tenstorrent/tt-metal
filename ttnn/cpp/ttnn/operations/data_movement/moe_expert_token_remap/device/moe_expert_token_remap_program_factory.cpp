@@ -4,8 +4,10 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "moe_expert_token_remap_device_operation.hpp"
+
 namespace ttnn::operations::data_movement {
 
 MoeExpertTokenRemapDeviceOperation::Multicore::cached_mesh_workload_t
@@ -148,9 +150,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    const bool output_is_dram = tensor_return_value.buffer()->buffer_type() == BufferType::DRAM;
     const auto output_datum_size_bytes = tt::datum_size(output_data_format);
-    const std::vector<uint32_t> writer_ct_args = {
+    std::vector<uint32_t> writer_ct_args = {
         local_experts_cb_id,
         metadata_cb_id,
         topk_cb_id,
@@ -158,11 +159,10 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         selected_experts_k,
         experts_per_device,
         output_page_size_bytes,
-        output_is_dram,
         output_datum_size_bytes,
     };
+    tt::tt_metal::TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_ct_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {/*TODO CT ARGS*/};
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/device/kernels/dataflow/"

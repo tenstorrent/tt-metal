@@ -33,8 +33,8 @@ void kernel_main() {
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(4);
     constexpr uint32_t num_local_experts = get_compile_time_arg_val(5);
     constexpr uint32_t output_page_size_bytes = get_compile_time_arg_val(6);  // num_local_experts * datum size
-    constexpr uint32_t output_is_dram = get_compile_time_arg_val(7);
-    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(7);
+    constexpr auto dst_args = TensorAccessorArgs<8>();
 
     using data_addr_t = detail::DataTypeHolder<datum_size_bytes>::type;
 
@@ -42,8 +42,7 @@ void kernel_main() {
     const auto start_idx = get_arg_val<uint32_t>(1);
     const auto end_idx = get_arg_val<uint32_t>(2);
 
-    InterleavedAddrGen<output_is_dram> output_addrgen{
-        .bank_base_address = output_base_addr, .page_size = output_page_size_bytes};
+    const auto output_addrgen = TensorAccessor(dst_args, output_base_addr, output_page_size_bytes);
 
     // scratch space
     cb_reserve_back(output_cb_id, 1);
