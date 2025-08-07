@@ -48,9 +48,7 @@ def set_env_vars(**kwargs):
         "doSync": "TT_METAL_PROFILER_SYNC=1 ",
         "doDispatchCores": "TT_METAL_DEVICE_PROFILER_DISPATCH=1 ",
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
-        "dispatchFromWorker": "TT_TEST_USE_WORKER_DISPATCH=1 ",
         "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
-        "dispatchFromEth": "TT_TEST_USE_ETH_DISPATCH=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -82,21 +80,13 @@ def run_device_profiler_test(
     slowDispatch=False,
     doSync=False,
     doDispatchCores=False,
-    dispatchFromWorker=False,
-    dispatchFromEth=False,
 ):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
     if testName:
         testCommand = testName
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(
-        slowDispatch=slowDispatch,
-        doSync=doSync,
-        doDispatchCores=doDispatchCores,
-        dispatchFromWorker=dispatchFromWorker,
-        dispatchFromEth=dispatchFromEth,
-    )
+    envVars = set_env_vars(slowDispatch=slowDispatch, doSync=doSync, doDispatchCores=doDispatchCores)
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
     print()
     logger.info(f"Running: {testCommand}")
@@ -258,17 +248,16 @@ def test_dispatch_cores():
         assert len(statTypesSet) == 0
 
     verify_stats(
-        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True, dispatchFromWorker=True),
+        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=150,
     )
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
-            dispatchFromWorker=True,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -276,10 +265,9 @@ def test_dispatch_cores():
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
-            dispatchFromWorker=True,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -290,7 +278,6 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
             setupAutoExtract=False,
             doDispatchCores=True,
-            dispatchFromWorker=True,
         ),
         statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
         allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
@@ -303,10 +290,9 @@ def test_dispatch_cores():
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 840, 1430, 1660, 2320], "Ethernet CQ Prefetch": [572, 4030]}
     devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
-        dispatchFromEth=True,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
@@ -323,10 +309,9 @@ def test_ethernet_dispatch_cores():
                 ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
     devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
-        dispatchFromEth=True,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
