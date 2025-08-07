@@ -37,11 +37,11 @@
       "op_name": "AllGatherAsync_Binary_Mult",
       "kernel_duration": 7083.920833333334,
       "op_to_op": 820.3703703703703,
-      "first_to_last_start": 104.51851851851852,
+      "first_to_last_start": 205.22222222222223,
       "non-overlapped-dispatch-time": 4531.650793650794,
       "kernel_duration_relative_margin": 0.05,
       "op_to_op_duration_relative_margin": 0.2,
-      "first_to_last_start_relative_margin": 0.2,
+      "first_to_last_start_relative_margin": 1.0,
       "dispatch_duration_relative_margin": 0.2
     },
     "Matmul_0": {
@@ -125,7 +125,7 @@
       "op_name": "ReduceScatter_FF3",
       "kernel_duration": 7218.590972222222,
       "op_to_op": 698.4148148148148,
-      "first_to_last_start": 710.4444444444445,
+      "first_to_last_start": 1688.2222222222222,
       "non-overlapped-dispatch-time": 7398.333333333333,
       "kernel_duration_relative_margin": 0.05,
       "op_to_op_duration_relative_margin": 0.2,
@@ -135,7 +135,7 @@
     "RotaryEmbeddingLlamaFusedQK_0": {
       "op_name": "RotaryEmbeddingLlamaFusedQK",
       "kernel_duration": 2234.1837962962964,
-      "op_to_op": 726.7777777777777,
+      "op_to_op": 1002.4444444444445,
       "first_to_last_start": 1979.9555555555555,
       "non-overlapped-dispatch-time": 3411.5079365079364,
       "kernel_duration_relative_margin": 0.1,
@@ -147,11 +147,11 @@
       "op_name": "PagedUpdateCache",
       "kernel_duration": 4451.882870370371,
       "op_to_op": 737.1037037037038,
-      "first_to_last_start": 111.07407407407408,
+      "first_to_last_start": 303.3333333333333,
       "non-overlapped-dispatch-time": 4170.3650793650795,
       "kernel_duration_relative_margin": 0.2,
       "op_to_op_duration_relative_margin": 0.2,
-      "first_to_last_start_relative_margin": 0.2,
+      "first_to_last_start_relative_margin": 0.3,
       "dispatch_duration_relative_margin": 0.2
     },
     "ScaledDotProductAttentionDecode_0": {
@@ -266,7 +266,7 @@
       "op_to_op": 988.4666666666667,
       "non-overlapped-dispatch-time": 2205.4285714285716,
       "kernel_duration_relative_margin": 0.2,
-      "op_to_op_duration_relative_margin": 0.2,
+      "op_to_op_duration_relative_margin": 0.5,
       "dispatch_duration_relative_margin": 0.5
     },
     "TopK_0": {
@@ -282,8 +282,8 @@
       "op_name": "AllGatherAsync_0",
       "kernel_duration": 10840.89375,
       "op_to_op": 655.7333333333333,
-      "non-overlapped-dispatch-time": 3171.1428571428573,
-      "kernel_duration_relative_margin": 0.2,
+      "non-overlapped-dispatch-time": 6158.0,
+      "kernel_duration_relative_margin": 0.25,
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
     },
@@ -291,7 +291,7 @@
       "op_name": "AllGatherAsync_1",
       "kernel_duration": 12112.06875,
       "op_to_op": 674.6,
-      "non-overlapped-dispatch-time": 3934.5,
+      "non-overlapped-dispatch-time": 6675.0,
       "kernel_duration_relative_margin": 0.2,
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
