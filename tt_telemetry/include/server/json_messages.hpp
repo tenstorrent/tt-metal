@@ -18,14 +18,14 @@ namespace messages {
         bool up;
     };
 
-    void to_json(nlohmann::json &j, const EndpointState &s) {
+    static inline void to_json(nlohmann::json &j, const EndpointState &s) {
         j = nlohmann::json {
             { "id", s.id },
             { "up", s.up }
         };
     }
 
-    void from_json(const nlohmann::json &j, EndpointState &s) {
+    static inline void from_json(const nlohmann::json &j, EndpointState &s) {
         j.at("id").get_to(s.id);
         j.at("up").get_to(s.up);
     }
@@ -39,7 +39,7 @@ namespace messages {
         EndpointState state;    // initial state
     };
 
-    void to_json(nlohmann::json &j, const EndpointDescription &d) {
+    static inline void to_json(nlohmann::json &j, const EndpointDescription &d) {
         j = nlohmann::json {
             { "id", d.id },
             { "from", d.from }, 
@@ -48,7 +48,7 @@ namespace messages {
         };
     }
 
-    void from_json(const nlohmann::json &j, EndpointDescription &d) {
+    static inline void from_json(const nlohmann::json &j, EndpointDescription &d) {
         j.at("id").get_to(d.id);
         j.at("from").get_to(d.from);
         j.at("to").get_to(d.to);
@@ -62,7 +62,7 @@ namespace messages {
         std::vector<EndpointDescription> endpoints;
     };
 
-    void to_json(nlohmann::json &j, const EndpointDefinitionMessage &e) {
+    static inline void to_json(nlohmann::json &j, const EndpointDefinitionMessage &e) {
         j = nlohmann::json{
             { "type", e.type },
             { "host", e.host },
@@ -70,7 +70,7 @@ namespace messages {
         };
     }
 
-    void from_json(const nlohmann::json &j, EndpointDefinitionMessage &e) {
+    static inline void from_json(const nlohmann::json &j, EndpointDefinitionMessage &e) {
         j.at("host").get_to(e.host);
         j.at("endpoints").get_to(e.endpoints);
     }
@@ -82,7 +82,7 @@ namespace messages {
         std::vector<EndpointState> endpoints;
     };
 
-    void to_json(nlohmann::json &j, const EndpointStateChangeMessage &s) {
+    static inline void to_json(nlohmann::json &j, const EndpointStateChangeMessage &s) {
         j = nlohmann::json({
             { "type", s.type },
             { "host", s.host },
@@ -90,7 +90,7 @@ namespace messages {
         });
     }
 
-    void from_json(const nlohmann::json &j, EndpointStateChangeMessage &s) {
+    static inline void from_json(const nlohmann::json &j, EndpointStateChangeMessage &s) {
         j.at("host").get_to(s.host);
         j.at("endpoints").get_to(s.endpoints);
     }
