@@ -107,6 +107,8 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # TODO: 26411
+        # Remove this blackhole condition once fabric CCLs are working on blackhole
         if is_blackhole():
             vision_tokens = ttnn.all_gather(vision_tokens, dim=3, num_links=1, topology=ttnn.Topology.Linear)
         else:

@@ -288,6 +288,8 @@ class TtLlamaCrossAttention(LightweightModule):
 
         # All reduce
         if self.is_multichip:
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
                 output = ttnn.reduce_scatter(
                     output,
@@ -395,6 +397,8 @@ class TtLlamaCrossAttention(LightweightModule):
 
         # Reduce-scatter
         if self.is_multichip:  # TODO use_fused_all_gather_matmul
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
                 dense_out_reduced = ttnn.reduce_scatter(
                     output,

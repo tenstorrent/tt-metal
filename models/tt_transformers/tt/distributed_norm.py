@@ -74,6 +74,8 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
                 x = ttnn.all_gather(
                     x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
@@ -99,6 +101,8 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode):
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
                 x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology())
             else:

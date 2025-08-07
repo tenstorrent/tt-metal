@@ -78,6 +78,9 @@ def tt_all_reduce(
     dtype=ttnn.bfloat16,
     use_composite=False,
 ):
+    # TODO: #26353
+    # We get a hang in RS-ring when running DP-4 on GLX
+    # This is a temporary workaround until the hang is fixed
     rs_topology = ttnn.Topology.Linear if tt_ccl.is_galaxy else topology
 
     # N150
@@ -98,6 +101,8 @@ def tt_all_reduce(
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
 
+        # TODO: 26411
+        # Remove this blackhole condition once fabric CCLs are working on blackhole
         if is_blackhole():
             reduced = ttnn.reduce_scatter(
                 input_tensor,
@@ -137,6 +142,8 @@ def tt_all_reduce(
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
     if not use_composite:
+        # TODO: 26411
+        # Remove this blackhole condition once fabric CCLs are working on blackhole
         if is_blackhole():
             gathered_tensor = ttnn.all_gather(
                 input_tensor,
@@ -177,6 +184,8 @@ def tt_all_reduce(
         gathered_tensor.deallocate(True)
     else:
         input_mem_cfg = input_tensor.memory_config()
+        # TODO: 26411
+        # Remove this blackhole condition once fabric CCLs are working on blackhole
         if is_blackhole():
             reduced_tensor = ttnn.reduce_scatter(
                 input_tensor,
@@ -263,6 +272,8 @@ def tt_all_gather(
             input_tensor = ttnn.to_memory_config(input_tensor, memory_config, dtype)  # to sharded
 
     if cluster_axis is None:
+        # TODO: 26411
+        # Remove this blackhole condition once fabric CCLs are working on blackhole
         if is_blackhole():
             gathered = ttnn.all_gather(
                 input_tensor,
@@ -286,6 +297,8 @@ def tt_all_gather(
                 num_buffers_per_channel=2,
             )
     else:
+        # TODO: 26411
+        # Remove this blackhole condition once fabric CCLs are working on blackhole
         if is_blackhole():
             gathered = ttnn.all_gather(
                 input_tensor,
@@ -352,6 +365,9 @@ def tt_sharded_distributed_rmsnorm(
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
 
     # All gather stats
+
+    # TODO: 26411
+    # Remove this blackhole condition once fabric CCLs are working on blackhole
     if is_blackhole():
         tt_stats = ttnn.all_gather(
             tt_stats,
@@ -391,12 +407,17 @@ def tt_sharded_distributed_rmsnorm(
     return tt_out
 
 
+# TODO: #26351
+# Fabric AG currently doesn't support gathering on a padded dim 3
+# This functionality is in development, and when ready should replace this reshape workaround
 def ag_on_padded_dim_3(inp, mesh_device, tt_ccl, is_galaxy, cluster_axis, num_links, topology):
     ag_memory_config = inp.memory_config()
     output_memory_config = inp.memory_config()
     input_shape = inp.shape
     reshape_required = input_shape[3] % 32 != 0
 
+    # TODO: 26411
+    # Remove this blackhole condition once fabric CCLs are working on blackhole
     if is_blackhole():
         if is_galaxy:
             output_tensor = ttnn.all_gather(
@@ -416,14 +437,14 @@ def ag_on_padded_dim_3(inp, mesh_device, tt_ccl, is_galaxy, cluster_axis, num_li
             )
     else:
         if reshape_required:
-            gather_dim_input_size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
-            if gather_dim_input_size % 32 != 0:
-                assert False, "AG does not support reshaped AG input shape"
+            gather_dim_input_tensor_size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
+            if gather_dim_input_tensor_size % 32 != 0:
+                assert False, "AG does not support gathering on padded dim 3"
 
             ag_memory_config = ttnn.DRAM_MEMORY_CONFIG
             inp = ttnn.reshape(
                 inp,
-                (1, 1, 1, gather_dim_input_size),
+                (1, 1, 1, gather_dim_input_tensor_size),
                 memory_config=ag_memory_config,
             )
 
@@ -446,7 +467,7 @@ def ag_on_padded_dim_3(inp, mesh_device, tt_ccl, is_galaxy, cluster_axis, num_li
 
         output_tensor = ag_output
         if reshape_required:
-            split_size = gather_dim_input_size
+            split_size = gather_dim_input_tensor_size
             split_tensors = ttnn.split(ag_output, split_size=split_size, dim=3)
             split_tensors = [ttnn.reshape(tensor, input_shape) for tensor in split_tensors]
 
