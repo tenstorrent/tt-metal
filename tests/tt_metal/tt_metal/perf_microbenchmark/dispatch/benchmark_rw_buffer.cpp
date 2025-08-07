@@ -40,6 +40,7 @@ using namespace tt::tt_metal::distributed;
 // Page Size (Bytes): 32, 64, 128, 256, 512, 1024, 2048
 // Transfer Size: 64 MB
 // Buffer Type: DRAM, L1
+// Sharding: Default (interleave), Horizontal
 // Device: 0 (local), 1 (remote) (when possible)
 //
 ////////////////////////////////////////////////////////////////////////////////
@@ -65,7 +66,9 @@ static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
 static const std::vector<int64_t> SHARD_ENABLE_ARGS = {false, true};
 
 static BufferShardingArgs get_sharding_args(std::shared_ptr<MeshDevice> mesh_device, BufferType buffer_type) {
-    // These are pulled out of TTNN for WH
+    // These are pulled out of TTNN for WH,
+    // This is modeled with a 2048 x 1024 tensor,
+    // which if containing uint32, would occupy 64MB (our transfer size).
     static const std::array<uint32_t, 2> PAGE_SHAPE = {32, 32};
     static const std::array<uint32_t, 2> TENSOR2D_SHAPE_IN_PAGES = {64, 32};
 
