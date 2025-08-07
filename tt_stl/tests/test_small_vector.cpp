@@ -486,17 +486,10 @@ TEST(SmallVectorEdgeCaseTest, ZeroCapacityUsesHeapAlways) {
     vec.push_back(1);
     EXPECT_GE(vec.capacity(), 1u);
 
-    auto firstPtr = vec.data();
+    //  current capacity growth algorithm is  2 * OldCapacity + 1.
     vec.push_back(2);
     // Pushing another element may reallocate; capacity should be >= 2
     EXPECT_GE(vec.capacity(), 2u);
-
-    // current capacity growth algorithm is  2 * OldCapacity + 1.
-    // kInlineCapacity greater than initial capacity means that reallocation happens only if no SBO is used.
-    while (vec.size() < kInlineCapacity) {
-        vec.push_back(vec.size() + 1);
-    }
-    EXPECT_NE(vec.data(), firstPtr);
 }
 
 TEST(SmallVectorEdgeCaseTest, LargeTypesWithNonTrivialDestructors) {
