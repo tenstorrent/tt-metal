@@ -55,7 +55,6 @@ on:
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   test-dispatch:
-    needs: build-artifact
     timeout-minutes: 1440
     env:
       ARCH_NAME: ${{ inputs.arch }}
