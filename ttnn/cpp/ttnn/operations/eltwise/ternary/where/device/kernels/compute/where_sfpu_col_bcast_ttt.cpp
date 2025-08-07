@@ -66,9 +66,8 @@ ALWI void process_tile(
 
         // Perform the where operation
         where_tile_init();
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            WHERE_LLK(i * 3, i * 3 + 1, i * 3 + 2);  // where(predicate, true, false)
-        }
+        WHERE_LLK(0, 1, 2);  // where(predicate, true, false)
+
         tile_regs_commit();
 
         tile_regs_wait();
