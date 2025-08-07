@@ -26,6 +26,7 @@ class RotarySetup(LightweightModule):
         rope_theta: float,
         scale_factor: float,  # use None to disable rope scaling
         orig_context_len: int,  # only used if scaling enabled
+        partial_rotary_factor: float = 1.0,  # use 1.0 for full rotary, < 1.0 for partial rotary
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
@@ -33,6 +34,7 @@ class RotarySetup(LightweightModule):
         self.batch_size = batch_size
         self.head_dim = head_dim
         self.device = device
+        self.partial_rotary_factor = partial_rotary_factor
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
@@ -43,7 +45,7 @@ class RotarySetup(LightweightModule):
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         cos_matrix, sin_matrix = compute_gather_cos_sin(
-            dhead=head_dim,
+            dhead=int (head_dim * partial_rotary_factor),
             end=max_seq_len * 2,
             theta=rope_theta,
             scale_factor=scale_factor,
@@ -180,7 +182,7 @@ class RotarySetup(LightweightModule):
             sin = sin[:, : self.batch_size_per_device_group, :, :]
 
         mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
+            shape=(ttnn.TILE_SIZE, int(self.head_dim * self.partial_rotary_factor)),
             core_grid=self.batch_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,

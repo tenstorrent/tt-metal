@@ -82,6 +82,7 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling_factor,
         model_args.orig_context_len,
+        model_args.partial_rotary_factor,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
 
@@ -155,7 +156,7 @@ def test_attention_inference(
     tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
     positions = torch.LongTensor(range(max_seq_len))
     freqs_cis_i = precompute_freqs_cis(
-        model_args.head_dim,
+        int(model_args.head_dim * model_args.partial_rotary_factor),
         model_args.max_seq_len * 2,
         model_args.rope_theta,
         model_args.rope_scaling_factor,

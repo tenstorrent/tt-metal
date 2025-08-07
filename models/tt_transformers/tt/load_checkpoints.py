@@ -137,6 +137,9 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.layernorm.weight": "layers.{layer}.attention_norm.weight",
         "model.layers.{layer}.layernorm.bias": "layers.{layer}.attention_norm.bias",
         "lm_head.bias": "output.bias",
+        "model.layers.{layer}.input_layernorm.bias": "layers.{layer}.attention_norm.bias",
+        "model.final_layernorm.weight": "norm.weight",
+        "model.final_layernorm.bias": "norm.bias",
     }
 
     meta_state_dict = {}
@@ -384,10 +387,8 @@ def convert_meta_qkv_to_hf_format(loaded_weights, head_dim):
             converted_weights[key] = tensor
     return converted_weights
 
-
 def reverse_permute(tensor, n_heads, dim1, dim2):
     return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
-
 
 def permute(tensor, n_heads, dim1, dim2):
     return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
