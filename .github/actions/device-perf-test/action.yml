@@ -11,7 +11,6 @@ runs:
     - run: |
         cd docker-job
         set -x
-        export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
 
         ${{ inputs.commands }}
 

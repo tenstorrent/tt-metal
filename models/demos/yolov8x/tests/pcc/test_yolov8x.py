@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov8x.common import load_torch_model
+from models.demos.yolov8x.common import YOLOV8X_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8x.reference import yolov8x
 from models.demos.yolov8x.tt.ttnn_yolov8x import TtC2f, TtConv, TtDFL, TtSppf, TtYolov8xModel
 from models.demos.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor, ttnn_decode_bboxes
@@ -42,7 +42,7 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
     return torch.cat(anchor_points), torch.cat(stride_tensor)
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True, ids=["0"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True, ids=["0"])
 @pytest.mark.parametrize(
     "input_tensor",
     [torch.rand((1, 3, 640, 640))],
@@ -90,7 +90,7 @@ def test_yolov8x_640(device, input_tensor, use_pretrained_weights, model_locatio
     logger.info(f"Passing: {passing}, PCC: {pcc}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 3, 640, 640)))], ids=["input_tensor1"])
 def test_Conv(device, input_tensor, model_location_generator):
     disable_persistent_kernel_cache()
@@ -128,7 +128,7 @@ def test_Conv(device, input_tensor, model_location_generator):
     logger.info(f"Passing: {passing}, PCC: {pcc}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 160, 160, 160)))], ids=["input_tensor1"])
 def test_C2f(device, input_tensor, reset_seeds, model_location_generator):
     disable_persistent_kernel_cache()
@@ -172,7 +172,7 @@ def test_C2f(device, input_tensor, reset_seeds, model_location_generator):
     logger.info(f"Passing: {passing}, PCC: {pcc}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 640, 20, 20)))], ids=["input_tensor1"])
 def test_SPPF(device, input_tensor, reset_seeds, model_location_generator):
     disable_persistent_kernel_cache()
@@ -206,7 +206,7 @@ def test_SPPF(device, input_tensor, reset_seeds, model_location_generator):
     logger.info(f"Passing: {passing}, PCC: {pcc}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 64, 8400)))], ids=["input_tensor1"])
 def test_DFL(device, input_tensor, reset_seeds, model_location_generator):
     disable_persistent_kernel_cache()
@@ -233,7 +233,7 @@ def test_DFL(device, input_tensor, reset_seeds, model_location_generator):
     logger.info(f"Passing: {passing}, PCC: {pcc}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "distance, anchors", [(torch.rand((1, 4, 8400)), torch.rand((1, 2, 8400)))], ids=["input_tensor"]
 )

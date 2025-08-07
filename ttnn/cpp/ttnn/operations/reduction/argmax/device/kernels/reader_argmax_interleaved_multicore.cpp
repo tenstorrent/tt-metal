@@ -96,7 +96,9 @@ inline void find_argmax_for_core(
                     });
 
             } else {
-                static_assert(data_format != data_format, "Unsupported data format in find_argmax_for_core");
+                // We need a value-dependent expression (gcc-12) that is not
+                // tautologically false (gcc-15)
+                static_assert(data_format == DataFormat::Float16_b, "Unsupported data format in find_argmax_for_core");
             }
         }
 
@@ -191,8 +193,11 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) { return a > b; });
 
         } else {
+            // We need a value-dependent expression (gcc-12) that is not
+            // tautologically false (gcc-15)
             static_assert(
-                data_format != data_format, "Unsupported data format in find_argmax_from_intermediate_outputs");
+                data_format == DataFormat::Float16_b,
+                "Unsupported data format in find_argmax_from_intermediate_outputs");
         }
     }
     return max_idx;
