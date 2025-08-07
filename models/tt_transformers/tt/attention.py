@@ -469,6 +469,34 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(xqkv_fused)
 
+        # Partial rotary embedding
+        if self.partial_rotary_factor !=1.0:
+            height_sharded_memory_config = ttnn.create_sharded_memory_config(
+                shape=q_heads_pre_rot_1BQD.padded_shape,
+                core_grid=ttnn.CoreGrid(y=1, x=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False
+            )
+            #TODO: ttnn.chunk can only be distributed evenly at present, so it is not possible to split the matrix according to rotary_ndims.
+            rotary_ndims = int(self.head_dim * self.partial_rotary_factor)
+            #HACK: In the decoding phase, the API design of ttnn.experimental requires a Sharding layout, while splitting ttnn.tensor requires an Interleaved layout, which requires more complex memory conversion.
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, ttnn.L1_MEMORY_CONFIG)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.L1_MEMORY_CONFIG)
+            q_heads_pre_rot_1BQD, query_pass = ttnn.chunk(q_heads_pre_rot_1BQD, 2, dim=-1)
+            k_heads_pre_rot_1BKD, key_pass = ttnn.chunk(k_heads_pre_rot_1BKD, 2, dim=-1)
+
+            height_sharded_memory_config_half = ttnn.create_sharded_memory_config(
+                shape=q_heads_pre_rot_1BQD.padded_shape,
+                core_grid=ttnn.CoreGrid(y=1, x=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False
+            )
+
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, height_sharded_memory_config_half)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, height_sharded_memory_config_half)
+
         # Q Rotary Embeddings
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
             q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
@@ -481,6 +509,20 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
+
+        # Partial rotary embedding
+        if self.partial_rotary_factor !=1.0:
+            #HACK: In the decoding phase, the API design of ttnn.experimental requires a Sharding layout, while splitting ttnn.tensor requires an Interleaved layout, which requires more complex memory conversion.
+            q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD, ttnn.L1_MEMORY_CONFIG)
+            q_heads_1BQD = ttnn.concat([q_heads_1BQD, query_pass], dim=-1)
+            q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD, height_sharded_memory_config)
+
+            k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, ttnn.L1_MEMORY_CONFIG)
+            k_heads_1BKD = ttnn.concat([k_heads_1BKD, key_pass], dim=-1)
+            k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, height_sharded_memory_config)
+
+            ttnn.deallocate(query_pass)
+            ttnn.deallocate(key_pass)
 
         ###
         # KV update
@@ -742,42 +784,43 @@ class Attention(LightweightModule):
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
         # Partial rotary embedding
-        rotary_ndims = self.head_dim * self.partial_rotary_factor
-        query_rot, query_pass = ttnn.chunk(q_heads_1QSD_pre_rot, 2, dim=-1)
-        key_rot, key_pass = ttnn.chunk(k_heads_1KSD_pre_rot, 2, dim=-1)
+        if self.partial_rotary_factor !=1.0:
+            #TODO: ttnn.chunk can only be distributed evenly at present, so it is not possible to split the matrix according to rotary_ndims.
+            rotary_ndims = int(self.head_dim * self.partial_rotary_factor)
+            q_heads_1QSD_pre_rot, query_pass = ttnn.chunk(q_heads_1QSD_pre_rot, 2, dim=-1)
+            k_heads_1KSD_pre_rot, key_pass = ttnn.chunk(k_heads_1KSD_pre_rot, 2, dim=-1)
 
-        q_heads_1QSD_rot = ttnn.experimental.rotary_embedding_llama(
-            query_rot,
+        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
+            q_heads_1QSD_pre_rot,
             rot_mats[0],
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
-        ttnn.deallocate(query_rot)
 
-
-        k_heads_1KSD_rot = ttnn.experimental.rotary_embedding_llama(
-            key_rot,
+        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_1KSD_pre_rot,
             rot_mats[0],
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
-        ttnn.deallocate(key_rot)
 
-        q_heads_1QSD = ttnn.concat(
-            [q_heads_1QSD_rot, query_pass], dim=-1
-        )  # Concatenate the rotary and pass-through parts of the query heads
-        k_heads_1KSD = ttnn.concat(
-            [k_heads_1KSD_rot, key_pass], dim=-1
-        )  # Concatenate the rotary and pass-through parts of the key heads 
+        # Partial rotary embedding
+        if self.partial_rotary_factor !=1.0:
+            q_heads_1QSD = ttnn.concat(
+                [q_heads_1QSD, query_pass], dim=-1
+            )  # Concatenate the rotary and pass-through parts of the query heads
+            k_heads_1KSD = ttnn.concat(
+                [k_heads_1KSD, key_pass], dim=-1
+            )  # Concatenate the rotary and pass-through parts of the key heads 
 
-        ttnn.deallocate(q_heads_1QSD_rot)
-        ttnn.deallocate(query_pass)
-        ttnn.deallocate(k_heads_1KSD_rot)
-        ttnn.deallocate(key_pass)
+            ttnn.deallocate(query_pass)
+            ttnn.deallocate(key_pass)
+
+        
 
         # Fill KV-Cache
         if kv_cache:

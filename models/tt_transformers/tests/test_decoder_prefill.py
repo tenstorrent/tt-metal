@@ -73,11 +73,12 @@ def test_decoder_inference(
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
+    state_dict_ref = model_args.load_state_dict_ref()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", 0)
+    first_layer_prefix = model_args.get_ref_state_dict_prefix("TransformerBlock", 0)
     partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+        k[len(first_layer_prefix) :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
     }
 
     reference_model = model_args.reference_decoder()
@@ -89,7 +90,7 @@ def test_decoder_inference(
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_rot_mats(
-        head_dim=model_args.head_dim,
+        head_dim=int (model_args.head_dim * model_args.partial_rotary_factor),
         device=mesh_device,
         seq_len=max_seq_len,
         theta=model_args.rope_theta,

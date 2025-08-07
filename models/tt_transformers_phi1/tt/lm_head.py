@@ -152,7 +152,9 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor):
         outputs = []
-        for weight, bias, pc in zip(self.output_weights, self.output_bias, self.program_configs):
+        bias_list = self.output_bias if len(self.output_bias) > 0 else [None] * len(self.output_weights)
+        
+        for weight, bias, pc in zip(self.output_weights, bias_list, self.program_configs):
             output = ttnn.linear(
                 x,
                 weight,
@@ -163,8 +165,9 @@ class LMHead(LightweightModule):
                 dtype=ttnn.bfloat8_b,
             )
             output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
-            bias = ttnn.sharded_to_interleaved(bias, memory_config=ttnn.L1_MEMORY_CONFIG) if len(self.output_bias) > 0 else None
-            output = output+bias if bias is not None else output
+            if bias is not None:
+                bias = ttnn.sharded_to_interleaved(bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+                output = output + bias
             outputs.append(output)
 
         # Concatenate the outputs

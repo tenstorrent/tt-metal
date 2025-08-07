@@ -68,11 +68,12 @@ def test_attention_inference(
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
+    state_dict_ref = model_args.load_state_dict_ref()
 
-    first_layer_prefix = model_args.get_state_dict_prefix("Attention", 0) + "."
+    first_layer_prefix = model_args.get_ref_state_dict_prefix("self_attn", 0) + "."
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+        k[len(first_layer_prefix) :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
     }
 
     reference_model = model_args.reference_attention()

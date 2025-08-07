@@ -341,7 +341,7 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, partial_rotary_factor, start_pos=0):
+def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, partial_rotary_factor=1.0, start_pos=0):
     dim = int(head_dim * partial_rotary_factor)
     cos, sin = precompute_freqs(
         dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len

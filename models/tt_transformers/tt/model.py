@@ -112,6 +112,7 @@ class Transformer(LightweightModule):
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
+                base_model_name=args.base_model_name,
             ),
             args,
             self.tt_ccl,
