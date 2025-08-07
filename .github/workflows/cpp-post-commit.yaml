@@ -41,6 +41,10 @@ jobs:
             cmd: |
               ./tests/scripts/run_tools_tests.sh
               ./build/test/tt_metal/unit_tests_debug_tools
+          - name: user kernel path
+            cmd: |
+              rm -rf /tmp/kernels
+              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
           - name: dispatch
             cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch" # 15 minutes
           - name: eth and misc
