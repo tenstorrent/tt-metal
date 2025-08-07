@@ -352,3 +352,19 @@ Tests:
 
     patterns:
       - type: all_to_all
+
+  - name: "FabricMuxSimpleUnicastWriteLinear"
+    sync: true
+    fabric_setup:
+      topology: Linear
+      fabric_type: Mux
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, 1]
