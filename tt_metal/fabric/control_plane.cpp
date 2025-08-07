@@ -1624,7 +1624,6 @@ void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr)
 void ControlPlane::initialize_intermesh_eth_links() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     // If intermesh links are not enabled, set all intermesh_eth_links_ to empty
-    std::cout << "Intermesh is enabled: " << this->is_intermesh_enabled() << std::endl;
     if (not this->is_intermesh_enabled()) {
         for (const auto& chip_id : cluster.all_chip_ids()) {
             intermesh_eth_links_[chip_id] = {};
@@ -1653,7 +1652,6 @@ void ControlPlane::initialize_intermesh_eth_links() {
             // TODO: remove branch here once get_ethernet_connections_to_remote_devices() contains
             // all cross host links, currently on T3K there are some cross host links that are not
             // visible to UMD
-            std::cout << "System is not UBB" << std::endl;
             if (soc_desc.logical_eth_core_to_chan_map.empty()) {
                 intermesh_eth_links_[chip_id] = {};
                 continue;
@@ -1668,17 +1666,10 @@ void ControlPlane::initialize_intermesh_eth_links() {
             std::vector<uint32_t> config_data(1, 0);
             auto multi_mesh_config_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
                 tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG);
-            std::cout << "Read from: " << multi_mesh_config_addr << std::endl;
             cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_config_addr);
-            std::cout << "Config Data: " << config_data[0] << std::endl;
             for (auto link : extract_intermesh_eth_links(config_data[0], chip_id)) {
                 // Find the CoreCoord for this channel
                 for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
-                    if (channel == link) {
-                        std::cout << "Intermesh link: " << core_coord.str() << " on: " << chip_id
-                                  << " Trained: " << this->is_intermesh_eth_link_trained(chip_id, core_coord)
-                                  << std::endl;
-                    }
                     if (channel == link and this->is_intermesh_eth_link_trained(chip_id, core_coord)) {
                         intermesh_eth_links.push_back({core_coord, link});
                         break;
@@ -1875,13 +1866,6 @@ void ControlPlane::generate_local_intermesh_link_table() {
     intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
     const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
-
-    if (*(distributed_context.rank()) == 0) {
-        for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-            std::cout << "Chip: " << chip_id << " Has Intermesh Links: " << this->has_intermesh_links(chip_id)
-                      << std::endl;
-        }
-    }
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (this->has_intermesh_links(chip_id)) {
             for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
@@ -1955,8 +1939,6 @@ void ControlPlane::exchange_intermesh_link_tables() {
 
     for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
         if (my_rank == bcast_root) {
-            std::cout << "Local table size for: " << (*distributed_context.rank()) << " "
-                      << intermesh_link_table_.intermesh_links.size() << std::endl;
             // Issue the broadcast from the current process to all other processes in the world
             int local_table_size_bytes = serialized_table.size();  // Send txn size first
             distributed_context.broadcast(
@@ -1980,11 +1962,8 @@ void ControlPlane::exchange_intermesh_link_tables() {
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_remote_table.data(), serialized_remote_table.size())),
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
-
             tt_fabric::IntermeshLinkTable deserialized_remote_table =
                 tt::tt_fabric::deserialize_from_bytes(serialized_remote_table);
-            std::cout << "Peer table size for: " << (*distributed_context.rank()) << " "
-                      << deserialized_remote_table.intermesh_links.size() << std::endl;
             peer_intermesh_link_tables_[deserialized_remote_table.local_mesh_id]
                                        [deserialized_remote_table.local_host_rank_id] =
                                            std::move(deserialized_remote_table.intermesh_links);
@@ -2052,22 +2031,16 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto board_id = chip_id_to_asic_id_.at(physical_chip_id);
     auto intermesh_links = this->get_intermesh_eth_links(physical_chip_id);
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+
     // Used to track the number of directions that could be assigned to intermesh links on this node
     uint32_t num_directions_assigned = 0;
-    auto rank = *(distributed_context.rank());
-    if (rank == 0) {
-        std::cout << "Assign direction to: " << fabric_node_id << " " << physical_chip_id << std::endl;
-    }
+
     for (const auto& [eth_core, eth_chan] : intermesh_links) {
         auto intermesh_routing_direction = RoutingDirection::NONE;
         auto curr_eth_chan_desc = EthChanDescriptor{.board_id = board_id, .chan_id = eth_chan};
         const auto& remote_eth_chan_desc = intermesh_link_table_.intermesh_links.at(curr_eth_chan_desc);
         for (const auto& [connected_mesh_id, edge] :
              inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
-            if (rank == 0) {
-                std::cout << "Check connectivity to: " << *connected_mesh_id << std::endl;
-            }
             bool connection_found = false;
             // TODO: untested, but should work. We would need two big meshes connected to test this
             auto connected_host_rank_id = this->routing_table_generator_->mesh_graph
@@ -2098,10 +2071,6 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
     for (const auto& [connected_mesh_id, edge] :
          inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
         num_links_requested_on_node += edge.connected_chip_ids.size();
-    }
-    if (rank == 0) {
-        std::cout << "Num links requested: " << num_links_requested_on_node << std::endl;
-        std::cout << "Num directions assigned: " << num_directions_assigned << std::endl;
     }
     TT_FATAL(
         num_directions_assigned == num_links_requested_on_node,
