@@ -2188,67 +2188,73 @@ void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type
 }
 
 // 1D Linear Fabric API Tests
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1D) { FabricUnicastCommon(this, NOC_UNICAST_WRITE); }
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1D) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE);
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1DMultiDir) {
     FabricUnicastCommon(this, NOC_UNICAST_WRITE, 2);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocAtomicInc1D) { FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC); }
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocAtomicInc1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocAtomicInc1D) {
+    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC);
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocAtomicInc1DMultiDir) {
     FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, 2);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) {
     FabricUnicastCommon(this, NOC_UNICAST_SCATTER_WRITE);
 }
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocScatterWrite1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWrite1DMultiDir) {
     FabricUnicastCommon(this, NOC_UNICAST_SCATTER_WRITE, 2);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocInlineWrite1D) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocInlineWrite1D) {
     FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE);
 }
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocInlineWrite1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocInlineWrite1DMultiDir) {
     FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, 2);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1D) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1D) {
     FabricUnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
 }
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1DMultiDir) {
     FabricUnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, 2);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1D) { FabricMulticastCommon(this, NOC_UNICAST_WRITE); }
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1D) {
+    FabricMulticastCommon(this, NOC_UNICAST_WRITE);
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1DMultiDir) {
     FabricMulticastCommon(this, NOC_UNICAST_WRITE, 2);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) {
     FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC);
 }
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocAtomicInc1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicInc1DMultiDir) {
     FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, 2);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocScatterWrite1D) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocScatterWrite1D) {
     FabricMulticastCommon(this, NOC_UNICAST_SCATTER_WRITE);
 }
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocScatterWrite1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocScatterWrite1DMultiDir) {
     FabricMulticastCommon(this, NOC_UNICAST_SCATTER_WRITE, 2);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) {
     FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE);
 }
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocInlineWrite1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWrite1DMultiDir) {
     FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, 2);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) {
     FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
 }
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1DMultiDir) {
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1DMultiDir) {
     FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, 2);
 }
 
