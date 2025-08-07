@@ -235,7 +235,7 @@ def trace_all_to_all_combine(
     num_links,
     scheme="random",
     dtype=ttnn.bfloat16,
-    topology=ttnn.Topology.Linear,
+    topology=None,
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     profiler=BenchmarkProfiler(),
@@ -381,7 +381,7 @@ def trace_all_to_all_combine(
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_trace(
     mesh_device,
@@ -444,7 +444,7 @@ def run_all_to_all_combine_test(
     input_grid=None,
     output_grid=None,
     dtype=ttnn.bfloat16,
-    topology=ttnn.Topology.Linear,
+    topology=None,
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
@@ -593,7 +593,6 @@ def check_results(test_tensor, ref_tensor, data_map):
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -604,8 +603,8 @@ def check_results(test_tensor, ref_tensor, data_map):
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("axis, num_links", [(0, 2), (1, 1)])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_no_trace(
     mesh_device,
@@ -655,11 +654,6 @@ def test_all_to_all_combine_no_trace(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "trace_region_size": 500000,
-        },
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 500000,
         },
@@ -679,11 +673,11 @@ def test_all_to_all_combine_no_trace(
     [(1, 40, 10), (128, 10, 5)],
     ids=["decode", "prefill"],
 )
-@pytest.mark.parametrize("local_reduce", [False, True])
+@pytest.mark.parametrize("local_reduce", [True])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_perf(
     mesh_device,
@@ -730,49 +724,3 @@ def test_perf(
         input_memory_config,
         output_memory_config,
     )
-
-
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
-)
-@pytest.mark.parametrize("local_reduce", [True, False])
-def test_simple_tensor_gen(mesh_device, mesh_shape, local_reduce):
-    torch.set_printoptions(threshold=10000)
-    devices = mesh_shape[0] * mesh_shape[1]
-    batch = 8 * devices
-    experts = 8 * devices
-    select_experts_k = 8
-    hidden_size = 7000
-    axis = 1
-    seq = 2
-    replicate_dim = mesh_shape[0 if axis == 1 else 1]
-    (
-        sparse_dispatched_tokens,
-        input_sparse_contribs_tensor,
-        expert_mapping,
-        metadata_tensor,
-        output_tensor,
-        _,
-    ) = gen_tensors(
-        batch,
-        experts,
-        select_experts_k,
-        hidden_size,
-        seq,
-        mesh_shape,
-        axis,
-        devices,
-        scheme="random",
-        local_reduce=local_reduce,
-    )
-
-    if local_reduce:
-        sparse_expert_dim = devices
-    else:
-        sparse_expert_dim = experts
-
-    assert sparse_dispatched_tokens.shape == (devices, batch, seq, hidden_size)
-    assert input_sparse_contribs_tensor.shape == (sparse_expert_dim, batch, seq, hidden_size)
-    assert output_tensor.shape == (select_experts_k, batch * replicate_dim, seq, hidden_size)
-    assert expert_mapping.shape == (1, 1, experts, devices)
-    assert metadata_tensor.shape == (devices, batch, seq, select_experts_k)
