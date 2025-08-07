@@ -41,6 +41,9 @@ def run_all_gather_impl(
     num_iters=1,
     enable_trace=True,
     use_barrier=False,
+    chunks_per_sync=None,
+    num_workers_per_link=None,
+    num_buffers_per_channel=None,
 ):
     torch.manual_seed(0)
 
@@ -212,6 +215,9 @@ def run_all_gather_impl(
                     topology=all_gather_topology,
                     subdevice_id=worker_sub_device_id,
                     barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                    chunks_per_sync=chunks_per_sync,
+                    num_workers_per_link=num_workers_per_link,
+                    num_buffers_per_channel=num_buffers_per_channel,
                 )
 
             tt_matmul_out_tensor = ttnn.linear(
@@ -255,6 +261,9 @@ def run_all_gather_impl(
                     memory_config_mm=mem_config_mm,
                     program_config=program_config,
                     compute_kernel_config=compute_kernel_config,
+                    chunks_per_sync=chunks_per_sync,
+                    num_workers_per_link=num_workers_per_link,
+                    num_buffers_per_channel=num_buffers_per_channel,
                 )
 
         return tt_all_gather_out_tensor, tt_matmul_out_tensor
@@ -361,6 +370,14 @@ def run_all_gather_impl(
     ids=["barrier_active", "barrier_inactive"],
 )
 @pytest.mark.parametrize(
+    "chunks_per_sync, num_workers_per_link, num_buffers_per_channel",
+    [
+        (None, None, None),
+        (10, 2, 2),
+    ],
+    ids=["default", "chunking"],
+)
+@pytest.mark.parametrize(
     "device_params, use_legacy_allgather, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
@@ -392,6 +409,9 @@ def test_all_gather_matmul_async(
     enable_trace,
     use_non_fused,
     use_barrier,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
     use_legacy_allgather,
     all_gather_topology,
     num_iters,
@@ -423,4 +443,7 @@ def test_all_gather_matmul_async(
         use_legacy_allgather=use_legacy_allgather,
         num_iters=num_iters,
         use_barrier=use_barrier,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
