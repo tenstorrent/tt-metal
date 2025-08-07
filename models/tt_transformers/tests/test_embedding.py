@@ -58,6 +58,7 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
 
     prompts = ["Joy"] * 32
     pt_input = torch.tensor([model_args.encode_prompt(prompt, instruct=False) for prompt in prompts])
+    embed_scale = model_args.embed_scale
     reference_output = reference_emb(pt_input)
     logger.info(f"reference_output: {reference_output.shape}")
 
@@ -68,7 +69,7 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    tt_output = tt_emb(tt_input)
+    tt_output = tt_emb(tt_input, embed_scale)
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=model_args.cluster_shape),
