@@ -2,8 +2,8 @@ rank_bindings:
   - rank: 0
     mesh_id: 0
     env_overrides:
-      LD_LIBRARY_PATH: "./build/lib"
-      TT_METAL_HOME: "/home/ansible/actions-runner/_work/tt-metal/tt-metal"
+      #LD_LIBRARY_PATH: "./build/lib"
+      #TT_METAL_HOME: "/home/ansible/actions-runner/_work/tt-metal/tt-metal"
       #PYTHONPATH: "$(pwd)"
       #ARCH_NAME: "wormhole_b0"
 
@@ -11,8 +11,8 @@ rank_bindings:
   - rank: 1
     mesh_id: 1
     env_overrides:
-      LD_LIBRARY_PATH: "./build/lib"
-      TT_METAL_HOME: "/home/ansible/actions-runner/_work/tt-metal/tt-metal"
+      #LD_LIBRARY_PATH: "./build/lib"
+      #TT_METAL_HOME: "/home/ansible/actions-runner/_work/tt-metal/tt-metal"
       #PYTHONPATH: "$(pwd)"
       #ARCH_NAME: "wormhole_b0"
 
