@@ -140,9 +140,9 @@ class TtDETRTrack3DCoder(TtBaseBBoxCoder):
             track_scores = ttnn.from_torch(
                 track_scores, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
             )
-            obj_idxes = ttnn.from_torch(obj_idxes, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-            mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-            bbox_index = ttnn.from_torch(bbox_index, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            obj_idxes = ttnn.from_torch(obj_idxes, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=self.device)
+            mask = ttnn.from_torch(mask, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=self.device)
+            bbox_index = ttnn.from_torch(bbox_index, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=self.device)
 
             predictions_dict = {
                 "bboxes": boxes3d,
