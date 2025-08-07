@@ -105,11 +105,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git diff comparison
       - name: Check for new InterleavedAddrGen usages in changed files
         run: |
           # Get the base branch for comparison
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_REF="${{ github.event.pull_request.base.sha }}"
+            BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
           else
             BASE_REF="HEAD^"
           fi
