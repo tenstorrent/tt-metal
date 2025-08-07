@@ -114,7 +114,6 @@ void MAIN {
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                 }
-
                 cb_pop_front(curr_in_cb_id, 1);
             }
             tile_regs_commit();
