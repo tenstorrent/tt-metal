@@ -50,6 +50,22 @@ if ([ -z "$test" ] || [ -z "$good_commit" ] || [ -z "$bad_commit" ]); then
     exit 1
 fi
 
+# Validate good_commit SHA
+if git cat-file -e "$good_commit" 2>/dev/null; then
+    echo "Good commit SHA is valid: $good_commit"
+else
+    echo "Invalid good commit SHA: $good_commit"
+    exit 1
+fi
+
+# Validate bad_commit SHA
+if git cat-file -e "$bad_commit" 2>/dev/null; then
+    echo "Bad commit SHA is valid: $bad_commit"
+else
+    echo "Invalid bad commit SHA: $bad_commit"
+    exit 1
+fi
+
 echo "Time to find who broke it :)"
 echo "Good commit:" $good_commit
 echo "Bad commit:" $bad_commit
