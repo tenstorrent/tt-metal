@@ -30,7 +30,8 @@ public:
     void run_all_tests();
     void run_test_by_name(const std::string& test_name);
     void cleanup();
-
+    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_distributed_context() const;
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_mesh_device() const;
     const tt::tt_fabric::MeshGraph& get_mesh_graph() const;
     const std::unordered_map<Rank, tt::tt_fabric::MeshId>& get_rank_to_mesh_mapping() const;
 
@@ -49,7 +50,6 @@ private:
         const SocketConnectionConfig& connection_config);
 
     void execute_socket_test(tt::tt_metal::distributed::MeshSocket& socket, const ParsedTestConfig& test);
-    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context() const;
     bool should_participate_in_test(const ParsedTestConfig& test) const;
     void log_test_execution(const ParsedTestConfig& test, size_t socket_index, size_t total_sockets) const;
     std::unordered_map<Rank, tt::tt_fabric::MeshId> create_rank_to_mesh_mapping();

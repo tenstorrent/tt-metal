@@ -83,6 +83,16 @@ const std::unordered_map<Rank, tt::tt_fabric::MeshId>& MeshSocketTestRunner::get
     return rank_to_mesh_mapping_;
 }
 
+const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
+MeshSocketTestRunner::get_distributed_context() const {
+    return distributed_context_;
+}
+
+const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& MeshSocketTestRunner::get_mesh_device() const {
+    TT_FATAL(mesh_device_, "Mesh device not initialized");
+    return mesh_device_;
+}
+
 void MeshSocketTestRunner::initialize_and_validate_custom_physical_config(
     const PhysicalMeshConfig& physical_mesh_config) {
     const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
@@ -271,11 +281,6 @@ void MeshSocketTestRunner::execute_socket_test(
         test.memory_config.data_size,
         test.memory_config.page_size,
         test.memory_config.num_transactions);
-}
-
-std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>
-MeshSocketTestRunner::get_distributed_context() const {
-    return distributed_context_;
 }
 
 bool MeshSocketTestRunner::should_participate_in_test(const ParsedTestConfig& test) const {
