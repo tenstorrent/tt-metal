@@ -259,7 +259,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool local_mem_offset) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;

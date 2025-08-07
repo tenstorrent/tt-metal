@@ -25,7 +25,6 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
-#include <enchantum/enchantum.hpp>
 
 #include "assert.hpp"
 #include "buffer.hpp"

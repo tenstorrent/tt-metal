@@ -205,7 +205,7 @@ public:
 
 class Hal {
 public:
-    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
+    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t, bool)>;
     using IramRelocateFunc = std::function<uint64_t(uint64_t)>;
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
     using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
@@ -373,8 +373,8 @@ public:
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
-    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) const {
-        return relocate_func_(addr, local_init_addr);
+    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool local_mem_offset = false) const {
+        return relocate_func_(addr, local_init_addr, local_mem_offset);
     }
 
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }

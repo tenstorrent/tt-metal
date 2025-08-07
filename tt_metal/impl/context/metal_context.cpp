@@ -351,6 +351,7 @@ void MetalContext::clear_dram_state(chip_id_t device_id) {
 void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
     launch_msg_t launch_msg;
     go_msg_t go_msg;
+    go_msg.all = 0;
     go_msg.signal = RUN_MSG_INIT;
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
     std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, launch_msg);
@@ -839,12 +840,6 @@ void MetalContext::initialize_firmware(
         cluster_->write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
     };
 
-    // Use a different mailbox address each time we initialize firmware to avoid double
-    // PCIe write bug. Also in active_erisc firmwarwe we will clear the mailbox before we return,
-    // so if any double write was sent during runtime it will be cleared
-    // as of tt-firmware 18.6.0 there is no one else using the mailbox
-    static int mailbox_index = 0;
-
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
@@ -961,16 +956,16 @@ void MetalContext::initialize_firmware(
             } else {
                 // Active ethernet firmware launched immediately. Set the enable flag to 1 so FW doesn't exit
                 // immediately.
+                // tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
+                // Wait for ack not required because we wait for the done message
+                constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
                     device_id,
                     virtual_core,
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
                     mailbox_index,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
-                    true);
-                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
-                // There are 4 mailboxes. wrap to 0 after 3
-                mailbox_index = (mailbox_index + 1) % 4;
+                    false);
             }
 
             break;
@@ -987,6 +982,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     launch_msg_t launch_msg;
     go_msg_t go_msg;
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
+    go_msg.all = 0;
     go_msg.signal = RUN_MSG_INIT;
 
     // Populate core info, which will be written to device

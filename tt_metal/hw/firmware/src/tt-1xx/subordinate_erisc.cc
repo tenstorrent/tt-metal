@@ -128,8 +128,13 @@ int main() {
         uint32_t kernel_lma =
             kernel_config_base +
             mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[PROCESSOR_TYPE_INDEX];
+#if defined(COMPILE_FOR_AERISC)
+        // Stack usage is not implemented yet for subordinate active eth (active_erisck.cc)
+        reinterpret_cast<void (*)()>(kernel_lma)();
+#else
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
+#endif
         WAYPOINT("D");
 
         signal_subordinate_erisc_completion();

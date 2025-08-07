@@ -26,6 +26,7 @@
 #include <tt-metalium/device.hpp>
 #include "context/metal_context.hpp"
 #include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>

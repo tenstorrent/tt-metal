@@ -60,8 +60,8 @@ class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
-        if (params.is_fw && params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
-            // active eth has it's own crt0
+        if (params.is_fw && !(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0)) {
+            // active eth0 being shared with base fw has it's own crt0
             objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
@@ -203,7 +203,7 @@ public:
             // build.cpp used to distinguish "active_erisc" and "erisc" and use
             // that to determine what object files to link.
             // This is no longer necessary, but only to keep the target names unchanged.
-            return "active_erisc";
+            return params.processor_id == 0 ? "active_erisc" : "subordinate_active_erisc";
         }
         return HalJitBuildQueryBase::target_name(params);
     }
@@ -258,13 +258,13 @@ void Hal::initialize_bh() {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool local_mem_offset) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             // For firmware with base fw, __ldm_data is already offset by base fw.
             // So we need to undo that offset here to get the correct relocation address
             // for copying by the kernel to local memory.
-            if (local_init_addr == MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH) {
+            if (local_mem_offset) {
                 addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
             }
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
@@ -285,7 +285,8 @@ void Hal::initialize_bh() {
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
-            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC));  // used to program start addr for eth FW
+            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC) ||
+            (addr == AERISC_RESET_PC || addr == SUBORDINATE_AERISC_RESET_PC));  // used to program start addr for eth FW
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "dispatch_test_utils.hpp"
+#include "distributed.hpp"
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
@@ -1363,6 +1364,56 @@ TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
                     device, eth_core, static_cast<DataMovementProcessor>(erisc_idx));
             }
         }
+    }
+}
+
+// Test to see we can launch a kernel at the same time on both active ethernet cores
+// If they can't handshake it means only 1 was able to launch
+TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
+    const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        HalProgrammableCoreType::ACTIVE_ETH);
+    if (erisc_count < 2) {
+        GTEST_SKIP() << "Skipping test as this test requires 2 ethernet cores";
+    }
+    for (const auto& mesh_device : devices_) {
+        auto& cq = mesh_device->mesh_command_queue();
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        for (const auto& eth_core : mesh_device->get_devices()[0]->get_active_ethernet_cores(true)) {
+            auto program = tt::tt_metal::CreateProgram();
+            auto primary = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/local_handshake_2.cpp",
+                eth_core,
+                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0}
+            );
+            auto secondary = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/local_handshake_2.cpp",
+                eth_core,
+                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_1}
+            );
+
+            uint32_t unreserved_l1 = hal::get_erisc_l1_unreserved_base();
+            uint32_t init_value = rand();
+            log_info(tt::LogTest,
+                "Test active ethernet handshake for eth_core: {} DM0 and DM1, init value: {} unreserved_l1: 0x{:x}",
+                eth_core.str(),
+                init_value, unreserved_l1);
+
+            std::vector<uint32_t> primary_kernel_args = {1, unreserved_l1, init_value};
+            std::vector<uint32_t> secondary_kernel_args = {0, unreserved_l1, init_value};
+
+            tt::tt_metal::SetRuntimeArgs(program, primary, eth_core, primary_kernel_args);
+            tt::tt_metal::SetRuntimeArgs(program, secondary, eth_core, secondary_kernel_args);
+
+            distributed::MeshWorkload workload;
+            distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+        }
+
+        distributed::Finish(cq);
     }
 }
 

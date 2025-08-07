@@ -100,7 +100,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12656
+#define MEM_MAILBOX_SIZE 12704
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -267,7 +267,7 @@
 #define MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_AERISC_MAP_END
 #define MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH \
     (MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_AERISC_LOCAL_SIZE)
-#define MEM_AERISC_STACK_MIN_SIZE MEM_ERISC_STACK_MIN_SIZE
+// Only subordinate risc has it's own stack. Primary risc program is being called from base firmware
 #define MEM_SUBORDINATE_AERISC_STACK_MIN_SIZE MEM_ERISC_STACK_MIN_SIZE
 
 #define MEM_AERISC_BANK_TO_NOC_SCRATCH \
