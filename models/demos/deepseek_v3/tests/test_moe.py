@@ -79,14 +79,13 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(1),
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 
     # TTNN forward pass using utility function
-    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
     tt_output = run_module_forward(MoE, mode, tt_input, run_config)
 
     # Verify output memory config matches expected

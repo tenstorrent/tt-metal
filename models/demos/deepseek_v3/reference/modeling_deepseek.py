@@ -1159,6 +1159,13 @@ class DeepseekV3DecoderLayer(nn.Module):
         self.input_layernorm = DeepseekV3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = DeepseekV3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
+    def init_weights_with_random(self):
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                print(f"Initializing {name} with torch.randn")
+                with torch.no_grad():
+                    param.copy_(torch.randn_like(param) * 0.1)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -1192,7 +1199,7 @@ class DeepseekV3DecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states, self_attn_weights, present_key_value = self.self_attn.forward_mla(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,

@@ -13,12 +13,14 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
+    AllGatherAsyncConfig,
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
     MulConfig,
     OpConfigBase,
     ReduceScatterAsyncConfig,
+    ReshardConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -49,7 +51,7 @@ class MLP1D(AbstractModule):
     NOTE: This is not the MLP we will use for DeepSeek-R1, but we do use it as a base class for the other MLPs.
     """
 
-    WEIGHT_TORCH_DTYPE = torch.bfloat16
+    WEIGHT_TORCH_DTYPE = torch.float32
     WEIGHT_DTYPE = ttnn.bfloat4_b
 
     @dataclass
@@ -186,6 +188,16 @@ class MLP1D(AbstractModule):
 
         # Construct the config
         return {
+            "input_reshard": ReshardConfig(
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            "all_gather": AllGatherAsyncConfig(
+                mesh_device=MeshDeviceStub(mesh_device.shape),
+                cluster_axis=1,
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+            ),
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
             "linear_pc_gen": MLP1D.MLPProgramConfigData(
                 dim=dim, hidden_dim=hidden_dim, num_devices=mesh_width, core_grid_size=matmul_core_grid_size
@@ -205,7 +217,6 @@ class MLP1D(AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
-            "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,  # RMSNorm must provide this shard spec as its output
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
         }
 
@@ -257,13 +268,25 @@ class MLP1D(AbstractModule):
         ), "output_num_cores must divide the output tensor width evenly"
 
         # Calculate input and output memory configurations
-        input_memory_config = cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
+        input_memory_config = cls._get_decode_activation_memory_config(
+            even_int_div(dim, mesh_width), input_num_cores, mesh_device
+        )
         output_memory_config = cls._get_decode_activation_memory_config(
             even_int_div(dim, mesh_width), output_num_cores, mesh_device
         )
 
         # Construct the config
         return {
+            "input_reshard": ReshardConfig(
+                memory_config=input_memory_config,
+            ),
+            "all_gather": AllGatherAsyncConfig(
+                mesh_device=MeshDeviceStub(mesh_device.shape),
+                cluster_axis=1,
+                dim=-1,
+                memory_config=cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device),
+                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+            ),
             "w1": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -304,7 +327,6 @@ class MLP1D(AbstractModule):
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=output_memory_config,
             ),
-            "input_memory_config": input_memory_config,  # For asserting the input to the MLP
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
         }
 
@@ -331,7 +353,7 @@ class MLP1D(AbstractModule):
         return ttnn.create_sharded_memory_config_(
             shape=(
                 ttnn.core.roundup(MAX_BATCH_SIZE, ttnn.TILE_SIZE),
-                even_int_div(ttnn.core.roundup(per_device_width, ttnn.TILE_SIZE), activation_sharding_num_cores),
+                ttnn.core.roundup(even_int_div(per_device_width, activation_sharding_num_cores), ttnn.TILE_SIZE),
             ),
             core_grid=ttnn.num_cores_to_corerangeset(
                 activation_sharding_num_cores,
@@ -358,6 +380,10 @@ class MLP1D(AbstractModule):
         """
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+            "all_gather": {
+                "multi_device_global_semaphore": ccl.get_semaphore(1),
+                "num_links": ccl.get_max_links(1),
+            },
             "reduce_scatter_async": {
                 "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
                 "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
@@ -396,10 +422,14 @@ class MLP1D(AbstractModule):
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        assert x.memory_config() == cfg["input_memory_config"]
+        assert x.memory_config() == cfg["input_reshard"]["memory_config"]
 
         num_layers, _, seq_len, _ = x.shape
 
+        # All gather for efficient matmuls
+        x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
+
+        # Chunk the input if needed
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
             x = ttnn.reshape(x, [num_layers, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
             seq_len = cfg["max_rows"]
@@ -439,7 +469,10 @@ class MLP1D(AbstractModule):
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        assert x.memory_config() == cfg["input_memory_config"]
+        assert x.memory_config() == cfg["input_reshard"]["memory_config"]
+
+        # All gather
+        x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])

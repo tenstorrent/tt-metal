@@ -805,7 +805,7 @@ def run_rmsnorm_impl(
     )
 
     # Setup: Convert weights and get weight_config
-    state_dicts = ({"weight": rms_norm.weight.to(torch.bfloat16)},)  # Tuple of dictionaries
+    state_dicts = ({"weight": rms_norm.weight},)  # Tuple of dictionaries
     weight_config = RMSNorm.convert_weights(hf_config, state_dicts, temp_dir, device)
 
     # Generate appropriate config

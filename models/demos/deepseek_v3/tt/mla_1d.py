@@ -126,8 +126,7 @@ class MLA1D(AbstractModule):
         def convert_norm_weight(hf_name: str) -> dict:
             """Helper to convert normalization weights."""
             ttnn_name = cls.HF_TTNN_MAPPING[hf_name]
-            norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.weight")
-            norm_state_dicts = [{"weight": item[""].to(torch.bfloat16)} for item in norm_state_dicts]
+            norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.")
             return {
                 ttnn_name: RMSNorm.convert_weights(hf_config, norm_state_dicts, output_path / ttnn_name, mesh_device)
             }
@@ -267,6 +266,10 @@ class MLA1D(AbstractModule):
 
         mesh_shape = list(mesh_device.shape)
 
+        input_reshard = ReshardConfig(
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -395,6 +398,7 @@ class MLA1D(AbstractModule):
 
         return {
             "hf_config": hf_config,
+            "input_reshard": input_reshard,
             "mesh_shape": mesh_shape,
             "wq_a": wq_a_config,
             "wq_b": wq_b_config,
@@ -445,6 +449,10 @@ class MLA1D(AbstractModule):
 
         mesh_shape = list(mesh_device.shape)
         num_heads_local = even_int_div(num_heads, mesh_shape[1])
+
+        input_reshard = ReshardConfig(
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -699,6 +707,7 @@ class MLA1D(AbstractModule):
         return {
             "hf_config": hf_config,
             "mesh_shape": mesh_shape,
+            "input_reshard": input_reshard,
             "wq_a": wq_a_config,
             "wq_b": wq_b_config,
             "wkv_a": wkv_a_config,
