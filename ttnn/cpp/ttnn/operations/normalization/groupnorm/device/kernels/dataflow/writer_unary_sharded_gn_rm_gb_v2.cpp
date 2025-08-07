@@ -7,7 +7,15 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+
+void generate_tile_with_packed_bfloat16_values(uint32_t cb_id, uint32_t packed_bf16_value) {
+    cb_reserve_back(cb_id, 1);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
+    for (uint32_t i = 0; i < 512U; ++i) {
+        *ptr++ = packed_bf16_value;
+    }
+    cb_push_back(cb_id, 1);
+}
 
 void kernel_main() {
     constexpr bool is_mcast_sender = get_compile_time_arg_val(0) == 1;
@@ -105,7 +113,7 @@ void kernel_main() {
                 generate_reduce_scaler(cb_in_2, scalar_w);
 
                 constexpr uint32_t ones = 0x3F803F80;  // 2 packed bfloat16 into 1 uint32_t of value 1.0
-                generate_tile_with_packed_bfloat16_value(cb_ones, ones);
+                generate_tile_with_packed_bfloat16_values(cb_ones, ones);
 
                 if constexpr (is_mcast_sender) {
                     constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;

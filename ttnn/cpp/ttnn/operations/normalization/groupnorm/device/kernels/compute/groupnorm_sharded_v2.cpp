@@ -113,7 +113,7 @@ void MAIN {
     uint32_t output_tile_index = 0;
 
 #ifdef UNTILIZE_OUT
-#if !defined(FUSE_NEGATIVE_MASK)
+#ifndef FUSE_NEGATIVE_MASK
     constexpr int cb_outgamma = cb_in;
     constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_out;
     constexpr int cb_outbeta = do_gamma ? cb_out : cb_in;
@@ -145,7 +145,7 @@ void MAIN {
     // Used in cases of negative mask provided
     constexpr uint32_t cb_in_negative_mask = tt::CBIndex::c_14;
 
-#if defined(FUSE_NEGATIVE_MASK)
+#ifdef FUSE_NEGATIVE_MASK
     constexpr bool use_negative_mask = true;
 #else
     constexpr bool use_negative_mask = false;

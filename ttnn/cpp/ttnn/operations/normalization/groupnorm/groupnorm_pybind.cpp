@@ -29,7 +29,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             num_groups (int)
             epsilon (float): 1e-12.
-            input_mask (ttnn.Tensor, optional): Defaults to `None`.
+            input_mask (ttnn.Tensor, optional): Defaults to `None`. When processing the inputs, the mask is used to only look at the elements of the current group.
             weight (ttnn.Tensor, optional): Defaults to `None`.
             bias (ttnn.Tensor, optional): Defaults to `None`.
             dtype (ttnn.DataType, optional): Defaults to `None`.
@@ -38,7 +38,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             output_layout (ttnn.Layout, optional): Defaults to `None`.
             num_out_blocks (int, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
-            negative_mask (ttnn.Tensor, optional): Defaults to `None`.
+            negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Used to reduce the number of CB's used in the sharded version of the kernel by overlapping the CB's used for tilized input and output. (The kernel is in fact row major variant, but is internally tilizing RM into tilized inputs).
 
         Returns:
             ttnn.Tensor: the output tensor.
