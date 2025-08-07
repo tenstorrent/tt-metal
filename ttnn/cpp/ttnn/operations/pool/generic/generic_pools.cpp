@@ -4,7 +4,6 @@
 
 #include "generic_pools.hpp"
 
-#include <cstdint>
 #include <optional>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/buffer_types.hpp>
