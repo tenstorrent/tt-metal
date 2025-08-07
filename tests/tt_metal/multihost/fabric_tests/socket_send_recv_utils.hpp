@@ -31,7 +31,7 @@ std::string get_system_config_name(SystemConfig system_config);
 std::string get_test_variant_name(TestVariant variant);
 
 // Core socket send/recv test function
-void test_socket_send_recv(
+bool test_socket_send_recv(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
     tt::tt_metal::distributed::MeshSocket& socket,
     uint32_t data_size,
