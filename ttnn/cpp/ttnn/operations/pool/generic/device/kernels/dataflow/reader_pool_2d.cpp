@@ -216,9 +216,8 @@ void kernel_main() {
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
     constexpr uint32_t stride_w = get_compile_time_arg_val(28);
     constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 17;
-    DPRINT << "in_aligned_nbytes_c" << in_aligned_nbytes_c << ENDL();
-    DPRINT << "in_nbytes_padded_c" << in_nbytes_padded_c << ENDL();
-    DPRINT << "in_nbytes_c" << in_nbytes_c << ENDL();
+
+    clear_out_tiles<in_cb_id, clear_value_cb_id>();
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
