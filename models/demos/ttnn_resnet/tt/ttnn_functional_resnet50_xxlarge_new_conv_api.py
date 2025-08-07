@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import is_grayskull, is_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
+from models.utility_functions import is_grayskull, is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -554,7 +554,7 @@ class resnet50:
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
         self.conv1_output_channels = self.conv1_weight_tensor.shape[0]
-        assert self.conv1_weight_tensor.shape[2] == 4
+        # assert self.conv1_weight_tensor.shape[2] == 4
 
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
@@ -650,16 +650,17 @@ class resnet50:
         return layers
 
     def preprocessing(self, torch_input_tensor):
-        resnet50_first_conv_kernel_size = 3
-        resnet50_first_conv_stride = 2
-        input_tensor = pad_and_fold_conv_activation_for_unity_stride(
-            torch_input_tensor,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_stride,
-            resnet50_first_conv_stride,
-        )
-        input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
+        print(f"=================================== preprocessing")
+        # resnet50_first_conv_kernel_size = 3
+        # resnet50_first_conv_stride = 2
+        # input_tensor = pad_and_fold_conv_activation_for_unity_stride(
+        #     torch_input_tensor,
+        #     resnet50_first_conv_kernel_size,
+        #     resnet50_first_conv_kernel_size,
+        #     resnet50_first_conv_stride,
+        #     resnet50_first_conv_stride,
+        # )
+        input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
         return input_tensor
 
@@ -687,11 +688,11 @@ class resnet50:
             "in_channels": self.conv1_input_channels,
             "out_channels": self.conv1_output_channels,
             "batch_size": self.batch_size,
-            "input_height": 515,
-            "input_width": 515,
-            "kernel_size": (4, 4),
-            "stride": (1, 1),
-            "padding": (0, 0),
+            "input_height": 1024,
+            "input_width": 1024,
+            "kernel_size": (7, 7),
+            "stride": (2, 2),
+            "padding": (3, 3),
             "dilation": (1, 1),
             "groups": 1,
             "device": device,
@@ -703,6 +704,9 @@ class resnet50:
                 act_block_h_override=act_block_h_override,
             ),
         }
+        print(f"=================================== conv1")
+        print(f"self.conv1_weight_tensor.shape: {self.conv1_weight_tensor.shape}")
+        print(f"self.conv1_bias_tensor.shape: {self.conv1_bias_tensor.shape}")
         if not ttnn.is_tensor_storage_on_device(self.conv1_weight_tensor):
             self.conv1_weight_tensor = ttnn.prepare_conv_weights(
                 weight_tensor=self.conv1_weight_tensor,
@@ -723,7 +727,15 @@ class resnet50:
 
             self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
             self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
-
+        print(f"self.conv1_weight_tensor.dtype: {self.conv1_weight_tensor.dtype}")
+        print(f"self.conv1_bias_tensor.dtype: {self.conv1_bias_tensor.dtype}")
+        # print(f"input_tensor.dtype: {input_tensor.dtype()}")
+        print(f"self.model_config['ACTIVATIONS_DTYPE']: {self.model_config['ACTIVATIONS_DTYPE']}")
+        print(f"=================================== conv1 details in first_run")
+        print(f"input_tensor.shape: {input_tensor.shape}")
+        print(f"input_tensor.memory_config: {input_tensor.memory_config()}")
+        print(f"input_tensor.get_layout: {input_tensor.get_layout()}")
+        print(f"conv_kwargs: {conv_kwargs}")
         x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -736,6 +748,34 @@ class resnet50:
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
+        )
+        print(f"=================================== conv1 output")
+        print(f"x.shape: {x.shape}")
+        print(f"x.memory_config: {x.memory_config()}")
+        print(f"x.get_layout: {x.get_layout()}")
+        print(f"=================================== compute_config details")
+        print(f"compute_config: {compute_config}")
+        print(f"device.arch(): {device.arch()}")
+        print(f"model_config MATH_FIDELITY: {self.model_config['MATH_FIDELITY']}")
+        print(f"model_config WEIGHTS_DTYPE: {self.model_config['WEIGHTS_DTYPE']}")
+        print(f"model_config ACTIVATIONS_DTYPE: {self.model_config['ACTIVATIONS_DTYPE']}")
+
+        # Print individual compute config attributes if it's a Wormhole config
+        if hasattr(compute_config, "math_fidelity"):
+            print(f"compute_config.math_fidelity: {compute_config.math_fidelity}")
+        if hasattr(compute_config, "math_approx_mode"):
+            print(f"compute_config.math_approx_mode: {compute_config.math_approx_mode}")
+        if hasattr(compute_config, "fp32_dest_acc_en"):
+            print(f"compute_config.fp32_dest_acc_en: {compute_config.fp32_dest_acc_en}")
+        if hasattr(compute_config, "packer_l1_acc"):
+            print(f"compute_config.packer_l1_acc: {compute_config.packer_l1_acc}")
+        if hasattr(compute_config, "dst_full_sync_en"):
+            print(f"compute_config.dst_full_sync_en: {compute_config.dst_full_sync_en}")
+        if hasattr(compute_config, "throttle_level"):
+            print(f"compute_config.throttle_level: {compute_config.throttle_level}")
+        print(f"===================================")
         # Relu is fused with conv1
 
         if self.batch_size == 20 or self.batch_size == 1:

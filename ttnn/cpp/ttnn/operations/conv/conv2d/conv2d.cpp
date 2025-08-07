@@ -697,6 +697,8 @@ Result conv2d_L1(
             }
         }
     }
+    // std::cout << "weight_tensor_on_device.dtype(): " << weight_tensor_on_device.dtype() << std::endl;
+    // std::cout << "bias_tensor_on_device.dtype(): " << bias_tensor_on_device.value().dtype() << std::endl;
 
     // call optimized conv op or matmul micro op
     bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);

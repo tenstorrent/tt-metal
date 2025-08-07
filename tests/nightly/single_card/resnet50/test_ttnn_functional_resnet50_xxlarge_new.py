@@ -54,7 +54,7 @@ def custom_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
             parameters["downsample"]["bias"] = ttnn.from_torch(torch.reshape(downsample_bias, (1, 1, 1, -1)))
     elif isinstance(model, torchvision.models.resnet.ResNet):
         conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
-        conv1_weight = pad_and_fold_conv_filters_for_unity_stride(conv1_weight, 2, 2)
+        # conv1_weight = pad_and_fold_conv_filters_for_unity_stride(conv1_weight, 2, 2)
         parameters["conv1"] = {}
         parameters["conv1"]["weight"] = ttnn.from_torch(conv1_weight)
         parameters["conv1"]["bias"] = ttnn.from_torch(torch.reshape(conv1_bias, (1, 1, 1, -1)))
@@ -223,6 +223,8 @@ class ResNet50TestInfra:
 
     def preprocess_torch_input(self, torch_input_tensor=None):
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
+        print(f"=================================== preprocess_torch_input")
+        print(f"torch_input_tensor.shape: {torch_input_tensor.shape}")
         self.input_tensor = self.ttnn_resnet50_model.preprocessing(torch_input_tensor)
 
     def run(self, torch_input_tensor=None):
@@ -274,6 +276,8 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     ((1, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
 def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
+    print(f"Starting test_resnet_50")
+    print(f"model_location_generator: {model_location_generator}")
     test_infra = create_test_infra(
         device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=model_location_generator
     )
