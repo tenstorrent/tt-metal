@@ -11,8 +11,8 @@
 #include <vector>
 
 #include <tt-metalium/device.hpp>
-#include "dispatch_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
