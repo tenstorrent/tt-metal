@@ -26,3 +26,5 @@ static constexpr uint32_t ETH_PROFILER_CHECK =
 static_assert(ETH_LAUNCH_CHECK == 0);
 static_assert(ETH_PROFILER_CHECK == 0);
 static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+// Expected to be the same because UMD does not differentiate between idle and active
+static_assert(MEM_AERISC_FABRIC_LITE_BARRIER == MEM_IERISC_FABRIC_LITE_BARRIER);

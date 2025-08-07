@@ -239,10 +239,9 @@ std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
         lite_fabric::WaitForState(cluster, tunnel_1x.mmio_cxy_virtual(), lite_fabric::InitState::READY);
         log_info(
             tt::LogMetal,
-            "Lite Fabric {} {} (virtual={}) is ready",
-            tunnel_1x.mmio_core_logical,
-            tunnel_1x.mmio_core_virtual.y,
-            tunnel_1x.mmio_core_virtual.x);
+            "Lite Fabric {} (virtual={}) is ready",
+            tunnel_1x.mmio_core_logical.str(),
+            tunnel_1x.mmio_core_virtual.str());
     }
 
     return pgm;

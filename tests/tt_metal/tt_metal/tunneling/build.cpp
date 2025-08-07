@@ -101,6 +101,7 @@ int CompileLiteFabric(
         fmt::format("ROUTING_MODE={}", ROUTING_MODE_1D | ROUTING_MODE_LOW_LATENCY),
     };
 
+    // This assumes both chips are the same
     auto soc_d = cluster->get_soc_desc(0);
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];

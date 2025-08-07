@@ -64,6 +64,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_LITE_CONFIG)] = MEM_AERISC_FABRIC_LITE_CONFIG;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_LITE_BARRIER)] = MEM_AERISC_FABRIC_LITE_BARRIER;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LOCAL_L1_INIT_SCRATCH)] =
         MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
 
@@ -93,6 +94,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] =
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_LITE_CONFIG)] = MEM_AERISC_FABRIC_LITE_CONFIG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_LITE_BARRIER)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LOCAL_L1_INIT_SCRATCH)] = MEM_ERISC_LOCAL_SIZE;
 
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);

@@ -6,12 +6,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include "fabric_edm_packet_header.hpp"
 #include "lite_fabric_constants.hpp"
 
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
 
+#include <fmt/ranges.h>
 #include <umd/device/types/xy_pair.h>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -134,6 +136,8 @@ public:
 // Interface for Host to MMIO Lite Fabric
 template <uint32_t NUM_BUFFERS, uint32_t CHANNEL_BUFFER_SIZE>
 struct HostToLiteFabricInterface {
+    static constexpr uint32_t k_ConnectedDeviceId = 1;
+
     // This values are updated by the device and read to the host
     struct DeviceToHost {
         volatile uint8_t fabric_sender_channel_index = 0;
@@ -150,6 +154,8 @@ struct HostToLiteFabricInterface {
     uint32_t host_interface_on_device_addr = 0;
     uint32_t sender_channel_base = 0;
     uint32_t receiver_channel_base = 0;
+    uint32_t eth_barrier_addr = 0;
+    uint32_t tensix_barrier_addr = 0;
 
     inline void init() volatile {
         h2d.sender_host_write_index = 0;
@@ -218,8 +224,39 @@ struct HostToLiteFabricInterface {
         HostToLiteFabricReadEvent::increment();
     }
 
-    // Not implemented yet. Need to write a small value and then read it back to check pipeline was flushed
-    void barrier(tt_cxy_pair virtual_core_sender) { wait_for_empty_write_slot(virtual_core_sender); }
+    void barrier(tt_cxy_pair virtual_core_sender) {
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto soc_d = cluster.get_soc_desc(k_ConnectedDeviceId);
+        const auto& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::TRANSLATED);
+        const auto& tensix_cores = soc_d.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
+
+        std::vector<uint32_t> barrier_value{rand(), rand(), rand(), rand()};
+
+        const auto do_barrier = [&](const std::vector<tt::umd::CoreCoord>& virtual_cores,
+                                    const std::string& core_type_name,
+                                    uint32_t barrier_addr) -> void {
+            for (const auto& virtual_core : virtual_cores) {
+                const uint64_t dest_noc_upper =
+                    (uint64_t(virtual_core.y) << (36 + 6)) | (uint64_t(virtual_core.x) << 36);
+                uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)barrier_addr;
+                write(
+                    barrier_value.data(), barrier_value.size() * sizeof(uint32_t), virtual_core_sender, dest_noc_addr);
+
+                std::vector<uint32_t> read_barrier(barrier_value.size(), 0);
+                read(read_barrier.data(), barrier_value.size() * sizeof(uint32_t), virtual_core_sender, dest_noc_addr);
+                TT_FATAL(
+                    read_barrier == barrier_value,
+                    "Chip memory corruption on {} virtual core {}: barrier value mismatch: Read {} but expected {}",
+                    core_type_name,
+                    virtual_core.str(),
+                    fmt::format("{:#x}", fmt::join(read_barrier, ", ")),
+                    fmt::format("{:#x}", fmt::join(barrier_value, ", ")));
+            }
+        };
+
+        do_barrier(eth_cores, "ethernet", eth_barrier_addr);
+        do_barrier(tensix_cores, "tensix", tensix_barrier_addr);
+    }
 
     void send_payload_flush_non_blocking_from_address(
         tt::tt_fabric::LowLatencyPacketHeader& header, tt_cxy_pair virtual_core_sender, uint32_t channel_address) {
@@ -352,9 +389,23 @@ struct LiteFabricMemoryMap {
     unsigned char sender_channel_buffer[SENDER_NUM_BUFFERS_ARRAY[0] * CHANNEL_BUFFER_SIZE];
     unsigned char receiver_channel_buffer[RECEIVER_NUM_BUFFERS_ARRAY[0] * CHANNEL_BUFFER_SIZE];
     unsigned char padding3[16];
+    // Must be last because it has members that are only stored on the host
     HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE> host_interface;
 
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
+    static auto make_host_interface() {
+        lite_fabric::HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE> host_interface;
+        host_interface.host_interface_on_device_addr = lite_fabric::LiteFabricMemoryMap::get_host_interface_addr();
+        host_interface.sender_channel_base = lite_fabric::LiteFabricMemoryMap::get_send_channel_addr();
+        host_interface.receiver_channel_base = lite_fabric::LiteFabricMemoryMap::get_receiver_channel_addr();
+        host_interface.eth_barrier_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_BARRIER);
+        host_interface.tensix_barrier_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_BARRIER);
+        host_interface.init();
+        return host_interface;
+    }
+
     static uint32_t get_address() {
         auto addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_CONFIG);
