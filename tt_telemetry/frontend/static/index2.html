@@ -1,0 +1,159 @@
+<!-- Example of a Lit frontend -->
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hierarchical Telemetry Dashboard</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+            min-height: 100vh;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #fff;
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <h1>System Telemetry Dashboard</h1>
+    <dump-telemetry></dump-telemetry>
+
+    <script type="module">
+         import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
+
+        class DumpTelemetry extends LitElement {
+            static properties = {
+                text: { type: String }
+            };
+
+            constructor() {
+                super();
+                this.text = '';
+                this._pollInterval = null;
+                this._eventSource = null;
+            }
+
+            static styles = css`
+                :host {
+                    display: block;
+                    margin: 20px 0;
+                }
+                
+                .telemetry-output {
+                    background: #2d2d2d;
+                    border: 1px solid #444;
+                    border-radius: 8px;
+                    padding: 15px;
+                    max-height: 400px;
+                    overflow-y: auto;
+                    font-family: 'Courier New', monospace;
+                    font-size: 12px;
+                    line-height: 1.4;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                }
+                
+                .telemetry-output:empty::before {
+                    content: "Waiting for data...";
+                    color: #888;
+                    font-style: italic;
+                }
+            `;
+
+            render() {
+                return html`
+                    <div class="telemetry-output">
+                        ${this.text}
+                    </div>
+                `;
+            }
+
+            connectedCallback() {
+                super.connectedCallback();
+                
+                // Start REST API polling every 2 seconds
+                this._pollInterval = setInterval(() => this._pollAPI(), 2000);
+                
+                // Setup Server-Sent Events
+                this._setupSSE();
+            }
+
+            disconnectedCallback() {
+                super.disconnectedCallback();
+                
+                // Clean up REST API polling
+                if (this._pollInterval) {
+                    clearInterval(this._pollInterval);
+                }
+                
+                // Clean up SSE connection
+                if (this._eventSource) {
+                    this._eventSource.close();
+                }
+            }
+
+            async _pollAPI() {
+                try {
+                    // Replace '/api/data' with your actual REST API endpoint
+                    const response = await fetch('/api/telemetry');
+                    if (response.ok) {
+                        const data = await response.json();
+                        this._appendToText(`[REST] ${JSON.stringify(data)}`);
+                    }
+                } catch (error) {
+                    console.error('Error polling API:', error);
+                    this._appendToText(`[REST ERROR] ${error.message}`);
+                }
+            }
+
+            _setupSSE() {
+                try {
+                    // Replace '/api/events' with your actual SSE endpoint
+                    this._eventSource = new EventSource('/api/stream');
+                    
+                    this._eventSource.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            this._appendToText(`[SSE] ${JSON.stringify(data)}`);
+                        } catch (error) {
+                            // If it's not JSON, append as-is
+                            this._appendToText(`[SSE] ${event.data}`);
+                        }
+                    };
+
+                    this._eventSource.onerror = (error) => {
+                        console.error('SSE error:', error);
+                        this._appendToText(`[SSE ERROR] Connection error`);
+                    };
+
+                    this._eventSource.onopen = () => {
+                        console.log('SSE connection opened');
+                        this._appendToText(`[SSE] Connection established`);
+                    };
+                } catch (error) {
+                    console.error('Error setting up SSE:', error);
+                    this._appendToText(`[SSE ERROR] ${error.message}`);
+                }
+            }
+
+            _appendToText(newData) {
+                const timestamp = new Date().toISOString();
+                const formattedData = `[${timestamp}] ${newData}\n`;
+                this.text += formattedData;
+                this.requestUpdate();
+            }
+        }
+
+        // Register all custom elements
+        customElements.define('dump-telemetry', DumpTelemetry);
+    </script>
+</body>
+</html>
