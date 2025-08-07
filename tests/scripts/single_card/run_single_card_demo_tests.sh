@@ -54,8 +54,7 @@ run_segformer_func() {
   pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation --timeout 600; fail+=$?
 
   #Segformer Classification Demo
-  # comment until HF Imagenet-1k Dataset is accessible in CIv2 env
-  # pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo --timeout 600; fail+=$?
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo --timeout 600; fail+=$?
 
   #Segformer Segmentation Eval
   pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer --timeout 600; fail+=$?
@@ -289,8 +288,7 @@ run_mobilenetv2_perf(){
  pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp --timeout 600
 
 #  mobilenetv2 eval
-#   comment until HF Imagenet-1k Dataset is accessible in CIv2 env
-#   pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
+  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
 
 }
 
@@ -307,7 +305,9 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+ pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image --timeout 600
+ # vanilla_unet eval
+ pytest -n auto models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet --timeout 1000
 }
 run_yolov8x_perf() {
 
