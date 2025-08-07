@@ -18,6 +18,7 @@ class TtSegDeformableTransformer:
         self.embed_dims = 256
         self.device = device
         self.params = params
+        self.level_embeds = params.level_embeds
         self.encoder = TtDetrTransformerEncoder(
             params=params.encoder,
             device=device,
@@ -53,22 +54,14 @@ class TtSegDeformableTransformer:
 
     def get_valid_ratio(self, mask, device=None):
         """Get the valid radios of feature maps of all  level."""
-        mask = ttnn.to_torch(mask).to(torch.int32)
         _, H, W = mask.shape
-        valid_H = torch.sum(~mask[:, :, 0], 1)
-        valid_W = torch.sum(~mask[:, 0, :], 1)
-        valid_ratio_h = valid_H.float() / H
-        valid_ratio_w = valid_W.float() / W
-        valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
-        valid_ratio = ttnn.from_torch(valid_ratio, device=device, layout=ttnn.TILE_LAYOUT)
-        # _, H, W = mask.shape
-        # one_tensor = ttnn.ones(mask.shape, layout=ttnn.TILE_LAYOUT, device = self.device)
-        # neg_mask = ttnn.subtract(one_tensor, mask)
-        # valid_H = ttnn.sum(neg_mask[:, :, 0], dim=1)
-        # valid_W = ttnn.sum(neg_mask[:, 0, :], dim=1)
-        # valid_ratio_h = ttnn.divide(valid_H, H)
-        # valid_ratio_w = ttnn.divide(valid_W, W)
-        # valid_ratio = ttnn.stack([valid_ratio_w, valid_ratio_h], dim=-1)
+        one_tensor = ttnn.ones(mask.shape, layout=ttnn.TILE_LAYOUT, device=self.device)
+        neg_mask = ttnn.subtract(one_tensor, mask)
+        valid_H = ttnn.sum(neg_mask[:, :, 0], dim=1)
+        valid_W = ttnn.sum(neg_mask[:, 0, :], dim=1)
+        valid_ratio_h = ttnn.divide(valid_H, H)
+        valid_ratio_w = ttnn.divide(valid_W, W)
+        valid_ratio = ttnn.stack([valid_ratio_w, valid_ratio_h], dim=-1)
         return valid_ratio
 
     def forward(
@@ -96,7 +89,8 @@ class TtSegDeformableTransformer:
             mask = ttnn.reshape(mask, (mask.shape[0], -1))
             pos_embed = ttnn.reshape(pos_embed, (pos_embed.shape[0], pos_embed.shape[1], -1))
             pos_embed = ttnn.permute(pos_embed, (0, 2, 1))
-            out = ttnn.reshape(level_embeds[lvl : lvl + 1], (1, 1, -1))
+            out = ttnn.reshape(self.level_embeds[lvl], (1, 1, -1))
+            out = ttnn.to_layout(out, layout=ttnn.TILE_LAYOUT)
             lvl_pos_embed = pos_embed + out
             lvl_pos_embed_flatten.append(lvl_pos_embed)
             feat_flatten.append(feat)
@@ -111,7 +105,7 @@ class TtSegDeformableTransformer:
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.float32,
         )
-        prod = ttnn.prod(spatial_shapes, dim=1)  # ttnn.prod give 2496.00000 instead 2500.0000
+        prod = ttnn.prod(spatial_shapes, dim=1)
         cumsum = ttnn.cumsum(prod, dim=0)
         cumsum_excl_last = cumsum[: cumsum.shape[0] - 1]
         zero = ttnn.zeros(
@@ -120,15 +114,11 @@ class TtSegDeformableTransformer:
             device=self.device,
         )
         level_start_index = zero
-        print("level_start_index", level_start_index)
 
         # valid_ratios computation
         valid_ratios_list = [self.get_valid_ratio(m, device=self.device) for m in mlvl_masks]
         valid_ratios = ttnn.stack(valid_ratios_list, dim=1)  # values changes in tnnn
 
-        print("spatial_shapes", spatial_shapes, spatial_shapes.shape)
-        print("valid_ratios", valid_ratios, valid_ratios.shape)
-        # return valid_ratios
         spatial_shapes = ttnn.to_torch(spatial_shapes)
         valid_ratios = ttnn.to_torch(valid_ratios)
         reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device="cpu")
@@ -160,8 +150,6 @@ class TtSegDeformableTransformer:
         query_pos = ttnn.expand(query_pos, (bs, -1, -1))
         query = ttnn.unsqueeze(query, 0)
         query = ttnn.expand(query, (bs, -1, -1))
-        # query_pos_layout = ttnn.to_layout(query_pos, ttnn.ROW_MAJOR_LAYOUT)
-        # reference_points = self.reference_points(query_pos_layout)
         query_pos = ttnn.to_layout(query_pos, ttnn.TILE_LAYOUT)
         reference_points = ttnn.linear(
             query_pos, self.params.reference_points.weight, bias=self.params.reference_points.bias

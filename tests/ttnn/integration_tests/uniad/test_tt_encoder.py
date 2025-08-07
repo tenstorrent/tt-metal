@@ -156,6 +156,7 @@ def test_uniad_encoder(
     level_start_index = ttnn.from_torch(
         level_start_index, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
+    bev_query = ttnn.from_torch(bev_query, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     shift = ttnn.from_torch(shift, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     ttnn_output = tt_model(

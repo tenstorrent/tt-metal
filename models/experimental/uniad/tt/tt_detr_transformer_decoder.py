@@ -186,8 +186,6 @@ class TtDetrTransformerDecoderLayer:
                     weight=self.params.norms[norm_index].weight,  # Changed here
                     bias=self.params.norms[norm_index].bias,  # Changed here
                 )
-                ttnn.deallocate(self.params.norms[norm_index].weight)  # Changed here
-                ttnn.deallocate(self.params.norms[norm_index].bias)  # Changed here
                 norm_index += 1
 
             elif layer == "cross_attn":
@@ -299,14 +297,14 @@ class TtDeformableDetrTransformerDecoder:
             if reg_branches is not None:
                 # Select reg_branch layers for current lid
                 layers = self.params_branches[lid]
-
+                tmp = output
                 for i in range(0, 5, 2):
                     tmp = ttnn.linear(
-                        output,
+                        tmp,
                         layers[i]["weight"],
                         bias=layers[i]["bias"],
                     )
-                    if i < 2:
+                    if i <= 2:
                         tmp = ttnn.relu(tmp)
 
                 if reference_points.shape[-1] == 4:
