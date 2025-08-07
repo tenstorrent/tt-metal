@@ -952,7 +952,7 @@ public:
     ~DeviceOperation() { this->destruct(); }
 
 private:
-    storage_t type_erased_storage{};
+    alignas(max_align_t) storage_t type_erased_storage{};
     void* pointer = nullptr;
 
     void (*delete_storage)(storage_t&) = nullptr;
