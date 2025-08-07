@@ -56,7 +56,14 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
     /* ================ SETUP ================ */
 
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // assert(
     //    (test_config.is_multicast && test_config.loopback) ||
@@ -89,11 +96,11 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
     auto sub_core_list = corerange_to_cores(sub_logical_core_set);
 
     // Subordinate Physical (only needed for unicast)
-    CoreCoord sub_worker_start_coord = device->worker_core_from_logical_core(sub_logical_start_coord);
-    CoreCoord sub_worker_end_coord = device->worker_core_from_logical_core(sub_logical_end_coord);
+    CoreCoord sub_worker_start_coord = mesh_device->worker_core_from_logical_core(sub_logical_start_coord);
+    CoreCoord sub_worker_end_coord = mesh_device->worker_core_from_logical_core(sub_logical_end_coord);
     vector<uint32_t> sub_worker_coordinates = {};
     for (auto& sub_logical_core : sub_core_list) {
-        CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);
+        CoreCoord sub_worker_core = mesh_device->worker_core_from_logical_core(sub_logical_core);
         uint32_t sub_worker_core_packed =
             (sub_worker_core.x << 16) | (sub_worker_core.y & 0xFFFF);  // Pack coordinates into a single uint32_t
         sub_worker_coordinates.push_back(sub_worker_core_packed);
@@ -168,7 +175,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
 
     DataMovementProcessor data_movement_processor = DataMovementProcessor::RISCV_0;
     auto sender_kernel = CreateKernel(
-        program,
+        program_,
         sender_kernel_path,
         mst_logical_core_set,
         DataMovementConfig{
@@ -182,12 +189,12 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
             sender_runtime_args.end(), sub_worker_coordinates.begin(), sub_worker_coordinates.end());
     }
 
-    SetRuntimeArgs(program, sender_kernel, mst_logical_core_set, sender_runtime_args);
+    SetRuntimeArgs(program_, sender_kernel, mst_logical_core_set, sender_runtime_args);
 
     // Assign unique id
 
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     /* ================ EXECUTION ================ */
 
