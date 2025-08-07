@@ -19,14 +19,14 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
     auto doc = fmt::format(
         R"doc(
 
-            Computes the product of all elements on specified ``dim`` of the ``input`` tensor.
+            Computes the product of all elements on specified :attr:`dim` of the :attr:`input_tensor` tensor.
 
-            If no ``dim`` is provided (or ``dim`` is set to `None`), it will compute the full product of every element in the ``input`` tensor.
+            If no :attr:`dim` is provided (or :attr:`dim` is set to `None`), it will compute the full product of every element in the :attr:`input_tensor` tensor.
             When using this full-product mode, the input tensor must be bfloat16.
 
-            If ``keepdim`` is `True`, the resulting tensor will have a similar shape as the ``input`` tensor, but with the specified ``dim`` reduced to 1.
-            Otherwise, the target ``dim`` will be squeezed, resulting in an output tensor with one less dimension than the ``input`` tensor.
-            Setting ``keepdim`` to `True` is not supported when computing the full product, as this operation results in a scalar.
+            If :attr:`keepdim` is `True`, the resulting tensor will have the same rank as the :attr:`input_tensor` tensor, but with the specified :attr:`dim` reduced to 1.
+            Otherwise, the target :attr:`dim` will be squeezed, resulting in an output tensor with one less dimension than the :attr:`input_tensor` tensor.
+            Setting :attr:`keepdim` to `True` is not supported when computing the full product, as this operation results in a scalar.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.

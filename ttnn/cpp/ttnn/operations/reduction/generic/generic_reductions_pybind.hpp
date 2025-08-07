@@ -18,7 +18,7 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
         R"doc(
         {0}
 
-        Computes the {0} of the input tensor along the specified dimension.
+        Computes the {0} of the input tensor :attr:`input_a` along the specified dimension :attr:`dim`.
         If no dimension is provided, {0} is computed over all dimensions yielding a single value.
 
             Args:

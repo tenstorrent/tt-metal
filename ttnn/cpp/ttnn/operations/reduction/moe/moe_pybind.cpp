@@ -21,12 +21,12 @@ void bind_reduction_moe_operation(py::module& module) {
         R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
 
             Returns the weight of the zero-th MoE expert.
-            Input tensor must have BFLOAT16 data type and TILE_LAYOUT layout.
-            expert_mask_tensor and topk_mask_tensor must have BFLOAT16 data type and TILE_LAYOUT layout.
+            :attr:`input_tensor` must have BFLOAT16 data type and TILE_LAYOUT layout.
+            :attr:`expert_mask_tensor` and :attr:`topk_mask_tensor` must have BFLOAT16 data type and TILE_LAYOUT layout.
 
-            Output value tensor will have the same data type as input tensor and output.
+            Output value tensor will have the same data type as :attr:`input_tensor` and :attr:`output_tensor`.
 
-            Equivalent pytorch code:
+            Equivalent PyTorch code:
 
             .. code-block:: python
                 val, ind = torch.topk(input_tensor + expert_mask_tensor, k)

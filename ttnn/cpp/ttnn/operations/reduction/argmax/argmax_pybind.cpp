@@ -16,13 +16,13 @@ void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
         R"doc(
 
-            Returns the indices of the maximum value of elements in the ``input`` tensor
-            If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
+            Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
+            If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 
             The input tensor must be in ROW_MAJOR layout.
             Currently this op only supports dimension-specific reduction on the last dimension.
 
-            Input tensor support bfloat16, float32, uint32, int32, uint16 data types and ROW_MAJOR layout.
+            Input tensor supports bfloat16, float32, uint32, int32, uint16 data types, and ROW_MAJOR layout.
 
             Output tensor will have UINT32 data type.
 

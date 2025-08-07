@@ -21,8 +21,8 @@ namespace py = pybind11;
 void bind_reduction_cumsum_operation(py::module& module) {
     auto docstring =
         R"doc(
-        Returns cumulative sum of `input` along dimension `dim`
-        For a given `input` of size N, the `output` will also contain N elements and be such that:
+        Returns cumulative sum of :attr:`input` along dimension :attr:`dim`
+        For a given :attr:`input` of size N, the :attr:`output` will also contain N elements and be such that:
 
         .. math::
             \mathrm{{output}}_i = \mathrm{{input}}_1 + \mathrm{{input}}_2 + \cdots + \mathrm{{input}}_i
@@ -43,7 +43,7 @@ void bind_reduction_cumsum_operation(py::module& module) {
 
 
         Note:
-            If both `dtype` and `output` are specified then `output.dtype` must match `dtype`.
+            If both :attr:`dtype` and :attr:`output` are specified then :attr:`output.dtype` must match :attr:`dtype`.
 
             Supported dtypes, layout, ranks and `dim` values:
 

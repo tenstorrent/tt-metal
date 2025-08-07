@@ -15,13 +15,13 @@ namespace py = pybind11;
 void bind_reduction_sampling_operation(py::module& module) {
     auto doc =
         R"doc(
-            Samples from the input tensor based on provided top-k and top-p constraints.
+            Samples from the :attr:`input_values_tensor` based on provided top-k and top-p constraints.
 
-            This operation samples values from the  `input_values_tensor` based on the provided thresholds `k` (top-k sampling)
-            and `p` (top-p nucleus sampling). The operation uses the `input_indices_tensor` for indexing and applies sampling
+            This operation samples values from the :attr:`input_values_tensor` based on the provided thresholds :attr:`k` (top-k sampling)
+            and :attr:`p` (top-p nucleus sampling). The operation uses the :attr:`input_indices_tensor` for indexing and applies sampling
             under the given seed for reproducibility.
 
-            The op first converts the input_values_tensor into probabilities by doing a softmax.
+            The op first converts the :attr:`input_values_tensor` into probabilities by doing a softmax.
 
             In top-k sampling, the op considers only the k highest-probability values from the input distribution. The remaining values are ignored, regardless of their probabilities.
             In top-p sampling, the op selects values from the input distribution such that the cumulative probability mass is less than or equal to a threshold p.
