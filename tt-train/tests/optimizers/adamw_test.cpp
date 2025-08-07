@@ -11,7 +11,6 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "fmt/base.h"
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 
@@ -29,7 +28,6 @@ protected:
 
 TEST_F(AdamWFullTest, AdamWTest) {
     using namespace ttml::ops;
-    ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t batch_size = 32;
     const size_t num_features = 64;
@@ -54,7 +52,7 @@ TEST_F(AdamWFullTest, AdamWTest) {
 
     auto model = ttml::modules::LinearLayer(num_features, 1);
     auto adamw_config = ttml::optimizers::AdamWConfig();
-    adamw_config.lr = 1e-2F;
+    adamw_config.lr = 1e-4F;
     adamw_config.weight_decay = 0.F;
     auto optimizer = ttml::optimizers::AdamW(model.parameters(), adamw_config);
 
@@ -71,6 +69,7 @@ TEST_F(AdamWFullTest, AdamWTest) {
         optimizer.step();
         ttml::autograd::ctx().reset_graph();
     }
+
     EXPECT_LT(losses.back(), losses.front());
     EXPECT_LT(losses.back(), 1e-3F);
 }
