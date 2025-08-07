@@ -66,6 +66,7 @@ jobs:
           },
           {
             name: "Galaxy DiT SD3.5 model perf tests",
+            if: ${{ inputs.topology != 'config-tg' }},
             model-type: "SD3.5",
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}"],
