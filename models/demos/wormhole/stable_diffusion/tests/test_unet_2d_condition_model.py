@@ -112,6 +112,13 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     model = UNet2D(device, parameters, batch_size, input_height, input_width)
 
+    use_signpost = True
+    try:
+        from tracy import signpost
+    except ModuleNotFoundError:
+        use_signpost = False
+    if use_signpost:
+        signpost(header="start")
     ttnn_output = model(
         input,
         timestep=ttnn_timestep,
@@ -122,6 +129,8 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         return_dict=return_dict,
         config=config,
     )
+    if use_signpost:
+        signpost(header="stop")
 
     ttnn_output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, 0.995)

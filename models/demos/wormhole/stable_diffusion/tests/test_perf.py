@@ -416,7 +416,7 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     if is_wormhole_b0():
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
-    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=False)
+    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     prep_device_perf_report(
         model_name=f"stable_diffusion_{batch}batch",
