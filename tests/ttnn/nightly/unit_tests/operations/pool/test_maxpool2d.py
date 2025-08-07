@@ -142,14 +142,31 @@ def run_max_pool(
     else:
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
+    # apply padding manually to torch tensor since torch doesn't support asymmetric padding
+    torch_input_padded = torch.nn.functional.pad(
+        torch_input,
+        (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
+        mode="constant",
+        value=-float("inf"),
+    )
+    # run torch maxpool2d
+    torch_output = torch.nn.MaxPool2d(
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=[0, 0],  # always use zero padding we are padding manually
+        dilation=dilation,
+        return_indices=False,
+        ceil_mode=ceil_mode,
+    )(torch_input_padded)
+
     pre_shard = shard_scheme == None
     if pre_shard:
         parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             batch_size=in_n,
             input_channels=in_c,
-            output_height=out_h,
-            output_width=out_w,
+            output_height=torch_output.shape[2],
+            output_width=torch_output.shape[3],
             output_channels=in_c,
             input_channels_alignment=32,
             compute_grid_size=device.compute_with_storage_grid_size(),
@@ -209,7 +226,9 @@ def run_max_pool(
 
     # adjust the TTNN output to match the expected shape
     ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
+    ttnn_output = ttnn_output.reshape(
+        torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]
+    )  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
     ttnn_output = ttnn_output[:, :in_c, :, :]
 
