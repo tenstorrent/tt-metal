@@ -21,7 +21,7 @@ def reference_model(hf_config, use_bitonic_sort):
     """Get the actual DeepSeek MLP model using local implementation."""
     torch.manual_seed(5)
     torch.use_deterministic_algorithms(True)
-    return ReferenceMoEGate(hf_config, use_bitonic_sort)
+    return ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
 
 
 @pytest.mark.parametrize(

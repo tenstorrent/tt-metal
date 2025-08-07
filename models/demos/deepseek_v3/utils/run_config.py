@@ -12,17 +12,33 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
-WeightConfig = dict[str, "WeightConfig | str"]
+WeightConfig = dict[str, "WeightConfig | str | None"] | list["WeightConfig | str | None"]
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
 # In general, we require ModelConfig to be serializable (NOTE: mesh device and classes that hold references to the objects on it are NOT serializable).
-ModelPrefillConfig = dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
-ModelDecodeConfig = dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
+ModelPrefillConfig = (
+    dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | list["ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | OpConfigBase
+)
+ModelDecodeConfig = (
+    dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | list["ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | OpConfigBase
+)
 
 ModelState = Any  # Type of the persistent model state
 
-RunPrefillConfig = dict[str, "RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
-RunDecodeConfig = dict[str, "RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
+RunPrefillConfig = (
+    dict[str, "RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | list["RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | OpConfigBase
+)
+RunDecodeConfig = (
+    dict[str, "RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | list["RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | OpConfigBase
+)
 
 
 @overload

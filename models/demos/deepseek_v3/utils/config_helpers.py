@@ -533,7 +533,7 @@ def get_state_dicts(
         d[key].dtype == expected_dtype for d in dicts if d is not None
     ), f"Key {key} must have the dtype as {expected_dtype} in all dictionaries; instead got {[d[key].dtype if d is not None else None for d in dicts]}"
 
-    tensors = [torch.zeros(expected_shape, dtype=dtype) if d is None else d[key] for d in dicts]
+    tensors = [torch.zeros(expected_shape).to(dtype) if d is None else d[key] for d in dicts]
 
     if concat:
         return torch.concat(tensors, dim=concat_dim)
