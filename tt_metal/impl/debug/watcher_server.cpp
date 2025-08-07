@@ -182,7 +182,11 @@ void WatcherServer::Impl::detach_devices() {
 
         // Close files
         std::fclose(logfile_);
+        std::fclose(kernel_file_);
+        std::fclose(kernel_elf_file_);
         logfile_ = nullptr;
+        kernel_file_ = nullptr;
+        kernel_elf_file_ = nullptr;
     }
 }
 
@@ -210,6 +214,10 @@ std::string WatcherServer::Impl::log_file_name() {
 }
 
 int WatcherServer::Impl::register_kernel(const std::string& name) {
+    auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    if (!rtoptions.get_watcher_enabled()) {
+        return 0;
+    }
     const std::lock_guard<std::mutex> lock(watch_mutex_);
 
     if (!kernel_file_) {
@@ -224,6 +232,10 @@ int WatcherServer::Impl::register_kernel(const std::string& name) {
 }
 
 void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::string>& paths) {
+    auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    if (!rtoptions.get_watcher_enabled()) {
+        return;
+    }
     const std::lock_guard<std::mutex> lock(watch_mutex_);
     if (!kernel_elf_file_) {
         create_kernel_elf_file();
