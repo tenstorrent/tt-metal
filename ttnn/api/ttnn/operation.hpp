@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <experimental/type_traits>
+#include <experimental/type_traits>  // TODO: don't need experimental here?
 #include <ttnn/tensor/tensor.hpp>
 
 #include <tt-metalium/host_api.hpp>
@@ -255,7 +255,7 @@ inline void set_default_operation_output_memory_config(const MemoryConfig& memor
 
 namespace detail {
 
-// TODO: move 'NotImplemented' to a library file
+// TODO: move all this somewher out of this fule
 class NotImplemented : public std::logic_error {
 public:
     NotImplemented(const std::string& message) : std::logic_error(message) {};
@@ -473,9 +473,6 @@ auto default_create_output_tensors(
     return output_tensors;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DeviceOperation  –  function-pointer v-table, full behaviour
-// ─────────────────────────────────────────────────────────────────────────────
 template <class OutputTensorsT = Tensors>
 class DeviceOperation final {
 public:
@@ -483,7 +480,6 @@ public:
     using OutputTensors = OutputTensorsT;
     using ComputedSpecs = std::vector<ttnn::TensorSpec>;
 
-    // ── public API (unchanged) ───────────────────────────────────────────
     std::string get_type_name() const { return vtbl_->get_type_name_(buf_); }
     void validate(const Tensors& i, const OptionalConstTensors& oi, const OptionalTensors& oo) const {
         vtbl_->validate_(buf_, i, oi, oo);
