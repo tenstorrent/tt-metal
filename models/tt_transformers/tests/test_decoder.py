@@ -177,7 +177,7 @@ def test_decoder_inference(
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats=[rot_mats, rot_mats],
             mode="decode",
             page_table=page_table_tt,
         )
@@ -191,7 +191,7 @@ def test_decoder_inference(
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
         # Reference model
-        ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+        ref_output = reference_model(pt_decode_input.to(dtype=torch.bfloat16), current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
