@@ -72,11 +72,12 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
                 const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
                 for (size_t core_index = 0; core_index < buffer_page_mapping.all_cores.size(); core_index++) {
                     auto core = buffer_page_mapping.all_cores[core_index];
+                    // For future devs reading this code, I asserted the number of bank_ids_from_logical_core and is
+                    // always 1
                     auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer->buffer_type(), core)[0];
                     uint32_t bank_num_pages = 0;
                     for (const auto& core_page_mapping : buffer_page_mapping.core_page_mappings[core_index]) {
-                        bank_num_pages =
-                            std::max(bank_num_pages, core_page_mapping.device_start_page + core_page_mapping.num_pages);
+                        bank_num_pages = std::max(bank_num_pages, core_page_mapping.num_pages);
                     }
                     bank_to_num_pages[bank_id] = bank_num_pages;
                 }
@@ -92,6 +93,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
             buffer_info.address = address;
             buffer_info.max_size_per_bank = (*max_num_pages).second * page_size;
             buffer_info.buffer_type = buffer->buffer_type();
+            buffer_info.buffer_layout = buffer->buffer_layout();
             buffer_infos.push_back(buffer_info);
         }
     }
