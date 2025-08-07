@@ -19,7 +19,7 @@ namespace ttnn::operations::ccl {
 
 void bind_all_to_all_dispatch(nb::module_& mod) {
     auto doc =
-        R"doc(all_to_all_dispatch(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, num_links: int = 1, topology: ttnn.Topology = ttnn.Topology.Linear, memory_config: Optional[ttnn.MemoryConfig] = std::nullopt, subdevice_id: Optional[ttnn.SubDeviceId] = std::nullopt, global_semaphore: Optional[ttnn.GlobalSemaphore] = std::nullopt, queue_id: int = 0) -> Tuple[ttnn.Tensor, ttnn.Tensor]
+        R"doc(all_to_all_dispatch(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, num_links: int = 1, topology: ttnn.Topology = ttnn.Topology.Linear, memory_config: Optional[ttnn.MemoryConfig] = nb::none(), subdevice_id: Optional[ttnn.SubDeviceId] = std::nullopt, global_semaphore: Optional[ttnn.GlobalSemaphore] = std::nullopt, queue_id: int = 0) -> Tuple[ttnn.Tensor, ttnn.Tensor]
 
             All to all dispatch operation for dispatching the input tokens to devices with the selected experts, based on the expert indices and expert mapping tensors. If cluster axis is specified then we dispatch the tokens to the experts only on that axis. The global semaphore is the cross-device semaphore for synchronizing the dispatching of the tokens.
             B = batch size
@@ -102,13 +102,13 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
             nb::arg("expert_indices_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("output_tensors") = std::nullopt,
-            nb::arg("cluster_axis") = std::nullopt,
+            nb::arg("output_tensors") = nb::none(),
+            nb::arg("cluster_axis") = nb::none(),
             nb::arg("num_links") = 1,
             nb::arg("topology") = tt::tt_fabric::Topology::Linear,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("subdevice_id") = std::nullopt,
-            nb::arg("global_semaphore") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("global_semaphore") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 }

@@ -81,8 +81,8 @@ void bind_experimental_gelu_backward_operation(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("approximate") = "none",
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 }  // namespace ttnn::operations::experimental::gelu_backward::detail

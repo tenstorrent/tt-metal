@@ -60,12 +60,12 @@ void bind_fold_operation(nb::module_& mod) {
             nb::arg("stride_h"),
             nb::arg("stride_w"),
             nb::arg("use_transpose_as_fold") = false,
-            nb::arg("output_shape") = std::nullopt,
+            nb::arg("output_shape") = nb::none(),
             nb::arg("pad_c") = 0,
             nb::arg("pad_h") = 0,
             nb::arg("pad_w") = 0,
-            nb::arg("grid_size") = std::nullopt,
-            nb::arg("override_memory_config") = std::nullopt,
+            nb::arg("grid_size") = nb::none(),
+            nb::arg("override_memory_config") = nb::none(),
             nb::kw_only(),
             nb::arg("queue_id") = DefaultQueueId});
 }

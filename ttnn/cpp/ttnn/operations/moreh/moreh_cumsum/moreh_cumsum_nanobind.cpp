@@ -23,8 +23,8 @@ void bind_moreh_cumsum_operation(nb::module_& mod) {
             nb::arg("input"),
             nb::arg("dim"),
             nb::kw_only(),
-            nb::arg("output") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("output") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
         });
 }
 
@@ -37,8 +37,8 @@ void bind_moreh_cumsum_backward_operation(nb::module_& mod) {
             nb::arg("output_grad"),
             nb::arg("dim"),
             nb::kw_only(),
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
         });
 }
 

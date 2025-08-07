@@ -80,8 +80,8 @@ void bind_scatter(nb::module_& mod) {
             nb::arg("index").noconvert(),
             nb::arg("src").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("reduce") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("reduce") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

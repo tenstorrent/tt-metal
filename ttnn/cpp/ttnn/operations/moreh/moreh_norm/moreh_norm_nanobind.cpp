@@ -22,11 +22,11 @@ void bind_moreh_norm_operation(nb::module_& mod) {
             nb::arg("input"),
             nb::arg("p"),
             nb::kw_only(),
-            nb::arg("dim") = std::nullopt,
+            nb::arg("dim") = nb::none(),
             nb::arg("keepdim") = false,
-            nb::arg("output") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("output") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
         });
 }
 }  // namespace ttnn::operations::moreh::moreh_norm

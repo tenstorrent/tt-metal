@@ -90,8 +90,8 @@ void bind_gather_operation(nb::module_& mod) {
             nb::arg("index"),
             nb::kw_only(),
             nb::arg("sparse_grad") = false,
-            nb::arg("out") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("out") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

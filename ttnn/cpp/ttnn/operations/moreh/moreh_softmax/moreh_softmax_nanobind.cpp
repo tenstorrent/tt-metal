@@ -28,11 +28,11 @@ void bind_moreh_softmax_operation(nb::module_& mod) {
             nb::arg("input_tensor"),                                           \
             nb::arg("dim"),                                                    \
             nb::kw_only(),                                                     \
-            nb::arg("output_tensor") = std::nullopt,                           \
+            nb::arg("output_tensor") = nb::none(),                             \
             nb::arg("op") = op_enum,                                           \
             nb::arg("strategy") = MorehSoftmaxOpParallelizationStrategy::NONE, \
-            nb::arg("memory_config") = std::nullopt,                           \
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none(),                             \
+            nb::arg("compute_kernel_config") = nb::none()});
 
     BIND_MOREH_SOFT_OP(moreh_softmax, MorehSoftmaxOp::SOFTMAX, "Moreh Softmax Operation")
     BIND_MOREH_SOFT_OP(moreh_softmin, MorehSoftmaxOp::SOFTMIN, "Moreh Softmin Operation")

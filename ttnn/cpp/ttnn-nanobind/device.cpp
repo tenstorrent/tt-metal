@@ -321,7 +321,7 @@ void device_module(nb::module_& m_device) {
         nb::arg("padded_shape"),
         nb::arg("pad_value"),
         nb::arg("target_layout").noconvert(),
-        nb::arg("target_mem_config").noconvert() = std::nullopt,
+        nb::arg("target_mem_config").noconvert() = nb::none(),
         R"doc(
         Formats tensor to target layout and pads to padded shape.
 
@@ -358,7 +358,7 @@ void device_module(nb::module_& m_device) {
         nb::arg("shape"),
         nb::arg("device").noconvert(),
         nb::arg("target_layout").noconvert(),
-        nb::arg("target_mem_config").noconvert() = std::nullopt,
+        nb::arg("target_mem_config").noconvert() = nb::none(),
         R"doc(
         Formats tensor to target layout and unpads to shape.
 
@@ -499,7 +499,7 @@ void device_module(nb::module_& m_device) {
         },
         synchronize_device_doc.data(),
         nb::arg("device"),
-        nb::arg("cq_id") = std::nullopt,
+        nb::arg("cq_id") = nb::none(),
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "synchronize_device",
@@ -509,7 +509,7 @@ void device_module(nb::module_& m_device) {
         },
         synchronize_device_doc.data(),
         nb::arg("device"),
-        nb::arg("cq_id") = std::nullopt,
+        nb::arg("cq_id") = nb::none(),
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "DumpDeviceProfiler",

@@ -55,7 +55,7 @@ void bind_interleaved_to_sharded_partial(
             nb::arg("shard_scheme"),
             nb::arg("shard_orientation"),
             nb::kw_only(),
-            nb::arg("output_dtype") = std::nullopt,
+            nb::arg("output_dtype") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
 
         });

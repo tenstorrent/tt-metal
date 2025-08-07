@@ -124,8 +124,8 @@ void bind_max_pool2d_operation(nb::module_& mod) {
             nb::arg("dilation"),
             nb::arg("ceil_mode") = false,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("applied_shard_scheme") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("applied_shard_scheme") = nb::none(),
             nb::arg("in_place_halo") = false,
             nb::arg("queue_id") = DefaultQueueId});
 }
@@ -237,10 +237,10 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
             nb::arg("padding"),
             nb::arg("ceil_mode") = false,
             nb::arg("count_include_pad") = true,
-            nb::arg("divisor_override") = std::nullopt,
+            nb::arg("divisor_override") = nb::none(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("applied_shard_scheme") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("applied_shard_scheme") = nb::none(),
             nb::arg("in_place_halo") = false,
             nb::arg("queue_id") = 0});
 }

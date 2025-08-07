@@ -43,7 +43,7 @@ void bind_experimental_plusone_operation(nb::module_& mod) {
                const ttnn::Tensor& input_tensor,
                const std::optional<CoreRangeSet>& sub_core_grids) { return self(input_tensor, sub_core_grids); },
             nb::arg("input_tensor").noconvert(),
-            nb::arg("sub_core_grids") = std::nullopt});
+            nb::arg("sub_core_grids") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::plusone::detail

@@ -56,10 +56,10 @@ void bind_untilize(nb::module_& mod) {
             },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("use_multicore") = true,
             nb::arg("use_pack_untilize") = true,
-            nb::arg("sub_core_grids") = std::nullopt,
+            nb::arg("sub_core_grids") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 }

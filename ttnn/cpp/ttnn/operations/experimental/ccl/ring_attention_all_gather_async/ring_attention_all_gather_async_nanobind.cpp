@@ -57,12 +57,12 @@ void bind_ring_attention_all_gather_async(nb::module_& mod, const ccl_operation_
             nb::arg("dim"),
             nb::kw_only(),
             nb::arg("multi_device_global_semaphore"),
-            nb::arg("num_links") = std::nullopt,
+            nb::arg("num_links") = nb::none(),
             nb::arg("cluster_axis"),
             nb::arg("mesh_device"),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology"),
-            nb::arg("subdevice_id") = std::nullopt});
+            nb::arg("subdevice_id") = nb::none()});
 }
 
 }  // namespace

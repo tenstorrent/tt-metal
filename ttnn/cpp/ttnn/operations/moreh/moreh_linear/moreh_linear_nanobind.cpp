@@ -22,9 +22,9 @@ void bind_moreh_linear_operation(nb::module_& mod) {
             nb::arg("input"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("bias") = std::nullopt,
-            nb::arg("output") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("bias") = nb::none(),
+            nb::arg("output") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_linear

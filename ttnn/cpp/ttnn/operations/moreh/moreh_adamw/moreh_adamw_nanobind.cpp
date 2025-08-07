@@ -56,14 +56,14 @@ void bind_moreh_adamw_operation(nb::module_& mod) {
             nb::arg("amsgrad") = false,
             nb::kw_only(),
 
-            nb::arg("max_exp_avg_sq_in") = std::nullopt,
-            nb::arg("param_out") = std::nullopt,
-            nb::arg("exp_avg_out") = std::nullopt,
-            nb::arg("exp_avg_sq_out") = std::nullopt,
-            nb::arg("max_exp_avg_sq_out") = std::nullopt,
+            nb::arg("max_exp_avg_sq_in") = nb::none(),
+            nb::arg("param_out") = nb::none(),
+            nb::arg("exp_avg_out") = nb::none(),
+            nb::arg("exp_avg_sq_out") = nb::none(),
+            nb::arg("max_exp_avg_sq_out") = nb::none(),
 
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 void py_module(nb::module_& mod) { bind_moreh_adamw_operation(mod); }

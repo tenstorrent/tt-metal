@@ -23,7 +23,7 @@ void bind_moreh_getitem_operation(nb::module_& mod) {
             nb::arg("index_tensors"),
             nb::arg("index_dims"),
             nb::kw_only(),
-            nb::arg("output") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("output") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_getitem

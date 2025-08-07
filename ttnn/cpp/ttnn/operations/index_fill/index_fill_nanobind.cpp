@@ -37,7 +37,7 @@ void bind_index_fill_operation(nb::module_& mod) {
             nb::arg("index"),
             nb::arg("value"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::index_fill

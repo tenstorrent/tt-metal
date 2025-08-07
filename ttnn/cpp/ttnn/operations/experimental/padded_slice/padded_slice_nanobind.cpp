@@ -74,11 +74,11 @@ void bind_padded_slice(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::arg("padded_slice_start"),
             nb::arg("padded_slice_end"),
-            nb::arg("padded_slice_step") = std::nullopt,  // should consider a better default value
+            nb::arg("padded_slice_step") = nb::none(),  // should consider a better default value
             nb::kw_only(),
             nb::arg("memory_config"),
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("pad_value") = std::nullopt,
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("pad_value") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 }

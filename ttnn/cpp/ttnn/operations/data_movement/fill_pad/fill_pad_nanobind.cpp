@@ -59,7 +59,7 @@ void bind_fill_pad_op(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::arg("fill_value"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

@@ -24,10 +24,10 @@ void bind_moreh_arange_operation(nb::module_& mod) {
             nb::arg("step") = 1,
             nb::arg("any"),
             nb::kw_only(),
-            nb::arg("output") = std::nullopt,
+            nb::arg("output") = nb::none(),
             nb::arg("untilize_out") = false,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
         });
 }
 }  // namespace ttnn::operations::moreh::moreh_arange

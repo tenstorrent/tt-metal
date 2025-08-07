@@ -197,7 +197,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("defines") = tt::tt_metal::KernelDescriptor::Defines(),
             nb::arg("runtime_args"),
             nb::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
-            nb::arg("opt_level") = std::nullopt,
+            nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
             R"pbdoc(
                 Initialize a KernelDescriptor with complete configuration.

@@ -26,10 +26,10 @@ void bind_moreh_bmm_backward_operation(nb::module_& mod) {
             nb::arg("mat2"),
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("mat2_grad") = std::nullopt,
-            nb::arg("input_grad_memory_config") = std::nullopt,
-            nb::arg("mat2_grad_memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("mat2_grad") = nb::none(),
+            nb::arg("input_grad_memory_config") = nb::none(),
+            nb::arg("mat2_grad_memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_bmm_backward

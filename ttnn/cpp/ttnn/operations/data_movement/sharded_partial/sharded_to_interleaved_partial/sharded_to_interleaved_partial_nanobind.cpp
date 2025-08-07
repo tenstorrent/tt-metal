@@ -40,8 +40,8 @@ void bind_sharded_to_interleaved_partial(
             nb::arg("num_slices"),
             nb::arg("slice_index"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_dtype") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_dtype") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
 
         });

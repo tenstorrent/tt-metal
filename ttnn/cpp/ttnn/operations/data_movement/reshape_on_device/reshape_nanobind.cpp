@@ -40,7 +40,7 @@ void bind_reshape(nb::module_& mod, const data_movement_operation_t& operation, 
             nb::arg("Y"),
             nb::arg("X"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

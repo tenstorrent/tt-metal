@@ -17,7 +17,7 @@ namespace nb = nanobind;
 
 void bind_bcast(nb::module_& mod) {
     auto doc =
-        R"doc(bcast(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, math_op[ADD, SUB, MUL],  dim: Optional[int] = None, memory_config: Optional[MemoryConfig] = std::nullopt, output_tensor: Optional[Tensor]) -> ttnn.Tensor
+        R"doc(bcast(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, math_op[ADD, SUB, MUL],  dim: Optional[int] = None, memory_config: Optional[MemoryConfig] = nb::none(), output_tensor: Optional[Tensor]) -> ttnn.Tensor
 
             Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
@@ -78,8 +78,8 @@ void bind_bcast(nb::module_& mod) {
             nb::arg("math_op"),
             nb::arg("dim"),
             nb::kw_only(),
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

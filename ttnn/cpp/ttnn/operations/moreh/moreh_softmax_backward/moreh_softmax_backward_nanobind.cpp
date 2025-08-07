@@ -29,11 +29,11 @@ void bind_moreh_softmax_backward_operation(nb::module_& mod) {
             nb::arg("output_grad_tensor"),                                             \
             nb::arg("dim"),                                                            \
             nb::kw_only(),                                                             \
-            nb::arg("input_grad_tensor") = std::nullopt,                               \
+            nb::arg("input_grad_tensor") = nb::none(),                                 \
             nb::arg("op") = op_enum,                                                   \
             nb::arg("strategy") = MorehSoftmaxBackwardOpParallelizationStrategy::NONE, \
-            nb::arg("memory_config") = std::nullopt,                                   \
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none(),                                     \
+            nb::arg("compute_kernel_config") = nb::none()});
 
     BIND_MOREH_SOFT_BACKWARD_OP(
         moreh_softmax_backward, MorehSoftmaxBackwardOp::SOFTMAX, "Moreh Softmax Backward Operation")

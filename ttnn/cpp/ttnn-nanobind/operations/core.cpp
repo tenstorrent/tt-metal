@@ -74,7 +74,7 @@ void py_module(nb::module_& mod) {
         "init_device_compute_kernel_config",
         &ttnn::init_device_compute_kernel_config,
         nb::arg("arch"),
-        nb::arg("device_kernel_config") = std::nullopt,
+        nb::arg("device_kernel_config") = nb::none(),
         nb::kw_only(),
         nb::arg("math_fidelity") = MathFidelity::LoFi,
         nb::arg("math_approx_mode") = true,
@@ -90,7 +90,7 @@ void py_module(nb::module_& mod) {
             &ttnn::operations::core::to_device),
         nb::arg("tensor"),
         nb::arg("device"),
-        nb::arg("memory_config") = std::nullopt,
+        nb::arg("memory_config") = nb::none(),
         nb::arg("cq_id") = ttnn::DefaultQueueId);
 
     mod.def(
@@ -99,7 +99,7 @@ void py_module(nb::module_& mod) {
             &ttnn::operations::core::to_device),
         nb::arg("tensor"),
         nb::arg("device"),
-        nb::arg("memory_config") = std::nullopt,
+        nb::arg("memory_config") = nb::none(),
         nb::arg("cq_id") = ttnn::DefaultQueueId,
         R"doc(
             Copy tensor from host to device.
@@ -176,7 +176,7 @@ void py_module(nb::module_& mod) {
         [](ttnn::Tensor& input_tensor, const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt)
             -> ttnn::Tensor { return reallocate(input_tensor, memory_config); },
         nb::arg("tensor"),
-        nb::arg("memory_config") = std::nullopt,
+        nb::arg("memory_config") = nb::none(),
         R"doc(
             Deallocates device tensor and returns a reallocated tensor.
 
@@ -214,7 +214,7 @@ void py_module(nb::module_& mod) {
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
             >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
-        ttnn::nanobind_arguments_t{nb::arg("tensor"), nb::arg("memory_config"), nb::arg("dtype") = std::nullopt});
+        ttnn::nanobind_arguments_t{nb::arg("tensor"), nb::arg("memory_config"), nb::arg("dtype") = nb::none()});
 
     bind_registered_operation(
         mod,
@@ -269,7 +269,7 @@ void py_module(nb::module_& mod) {
             nb::arg("dtype"),
             nb::arg("layout"),
             nb::arg("mesh_device"),
-            nb::arg("memory_config") = std::nullopt)
+            nb::arg("memory_config") = nb::none())
         .def(
             "allocate_tensor_on_host",
             [](const ttnn::Shape& shape,
@@ -288,7 +288,7 @@ void py_module(nb::module_& mod) {
             nb::arg("dtype"),
             nb::arg("layout"),
             nb::arg("mesh_device"),
-            nb::arg("memory_config") = std::nullopt);
+            nb::arg("memory_config") = nb::none());
 
     mod.def(
         "copy_host_to_device_tensor",
@@ -350,8 +350,8 @@ void py_module(nb::module_& mod) {
             },
             nb::arg("tensor"),
             nb::arg("layout"),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
 
     mod.def(
         "num_cores_to_corerangeset",

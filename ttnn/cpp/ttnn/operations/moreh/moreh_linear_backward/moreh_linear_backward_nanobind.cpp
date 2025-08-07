@@ -26,14 +26,14 @@ void bind_moreh_linear_backward_operation(nb::module_& mod) {
             nb::arg("weight"),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true, true},
 
-            nb::arg("bias") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("weight_grad") = std::nullopt,
-            nb::arg("bias_grad") = std::nullopt,
+            nb::arg("bias") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("weight_grad") = nb::none(),
+            nb::arg("bias_grad") = nb::none(),
 
-            nb::arg("input_grad_memory_config") = std::nullopt,
-            nb::arg("weight_grad_memory_config") = std::nullopt,
-            nb::arg("bias_grad_memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("input_grad_memory_config") = nb::none(),
+            nb::arg("weight_grad_memory_config") = nb::none(),
+            nb::arg("bias_grad_memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_linear_backward

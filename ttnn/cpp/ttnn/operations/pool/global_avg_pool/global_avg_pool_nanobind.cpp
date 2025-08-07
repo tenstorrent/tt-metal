@@ -54,8 +54,8 @@ void bind_global_avg_pool2d(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none()});
 }
 
 }  // namespace

@@ -23,9 +23,9 @@ void bind_moreh_mean_backward_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("dim"),
             nb::arg("keepdim"),
-            nb::arg("input_grad_shape") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("input_grad_shape") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_mean_backward

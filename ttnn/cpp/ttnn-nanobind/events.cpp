@@ -78,7 +78,7 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("cq_id"),
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>(),
-        nb::arg("device_range") = std::nullopt,
+        nb::arg("device_range") = nb::none(),
         R"doc(
             Records the completion of commands on this CQ, preceeding this call.
 

@@ -25,10 +25,10 @@ void py_module(nb::module_& mod) {
             nb::init<CoreCoord, std::optional<CoreRangeSet>, std::size_t, std::size_t, std::optional<bool>>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
-            nb::arg("sub_core_grids") = std::nullopt,
+            nb::arg("sub_core_grids") = nb::none(),
             nb::arg("q_chunk_size").noconvert(),
             nb::arg("k_chunk_size").noconvert(),
-            nb::arg("exp_approx_mode") = std::nullopt)
+            nb::arg("exp_approx_mode") = nb::none())
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)

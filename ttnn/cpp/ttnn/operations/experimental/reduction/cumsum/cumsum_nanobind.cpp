@@ -95,8 +95,8 @@ void bind_cumsum_operation(nb::module_& mod) {
             nb::arg("input").noconvert(),
             nb::arg("dim"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("output") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("output") = nb::none(),
             nb::arg("queueId") = DefaultQueueId});
 }
 

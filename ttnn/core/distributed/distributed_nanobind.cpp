@@ -220,7 +220,7 @@ void py_module(nb::module_& mod) {
             "create_submesh",
             &MeshDevice::create_submesh,
             nb::arg("submesh_shape"),
-            nb::arg("offset") = std::nullopt,
+            nb::arg("offset") = nb::none(),
             nb::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
         .def(
             "create_submeshes",
@@ -467,7 +467,7 @@ void py_module(nb::module_& mod) {
                     MeshMapperConfig{.placements = std::move(placements), .mesh_shape_override = mesh_shape_override};
             },
             nb::arg("placements"),
-            nb::arg("mesh_shape_override") = std::nullopt,
+            nb::arg("mesh_shape_override") = nb::none(),
             R"doc(
            Creates a MeshMapperConfig object with the given placements and mesh shape override.
 
@@ -494,7 +494,7 @@ void py_module(nb::module_& mod) {
             },
             nb::arg("row_dim"),
             nb::arg("col_dim"),
-            nb::arg("mesh_shape_override") = std::nullopt,
+            nb::arg("mesh_shape_override") = nb::none(),
             R"doc(
            Creates a 2D MeshMapperConfig with the given placements and mesh shape override.
 
@@ -516,7 +516,7 @@ void py_module(nb::module_& mod) {
         .def(
             nb::init<tt::stl::SmallVector<int>, const std::optional<MeshShape>&>(),
             nb::arg("dims"),
-            nb::arg("mesh_shape_override") = std::nullopt,
+            nb::arg("mesh_shape_override") = nb::none(),
             R"doc(
            Creates a MeshComposerConfig object with the given dimensions.
 
@@ -537,7 +537,7 @@ void py_module(nb::module_& mod) {
             },
             nb::arg("row_dim"),
             nb::arg("col_dim"),
-            nb::arg("mesh_shape_override") = std::nullopt,
+            nb::arg("mesh_shape_override") = nb::none(),
             R"doc(
            Creates a 2D MeshComposerConfig object with the given dimensions.
 

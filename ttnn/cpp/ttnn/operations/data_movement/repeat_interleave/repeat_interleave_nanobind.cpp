@@ -54,7 +54,7 @@ void bind_repeat_interleave(nb::module_& mod) {
             nb::arg("repeats"),
             nb::arg("dim"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

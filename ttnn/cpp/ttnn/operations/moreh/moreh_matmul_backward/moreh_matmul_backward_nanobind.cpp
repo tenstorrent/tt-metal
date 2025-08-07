@@ -26,9 +26,9 @@ void bind_moreh_matmul_backward_operation(nb::module_& mod) {
             nb::arg("input_b"),
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("input_a_grad") = std::nullopt,
-            nb::arg("input_b_grad") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("input_a_grad") = nb::none(),
+            nb::arg("input_b_grad") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward

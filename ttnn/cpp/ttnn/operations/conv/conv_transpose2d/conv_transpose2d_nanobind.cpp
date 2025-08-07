@@ -144,11 +144,11 @@ void bind_conv_transpose2d(nb::module_& mod) {
             nb::arg("output_padding") = std::array<uint32_t, 2>{0, 0},
             nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             nb::arg("groups") = 1,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("bias_tensor") = std::nullopt,
-            nb::arg("conv_config") = std::nullopt,
-            nb::arg("compute_config") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("bias_tensor") = nb::none(),
+            nb::arg("conv_config") = nb::none(),
+            nb::arg("compute_config") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
             nb::arg("mirror_kernel") = true,
             nb::arg("return_output_dim") = false,
             nb::arg("return_weights_and_bias") = false,
@@ -219,11 +219,11 @@ void bind_conv_transpose2d(nb::module_& mod) {
             nb::arg("output_padding") = std::array<uint32_t, 2>{0, 0},
             nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             nb::arg("groups") = 1,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("bias_tensor") = std::nullopt,
-            nb::arg("conv_config") = std::nullopt,
-            nb::arg("compute_config") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("bias_tensor") = nb::none(),
+            nb::arg("conv_config") = nb::none(),
+            nb::arg("compute_config") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
             nb::arg("mirror_kernel") = true,
             nb::arg("return_output_dim") = false,
             nb::arg("return_weights_and_bias") = false,
@@ -250,9 +250,9 @@ void bind_conv_transpose2d(nb::module_& mod) {
         nb::arg("groups"),
         nb::arg("device"),
         nb::arg("input_dtype"),
-        nb::arg("output_dtype") = std::nullopt,
-        nb::arg("conv_config") = std::nullopt,
-        nb::arg("compute_config") = std::nullopt,
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none(),
         nb::arg("mirror_kernel") = true);
 
     mod.def(
@@ -276,9 +276,9 @@ void bind_conv_transpose2d(nb::module_& mod) {
         nb::arg("groups"),
         nb::arg("device"),
         nb::arg("input_dtype"),
-        nb::arg("output_dtype") = std::nullopt,
-        nb::arg("conv_config") = std::nullopt,
-        nb::arg("compute_config") = std::nullopt,
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none(),
         nb::arg("mirror_kernel") = true);
 
     mod.def(
@@ -300,9 +300,9 @@ void bind_conv_transpose2d(nb::module_& mod) {
         nb::arg("groups"),
         nb::arg("device"),
         nb::arg("input_dtype"),
-        nb::arg("output_dtype") = std::nullopt,
-        nb::arg("conv_config") = std::nullopt,
-        nb::arg("compute_config") = std::nullopt);
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none());
 
     mod.def(
         "prepare_conv_transpose2d_bias",
@@ -323,9 +323,9 @@ void bind_conv_transpose2d(nb::module_& mod) {
         nb::arg("groups"),
         nb::arg("device"),
         nb::arg("input_dtype"),
-        nb::arg("output_dtype") = std::nullopt,
-        nb::arg("conv_config") = std::nullopt,
-        nb::arg("compute_config") = std::nullopt);
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::conv::conv_transpose2d

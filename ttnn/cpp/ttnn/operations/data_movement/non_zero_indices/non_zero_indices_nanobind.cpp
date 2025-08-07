@@ -51,7 +51,7 @@ void bind_non_zero(nb::module_& mod) {
                QueueId queue_id) { return self(queue_id, input_tensor, memory_config); },
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

@@ -55,7 +55,7 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::arg("output_tensor_end"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("use_multicore") = true,
             nb::arg("use_pack_untilize") = true,
             nb::arg("queue_id") = DefaultQueueId,

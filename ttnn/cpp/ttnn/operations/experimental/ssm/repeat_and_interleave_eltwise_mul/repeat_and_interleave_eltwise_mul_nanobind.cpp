@@ -38,9 +38,9 @@ void bind_repeat_and_interleave_eltwise_mul(nb::module_& mod) {
             nb::arg("a"),
             nb::arg("b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("math_fidelity") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("math_fidelity") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

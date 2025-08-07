@@ -97,7 +97,7 @@ void bind_binary_backward_ops(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_backward_operation_t>
@@ -196,9 +196,9 @@ void bind_binary_backward_concat(
             nb::arg(parameter_name.c_str()) = parameter_value,
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_a_grad") = std::nullopt,
-            nb::arg("input_b_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_a_grad") = nb::none(),
+            nb::arg("input_b_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
@@ -301,9 +301,9 @@ void bind_binary_backward_addalpha(
             nb::arg(parameter_name.c_str()) = parameter_value,
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_a_grad") = std::nullopt,
-            nb::arg("input_b_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_a_grad") = nb::none(),
+            nb::arg("input_b_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
@@ -390,7 +390,7 @@ void bind_binary_backward_bias_gelu(
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const binary_backward_operation_t& self,
@@ -406,7 +406,7 @@ void bind_binary_backward_bias_gelu(
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_backward_operation_t>
@@ -499,9 +499,9 @@ void bind_binary_backward_sub_alpha(
             nb::arg(parameter_name.c_str()) = parameter_value,
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("other_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("other_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
@@ -584,9 +584,9 @@ void bind_binary_backward_rsub(
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("other_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("other_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
@@ -666,8 +666,8 @@ void bind_binary_bw_mul(
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         // tensor and tensor
@@ -696,9 +696,9 @@ void bind_binary_bw_mul(
             nb::arg("other_tensor"),
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("other_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("other_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         // complex tensor
@@ -714,7 +714,7 @@ void bind_binary_bw_mul(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_backward_operation_t>
@@ -796,8 +796,8 @@ void bind_binary_bw(
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         // tensor and tensor
@@ -826,9 +826,9 @@ void bind_binary_bw(
             nb::arg("other_tensor"),
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("other_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("other_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         // complex tensor
@@ -846,7 +846,7 @@ void bind_binary_bw(
             nb::arg("input_tensor_b"),
             nb::arg("alpha"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_backward_operation_t>
@@ -932,9 +932,9 @@ void bind_binary_bw_div(
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
-            nb::arg("round_mode") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
+            nb::arg("round_mode") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         // tensor and tensor
@@ -964,11 +964,11 @@ void bind_binary_bw_div(
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
             nb::kw_only(),
-            nb::arg("round_mode") = std::nullopt,
+            nb::arg("round_mode") = nb::none(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("other_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("other_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         // complex tensor
@@ -984,7 +984,7 @@ void bind_binary_bw_div(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_backward_operation_t>
@@ -1060,7 +1060,7 @@ void bind_binary_backward_overload(
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         // tensor and tensor
         ttnn::nanobind_overload_t{
@@ -1075,7 +1075,7 @@ void bind_binary_backward_overload(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_backward_operation_t>
@@ -1147,8 +1147,8 @@ void bind_binary_backward_assign(
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_a_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_a_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         // tensor and tensor
@@ -1177,9 +1177,9 @@ void bind_binary_backward_assign(
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_a_grad") = std::nullopt,
-            nb::arg("input_b_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_a_grad") = nb::none(),
+            nb::arg("input_b_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 

@@ -32,7 +32,7 @@ void bind_operation_barrier(nb::module_& mod, const ccl_operation_t& operation, 
                ttnn::ccl::Topology topology) -> ttnn::Tensor { return self(input_tensor, memory_config, topology); },
             nb::arg("input_tensor"),
             nb::kw_only(),  // The following are optional by key word only
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Ring});
 }
 }  // namespace

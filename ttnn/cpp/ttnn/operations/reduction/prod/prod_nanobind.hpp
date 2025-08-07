@@ -61,10 +61,10 @@ void bind_reduction_prod_operation(nb::module_& mod, const unary_operation_t& op
                 return self(input_tensor, dim, keepdim, memory_config);
             },
             nb::arg("input_tensor"),
-            nb::arg("dim") = std::nullopt,
+            nb::arg("dim") = nb::none(),
             nb::arg("keepdim") = false,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
         // prod along nc dimensions
         ttnn::nanobind_overload_t{
             [](const unary_operation_t& self,
@@ -78,7 +78,7 @@ void bind_reduction_prod_operation(nb::module_& mod, const unary_operation_t& op
             nb::arg("output_tensor"),
             nb::kw_only(),
             nb::arg("dims"),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::reduction::detail

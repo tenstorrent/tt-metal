@@ -30,8 +30,8 @@ void bind_nlp_concat_heads_boltz(nb::module_& mod) {
                QueueId queue_id) { return self(queue_id, input_tensor, memory_config, optional_output_tensor); },
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

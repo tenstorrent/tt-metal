@@ -71,8 +71,8 @@ void bind_normalization_softmax_operation(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim") = -1,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
             nb::arg("numeric_stable").noconvert() = false});
 }
 
@@ -115,12 +115,12 @@ void bind_normalization_scale_mask_softmax_operation(nb::module_& mod) {
                     input_tensor, scale, mask, memory_config, is_causal_mask, compute_kernel_config, numeric_stable);
             },
             nb::arg("input_tensor").noconvert(),
-            nb::arg("scale").noconvert() = std::nullopt,
-            nb::arg("mask").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("mask").noconvert() = nb::none(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("is_causal_mask") = false,
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("numeric_stable") = false});
 }
 
@@ -158,7 +158,7 @@ void bind_normalization_softmax_in_place_operation(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("program_config") = SoftmaxDefaultProgramConfig{},
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("numeric_stable") = false});
 }
 
@@ -198,12 +198,12 @@ void bind_normalization_scale_mask_softmax_in_place_operation(nb::module_& mod) 
                     input_tensor, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
             },
             nb::arg("input_tensor").noconvert(),
-            nb::arg("scale").noconvert() = std::nullopt,
-            nb::arg("mask").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("mask").noconvert() = nb::none(),
             nb::kw_only(),
             nb::arg("program_config") = SoftmaxDefaultProgramConfig{},
             nb::arg("is_causal_mask") = false,
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("numeric_stable") = false});
 }
 
@@ -241,11 +241,11 @@ void bind_normalization_scale_causal_mask_hw_dims_softmax_in_place_operation(nb:
                 return self(input_tensor, scale, mask, program_config, compute_kernel_config, numeric_stable);
             },
             nb::arg("input_tensor").noconvert(),
-            nb::arg("scale").noconvert() = std::nullopt,
-            nb::arg("mask").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("mask").noconvert() = nb::none(),
             nb::kw_only(),
             nb::arg("program_config") = SoftmaxDefaultProgramConfig{},
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("numeric_stable") = false});
 }
 

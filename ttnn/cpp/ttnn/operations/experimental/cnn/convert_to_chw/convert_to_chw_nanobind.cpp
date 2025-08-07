@@ -35,8 +35,8 @@ void bind_convert_to_chw(nb::module_& mod) {
                QueueId queue_id) { return self(queue_id, input, memory_config, dtype); },
             nb::arg("input"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

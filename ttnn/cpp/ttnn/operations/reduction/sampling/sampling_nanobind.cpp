@@ -111,9 +111,9 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("k").noconvert(),
             nb::arg("p").noconvert(),
-            nb::arg("seed").noconvert() = std::nullopt,
-            nb::arg("sub_core_grids") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("seed").noconvert() = nb::none(),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

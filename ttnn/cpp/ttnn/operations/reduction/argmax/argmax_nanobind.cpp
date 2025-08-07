@@ -74,13 +74,13 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                     optional_output_tensor);
             },
             nb::arg("input_tensor").noconvert(),
-            nb::arg("dim") = std::nullopt,
+            nb::arg("dim") = nb::none(),
             nb::arg("keepdim") = false,
             nb::kw_only(),
-            nb::arg("sub_core_grids") = std::nullopt,
+            nb::arg("sub_core_grids") = nb::none(),
             nb::arg("use_multicore") = false,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

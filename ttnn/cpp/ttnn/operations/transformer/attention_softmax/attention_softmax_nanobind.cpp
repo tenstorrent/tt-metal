@@ -41,11 +41,11 @@ void bind_attention_softmax(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("tensor"),
             nb::kw_only(),
-            nb::arg("head_size") = std::nullopt,
-            nb::arg("attention_mask") = std::nullopt,
+            nb::arg("head_size") = nb::none(),
+            nb::arg("attention_mask") = nb::none(),
             nb::arg("program_config").noconvert() = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
             nb::arg("causal_mask") = false,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 
     ttnn::bind_registered_operation(
         mod,
@@ -73,11 +73,11 @@ void bind_attention_softmax(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("tensor"),
             nb::kw_only(),
-            nb::arg("head_size") = std::nullopt,
-            nb::arg("attention_mask") = std::nullopt,
+            nb::arg("head_size") = nb::none(),
+            nb::arg("attention_mask") = nb::none(),
             nb::arg("program_config").noconvert() = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
             nb::arg("causal_mask") = false,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::transformer

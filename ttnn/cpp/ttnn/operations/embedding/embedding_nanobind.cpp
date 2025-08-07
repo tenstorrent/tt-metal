@@ -90,12 +90,12 @@ void py_module(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("weight").noconvert(),
             nb::kw_only(),
-            nb::arg("padding_idx") = std::nullopt,
-            nb::arg("layout") = std::nullopt,
+            nb::arg("padding_idx") = nb::none(),
+            nb::arg("layout") = nb::none(),
             nb::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
-            nb::arg("dtype").noconvert() = std::nullopt,
-            nb::arg("output_tensor").noconvert() = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("dtype").noconvert() = nb::none(),
+            nb::arg("output_tensor").noconvert() = nb::none(),
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

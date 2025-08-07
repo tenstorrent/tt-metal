@@ -74,16 +74,16 @@ void bind_batch_norm_operation(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("input"),
             nb::kw_only(),
-            nb::arg("running_mean") = std::nullopt,
-            nb::arg("running_var") = std::nullopt,
+            nb::arg("running_mean") = nb::none(),
+            nb::arg("running_var") = nb::none(),
             nb::arg("training") = false,
             nb::arg("eps") = 1e-05,
             nb::arg("momentum") = 0.1,
-            nb::arg("weight") = std::nullopt,
-            nb::arg("bias") = std::nullopt,
-            nb::arg("output") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("weight") = nb::none(),
+            nb::arg("bias") = nb::none(),
+            nb::arg("output") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::normalization::detail

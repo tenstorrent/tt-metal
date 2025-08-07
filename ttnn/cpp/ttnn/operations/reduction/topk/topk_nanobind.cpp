@@ -18,7 +18,7 @@ namespace ttnn::operations::reduction::detail {
 
 void bind_reduction_topk_operation(nb::module_& mod) {
     auto doc =
-        R"doc(topk(input_tensor: ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> Tuple[ttnn.Tensor, ttnn.Tensor]
+        R"doc(topk(input_tensor: ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = nb::none(), memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> Tuple[ttnn.Tensor, ttnn.Tensor]
 
             Returns the ``k`` largest or ``k`` smallest elements of the given input tensor along a given dimension.
 
@@ -92,10 +92,10 @@ void bind_reduction_topk_operation(nb::module_& mod) {
             nb::arg("largest") = true,
             nb::arg("sorted") = true,
             nb::kw_only(),
-            nb::arg("out") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("sub_core_grids") = std::nullopt,
-            nb::arg("indices_tensor") = std::nullopt,
+            nb::arg("out") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("indices_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

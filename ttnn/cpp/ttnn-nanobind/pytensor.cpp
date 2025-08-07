@@ -686,7 +686,7 @@ void pytensor_module(nb::module_& mod) {
                 }));
         },
         nb::arg("function").noconvert(),
-        nb::arg("function_name").noconvert() = std::nullopt,
+        nb::arg("function_name").noconvert() = nb::none(),
         R"doc(
         Decorate external operation for purposes of reporting and profiling.
 
@@ -723,7 +723,7 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("shape"),
             nb::arg("data_type"),
             nb::arg("layout"),
-            nb::arg("tile") = std::nullopt,
+            nb::arg("tile") = nb::none(),
             nb::arg("pad_value") = 0.0f,
             nb::rv_policy::move,
             R"doc(
@@ -777,8 +777,8 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("shape"),
             nb::arg("data_type"),
             nb::arg("layout"),
-            nb::arg("device") = std::nullopt,
-            nb::arg("tile") = std::nullopt,
+            nb::arg("device") = nb::none(),
+            nb::arg("tile") = nb::none(),
             nb::arg("pad_value") = 0.0f,
             nb::rv_policy::move,
             R"doc(
@@ -842,9 +842,9 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("shape"),
             nb::arg("data_type"),
             nb::arg("layout"),
-            nb::arg("device") = std::nullopt,
+            nb::arg("device") = nb::none(),
             nb::arg("memory_config"),
-            nb::arg("tile") = std::nullopt,
+            nb::arg("tile") = nb::none(),
             nb::arg("pad_value") = 0.0f,
             nb::rv_policy::move,
             R"doc(
@@ -913,13 +913,13 @@ void pytensor_module(nb::module_& mod) {
                     mesh_mapper));
             },
             nb::arg("tensor"),
-            nb::arg("data_type") = std::nullopt,
-            nb::arg("device") = std::nullopt,
-            nb::arg("layout").noconvert() = std::nullopt,
-            nb::arg("mem_config").noconvert() = std::nullopt,
-            nb::arg("tile").noconvert() = std::nullopt,
+            nb::arg("data_type") = nb::none(),
+            nb::arg("device") = nb::none(),
+            nb::arg("layout").noconvert() = nb::none(),
+            nb::arg("mem_config").noconvert() = nb::none(),
+            nb::arg("tile").noconvert() = nb::none(),
             nb::arg("cq_id") = ttnn::DefaultQueueId,
-            nb::arg("pad_value") = std::nullopt,
+            nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
             nb::rv_policy::move,
             R"doc(

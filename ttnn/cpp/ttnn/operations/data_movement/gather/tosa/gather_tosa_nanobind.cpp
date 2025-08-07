@@ -80,7 +80,7 @@ void bind_gather_tosa_operation(nb::module_& mod) {
             nb::arg("input").noconvert(),
             nb::arg("index"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::data_movement::detail

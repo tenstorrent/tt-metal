@@ -45,9 +45,9 @@ void bind_bernoulli_operation(nb::module_& mod) {
             nb::arg("input"),
             nb::arg("seed") = 0,
             nb::kw_only(),
-            nb::arg("output") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("output") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::bernoulli

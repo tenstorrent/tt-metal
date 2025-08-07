@@ -25,9 +25,9 @@ void bind_moreh_clip_grad_norm_operation(nb::module_& mod) {
             nb::arg("norm_type") = 2.0f,
             nb::arg("error_if_nonfinite") = false,
             nb::kw_only(),
-            nb::arg("total_norm") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("total_norm") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm

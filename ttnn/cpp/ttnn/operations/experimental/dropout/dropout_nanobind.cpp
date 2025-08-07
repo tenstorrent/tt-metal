@@ -79,7 +79,7 @@ void bind_experimental_dropout_operation(nb::module_& mod) {
             nb::arg("scale"),
             nb::arg("seed"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
 }
 }  // namespace ttnn::operations::experimental::dropout::detail

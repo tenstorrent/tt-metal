@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::ccl {
 
 void bind_llama_rs_create_heads(nb::module_& mod) {
     auto doc =
-        R"doc(llama_rs_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(llama_rs_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = nb::none(), queue_id: int = 0) -> ttnn.Tensor
 
             Reduce_scatter after FF1/3 for Llama70B.
 
@@ -105,8 +105,8 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
             nb::arg("num_links") = 1,
             nb::arg("num_heads"),
             nb::arg("num_kv_heads"),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("qkv_memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("qkv_memory_config") = nb::none(),
             nb::arg("use_noc1_only") = false,
             nb::arg("use_optimal_ccl_for_llama") = false,
             nb::arg("queue_id") = DefaultQueueId,

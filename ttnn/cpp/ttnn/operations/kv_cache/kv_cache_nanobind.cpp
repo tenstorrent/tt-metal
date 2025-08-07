@@ -136,7 +136,7 @@ void bind_update_cache(nb::module_& mod, const update_cache_operation_t& operati
             nb::arg("update_idx"),
             nb::kw_only(),
             nb::arg("batch_offset") = 0,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 template <typename update_cache_operation_t>

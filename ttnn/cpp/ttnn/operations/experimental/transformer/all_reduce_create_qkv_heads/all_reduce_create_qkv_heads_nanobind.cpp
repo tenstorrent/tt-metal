@@ -73,14 +73,14 @@ void bind_all_reduce_create_qkv_heads(nb::module_& mod, const ccl_operation_t& o
             nb::arg("multi_device_global_semaphore"),
             nb::arg("num_heads"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("num_links") = std::nullopt,
-            nb::arg("subdevice_id") = std::nullopt,
-            nb::arg("num_kv_heads") = std::nullopt,
-            nb::arg("slice_size") = std::nullopt,
-            nb::arg("final_memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
+            nb::arg("num_links") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("num_kv_heads") = nb::none(),
+            nb::arg("slice_size") = nb::none(),
+            nb::arg("final_memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
             nb::arg("use_noc1_only") = false});
 }
 

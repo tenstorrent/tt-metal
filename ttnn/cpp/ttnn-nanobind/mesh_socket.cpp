@@ -50,8 +50,8 @@ void py_module_types(nb::module_& mod) {
                 std::optional<tt::tt_metal::SubDeviceId>>(),
             nb::arg("socket_storage_type"),
             nb::arg("fifo_size"),
-            nb::arg("sender_sub_device") = std::nullopt,
-            nb::arg("receiver_sub_device") = std::nullopt,
+            nb::arg("sender_sub_device") = nb::none(),
+            nb::arg("receiver_sub_device") = nb::none(),
             R"doc(
                 Initialize a SocketMemoryConfig with socket storage type, fifo size, sender sub device and receiver sub device.
 

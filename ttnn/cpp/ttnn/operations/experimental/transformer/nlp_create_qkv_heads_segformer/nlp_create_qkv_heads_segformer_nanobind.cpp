@@ -31,8 +31,8 @@ void bind_nlp_create_qkv_heads_segformer(nb::module_& mod) {
                QueueId queue_id) { return self(queue_id, input_tensor_q, memory_config, optional_output_tensors); },
             nb::arg("input").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config").noconvert() = std::nullopt,
-            nb::arg("output_tensors").noconvert() = std::nullopt,
+            nb::arg("memory_config").noconvert() = nb::none(),
+            nb::arg("output_tensors").noconvert() = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 };
 }  // namespace ttnn::operations::experimental::transformer::detail

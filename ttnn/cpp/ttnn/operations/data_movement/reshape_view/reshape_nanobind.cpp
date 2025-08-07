@@ -34,9 +34,9 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
             nb::arg("input_tensor"),
             nb::arg("shape"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
-            nb::arg("pad_value") = std::nullopt},
+            nb::arg("pad_value") = nb::none()},
         ttnn::nanobind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -51,9 +51,9 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
             nb::arg("logical_shape"),
             nb::arg("padded_shape"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
-            nb::arg("pad_value") = std::nullopt},
+            nb::arg("pad_value") = nb::none()},
         ttnn::nanobind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -64,9 +64,9 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
             nb::arg("input_tensor"),
             nb::arg("shape"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
-            nb::arg("pad_value") = std::nullopt});
+            nb::arg("pad_value") = nb::none()});
 }
 
 }  // namespace detail

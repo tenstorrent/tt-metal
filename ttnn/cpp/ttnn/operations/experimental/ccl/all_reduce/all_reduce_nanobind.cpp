@@ -43,10 +43,10 @@ void bind_operation_all_reduce(nb::module_& mod, const ccl_operation_t& operatio
             nb::arg("math_op"),
             nb::kw_only(),
             nb::arg("num_links") = 1,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Ring,
-            nb::arg("num_workers") = std::nullopt,
-            nb::arg("num_buffers_per_channel") = std::nullopt});
+            nb::arg("num_workers") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()});
 }
 
 }  // namespace

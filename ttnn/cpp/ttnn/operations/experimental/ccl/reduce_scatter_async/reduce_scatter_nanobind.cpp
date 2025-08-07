@@ -56,10 +56,10 @@ void bind_reduce_scatter(nb::module_& mod, const ccl_operation_t& operation, con
             nb::arg("to_remote_multi_device_global_semaphore"),
             nb::arg("math_op"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("num_links") = std::nullopt,
-            nb::arg("subdevice_id") = std::nullopt},
+            nb::arg("num_links") = nb::none(),
+            nb::arg("subdevice_id") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ccl_operation_t& self,
@@ -96,12 +96,12 @@ void bind_reduce_scatter(nb::module_& mod, const ccl_operation_t& operation, con
             nb::arg("from_remote_multi_device_global_semaphore"),
             nb::arg("to_remote_multi_device_global_semaphore"),
             nb::kw_only(),
-            nb::arg("persistent_output_tensors") = std::nullopt,
+            nb::arg("persistent_output_tensors") = nb::none(),
             nb::arg("math_op") = ttnn::operations::reduction::ReduceType::Sum,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("num_links") = std::nullopt,
-            nb::arg("subdevice_id") = std::nullopt});
+            nb::arg("num_links") = nb::none(),
+            nb::arg("subdevice_id") = nb::none()});
 }
 
 }  // namespace

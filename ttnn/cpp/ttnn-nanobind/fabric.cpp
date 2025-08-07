@@ -4,7 +4,10 @@
 
 #include "fabric.hpp"
 
+#include <optional>
+
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 
 #include <tt-metalium/fabric.hpp>
 
@@ -34,7 +37,7 @@ void bind_fabric_api(nb::module_& mod) {
         &tt::tt_fabric::SetFabricConfig,
         nb::arg("config"),
         nb::arg("reliability_mode") = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        nb::arg("num_planes") = std::nullopt);
+        nb::arg("num_planes") = nb::none());
 }
 
 }  // namespace ttnn::fabric

@@ -60,8 +60,8 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
             nb::arg("output_tensor_shape"),
             nb::arg("pad_value"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
             nb::arg("use_multicore") = true,
             nb::arg("queue_id") = DefaultQueueId,
         }
@@ -104,8 +104,8 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
                QueueId queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_dtype") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_dtype") = nb::none(),
             nb::arg("use_multicore") = true,
             nb::arg("queue_id") = DefaultQueueId,
         });

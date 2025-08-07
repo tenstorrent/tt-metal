@@ -126,12 +126,12 @@ void bind_conv2d(nb::module_& mod) {
             nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
             nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             nb::arg("groups") = 1,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("bias_tensor") = std::nullopt,
-            nb::arg("conv_config") = std::nullopt,
-            nb::arg("compute_config") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("slice_config") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("bias_tensor") = nb::none(),
+            nb::arg("conv_config") = nb::none(),
+            nb::arg("compute_config") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("slice_config") = nb::none(),
             nb::arg("return_output_dim") = false,
             nb::arg("return_weights_and_bias") = false,
             nb::arg("queue_id") = DefaultQueueId},
@@ -198,12 +198,12 @@ void bind_conv2d(nb::module_& mod) {
             nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
             nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             nb::arg("groups") = 1,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("bias_tensor") = std::nullopt,
-            nb::arg("conv_config") = std::nullopt,
-            nb::arg("compute_config") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("slice_config") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("bias_tensor") = nb::none(),
+            nb::arg("conv_config") = nb::none(),
+            nb::arg("compute_config") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("slice_config") = nb::none(),
             nb::arg("return_output_dim") = false,
             nb::arg("return_weights_and_bias") = false,
             nb::arg("queue_id") = DefaultQueueId});
@@ -229,10 +229,10 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("groups"),
         nb::arg("device"),
         nb::arg("input_dtype"),
-        nb::arg("output_dtype") = std::nullopt,
-        nb::arg("conv_config") = std::nullopt,
-        nb::arg("compute_config") = std::nullopt,
-        nb::arg("slice_config") = std::nullopt);
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none(),
+        nb::arg("slice_config") = nb::none());
 
     mod.def(
         "prepare_conv_weights",
@@ -255,10 +255,10 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("groups"),
         nb::arg("device"),
         nb::arg("input_dtype"),
-        nb::arg("output_dtype") = std::nullopt,
-        nb::arg("conv_config") = std::nullopt,
-        nb::arg("compute_config") = std::nullopt,
-        nb::arg("slice_config") = std::nullopt);
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none(),
+        nb::arg("slice_config") = nb::none());
 
     mod.def(
         "prepare_conv_bias",
@@ -279,9 +279,9 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("groups"),
         nb::arg("device"),
         nb::arg("input_dtype"),
-        nb::arg("output_dtype") = std::nullopt,
-        nb::arg("conv_config") = std::nullopt,
-        nb::arg("compute_config") = std::nullopt);
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none());
 
     mod.def(
         "prepare_conv_bias",
@@ -302,9 +302,9 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("groups"),
         nb::arg("device"),
         nb::arg("input_dtype"),
-        nb::arg("output_dtype") = std::nullopt,
-        nb::arg("conv_config") = std::nullopt,
-        nb::arg("compute_config") = std::nullopt);
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none());
 
     mod.def(
         "convert_conv_weight_tensor_to_tiled_layout",
@@ -312,7 +312,7 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("conv_weight_tensor").noconvert(),
         nb::arg("in1_block_h"),
         nb::arg("in1_block_w"),
-        nb::arg("output_dtype").noconvert() = std::nullopt);
+        nb::arg("output_dtype").noconvert() = nb::none());
 
     mod.def(
         "convert_conv_weight_tensor_to_special_padding_tiled_layout",
@@ -320,14 +320,14 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("conv_weight_tensor").noconvert(),
         nb::arg("in1_block_h"),
         nb::arg("in1_block_w"),
-        nb::arg("output_dtype").noconvert() = std::nullopt);
+        nb::arg("output_dtype").noconvert() = nb::none());
 
     mod.def(
         "convert_conv_weight_tensor_to_grouped_layout",
         &convert_conv_weight_tensor_to_grouped_layout,
         nb::arg("conv_weight_tensor").noconvert(),
         nb::arg("num_groups"),
-        nb::arg("output_dtype").noconvert() = std::nullopt);
+        nb::arg("output_dtype").noconvert() = nb::none());
 
     mod.def(
         "determine_parallel_config",
@@ -441,7 +441,7 @@ void bind_conv2d(nb::module_& mod) {
             bool,
             bool>(),
         nb::kw_only(),
-        nb::arg("weights_dtype") = std::nullopt,
+        nb::arg("weights_dtype") = nb::none(),
         nb::arg("activation") = "",
         nb::arg("deallocate_activation") = false,
         nb::arg("reallocate_halo_output") = true,
@@ -449,8 +449,8 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("act_block_w_div") = 1,
         nb::arg("reshard_if_not_optimal") = false,
         nb::arg("override_sharding_config") = false,
-        nb::arg("shard_layout") = std::nullopt,
-        nb::arg("core_grid") = std::nullopt,
+        nb::arg("shard_layout") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
         nb::arg("transpose_shards") = false,
         nb::arg("output_layout") = Layout::TILE,
         nb::arg("enable_act_double_buffer") = false,

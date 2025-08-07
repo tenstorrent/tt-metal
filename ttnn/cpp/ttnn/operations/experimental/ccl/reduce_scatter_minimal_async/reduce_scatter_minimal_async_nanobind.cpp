@@ -59,19 +59,19 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod, const ccl_operation_t& 
                     num_buffers_per_channel);
             },
             nb::arg("input_tensor"),
-            nb::arg("persistent_output_buffers") = std::nullopt,
+            nb::arg("persistent_output_buffers") = nb::none(),
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
-            nb::arg("barrier_semaphore") = std::nullopt,
+            nb::arg("barrier_semaphore") = nb::none(),
             nb::arg("num_links") = 1,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Ring,
-            nb::arg("subdevice_id") = std::nullopt,
-            nb::arg("cluster_axis") = std::nullopt,
-            nb::arg("chunks_per_sync") = std::nullopt,
-            nb::arg("num_workers_per_link") = std::nullopt,
-            nb::arg("num_buffers_per_channel") = std::nullopt});
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("chunks_per_sync") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()});
 }
 
 }  // namespace

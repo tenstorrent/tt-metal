@@ -47,9 +47,9 @@ void bind_group_attn_matmul(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size").noconvert(),
             nb::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            nb::arg("dtype").noconvert() = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
-            nb::arg("optional_output_tensor").noconvert() = std::nullopt,
+            nb::arg("dtype").noconvert() = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
+            nb::arg("optional_output_tensor").noconvert() = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

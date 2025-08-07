@@ -46,8 +46,8 @@ void bind_typecast(nb::module_& mod) {
                QueueId queue_id) { return self(queue_id, input_tensor, dtype, memory_config, optional_output_tensor); },
             nb::arg("input_tensor").noconvert(),
             nb::arg("dtype").noconvert(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("optional_output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

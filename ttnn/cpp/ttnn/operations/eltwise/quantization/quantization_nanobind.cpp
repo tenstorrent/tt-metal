@@ -86,10 +86,10 @@ void bind_quantize_operation(
             nb::arg("scale"),
             nb::arg("zero_point"),
             nb::kw_only(),
-            nb::arg("axis") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("axis") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -179,10 +179,10 @@ void bind_requantize_operation(
             nb::arg("out_scale"),
             nb::arg("out_zero_point"),
             nb::kw_only(),
-            nb::arg("axis") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("axis") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -254,10 +254,10 @@ void bind_dequantize_operation(
             nb::arg("scale"),
             nb::arg("zero_point"),
             nb::kw_only(),
-            nb::arg("axis") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("axis") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

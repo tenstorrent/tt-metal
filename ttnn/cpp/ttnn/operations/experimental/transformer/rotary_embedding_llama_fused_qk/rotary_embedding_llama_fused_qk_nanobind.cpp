@@ -43,7 +43,7 @@ void bind_rotary_embedding_llama_fused_qk(nb::module_& mod) {
             nb::arg("sin_cache"),
             nb::arg("trans_mat"),
             nb::kw_only(),
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::transformer

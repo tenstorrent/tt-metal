@@ -61,10 +61,10 @@ void bind_all_to_all_combine(nb::module_& mod) {
             nb::arg("local_reduce") = false,
             nb::arg("num_links") = 1,
             nb::arg("topology") = tt::tt_fabric::Topology::Linear,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("axis") = std::nullopt,
-            nb::arg("subdevice_id") = std::nullopt,
-            nb::arg("optional_output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("axis") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 }

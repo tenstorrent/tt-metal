@@ -36,9 +36,9 @@ void bind_clone_operation(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("input"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
         });
 }
 }  // namespace ttnn::operations::data_movement::clone

@@ -36,9 +36,9 @@ void bind_fast_reduce_nc(nb::module_& mod) {
             nb::arg("input").noconvert(),
             nb::kw_only(),
             nb::arg("dims").noconvert() = ttnn::SmallVector<int32_t>(),
-            nb::arg("output").noconvert() = std::nullopt,
+            nb::arg("output").noconvert() = nb::none(),
             nb::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

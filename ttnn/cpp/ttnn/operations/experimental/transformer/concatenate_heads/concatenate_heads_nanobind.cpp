@@ -48,8 +48,8 @@ void bind_concatenate_heads(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("compute_with_storage_grid_size").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

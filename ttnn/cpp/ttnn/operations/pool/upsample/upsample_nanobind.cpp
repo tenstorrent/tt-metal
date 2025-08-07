@@ -48,8 +48,8 @@ void bind_upsample(nb::module_& mod) {
             nb::arg("scale_factor"),
             nb::kw_only(),
             nb::arg("mode") = "nearest",
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 }  // namespace

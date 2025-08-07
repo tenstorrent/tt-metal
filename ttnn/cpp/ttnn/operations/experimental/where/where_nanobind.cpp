@@ -83,9 +83,9 @@ void bind_where(nb::module_& mod) {
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
-            nb::arg("dtype").noconvert() = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype").noconvert() = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
@@ -109,9 +109,9 @@ void bind_where(nb::module_& mod) {
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
-            nanobind::arg("dtype").noconvert() = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nanobind::arg("dtype").noconvert() = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
@@ -135,9 +135,9 @@ void bind_where(nb::module_& mod) {
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
-            nb::arg("dtype").noconvert() = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype").noconvert() = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
@@ -161,9 +161,9 @@ void bind_where(nb::module_& mod) {
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
-            nb::arg("dtype").noconvert() = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype").noconvert() = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

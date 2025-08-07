@@ -86,9 +86,9 @@ void bind_embedding_backward(nb::module_& mod) {
             nb::arg("weight_tensor").noconvert(),
             nb::arg("output_gradient_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("dtype").noconvert() = std::nullopt,
-            nb::arg("output_tensor").noconvert() = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("dtype").noconvert() = nb::none(),
+            nb::arg("output_tensor").noconvert() = nb::none(),
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

@@ -57,8 +57,8 @@ void bind_broadcast_to(nb::module_& mod) {
             nb::arg("input"),
             nb::arg("output_shape"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::experimental::broadcast_to::detail

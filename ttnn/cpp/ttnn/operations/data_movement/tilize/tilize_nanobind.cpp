@@ -51,8 +51,8 @@ void bind_tilize(nb::module_& mod) {
                QueueId queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
             nb::arg("use_multicore") = true,
             nb::arg("queue_id") = DefaultQueueId,
         });

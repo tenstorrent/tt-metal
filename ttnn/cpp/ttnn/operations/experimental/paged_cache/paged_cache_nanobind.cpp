@@ -54,12 +54,12 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("update_idxs").noconvert() = std::vector<uint32_t>(),
-            nb::arg("update_idxs_tensor").noconvert() = std::nullopt,
-            nb::arg("share_cache").noconvert() = std::nullopt,
-            nb::arg("page_table").noconvert() = std::nullopt,
+            nb::arg("update_idxs_tensor").noconvert() = nb::none(),
+            nb::arg("share_cache").noconvert() = nb::none(),
+            nb::arg("page_table").noconvert() = nb::none(),
             nb::arg("batch_offset") = 0,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
-            nb::arg("mesh_coords").noconvert() = std::nullopt,
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
+            nb::arg("mesh_coords").noconvert() = nb::none(),
         });
 
     auto paged_fused_update_cache_doc =
@@ -123,12 +123,12 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
             nb::arg("input_tensor2").noconvert(),
             nb::kw_only(),
             nb::arg("update_idxs").noconvert() = std::vector<uint32_t>(),
-            nb::arg("update_idxs_tensor").noconvert() = std::nullopt,
-            nb::arg("share_cache").noconvert() = std::nullopt,
-            nb::arg("page_table").noconvert() = std::nullopt,
+            nb::arg("update_idxs_tensor").noconvert() = nb::none(),
+            nb::arg("share_cache").noconvert() = nb::none(),
+            nb::arg("page_table").noconvert() = nb::none(),
             nb::arg("batch_offset") = 0,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
-            nb::arg("mesh_coords").noconvert() = std::nullopt,
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
+            nb::arg("mesh_coords").noconvert() = nb::none(),
         });
 
     auto paged_fill_cache_doc =
@@ -170,10 +170,10 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("page_table").noconvert(),
             nb::kw_only(),
-            nb::arg("batch_idx_tensor").noconvert() = std::nullopt,
+            nb::arg("batch_idx_tensor").noconvert() = nb::none(),
             nb::arg("batch_idx") = 0,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
-            nb::arg("mesh_coords").noconvert() = std::nullopt,
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
+            nb::arg("mesh_coords").noconvert() = nb::none(),
         });
 }
 

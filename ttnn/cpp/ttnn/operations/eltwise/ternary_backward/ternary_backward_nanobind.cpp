@@ -97,7 +97,7 @@ void bind_ternary_backward(
             nb::arg("input_tensor_c"),
             nb::arg("alpha"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename ternary_backward_operation_t>
@@ -188,7 +188,7 @@ void bind_ternary_backward_op(
             nb::arg("input_tensor_b"),
             nb::arg("input_tensor_c"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ternary_backward_operation_t& self,
@@ -204,7 +204,7 @@ void bind_ternary_backward_op(
             nb::arg("input_tensor_b"),
             nb::arg("scalar"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename ternary_backward_operation_t>
@@ -291,10 +291,10 @@ void bind_ternary_backward_optional_output(
             nb::arg("input_tensor_b"),
             nb::arg("input_tensor_c"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("input_a_grad") = std::nullopt,
-            nb::arg("input_b_grad") = std::nullopt,
+            nb::arg("input_a_grad") = nb::none(),
+            nb::arg("input_b_grad") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace

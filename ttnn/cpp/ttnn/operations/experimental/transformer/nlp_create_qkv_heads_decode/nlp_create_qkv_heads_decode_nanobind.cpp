@@ -51,12 +51,12 @@ void bind_nlp_create_qkv_heads_decode(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("num_heads").noconvert(),
-            nb::arg("num_kv_heads").noconvert() = std::nullopt,
+            nb::arg("num_kv_heads").noconvert() = nb::none(),
             nb::arg("overlap_qk_coregrid").noconvert() = true,
-            nb::arg("batch_offset").noconvert() = std::nullopt,
-            nb::arg("slice_size").noconvert() = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensors") = std::nullopt,
+            nb::arg("batch_offset").noconvert() = nb::none(),
+            nb::arg("slice_size").noconvert() = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensors") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

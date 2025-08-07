@@ -86,11 +86,11 @@ void bind_primitive_binary_operation(
             nb::arg("input_tensor_b"),
             nb::arg("binary_op_type"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("activations") = std::nullopt,
-            nb::arg("input_tensor_a_activation") = std::nullopt});
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("activations") = nb::none(),
+            nb::arg("input_tensor_a_activation") = nb::none()});
 }
 
 template <typename binary_operation_t>
@@ -185,13 +185,13 @@ void bind_binary_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
@@ -222,13 +222,13 @@ void bind_binary_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -328,13 +328,13 @@ void bind_binary_gcd_lcm_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -422,13 +422,13 @@ void bind_binary_unary_max_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_b"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
@@ -459,13 +459,13 @@ void bind_binary_unary_max_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -560,13 +560,13 @@ void bind_binary_unary_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_b"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
@@ -597,13 +597,13 @@ void bind_binary_unary_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -683,8 +683,8 @@ void bind_binary_with_float_param(
             nb::arg("input_tensor_b"),
             nb::arg("alpha") = 1.0f,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -775,12 +775,12 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
@@ -809,12 +809,12 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -903,10 +903,10 @@ void bind_logical_binary_ops_operation(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -985,7 +985,7 @@ void bind_binary_composite(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_operation_t>
@@ -1058,7 +1058,7 @@ void bind_binary_composite_with_rtol_atol(
             nb::arg("rtol") = 1e-05f,
             nb::arg("atol") = 1e-08f,
             nb::arg("equal_nan") = false,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 // https://nanobind.readthedocs.io/en/latest/api_extra.html
@@ -1135,7 +1135,7 @@ void bind_binary_composite_overload(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const binary_operation_t& self,
@@ -1145,7 +1145,7 @@ void bind_binary_composite_overload(
             nb::arg("input_tensor_a"),
             nb::arg("value"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_operation_t>
@@ -1220,7 +1220,7 @@ void bind_prelu(
             nb::arg("input_tensor_a"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const binary_operation_t& self,
@@ -1230,7 +1230,7 @@ void bind_prelu(
             nb::arg("input_tensor_a"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const binary_operation_t& self,
@@ -1242,7 +1242,7 @@ void bind_prelu(
             nb::arg("input_tensor_a"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_operation_t>
@@ -1333,14 +1333,14 @@ void bind_div(
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("accurate_mode") = false,
-            nb::arg("round_mode") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("round_mode") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         ttnn::nanobind_overload_t{
@@ -1375,14 +1375,14 @@ void bind_div(
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("accurate_mode") = false,
-            nb::arg("round_mode") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("round_mode") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
@@ -1453,7 +1453,7 @@ void bind_polyval(
             nb::arg("input_tensor_a"),
             nb::arg("coeffs"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_operation_t>
@@ -1523,7 +1523,7 @@ void bind_binary_overload_operation(
             nb::arg("input_tensor"),
             nb::arg("scalar"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         // tensor and tensor
         ttnn::nanobind_overload_t{
@@ -1536,7 +1536,7 @@ void bind_binary_overload_operation(
             nb::arg("input_a"),
             nb::arg("input_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename binary_operation_t>
@@ -1617,7 +1617,7 @@ void bind_inplace_operation(
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
@@ -1645,7 +1645,7 @@ void bind_inplace_operation(
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -1726,7 +1726,7 @@ void bind_logical_inplace_operation(
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -1780,7 +1780,7 @@ void bind_binary_inplace_operation(
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
@@ -1808,7 +1808,7 @@ void bind_binary_inplace_operation(
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -1874,8 +1874,8 @@ void bind_power(nb::module_& mod, const binary_operation_t& operation, const std
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         // float exponent
@@ -1891,8 +1891,8 @@ void bind_power(nb::module_& mod, const binary_operation_t& operation, const std
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         // tensor exponent
@@ -1923,13 +1923,13 @@ void bind_power(nb::module_& mod, const binary_operation_t& operation, const std
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId},
 
         // scalar input - tensor exponent
@@ -1960,13 +1960,13 @@ void bind_power(nb::module_& mod, const binary_operation_t& operation, const std
             nb::arg("input"),
             nb::arg("exponent"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            nb::arg("use_legacy") = std::nullopt,
+            nb::arg("use_legacy") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 }  // namespace detail

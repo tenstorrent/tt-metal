@@ -76,12 +76,12 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("input_tensor_v").noconvert(),
             nb::kw_only(),
-            nb::arg("attn_mask").noconvert() = std::nullopt,
+            nb::arg("attn_mask").noconvert() = nb::none(),
             nb::arg("is_causal").noconvert() = true,
-            nb::arg("scale").noconvert() = std::nullopt,
-            nb::arg("memory_config").noconvert() = std::nullopt,
-            nb::arg("program_config").noconvert() = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("memory_config").noconvert() = nb::none(),
+            nb::arg("program_config").noconvert() = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 
@@ -146,10 +146,10 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("page_table_tensor").noconvert(),
             nb::arg("chunk_start_idx"),
             nb::kw_only(),
-            nb::arg("scale").noconvert() = std::nullopt,
-            nb::arg("memory_config").noconvert() = std::nullopt,
-            nb::arg("program_config").noconvert() = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("memory_config").noconvert() = nb::none(),
+            nb::arg("program_config").noconvert() = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 
@@ -227,8 +227,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("joint_strategy"),
             nb::arg("program_config").noconvert(),
-            nb::arg("scale").noconvert() = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 
     auto ring_joint_doc = R"doc(
@@ -344,15 +344,15 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("joint_strategy"),
             nb::arg("logical_n"),
             nb::arg("program_config").noconvert(),
-            nb::arg("scale").noconvert() = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::arg("num_links"),
             nb::arg("cluster_axis"),
             nb::arg("mesh_device"),
             nb::arg("topology"),
-            nb::arg("subdevice_id") = std::nullopt,
+            nb::arg("subdevice_id") = nb::none(),
             nb::arg("ccl_core_grid_offset"),
             nb::arg("queue_id") = DefaultQueueId});
 
@@ -415,12 +415,12 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("head_dim_v").noconvert(),
             nb::kw_only(),
-            nb::arg("attn_mask").noconvert() = std::nullopt,
+            nb::arg("attn_mask").noconvert() = nb::none(),
             nb::arg("is_causal").noconvert() = true,
-            nb::arg("scale").noconvert() = std::nullopt,
-            nb::arg("memory_config").noconvert() = std::nullopt,
-            nb::arg("program_config").noconvert() = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("memory_config").noconvert() = nb::none(),
+            nb::arg("program_config").noconvert() = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 
@@ -485,10 +485,10 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("page_table_tensor").noconvert(),
             nb::arg("chunk_start_idx"),
             nb::kw_only(),
-            nb::arg("scale").noconvert() = std::nullopt,
-            nb::arg("memory_config").noconvert() = std::nullopt,
-            nb::arg("program_config").noconvert() = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("memory_config").noconvert() = nb::none(),
+            nb::arg("program_config").noconvert() = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 }

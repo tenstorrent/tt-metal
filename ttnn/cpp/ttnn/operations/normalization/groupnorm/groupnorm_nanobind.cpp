@@ -51,16 +51,16 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("num_groups"),
             nb::arg("epsilon") = 1e-12,
-            nb::arg("input_mask") = std::nullopt,
-            nb::arg("weight") = std::nullopt,
-            nb::arg("bias") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("core_grid") = std::nullopt,
+            nb::arg("input_mask") = nb::none(),
+            nb::arg("weight") = nb::none(),
+            nb::arg("bias") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("core_grid") = nb::none(),
             nb::arg("inplace") = true,
-            nb::arg("output_layout") = std::nullopt,
-            nb::arg("num_out_blocks") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("output_layout") = nb::none(),
+            nb::arg("num_out_blocks") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace
 

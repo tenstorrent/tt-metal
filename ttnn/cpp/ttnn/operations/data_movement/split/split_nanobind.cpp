@@ -56,7 +56,7 @@ void bind_split(nb::module_& mod) {
             nb::arg("split_size"),
             nb::arg("dim") = 0,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = 0,
         },
         ttnn::nanobind_overload_t{
@@ -70,7 +70,7 @@ void bind_split(nb::module_& mod) {
             nb::arg("split_size"),
             nb::arg("dim") = 0,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 }

@@ -34,7 +34,7 @@ void bind_reshard(nb::module_& mod, const data_movement_sharded_operation_t& ope
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("output_memory_config"),
-            nb::arg("output_tensor").noconvert() = std::nullopt,
+            nb::arg("output_tensor").noconvert() = nb::none(),
             nb::kw_only(),
             nb::arg("queue_id") = DefaultQueueId,
 

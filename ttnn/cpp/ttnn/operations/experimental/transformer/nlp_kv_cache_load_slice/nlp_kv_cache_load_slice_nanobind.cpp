@@ -38,8 +38,8 @@ void bind_nlp_kv_cache_load_slice(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("seq_len_start").noconvert(),
             nb::arg("seq_len_end").noconvert(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

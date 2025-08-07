@@ -112,7 +112,7 @@ void bind_fill_rm_op(nb::module_& mod) {
             nb::arg("val_hi"),
             nb::arg("val_lo"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -182,7 +182,7 @@ void bind_fill_ones_rm_op(nb::module_& mod) {
             nb::arg("wOnes"),
             nb::arg("any"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

@@ -25,11 +25,11 @@ void bind_moreh_layer_norm_backward_operation(nb::module_& mod) {
             nb::arg("rstd"),
             nb::arg("normalized_dims"),
             nb::kw_only(),
-            nb::arg("gamma") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("gamma_grad") = std::nullopt,
-            nb::arg("beta_grad") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("gamma") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("gamma_grad") = nb::none(),
+            nb::arg("beta_grad") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_layer_norm_backward

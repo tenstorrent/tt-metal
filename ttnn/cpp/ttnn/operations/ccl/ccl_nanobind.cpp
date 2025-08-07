@@ -33,7 +33,7 @@ void bind_common(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::kw_only(),
         nb::arg("wrap_fabric_around_mesh") = false,
-        nb::arg("context_switch_interval_override") = std::nullopt,
+        nb::arg("context_switch_interval_override") = nb::none(),
         nb::arg("topology") = ttnn::ccl::Topology::Linear);
 
     mod.def(

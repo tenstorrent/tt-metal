@@ -30,20 +30,20 @@ void bind_fused_rms_1_1_32_8192(nb::module_& mod) {
             nb::arg("global_semaphore"),  // TODO: Build this internally
             nb::kw_only(),
             // all gather
-            nb::arg("persistent_output_tensor") = std::nullopt,
-            nb::arg("num_links") = std::nullopt,
+            nb::arg("persistent_output_tensor") = nb::none(),
+            nb::arg("num_links") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("subdevice_id") = std::nullopt,
+            nb::arg("subdevice_id") = nb::none(),
             // common
-            nb::arg("dtype") = std::nullopt,  // Should default to BFLOAT 16 on pre, nullopt on post
-            nb::arg("compute_kernel_config") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("dtype") = nb::none(),  // Should default to BFLOAT 16 on pre, nullopt on post
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
             // on pre only
-            nb::arg("residual_input_tensor") = std::nullopt,
+            nb::arg("residual_input_tensor") = nb::none(),
             // on post only
             nb::arg("epsilon") = 1e-12,  // constant 1e-12 on pre, value only affects post
-            nb::arg("weight") = std::nullopt,
-            nb::arg("stats") = std::nullopt,
+            nb::arg("weight") = nb::none(),
+            nb::arg("stats") = nb::none(),
             nb::arg("use_noc1_only") = false});
 }
 }  // namespace ttnn::operations::experimental::ccl

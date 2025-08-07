@@ -23,9 +23,9 @@ void bind_moreh_mean_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("dim"),
             nb::arg("keepdim") = false,
-            nb::arg("divisor") = std::nullopt,
-            nb::arg("output") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("divisor") = nb::none(),
+            nb::arg("output") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_mean

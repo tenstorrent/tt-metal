@@ -62,7 +62,7 @@ void bind_indexed_fill(nb::module_& mod) {
             nb::arg("input_tensor_a").noconvert(),
             nb::arg("input_tensor_b").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("dim") = 0,
             nb::arg("queue_id") = DefaultQueueId});
 }

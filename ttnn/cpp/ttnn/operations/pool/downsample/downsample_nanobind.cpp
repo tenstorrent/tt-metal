@@ -21,7 +21,7 @@ void bind_downsample(nb::module_& mod, const char* doc) {
         ttnn::downsample,
         doc,
         ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"), nb::arg("downsample_params"), nb::arg("dtype") = std::nullopt});
+            nb::arg("input_tensor"), nb::arg("downsample_params"), nb::arg("dtype") = nb::none()});
 }
 
 }  // namespace

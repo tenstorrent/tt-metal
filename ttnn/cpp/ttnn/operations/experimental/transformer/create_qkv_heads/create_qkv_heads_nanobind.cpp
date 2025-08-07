@@ -47,10 +47,10 @@ void bind_create_qkv_heads_template(nb::module_& mod, const transformer_operatio
             nb::arg("input").noconvert(),
             nb::kw_only(),
             nb::arg("num_heads").noconvert(),
-            nb::arg("num_kv_heads").noconvert() = std::nullopt,
+            nb::arg("num_kv_heads").noconvert() = nb::none(),
             nb::arg("transpose_k_heads").noconvert() = true,
-            nb::arg("memory_config").noconvert() = std::nullopt,
-            nb::arg("output_tensors").noconvert() = std::nullopt,
+            nb::arg("memory_config").noconvert() = nb::none(),
+            nb::arg("output_tensors").noconvert() = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 };
 }  // namespace

@@ -66,19 +66,19 @@ void bind_rs_matmul(nb::module_& mod) {
                const std::optional<const ttnn::Tensor>& second_weight_tensor,
                const std::optional<const ttnn::Tensor>& rs_tensor,  // rs1
                tt::tt_fabric::Topology topology,
-               const std::optional<ttnn::MemoryConfig>& memory_config_rs,  // rs 8 default std::nullopt
-               const std::optional<ttnn::MemoryConfig>& memory_config_mm,  // mm4 used but default std::nullopt
+               const std::optional<ttnn::MemoryConfig>& memory_config_rs,  // rs 8 default nb::none()
+               const std::optional<ttnn::MemoryConfig>& memory_config_mm,  // mm4 used but default nb::none()
                const std::optional<const ttnn::DeviceComputeKernelConfig>&
-                   compute_kernel_config,                                   // mm8 used but default std::nullopt
-               const std::optional<const GlobalCircularBuffer>& global_cb,  // mm12 used but default std::nullopt
-               std::optional<const ttnn::CoreGrid>& core_grid,              // mm9 may use but default std::nullopt
+                   compute_kernel_config,                                   // mm8 used but default nb::none()
+               const std::optional<const GlobalCircularBuffer>& global_cb,  // mm12 used but default nb::none()
+               std::optional<const ttnn::CoreGrid>& core_grid,              // mm9 may use but default nb::none()
                const bool transpose_a,                                      // mm2 set false
                const bool transpose_b,                                      // mm3 set false
                const std::optional<const DataType>& dtype,                  // mm5 set false
-               const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,  // mm6 std::nullopt
+               const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,  // mm6 nb::none()
                const std::optional<const std::string>& activation,                                  // mm7 set false
-               const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
-               std::optional<Tensor>& optional_output_tensor,                                       // mm11 std::nullopt
+               const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 nb::none()
+               std::optional<Tensor>& optional_output_tensor,                                       // mm11 nb::none()
                bool use_noc1_only,
                QueueId queue_id  // rs 9 default DefaultQueueId
 
@@ -121,21 +121,21 @@ void bind_rs_matmul(nb::module_& mod) {
             nb::arg("num_links"),
             nb::arg("subdevice_id"),
             nb::kw_only(),
-            nb::arg("second_weight_tensor") = std::nullopt,
-            nb::arg("rs_tensor") = std::nullopt,
+            nb::arg("second_weight_tensor") = nb::none(),
+            nb::arg("rs_tensor") = nb::none(),
             nb::arg("topology") = tt::tt_fabric::Topology::Linear,
-            nb::arg("memory_config_rs") = std::nullopt,
-            nb::arg("memory_config_mm") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
-            nb::arg("global_cb") = std::nullopt,
-            nb::arg("core_grid") = std::nullopt,
+            nb::arg("memory_config_rs") = nb::none(),
+            nb::arg("memory_config_mm") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("global_cb") = nb::none(),
+            nb::arg("core_grid") = nb::none(),
             nb::arg("transpose_a") = false,
             nb::arg("transpose_b") = false,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("program_config") = std::nullopt,
-            nb::arg("activation") = std::nullopt,
-            nb::arg("output_tile") = std::nullopt,
-            nb::arg("optional_output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("activation") = nb::none(),
+            nb::arg("output_tile") = nb::none(),
+            nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("use_noc1_only") = false,
             nb::arg("queue_id") = DefaultQueueId});
 }

@@ -58,7 +58,7 @@ void bind_transpose(nb::module_& mod) {
             nb::arg("dim1"),
             nb::arg("dim2"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
             nb::arg("pad_value") = 0.0f,
         });

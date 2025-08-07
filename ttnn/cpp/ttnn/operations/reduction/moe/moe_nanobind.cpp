@@ -17,7 +17,7 @@ namespace ttnn::operations::reduction::detail {
 
 void bind_reduction_moe_operation(nb::module_& mod) {
     auto doc =
-        R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
+        R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = nb::none(), memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
 
             Returns the weight of the zero-th MoE expert.
             Input tensor must have BBFLOAT16 data type and TILE_LAYOUT layout.
@@ -71,8 +71,8 @@ void bind_reduction_moe_operation(nb::module_& mod) {
             nb::arg("topk_mask_tensor").noconvert(),
             nb::arg("k") = 32,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

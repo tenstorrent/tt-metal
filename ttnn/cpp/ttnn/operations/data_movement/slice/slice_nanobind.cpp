@@ -78,11 +78,11 @@ void bind_slice(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::arg("starts"),
             nb::arg("ends"),
-            nb::arg("slice_step") = std::nullopt,  // should consider a better default value
+            nb::arg("slice_step") = nb::none(),  // should consider a better default value
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("pad_value") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("pad_value") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         },
 
@@ -104,9 +104,9 @@ void bind_slice(nb::module_& mod) {
             nb::arg("ends"),
             nb::arg("steps"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("pad_value") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("pad_value") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         },
         ttnn::nanobind_overload_t{
@@ -125,10 +125,10 @@ void bind_slice(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::arg("slice_start"),
             nb::arg("slice_end"),
-            nb::arg("slice_step") = std::nullopt,  // should consider a better default value
+            nb::arg("slice_step") = nb::none(),  // should consider a better default value
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = 0,
         }
 

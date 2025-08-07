@@ -43,10 +43,10 @@ void bind_rotary_embedding(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::arg("cos_cache"),
             nb::arg("sin_cache"),
-            nb::arg("token_index") = std::nullopt,
+            nb::arg("token_index") = nb::none(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::transformer

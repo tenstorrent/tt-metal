@@ -105,7 +105,7 @@ void bind_unary_composite_optional_floats_with_default(
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const unary_operation_t& self,
@@ -119,7 +119,7 @@ void bind_unary_composite_optional_floats_with_default(
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_operation_t>
@@ -188,8 +188,8 @@ void bind_unary_operation(
                QueueId queue_id) -> ttnn::Tensor { return self(queue_id, input_tensor, memory_config, output_tensor); },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -255,8 +255,8 @@ void bind_unary_operation_overload_complex(
                QueueId queue_id) -> ttnn::Tensor { return self(queue_id, input_tensor, memory_config, output_tensor); },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         ttnn::nanobind_overload_t{
@@ -329,8 +329,8 @@ void bind_unary_operation_overload_complex_return_complex(
                QueueId queue_id) -> ttnn::Tensor { return self(queue_id, input_tensor, memory_config, output_tensor); },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         ttnn::nanobind_overload_t{
@@ -407,8 +407,8 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -484,8 +484,8 @@ void bind_unary_operation_with_float_parameter(
             nb::arg("input_tensor"),
             nb::arg(parameter_name.c_str()),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -561,8 +561,8 @@ void bind_unary_operation_with_int_parameter(
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name.c_str()) = 0,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -634,7 +634,7 @@ void bind_unary_operation_with_dim_parameter(
             nb::arg("input_tensor"),
             nb::arg("dim") = -1,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_operation_t>
@@ -714,9 +714,9 @@ void bind_unary_rdiv(
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
-            nb::arg(parameter_name_b.c_str()) = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg(parameter_name_b.c_str()) = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -778,8 +778,8 @@ void bind_softplus(nb::module_& mod, const unary_operation_t& operation) {
             nb::kw_only(),
             nb::arg("beta") = 1.0f,
             nb::arg("threshold") = 20.0f,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -837,8 +837,8 @@ void bind_tanh(nb::module_& mod, const unary_operation_t& operation) {
                const QueueId queue_id) { return self(queue_id, input, memory_config, output_tensor, accuracy); },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("accuracy") = false,
             nb::arg("queue_id") = DefaultQueueId});
 }
@@ -897,8 +897,8 @@ void bind_sigmoid_accurate(nb::module_& mod, const unary_operation_t& operation)
             },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -962,8 +962,8 @@ void bind_sigmoid_mode_appx(nb::module_& mod, const unary_operation_t& operation
             nb::kw_only(),
             nb::arg("vector_mode") = 4,
             nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -1026,8 +1026,8 @@ void bind_unary_chain(nb::module_& mod, const unary_operation_t& operation) {
             nb::arg("input_tensor"),
             nb::arg("ops_chain"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -1084,8 +1084,8 @@ void bind_identity(nb::module_& mod, const unary_operation_t& operation) {
                const QueueId queue_id) { return self(queue_id, input_tensor, memory_config, output_tensor); },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -1152,7 +1152,7 @@ void bind_unary_composite(
                const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 // OpHandler_1int
@@ -1222,7 +1222,7 @@ void bind_unary_composite_int_with_default(
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 // OpHandler_two_float_with_default
@@ -1299,7 +1299,7 @@ void bind_unary_composite_floats_with_default(
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_operation_t>
@@ -1377,7 +1377,7 @@ void bind_hardtanh(
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 // OpHandler_two_float_with_default
@@ -1439,7 +1439,7 @@ void bind_unary_composite_int(
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 // OpHandler_two_float_with_default
@@ -1510,7 +1510,7 @@ void bind_unary_composite_threshold(
             nb::arg(parameter_name_a.c_str()),
             nb::arg(parameter_name_b.c_str()),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 // OpHandler_float_with_default
@@ -1578,7 +1578,7 @@ void bind_unary_composite_float_with_default(
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_operation_t>
@@ -1647,7 +1647,7 @@ void bind_unary_composite_rpow(
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace

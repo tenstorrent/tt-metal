@@ -263,7 +263,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("dtype"),
             nb::arg("layout"),
             nb::arg("buffer_type") = BufferType::DRAM,
-            nb::arg("tile") = std::nullopt,
+            nb::arg("tile") = nb::none(),
             R"doc(
                 Create TensorSpec class.
                 This constructor is used to create TensorSpec for tensors that are not sharded.
@@ -287,9 +287,9 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("dtype"),
             nb::arg("layout"),
             nb::arg("memory_layout"),
-            nb::arg("shard_spec") = std::nullopt,
+            nb::arg("shard_spec") = nb::none(),
             nb::arg("buffer_type") = BufferType::DRAM,
-            nb::arg("tile") = std::nullopt,
+            nb::arg("tile") = nb::none(),
             R"doc(
                 Create TensorSpec class.
                 This constructor is used to create TensorSpec for tensors that are sharded.
@@ -311,7 +311,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("layout"),
             nb::arg("nd_shard_spec"),
             nb::arg("buffer_type") = BufferType::DRAM,
-            nb::arg("tile") = std::nullopt,
+            nb::arg("tile") = nb::none(),
             R"doc(
                 Create TensorSpec class.
                 This constructor is used to create TensorSpec for ND sharded tensors.
@@ -441,7 +441,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             },
             nb::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             nb::arg("buffer_type") = BufferType::DRAM,
-            nb::arg("shard_spec") = std::nullopt,
+            nb::arg("shard_spec") = nb::none(),
             R"doc(
                 Create MemoryConfig class.
                 If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.

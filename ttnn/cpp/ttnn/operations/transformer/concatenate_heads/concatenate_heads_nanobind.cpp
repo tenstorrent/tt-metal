@@ -32,7 +32,7 @@ void bind_concatenate_heads(nb::module_& mod) {
                 ttnn.Tensor: the output tensor.
 
         )doc",
-        ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config") = std::nullopt});
+        ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::transformer

@@ -92,7 +92,7 @@ void bind_unary_backward_two_float(
             nb::arg("min"),
             nb::arg("max"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_backward_operation_t>
@@ -159,7 +159,7 @@ void bind_unary_backward_op(
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_backward_operation_t>
@@ -229,8 +229,8 @@ void bind_unary_backward_rsqrt(
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
@@ -296,7 +296,7 @@ void bind_unary_backward_op_reciprocal(
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const unary_backward_operation_t& self,
@@ -371,7 +371,7 @@ void bind_unary_backward_op_overload_abs(
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const unary_backward_operation_t& self,
@@ -453,7 +453,7 @@ void bind_unary_backward_float(
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt}
+            nb::arg("memory_config") = nb::none()}
 
     );
 }
@@ -538,7 +538,7 @@ void bind_unary_backward_two_float_with_default(
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_backward_operation_t>
@@ -613,7 +613,7 @@ void bind_unary_backward_float_with_default(
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_backward_operation_t>
@@ -699,7 +699,7 @@ void bind_unary_backward_optional_float_params_with_default(
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const unary_backward_operation_t& self,
@@ -715,7 +715,7 @@ void bind_unary_backward_optional_float_params_with_default(
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_backward_operation_t>
@@ -797,8 +797,8 @@ void bind_unary_backward_rdiv(
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
-            nb::arg(parameter_name_b.c_str()) = std::nullopt,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg(parameter_name_b.c_str()) = nb::none(),
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_backward_operation_t>
@@ -874,8 +874,8 @@ void bind_unary_backward_unary_optional_float(
             nb::arg("input_tensor"),
             nb::arg(parameter_name.c_str()),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -948,7 +948,7 @@ void bind_unary_backward_shape(
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_backward_operation_t>
@@ -1019,8 +1019,8 @@ void bind_unary_backward_optional(
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
@@ -1090,8 +1090,8 @@ void bind_unary_backward_neg(
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
@@ -1154,8 +1154,8 @@ void bind_unary_backward_prod_bw(nb::module_& mod, const unary_backward_operatio
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("dim") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("dim") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_backward_operation_t>
@@ -1233,8 +1233,8 @@ void bind_unary_backward_gelu(
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("input_grad") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("input_grad") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 

@@ -44,9 +44,9 @@ void bind_all_broadcast_async(nb::module_& mod, const ccl_operation_t& operation
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
             nb::arg("num_links") = 1,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("subdevice_id") = std::nullopt},
+            nb::arg("subdevice_id") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ccl_operation_t& self,
@@ -65,10 +65,10 @@ void bind_all_broadcast_async(nb::module_& mod, const ccl_operation_t& operation
                     mesh_device,
                     topology,
                     multi_device_global_semaphore,
-                    persistent_output_tensor,  // = std::nullopt,
-                    memory_config,             // = std::nullopt,
-                    num_preferred_links,       // = std::nullopt,
-                    subdevice_id);             // = std::nullopt
+                    persistent_output_tensor,  // = nb::none(),
+                    memory_config,             // = nb::none(),
+                    num_preferred_links,       // = nb::none(),
+                    subdevice_id);             // = nb::none()
             },
             nb::arg("input_tensor"),
             nb::arg("cluster_axis"),
@@ -76,10 +76,10 @@ void bind_all_broadcast_async(nb::module_& mod, const ccl_operation_t& operation
             nb::arg("topology"),
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
-            nb::arg("persistent_output_tensor") = std::nullopt,
-            nb::arg("num_links") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("subdevice_id") = std::nullopt});
+            nb::arg("persistent_output_tensor") = nb::none(),
+            nb::arg("num_links") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("subdevice_id") = nb::none()});
 }
 
 }  // namespace

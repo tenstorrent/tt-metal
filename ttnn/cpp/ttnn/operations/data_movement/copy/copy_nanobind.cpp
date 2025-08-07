@@ -119,8 +119,8 @@ void bind_assign(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("memory_config"),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
         ttnn::nanobind_overload_t{
             [](const decltype(ttnn::assign)& self,

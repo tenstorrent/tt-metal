@@ -94,19 +94,19 @@ void bind_all_gather_matmul(nb::module_& mod) {
             nb::arg("dim"),
             nb::arg("all_gather_core_grid_offset"),
             nb::kw_only(),
-            nb::arg("bias") = std::nullopt,
+            nb::arg("bias") = nb::none(),
             nb::arg("num_links") = 1,
-            nb::arg("memory_config_ag") = std::nullopt,
-            nb::arg("num_workers") = std::nullopt,
-            nb::arg("num_buffers_per_channel") = std::nullopt,
-            nb::arg("memory_config_mm") = std::nullopt,
+            nb::arg("memory_config_ag") = nb::none(),
+            nb::arg("num_workers") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none(),
+            nb::arg("memory_config_mm") = nb::none(),
             nb::arg("transpose_a") = false,
             nb::arg("transpose_b") = false,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("program_config") = std::nullopt,
-            nb::arg("activation") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
-            nb::arg("core_grid") = std::nullopt});
+            nb::arg("dtype") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("activation") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("core_grid") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

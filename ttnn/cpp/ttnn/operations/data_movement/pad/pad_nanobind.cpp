@@ -66,7 +66,7 @@ void bind_pad(nb::module_& mod) {
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("use_multicore") = true,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         },
         ttnn::nanobind_overload_t{
@@ -93,7 +93,7 @@ void bind_pad(nb::module_& mod) {
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("use_multicore") = false,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::data_movement::detail

@@ -37,9 +37,9 @@ void bind_hc_sum_reduce(nb::module_& mod) {
                QueueId queue_id) { return self(queue_id, input, memory_config, dtype, math_fidelity); },
             nb::arg("input"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("math_fidelity") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("math_fidelity") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

@@ -39,9 +39,9 @@ void bind_prefix_scan(nb::module_& mod) {
             nb::arg("bx"),
             nb::arg("h_prev"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("math_fidelity") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("math_fidelity") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

@@ -90,7 +90,7 @@ void bind_ternary_composite_float(
             nb::arg("input_tensor_c"),
             nb::kw_only(),
             nb::arg("value"),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename ternary_operation_t>
@@ -154,8 +154,8 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -220,7 +220,7 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
             nb::arg("end"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ternary_operation_t& self,
@@ -232,7 +232,7 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
             nb::arg("end"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename ternary_operation_t>
@@ -293,7 +293,7 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
             nb::arg("input_tensor_b"),
             nb::arg("input_tensor_c"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt},
+            nb::arg("memory_config") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ternary_operation_t& self,
@@ -307,7 +307,7 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
             nb::arg("value1"),
             nb::arg("value2"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace

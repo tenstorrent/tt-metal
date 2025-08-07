@@ -28,7 +28,7 @@ void bind_rotate_half(nb::module_& mod) {
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor, if None then it gets set to input.memory_config()
         )doc",
-        ttnn::nanobind_arguments_t{nb::arg("input"), nb::kw_only(), nb::arg("memory_config") = std::nullopt});
+        ttnn::nanobind_arguments_t{nb::arg("input"), nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::transformer

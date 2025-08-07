@@ -22,13 +22,13 @@ void bind_moreh_layer_norm_operation(nb::module_& mod) {
             nb::arg("input"),
             nb::arg("normalized_dims"),
             nb::arg("eps") = 1e-5f,
-            nb::arg("gamma") = std::nullopt,
-            nb::arg("beta") = std::nullopt,
+            nb::arg("gamma") = nb::none(),
+            nb::arg("beta") = nb::none(),
             nb::kw_only(),
-            nb::arg("output") = std::nullopt,
-            nb::arg("mean") = std::nullopt,
-            nb::arg("rstd") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("output") = nb::none(),
+            nb::arg("mean") = nb::none(),
+            nb::arg("rstd") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_layer_norm

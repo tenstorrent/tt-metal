@@ -25,9 +25,9 @@ void bind_moreh_matmul_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("transpose_input").noconvert() = false,
             nb::arg("transpose_other").noconvert() = false,
-            nb::arg("output").noconvert() = std::nullopt,
-            nb::arg("bias").noconvert() = std::nullopt,
-            nb::arg("memory_config").noconvert() = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt});
+            nb::arg("output").noconvert() = nb::none(),
+            nb::arg("bias").noconvert() = nb::none(),
+            nb::arg("memory_config").noconvert() = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul

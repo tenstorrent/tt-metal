@@ -40,8 +40,8 @@ void bind_sharded_to_interleaved(
                     is_l1_aligned);
             },
             nb::arg("input_tensor").noconvert(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_dtype") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_dtype") = nb::none(),
             nb::kw_only(),
             nb::arg("queue_id") = DefaultQueueId,
             nb::arg("is_l1_aligned") = false,

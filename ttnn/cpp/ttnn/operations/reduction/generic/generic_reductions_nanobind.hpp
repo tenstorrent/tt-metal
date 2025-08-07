@@ -44,11 +44,11 @@ void bind_reduction_operation(nb::module_& mod, const reduction_operation_t& ope
         doc,
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
-            nb::arg("dim") = std::nullopt,
+            nb::arg("dim") = nb::none(),
             nb::arg("keepdim") = false,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("scalar") = 1.0f,
             nb::arg("correction") = true});
 }

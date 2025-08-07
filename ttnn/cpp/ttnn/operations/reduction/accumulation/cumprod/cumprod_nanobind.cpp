@@ -95,10 +95,10 @@ void bind_reduction_cumprod_operation(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
             nb::arg("reverse_order") = false,
-            nb::arg("out") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("out") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

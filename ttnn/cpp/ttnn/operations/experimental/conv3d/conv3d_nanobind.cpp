@@ -55,10 +55,10 @@ void bind_conv3d(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
-            nb::arg("bias_tensor") = std::nullopt,
+            nb::arg("bias_tensor") = nb::none(),
             nb::arg("config"),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("queue_id") = 0});
 
     auto py_conv3d_config = nb::class_<Conv3dConfig>(

@@ -25,8 +25,8 @@ void bind_moreh_dot_backward_operation(nb::module_& mod) {
             nb::arg("input"),
             nb::arg("other"),
             nb::kw_only(),
-            nb::arg("input_grad") = std::nullopt,
-            nb::arg("other_grad") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("other_grad") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_dot_backward

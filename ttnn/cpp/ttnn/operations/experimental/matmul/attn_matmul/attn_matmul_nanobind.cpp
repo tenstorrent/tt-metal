@@ -48,10 +48,10 @@ void bind_attn_matmul(nb::module_& mod) {
             nb::arg("input_tensor_b").noconvert(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size").noconvert(),
-            nb::arg("dtype").noconvert() = std::nullopt,
-            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("dtype").noconvert() = nb::none(),
+            nb::arg("compute_kernel_config").noconvert() = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -91,9 +91,9 @@ void bind_attn_matmul_from_cache(nb::module_& mod) {
             nb::arg("num_tokens").noconvert(),
             nb::arg("transpose_hw").noconvert(),
             nb::arg("compute_with_storage_grid_size").noconvert(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

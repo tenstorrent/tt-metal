@@ -69,8 +69,8 @@ void bind_mse_loss_function(nb::module_& mod) {
             nb::arg("input_prediction"),
             nb::kw_only(),
             nb::arg("reduction") = LossReductionMode::NONE,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 
@@ -120,8 +120,8 @@ void bind_mae_loss_function(nb::module_& mod) {
             nb::arg("input_prediction"),
             nb::kw_only(),
             nb::arg("reduction") = LossReductionMode::NONE,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

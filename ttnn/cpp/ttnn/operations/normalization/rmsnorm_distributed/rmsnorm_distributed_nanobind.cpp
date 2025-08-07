@@ -27,10 +27,10 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("residual_input_tensor") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
-            nb::arg("program_config") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("residual_input_tensor") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
 }
 
 void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
@@ -45,12 +45,12 @@ void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
             nb::arg("stats"),
             nb::kw_only(),
             nb::arg("epsilon") = 1e-12,
-            nb::arg("weight") = std::nullopt,
-            nb::arg("bias") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
-            nb::arg("program_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt});
+            nb::arg("weight") = nb::none(),
+            nb::arg("bias") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("dtype") = nb::none()});
 }
 
 void bind_normalization_rms_norm_distributed(nb::module_& mod) {

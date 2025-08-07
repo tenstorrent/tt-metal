@@ -26,12 +26,12 @@ void bind_moreh_nll_loss_operation(nb::module_& mod) {
             nb::arg("target_tensor"),
             nb::arg("reduction"),
             nb::kw_only(),
-            nb::arg("weight_tensor") = std::nullopt,
-            nb::arg("divisor_tensor") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("weight_tensor") = nb::none(),
+            nb::arg("divisor_tensor") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("ignore_index") = -100,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss

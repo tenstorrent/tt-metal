@@ -73,11 +73,11 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
             nb::arg("num_links") = 1,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Ring,
-            nb::arg("subdevice_id") = std::nullopt,
+            nb::arg("subdevice_id") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
-            nb::arg("barrier_semaphore") = std::nullopt},
+            nb::arg("barrier_semaphore") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ccl_operation_t& self,
@@ -117,15 +117,15 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
             nb::arg("num_links") = 1,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Ring,
-            nb::arg("subdevice_id") = std::nullopt,
-            nb::arg("cluster_axis") = std::nullopt,
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("cluster_axis") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
-            nb::arg("barrier_semaphore") = std::nullopt,
-            nb::arg("chunks_per_sync") = std::nullopt,
-            nb::arg("num_workers_per_link") = std::nullopt,
-            nb::arg("num_buffers_per_channel") = std::nullopt},
+            nb::arg("barrier_semaphore") = nb::none(),
+            nb::arg("chunks_per_sync") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ccl_operation_t& self,
@@ -148,9 +148,9 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                     mesh_device,
                     topology,
                     multi_device_global_semaphore.get(),
-                    persistent_output_tensor,  // = std::nullopt,
-                    memory_config,             // = std::nullopt,
-                    num_preferred_links,       // = std::nullopt,
+                    persistent_output_tensor,  // = nb::none(),
+                    memory_config,             // = nb::none(),
+                    num_preferred_links,       // = nb::none(),
                     subdevice_id,
                     use_optimal_ccl_for_llama,
                     barrier_semaphore);
@@ -162,12 +162,12 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
             nb::arg("topology"),
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
-            nb::arg("persistent_output_tensor") = std::nullopt,
-            nb::arg("num_links") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("subdevice_id") = std::nullopt,
+            nb::arg("persistent_output_tensor") = nb::none(),
+            nb::arg("num_links") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
-            nb::arg("barrier_semaphore") = std::nullopt});
+            nb::arg("barrier_semaphore") = nb::none()});
 }
 
 }  // namespace

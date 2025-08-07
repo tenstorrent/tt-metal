@@ -49,9 +49,9 @@ void bind_full_operation(nb::module_& mod) {
             nb::arg("fill_value"),
             nb::arg("any"),
             nb::kw_only(),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("layout") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("dtype") = nb::none(),
+            nb::arg("layout") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::full

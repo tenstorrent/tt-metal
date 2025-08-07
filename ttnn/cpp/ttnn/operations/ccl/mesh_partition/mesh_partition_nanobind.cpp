@@ -17,7 +17,7 @@ namespace ttnn::operations::ccl {
 
 void bind_mesh_partition(nb::module_& mod) {
     auto doc =
-        R"doc(mesh_partition(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(mesh_partition(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = nb::none(), queue_id: int = 0) -> ttnn.Tensor
 
             Partitions the input tensor across the mesh such that each device has the i/num_devices-th partition of the input tensor along the specified dimension. This is the inverse of all_gather
 
@@ -55,9 +55,9 @@ void bind_mesh_partition(nb::module_& mod) {
                QueueId queue_id) { return self(queue_id, input_tensor, dim, cluster_axis, memory_config); },
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
-            nb::arg("cluster_axis") = std::nullopt,
+            nb::arg("cluster_axis") = nb::none(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
 
         });

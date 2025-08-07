@@ -40,11 +40,11 @@ auto create_nanobind_full_overload() {
         },
         nb::arg("shape"),
         nb::arg("fill_value"),
-        nb::arg("dtype") = std::nullopt,
-        nb::arg("layout") = std::nullopt,
-        nb::arg("device") = std::nullopt,
-        nb::arg("memory_config") = std::nullopt,
-        nb::arg("optional_tensor") = std::nullopt,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
+        nb::arg("device") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("optional_tensor") = nb::none(),
         nb::arg("queue_id") = ttnn::DefaultQueueId};
 }
 
@@ -64,11 +64,11 @@ auto create_nanobind_full_like_overload() {
         },
         nb::arg("tensor"),
         nb::arg("fill_value"),
-        nb::arg("dtype") = std::nullopt,
-        nb::arg("layout") = std::nullopt,
-        nb::arg("device") = std::nullopt,
-        nb::arg("memory_config") = std::nullopt,
-        nb::arg("optional_tensor") = std::nullopt,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
+        nb::arg("device") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("optional_tensor") = nb::none(),
         nb::arg("queue_id") = ttnn::DefaultQueueId};
 }
 
@@ -164,10 +164,10 @@ void bind_full_operation_with_hard_coded_value(
                 return self(ttnn::Shape{shape}, dtype, layout, device, memory_config);
             },
             nb::arg("shape"),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("layout") = std::nullopt,
-            nb::arg("device") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("dtype") = nb::none(),
+            nb::arg("layout") = nb::none(),
+            nb::arg("device") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
 }
 
 template <typename creation_operation_t>
@@ -260,11 +260,11 @@ void bind_full_like_operation_with_hard_coded_value(
                 return self(queue_id, tensor, dtype, layout, device, memory_config, optional_output_tensor);
             },
             nb::arg("tensor"),
-            nb::arg("dtype") = std::nullopt,
-            nb::arg("layout") = std::nullopt,
-            nb::arg("device") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("optional_tensor") = std::nullopt,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("layout") = nb::none(),
+            nb::arg("device") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("optional_tensor") = nb::none(),
             nb::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
@@ -313,7 +313,7 @@ void bind_arange_operation(nb::module_& mod, const creation_operation_t& operati
             nb::arg("step") = 1,
             nb::kw_only(),
             nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("device") = std::nullopt,
+            nb::arg("device") = nb::none(),
             nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
             nb::arg("layout") = Layout::ROW_MAJOR},
         ttnn::nanobind_overload_t{
@@ -326,7 +326,7 @@ void bind_arange_operation(nb::module_& mod, const creation_operation_t& operati
             nb::arg("end"),
             nb::kw_only(),
             nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("device") = std::nullopt,
+            nb::arg("device") = nb::none(),
             nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
             nb::arg("layout") = Layout::ROW_MAJOR});
 }
@@ -421,7 +421,7 @@ void bind_empty_like_operation(nb::module_& mod, const creation_operation_t& ope
             nb::kw_only(),
             nb::arg("dtype") = DataType::BFLOAT16,
             nb::arg("layout") = Layout::ROW_MAJOR,
-            nb::arg("device") = std::nullopt,
+            nb::arg("device") = nb::none(),
             nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
 }
 

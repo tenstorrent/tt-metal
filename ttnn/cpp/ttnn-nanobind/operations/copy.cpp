@@ -59,9 +59,9 @@ Example::
             nb::arg("input_tensor"),
             nb::arg("dtype"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("sub_core_grids") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId},
 
         ttnn::nanobind_overload_t{
@@ -80,9 +80,9 @@ Example::
             nb::arg("input_dtype"),
             nb::arg("output_dtype"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("sub_core_grids") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId}
 
     );

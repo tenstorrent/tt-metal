@@ -19,7 +19,7 @@ namespace ttnn::operations::experimental::ccl {
 
 void bind_llama_reduce_scatter(nb::module_& mod) {
     auto doc =
-        R"doc(llama_reduce_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(llama_reduce_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = nb::none(), queue_id: int = 0) -> ttnn.Tensor
 
             Reduce_scatter after FF1/3 for Llama70B.
 
@@ -95,7 +95,7 @@ void bind_llama_reduce_scatter(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::kw_only(),
             nb::arg("num_links") = 1,
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = tt::tt_fabric::Topology::Linear,
             nb::arg("use_noc1_only") = false,
             nb::arg("queue_id") = DefaultQueueId});

@@ -23,9 +23,9 @@ void bind_moreh_abs_pow_operation(nb::module_& mod) {
             nb::arg("input"),
             nb::arg("p"),
             nb::kw_only(),
-            nb::arg("output") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("output") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
         });
 }
 }  // namespace ttnn::operations::moreh::moreh_abs_pow

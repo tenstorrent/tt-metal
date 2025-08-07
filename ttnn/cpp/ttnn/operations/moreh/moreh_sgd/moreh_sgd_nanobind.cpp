@@ -21,9 +21,9 @@ void bind_moreh_sgd_operation(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("param_in"),
             nb::arg("grad"),
-            nb::arg("momentum_buffer_in") = std::nullopt,
-            nb::arg("param_out") = std::nullopt,
-            nb::arg("momentum_buffer_out") = std::nullopt,
+            nb::arg("momentum_buffer_in") = nb::none(),
+            nb::arg("param_out") = nb::none(),
+            nb::arg("momentum_buffer_out") = nb::none(),
             nb::arg("lr") = 1e-3,
             nb::arg("momentum") = 0,
             nb::arg("dampening") = 0,
@@ -31,8 +31,8 @@ void bind_moreh_sgd_operation(nb::module_& mod) {
             nb::arg("nesterov") = false,
             nb::kw_only(),
             nb::arg("momentum_initialized"),
-            nb::arg("param_out_memory_config") = std::nullopt,
-            nb::arg("momentum_buffer_out_memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("param_out_memory_config") = nb::none(),
+            nb::arg("momentum_buffer_out_memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::moreh::moreh_sgd

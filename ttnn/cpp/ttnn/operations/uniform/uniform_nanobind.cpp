@@ -47,7 +47,7 @@ void bind_uniform_operation(nb::module_& mod) {
             nb::arg("to") = 1,
             nb::arg("seed") = 0,
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::uniform

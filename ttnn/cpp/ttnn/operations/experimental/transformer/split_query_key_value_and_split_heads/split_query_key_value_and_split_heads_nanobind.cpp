@@ -55,9 +55,9 @@ void bind_split_qkv(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("compute_with_storage_grid_size").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("num_heads") = 16,
-            nb::arg("output_tensors") = std::nullopt,
+            nb::arg("output_tensors") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

@@ -90,12 +90,12 @@ void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
                 return self(input_tensor, kv_input_tensor, num_heads, num_kv_heads, transpose_key, memory_config);
             },
             nb::arg("input_tensor").noconvert(),
-            nb::arg("kv_input_tensor") = std::nullopt,
+            nb::arg("kv_input_tensor") = nb::none(),
             nb::kw_only(),
             nb::arg("num_heads"),
-            nb::arg("num_kv_heads") = std::nullopt,
+            nb::arg("num_kv_heads") = nb::none(),
             nb::arg("transpose_key") = true,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::transformer

@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::reduction::detail {
 
 void bind_argmax_operation(nb::module_& mod) {
     auto doc =
-        R"doc(argmax(input_tensor: ttnn.Tensor, *, dim: Optional[int] = None, memory_config: MemoryConfig = std::nullopt) -> ttnn.Tensor
+        R"doc(argmax(input_tensor: ttnn.Tensor, *, dim: Optional[int] = None, memory_config: MemoryConfig = nb::none()) -> ttnn.Tensor
 
             Returns the indices of the maximum value of elements in the ``input`` tensor
             If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
@@ -58,7 +58,7 @@ void bind_argmax_operation(nb::module_& mod) {
             nb::arg("dim"),
             nb::kw_only(),
             nb::arg("all") = false,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 void bind_argmin_operation(nb::module_& mod) {
@@ -98,7 +98,7 @@ void bind_argmin_operation(nb::module_& mod) {
             nb::arg("dim"),
             nb::kw_only(),
             nb::arg("all") = false,
-            nb::arg("memory_config") = std::nullopt});
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::reduction::detail

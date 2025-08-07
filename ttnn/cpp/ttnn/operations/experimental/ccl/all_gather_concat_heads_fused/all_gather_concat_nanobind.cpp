@@ -68,7 +68,7 @@ void bind_all_gather_concat(nb::module_& mod, const ccl_operation_t& operation, 
             nb::arg("use_noc1_only") = false,
             nb::arg("num_links") = 1,
             nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("subdevice_id") = std::nullopt,
+            nb::arg("subdevice_id") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId});
 }
 

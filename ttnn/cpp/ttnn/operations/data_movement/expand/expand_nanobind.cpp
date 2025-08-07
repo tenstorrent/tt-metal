@@ -31,7 +31,7 @@ void bind_expand(nb::module_& mod, const data_movement_operation_t& operation, c
             nb::arg("input_tensor"),
             nb::arg("output_shape"),
             nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
+            nb::arg("memory_config") = nb::none(),
             nb::arg("queue_id") = DefaultQueueId,
         });
 }
