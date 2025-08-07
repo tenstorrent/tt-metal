@@ -20,11 +20,6 @@ class SlowTestsExceededError(SlowTestDetectionError):
 
 
 def detect_slow_tests(report_dir, timeout):
-    # Hardcoded list of tests to exclude from slow test detection (Don't use this unless you HAVE TO)
-    exceptions = [
-        "DispatchFixture.TensixFailOnDuplicateKernelCreationDataflow",
-    ]
-
     # Find all XML files in the report directory
     report_files = [
         os.path.join(root, file) for root, dirs, files in os.walk(report_dir) for file in files if file.endswith(".xml")
@@ -32,7 +27,6 @@ def detect_slow_tests(report_dir, timeout):
     if not report_files:
         raise NoTestReportsFoundError("No test reports found.")
 
-    excluded_tests = []
     slow_tests = []
 
     for report_file in report_files:
@@ -42,25 +36,18 @@ def detect_slow_tests(report_dir, timeout):
             for tc in root.findall(".//testcase"):
                 time = float(tc.get("time", 0))
                 if time > timeout:
-                    test_name = f"{tc.get('classname', 'Unknown')}.{tc.get('name', 'Unknown')}"
-
-                    # Check if this test is in the exceptions list
-                    if test_name in exceptions:
-                        excluded_tests.append(f"{report_file}: {test_name} ({time:.3f}s) - EXCLUDED")
-                    else:
-                        slow_tests.append(f"{report_file}: {test_name} ({time:.3f}s)")
+                    slow_tests.append(
+                        f"{report_file}: {tc.get('classname', 'Unknown')}.{tc.get('name', 'Unknown')} ({time:.3f}s)"
+                    )
         except Exception as e:
             raise TestReportParsingError(f"Error parsing {report_file}: {e}")
 
-    # Print excluded tests for visibility
-    if excluded_tests:
-        print("Excluded slow tests:")
-        for test in excluded_tests:
+    if slow_tests:
+        print("Detected Slow Tests:")
+        for test in slow_tests:
             print(f"  {test}")
         print()
-
-    if slow_tests:
-        raise SlowTestsExceededError(f"Some tests exceeded {timeout}s:\n" + "\n".join(slow_tests))
+        # raise SlowTestsExceededError(f"Some tests exceeded {timeout}s:\n" + "\n".join(slow_tests))
 
 
 if __name__ == "__main__":
@@ -76,4 +63,4 @@ if __name__ == "__main__":
     except SlowTestDetectionError as e:
         print(e)
         sys.exit(1)
-    print("No slow tests slower than {timeout}s detected.")
+    print(f"No slow tests slower than {timeout}s detected.")

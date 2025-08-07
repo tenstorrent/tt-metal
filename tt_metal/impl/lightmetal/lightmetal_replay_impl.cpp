@@ -366,6 +366,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
 }
 
 // Per API command handlers.
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -374,9 +375,11 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceC
         cmd->tid(),
         cmd->blocking());
     CommandQueue& cq = this->device_->command_queue(cmd->cq_id());
-    EnqueueTrace(cq, cmd->tid(), cmd->blocking());
+    TT_THROW("Light Metal Trace is no longer supported.");
+    // EnqueueTrace(cq, cmd->tid(), cmd->blocking());
 }
 
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -384,19 +387,24 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCo
         cmd->cq_id(),
         cmd->tid(),
         cmd->blocking());
-    ReplayTrace(this->device_, cmd->cq_id(), cmd->tid(), cmd->blocking());
+    TT_THROW("Light Metal Trace is no longer supported.");
+    // ReplayTrace(this->device_, cmd->cq_id(), cmd->tid(), cmd->blocking());
 }
 
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(LoadTrace) cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
+    TT_THROW("Light Metal Trace is no longer supported.");
     // Get the trace descriptor from flatbuffer and load it to device.
-    auto trace_desc = get_trace_by_id(cmd->tid());
-    LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
+    // auto trace_desc = get_trace_by_id(cmd->tid());
+    // LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
 }
 
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ReleaseTrace) tid: {}", cmd->tid());
-    ReleaseTrace(this->device_, cmd->tid());
+    TT_THROW("Light Metal Trace is no longer supported.");
+    // ReleaseTrace(this->device_, cmd->tid());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd) {
@@ -411,6 +419,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
 
     // Handle optionals
     const auto shard_parameters = from_flatbuffer(cmd->shard_parameters());
+    const auto dist_spec = from_flatbuffer(cmd->buffer_distribution_spec());
     auto buffer_layout = static_cast<TensorMemoryLayout>(cmd->buffer_layout());
     const auto bottom_up = cmd->bottom_up() ? std::optional<bool>{cmd->bottom_up()->value()} : std::nullopt;
     const auto sub_device_id =
@@ -424,7 +433,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            BufferShardingArgs(shard_parameters, buffer_layout),
+            BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);
@@ -435,7 +444,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            BufferShardingArgs(shard_parameters, buffer_layout),
+            BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);

@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -156,8 +157,6 @@ FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
     send_packets_unicast_write_impl<false>(fabric_connection, pkt_hdr_fwd, pkt_hdr_bwd, params, source_buffer_address);
 }
 
-#ifdef ARCH_WORMHOLE
-
 template <>
 FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE>(
     FabricConnectionManager& fabric_connection,
@@ -167,8 +166,6 @@ FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_W
     size_t source_buffer_address) {
     send_packets_unicast_write_impl<true>(fabric_connection, pkt_hdr_fwd, pkt_hdr_bwd, params, source_buffer_address);
 }
-
-#endif
 
 template <>
 void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
@@ -346,8 +343,6 @@ void kernel_main() {
     arg_idx += num_send_types;
 
     const size_t source_l1_cb_index = get_arg_val<uint32_t>(arg_idx++);
-    const size_t packet_header_cb = get_arg_val<uint32_t>(arg_idx++);
-    const size_t packet_header_size_in_headers = get_arg_val<uint32_t>(arg_idx++);
 
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
@@ -381,17 +376,13 @@ void kernel_main() {
     fabric_connection.open();
 
     cb_reserve_back(source_l1_cb_index, 1);
-    cb_reserve_back(packet_header_cb, 1);
     const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
-    const auto packet_header_buffer_address = get_write_ptr(packet_header_cb);
 
-    auto* fwd_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
-    auto* bwd_packet_header =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
-    auto* sync_fwd_packet_header =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE) * 2);
-    auto* sync_bwd_packet_header =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE) * 3);
+    // Allocate packet headers from the pool instead of circular buffer
+    auto* fwd_packet_header = PacketHeaderPool::allocate_header();
+    auto* bwd_packet_header = PacketHeaderPool::allocate_header();
+    auto* sync_fwd_packet_header = PacketHeaderPool::allocate_header();
+    auto* sync_bwd_packet_header = PacketHeaderPool::allocate_header();
 
     if (enable_any_synchronization) {
         sync_fwd_packet_header->to_chip_multicast(
@@ -459,12 +450,10 @@ void kernel_main() {
                         send_packets<NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
                             fabric_connection, fwd_packet_header, bwd_packet_header, params, source_l1_buffer_address);
                         break;
-#ifdef ARCH_WORMHOLE
                     case NocSendType::NOC_UNICAST_SCATTER_WRITE:
                         send_packets<NocSendType::NOC_UNICAST_SCATTER_WRITE>(
                             fabric_connection, fwd_packet_header, bwd_packet_header, params, source_l1_buffer_address);
                         break;
-#endif
                     default: ASSERT(false); break;
                 }
             }

@@ -9,6 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -70,7 +71,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
-    std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
 
     uint32_t num_input_tiles;
     if (shard_spec.has_value()) {
@@ -346,7 +347,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
-    std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
 
     uint32_t num_input_tiles;
     if (shard_spec.has_value()) {
@@ -391,8 +392,8 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_kernel_defines;
     if (shard_spec.has_value()) {

@@ -10,6 +10,8 @@
 #include "metal/ops/common/program_utils.hpp"
 #include "rmsnorm_fw_device_operation_types.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace {
 
 constexpr auto kWriterKernelPath =
@@ -69,71 +71,6 @@ struct RMSNormForwardKernels {
     tt::tt_metal::KernelHandle compute_group_1;
     tt::tt_metal::KernelHandle compute_group_2;
 };
-
-/**
- *   Create and configure a circular buffer, returning both the configuration and the handle.
- */
-tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size,
-    uint32_t num_tiles) {
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
-            .set_page_size(cb_index, single_tile_size);
-
-    auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
-    return cb_handle;
-}
-
-/**
- *   Create a reader kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_reader_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
-}
-
-/**
- *   Create a writer kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_writer_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
-}
-
-/**
- * Create a compute kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_compute_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program,
-        kernel_path,
-        core_ranges,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-            .math_approx_mode = false,
-            .compile_args = compile_time_args,
-            .defines = defines});
-}
 
 /**
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
@@ -313,25 +250,25 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     TT_FATAL(
         input_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* gamma_buffer = gamma.buffer();
     TT_FATAL(
         gamma_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        magic_enum::enum_name(gamma_buffer->buffer_type()));
+        enchantum::to_string(gamma_buffer->buffer_type()));
 
     auto* output_buffer = output.front().buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        magic_enum::enum_name(output_buffer->buffer_type()));
+        enchantum::to_string(output_buffer->buffer_type()));
 
     auto* rms_output_buffer = output.back().buffer();
     TT_FATAL(
         rms_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "RMS output buffer must be in DRAM. RMS output buffer of type {}",
-        magic_enum::enum_name(rms_output_buffer->buffer_type()));
+        enchantum::to_string(rms_output_buffer->buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;
@@ -377,8 +314,8 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
         Wt                          // num_inner / TILE_W
     };
 
-    kernels.compute_group_1 =
-        create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath);
+    kernels.compute_group_1 = create_compute_kernel(
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -388,8 +325,8 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
             Wt                          // num_inner / TILE_W
         };
 
-        kernels.compute_group_2 =
-            create_compute_kernel(program, core_group_2, compute_group_2_args, defines, kComputeKernelPath);
+        kernels.compute_group_2 = create_compute_kernel(
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
 
     // -------------------------------------------------------------------------

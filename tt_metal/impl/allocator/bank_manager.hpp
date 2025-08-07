@@ -28,7 +28,7 @@ class Algorithm;
 
 class BankManager {
 public:
-    BankManager() {}
+    BankManager() = default;
 
     BankManager(
         const BufferType& buffer_type,

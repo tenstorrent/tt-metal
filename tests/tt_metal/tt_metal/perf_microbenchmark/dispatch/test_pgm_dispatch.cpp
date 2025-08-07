@@ -49,7 +49,7 @@ constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
 constexpr uint32_t MIN_KERNEL_SIZE_BYTES = 32;  // overhead
 constexpr uint32_t DEFAULT_KERNEL_SIZE_K = 1;
 constexpr uint32_t MAX_CBS = 32;
-constexpr uint32_t MAX_ARGS = 255;
+constexpr uint32_t MAX_ARGS = 341;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance

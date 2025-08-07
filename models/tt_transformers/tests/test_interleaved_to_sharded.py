@@ -24,7 +24,7 @@ from models.utility_functions import skip_for_grayskull
     indirect=True,
 )
 def test_decoder_inference(mesh_device, reset_seeds):
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, cache_hf=True)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

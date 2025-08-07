@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/swin_s/test_ttnn_swin_transformer.py
+../../../../models/experimental/swin_s/tests/pcc/test_ttnn_swin_transformer.py

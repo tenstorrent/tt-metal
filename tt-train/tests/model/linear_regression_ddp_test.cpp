@@ -10,7 +10,6 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "datasets/dataloader.hpp"
@@ -109,9 +108,7 @@ TEST_F(LinearRegressionDDPTest, Full) {
             auto output = (*model)(data);
             auto loss = ttml::ops::mse_loss(output, targets);
             auto mesh_shape = device->shape();
-            ttml::core::MeshToXTensorVariant<float> identity_composer =
-                ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-            auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), identity_composer);
+            auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
             float loss_float_0 = loss_xtensors[0](0);
             float loss_float_1 = loss_xtensors[1](0);
             EXPECT_EQ(loss_float_0, loss_float_1);

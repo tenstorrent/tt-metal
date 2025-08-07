@@ -8,6 +8,7 @@
 #include "dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 
 #include <array>
 #include <utility>
@@ -123,6 +124,14 @@ constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
 constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
 constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
 constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+
+// For multi-RISC router implementations, the two risc cores must coordinate
+// on the teardown process.
+// The teardown process is as follows:
+// Every RISC core must increment this counter when it is ready to teardown.
+// each waits for the counter to reach the active RISC core count before proceeding
+// One of the RISC cores is designated as the master to complete the teardown (RISC0)
+constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = 31;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
@@ -302,7 +311,13 @@ constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time
 constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 12);
 constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 14;
+constexpr size_t MY_ETH_CHANNEL = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 14);
+
+constexpr size_t MY_ERISC_ID = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 15);
+constexpr size_t NUM_ACTIVE_ERISCS = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 16);
+static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NUM_ACTIVE_ERISCS");
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 17;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
@@ -346,7 +361,23 @@ static_assert(
     "Special marker 1 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+///////////////////////////////////////////////
+// Telemetry
+constexpr size_t PERF_TELEMETRY_MODE_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr PerfTelemetryRecorderType perf_telemetry_mode =
+    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
+
+constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 1;
+constexpr size_t perf_telemetry_buffer_addr = get_compile_time_arg_val(PERF_TELEMETRY_BUFFER_ADDR_IDX);
+
+constexpr size_t SPECIAL_MARKER_2_IDX = PERF_TELEMETRY_BUFFER_ADDR_IDX + 1;
+constexpr size_t SPECIAL_MARKER_2 = 0x20c0ffee;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2_IDX) == SPECIAL_MARKER_2,
+    "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
+    "CT args.");
+
+constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_ack_counter_addrs =
     conditional_get_next_n_args<multi_txq_enabled, size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, NUM_SENDER_CHANNELS>();
@@ -393,15 +424,15 @@ static_assert(
     !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_completion_counter_ptrs),
     "local_receiver_completion_counter_ptrs must be valid");
 
-constexpr size_t SPECIAL_MARKER_2_IDX =
+constexpr size_t SPECIAL_MARKER_3_IDX =
     TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS) : 0);
-constexpr size_t SPECIAL_MARKER_2 = 0x20c0ffee;
+constexpr size_t SPECIAL_MARKER_3 = 0x30c0ffee;
 static_assert(
-    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2_IDX) == SPECIAL_MARKER_2,
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_3_IDX) == SPECIAL_MARKER_3,
     "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_3_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 // static_assert(HOST_SIGNAL_ARGS_START_IDX == 56, "HOST_SIGNAL_ARGS_START_IDX must be 56");
 // TODO: Add type safe getter
 constexpr bool is_local_handshake_master =
@@ -453,7 +484,11 @@ static_assert(
     receiver_channel_local_write_noc_ids[0] == edm_to_local_chip_noc,
     "edm_to_local_chip_noc must equal to receiver_channel_local_write_noc_ids");
 static constexpr uint8_t edm_to_downstream_noc = receiver_channel_forwarding_noc_ids[0];
+#ifdef ARCH_BLACKHOLE
+static constexpr uint8_t worker_handshake_noc = noc_index;
+#else
 static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
+#endif
 constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];

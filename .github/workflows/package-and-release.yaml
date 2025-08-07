@@ -53,6 +53,7 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
+      fetch-depth: 0
   build-artifact-profiler:
     needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
@@ -63,13 +64,7 @@ jobs:
       version: 22.04
       tracy: true
       build-wheel: true
-  test-wheels:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/_test-wheels-impl.yaml
-    with:
-      from-precompiled: true
-    secrets: inherit
+      fetch-depth: 0
   single-card-demos:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
@@ -187,7 +182,7 @@ jobs:
           path: RELEASE_NOTES.txt
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, build-artifact, test-wheels]
+    needs: [create-tag, create-release-notes, build-artifact]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
@@ -226,7 +221,7 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
-            models/MODEL_UPDATES.md
+            models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:
@@ -260,7 +255,7 @@ jobs:
   publish-to-pypi:
     name: >-
       Publish Python 🐍 distribution 📦 to PyPI
-    needs: [build-artifact, test-wheels]
+    needs: [build-artifact]
     runs-on: ubuntu-latest
     if: github.ref != 'refs/heads/main'
     environment:

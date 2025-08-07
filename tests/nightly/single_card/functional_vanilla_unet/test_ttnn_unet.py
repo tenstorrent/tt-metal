@@ -1,1 +1,0 @@
-../../../ttnn/integration_tests/vanilla_unet/test_ttnn_unet.py

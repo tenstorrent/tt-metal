@@ -23,16 +23,15 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     const auto& metadata_tensor = tensor_args.metadata_tensor;
     const auto& mapping_tensor = tensor_args.mapping_tensor;
 
-    TT_FATAL(input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
+    TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
     TT_FATAL(
-        metadata_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Metadata tensor must be in row major layout");
+        metadata_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Metadata tensor must be in row major layout");
 
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
-    TT_FATAL(metadata_tensor.get_dtype() == tt::tt_metal::DataType::UINT16, "Metadata tensor must be uint16");
+    TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
+    TT_FATAL(metadata_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Metadata tensor must be uint16");
 
-    TT_FATAL(mapping_tensor.get_dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
-    TT_FATAL(
-        mapping_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Metadata tensor must be in row major layout");
+    TT_FATAL(mapping_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
+    TT_FATAL(mapping_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Metadata tensor must be in row major layout");
 
     TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
 
@@ -41,18 +40,18 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
         const auto& output_tensor = tensor_args.optional_output_tensor.value();
 
         TT_FATAL(
-            output_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Output tensor must be in row major layout");
+            output_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Output tensor must be in row major layout");
 
         TT_FATAL(
-            output_spec == output_tensor.get_tensor_spec(),
+            output_spec == output_tensor.tensor_spec(),
             "Optional sparse output token tensor spec {} does not match computed output spec {}",
-            output_tensor.get_tensor_spec(),
+            output_tensor.tensor_spec(),
             output_spec);
     }
 
-    const auto& input_shape = input_tensor.get_tensor_spec().logical_shape();
-    const auto& metadata_shape = metadata_tensor.get_tensor_spec().logical_shape();
-    const auto& mapping_shape = mapping_tensor.get_tensor_spec().logical_shape();
+    const auto& input_shape = input_tensor.tensor_spec().logical_shape();
+    const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
+    const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
 
     const auto mesh_view = input_tensor.mesh_device()->get_view();
     const auto mesh_rows = mesh_view.num_rows();
@@ -95,8 +94,17 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(batch % axis_group == 0, "Batch {} must be divisible by axis group", batch, axis_group);
 
-    TT_FATAL(operation_attributes.num_links == 1, "Number of links must be 1, got {}", operation_attributes.num_links);
-    TT_FATAL(operation_attributes.topology == tt::tt_fabric::Topology::Linear, "Topology must be linear at the moment");
+    TT_FATAL(
+        operation_attributes.num_links > 0,
+        "Number of links must be greater than 0, got {}",
+        operation_attributes.num_links);
+    TT_FATAL(
+        (operation_attributes.topology == tt::tt_fabric::Topology::Linear) ||
+            (operation_attributes.topology == tt::tt_fabric::Topology::Mesh),
+        "Topology must be linear or mesh at the moment");
+    TT_FATAL(
+        operation_attributes.cross_device_semaphore.has_value(),
+        "Cross device semaphore must be specified at the moment");
 }
 
 void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
@@ -107,8 +115,8 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
     using namespace tt::tt_metal;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_shape = input_tensor.get_tensor_spec().logical_shape();
-    const auto& metadata_shape = tensor_args.metadata_tensor.get_tensor_spec().logical_shape();
+    const auto& input_shape = input_tensor.tensor_spec().logical_shape();
+    const auto& metadata_shape = tensor_args.metadata_tensor.tensor_spec().logical_shape();
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
@@ -132,8 +140,7 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
     auto mem_config = operation_attributes.output_mem_config;
     return TensorSpec(
         Shape(output_shape),
-        TensorLayout(
-            tensor_args.input_tensor.get_dtype(), PageConfig(tensor_args.input_tensor.get_layout()), mem_config));
+        TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(tensor_args.input_tensor.layout()), mem_config));
 }
 
 AllToAllCombineDeviceOperation::tensor_return_value_t AllToAllCombineDeviceOperation::create_output_tensors(
@@ -151,7 +158,7 @@ AllToAllCombineDeviceOperation::invoke(
     const uint32_t num_links,
     const tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const GlobalSemaphore& global_semaphore,
+    const std::optional<GlobalSemaphore>& global_semaphore,
     const std::optional<uint32_t>& axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor,

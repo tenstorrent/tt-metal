@@ -45,17 +45,14 @@ void kernel_main() {
     const uint32_t write_start_offset = get_arg_val<uint32_t>(6);
     const uint32_t nop = get_arg_val<uint32_t>(9);
 
-    constexpr bool tensor_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src_aligned_to_64 = get_compile_time_arg_val(1) == 1;
-    constexpr bool src_aligned_to_16 = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(4);
-    constexpr uint32_t source_page_size_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t dest_page_size_bytes = get_compile_time_arg_val(6);
-    constexpr bool source_page_is_pow_2 = get_compile_time_arg_val(7) == 1;
-    constexpr uint32_t source_page_pow_2 = get_compile_time_arg_val(8);
-    constexpr bool dest_page_is_pow_2 = get_compile_time_arg_val(9) == 1;
-    constexpr uint32_t dest_page_pow_2 = get_compile_time_arg_val(10);
+    constexpr bool src_aligned_to_64 = get_compile_time_arg_val(0) == 1;
+    constexpr bool src_aligned_to_16 = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(3);
+    constexpr uint32_t source_page_size_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t dest_page_size_bytes = get_compile_time_arg_val(5);
+    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     //Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this core
     if (nop == 1)
@@ -63,10 +60,8 @@ void kernel_main() {
         return;
     }
 
-    const auto s = get_interleaved_addr_gen<tensor_is_dram, source_page_is_pow_2>(
-        src_addr, source_page_size_bytes, source_page_pow_2);
-    const auto d =
-        get_interleaved_addr_gen<tensor_is_dram, dest_page_is_pow_2>(dst_addr, dest_page_size_bytes, dest_page_pow_2);
+    const auto s = TensorAccessor(src_args, src_addr, source_page_size_bytes);
+    const auto d = TensorAccessor(dst_args, dst_addr, dest_page_size_bytes);
 
     uint32_t read_offset = 0;
     uint32_t write_page = write_start_page;
@@ -92,12 +87,12 @@ void kernel_main() {
         //Read from source
         uint64_t src_noc_addr = s.get_noc_addr(i,0);
 
-        if constexpr (src_aligned_to_64 || ((!tensor_is_dram) && src_aligned_to_16)) {  // Aligned to 64 bytes or 16
-                                                                                        // bytes but L1
+        if constexpr (src_aligned_to_64 || ((!src_args.is_dram) && src_aligned_to_16)) {  // Aligned to 64 bytes or 16
+                                                                                          // bytes but L1
             tt::data_movement::common::enhanced_noc_async_read<source_page_size_bytes, false>(
                 src_noc_addr, source_buffer, source_page_size_bytes);
             read_offset = 0;
-        } else if constexpr (tensor_is_dram) {  // DDR but not alligned to 64 (potentially also not alligned to 16)
+        } else if constexpr (src_args.is_dram) {  // DDR but not alligned to 64 (potentially also not alligned to 16)
             tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
                 src_noc_addr & MASK_64, source_buffer, source_read_size_bytes);
             read_offset = src_noc_addr & OFFSET_64;

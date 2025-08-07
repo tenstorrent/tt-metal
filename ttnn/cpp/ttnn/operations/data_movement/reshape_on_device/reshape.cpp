@@ -22,7 +22,7 @@ static Tensor manual_insertion(
     const Tensor& input_tensor,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
-    IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
@@ -38,7 +38,8 @@ static Tensor manual_insertion(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
                     DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)),
-            cpu_tensor.distributed_tensor_config())
+            cpu_tensor.distributed_tensor_config(),
+            cpu_tensor.tensor_topology())
             .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);

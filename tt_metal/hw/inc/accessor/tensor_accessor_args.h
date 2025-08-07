@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
+#include <tuple>
 
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "const.h"
@@ -120,11 +122,13 @@ public:
 
     /**
      * @brief Calculates the number of compile-time arguments used when building a DistributionSpec. Note that
-     * compile_time_args_skip is required to be constexpr since cta argument index must be constexpr
+     * num_compile_time_args is required to be constexpr since cta argument index must be constexpr
      *
      * @return constexpr uint32_t Number of compile-time arguments used by the DistributionSpec.
      */
-    static constexpr uint32_t compile_time_args_skip() { return NumArgsCT; }
+    static constexpr uint32_t num_compile_time_args() { return NumArgsCT; }
+
+    static constexpr uint32_t next_compile_time_args_offset() { return CTA_OFFSET + num_compile_time_args(); }
 
     /**
      * @brief Calculates the number of common runtime arguments used when building a DistributionSpec.
@@ -132,10 +136,42 @@ public:
      *
      * @return constexpr uint32_t Number of common runtime arguments used by the DistributionSpec.
      */
-    constexpr uint32_t runtime_args_skip() const {
+    constexpr uint32_t num_common_runtime_args() const {
         if constexpr (!is_sharded) {
             return 0;
         }
         return bank_coords_crta_offset() + (bank_coords_is_crta ? get_physical_num_banks() : 0) - crta_offset();
     }
+
+    constexpr uint32_t next_common_runtime_args_offset() const { return crta_offset() + num_common_runtime_args(); }
 };
+
+namespace tensor_accessor::detail {
+template <uint32_t TENSOR_IDX, uint32_t CTA_OFFSET>
+constexpr uint32_t get_tensor_accessor_args_cta_offset() {
+    if constexpr (TENSOR_IDX == 0) {
+        return CTA_OFFSET;
+    } else {
+        constexpr auto prev_offset = get_tensor_accessor_args_cta_offset<TENSOR_IDX - 1, CTA_OFFSET>();
+        constexpr auto accessor_args = TensorAccessorArgs<prev_offset>();
+        return accessor_args.next_compile_time_args_offset();
+    }
+}
+
+template <uint32_t CTA_OFFSET, uint32_t... INDEXES>
+constexpr auto get_tensor_accessor_args_cta_offsets(std::integer_sequence<uint32_t, INDEXES...>) {
+    return std::integer_sequence<uint32_t, get_tensor_accessor_args_cta_offset<INDEXES, CTA_OFFSET>()...>();
+}
+
+template <uint32_t... CTA_OFFSETS>
+constexpr auto make_tensor_accessor_args_tuple_from_cta_offsets(std::integer_sequence<uint32_t, CTA_OFFSETS...>) {
+    return std::make_tuple(TensorAccessorArgs<CTA_OFFSETS>()...);
+}
+}  // namespace tensor_accessor::detail
+
+template <uint32_t NUM_TENSORS, uint32_t CTA_OFFSET>
+constexpr auto make_tensor_accessor_args_tuple() {
+    constexpr auto cta_offsets = tensor_accessor::detail::get_tensor_accessor_args_cta_offsets<CTA_OFFSET>(
+        std::make_integer_sequence<uint32_t, NUM_TENSORS>());
+    return tensor_accessor::detail::make_tensor_accessor_args_tuple_from_cta_offsets(cta_offsets);
+}

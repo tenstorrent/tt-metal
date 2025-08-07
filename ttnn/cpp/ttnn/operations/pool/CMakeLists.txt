@@ -14,8 +14,8 @@ target_sources(
         pool_utils.cpp
         upsample/device//upsample_bilinear_program_factory_multicore.cpp
         upsample/device/upsample_op.cpp
-        upsample/device/upsample_program_factory_multicore.cpp
-        upsample/device/upsample_program_factory_singlecore.cpp
+        upsample/device/upsample_program_factory_multicore_sharded.cpp
+        upsample/device/upsample_program_factory_multicore_interleaved.cpp
         upsample/upsample.cpp
 )
 

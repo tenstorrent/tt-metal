@@ -96,14 +96,6 @@ public:
     }
 #endif
 
-    FORCE_INLINE bool needs_to_send_channel_sync() const { return this->need_to_send_channel_sync; }
-
-    FORCE_INLINE void set_need_to_send_channel_sync(bool need_to_send_channel_sync) {
-        this->need_to_send_channel_sync = need_to_send_channel_sync;
-    }
-
-    FORCE_INLINE void clear_need_to_send_channel_sync() { this->need_to_send_channel_sync = false; }
-
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr() const { return this->cached_next_buffer_slot_addr; }
 
     FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
@@ -210,7 +202,7 @@ struct EdmChannelWorkerInterface {
     // Only used for persistent connections (i.e. upstream is EDM)
     template <bool enable_ring_support>
     FORCE_INLINE void update_persistent_connection_copy_of_free_slots(int32_t inc_val) {
-        noc_inline_dw_write<true, true>(
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
             this->cached_worker_semaphore_address,
             inc_val << REMOTE_DEST_BUF_WORDS_FREE_INC,
             0xf,
@@ -218,7 +210,7 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {
-        noc_inline_dw_write<true, true>(
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
             this->cached_worker_semaphore_address,
             local_read_counter.counter,
             0xf,
@@ -252,10 +244,12 @@ struct EdmChannelWorkerInterface {
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, tt::tt_fabric::worker_handshake_noc);
     }
 
+    template <uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
     FORCE_INLINE void cache_producer_noc_addr() {
         invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
-        uint64_t worker_semaphore_address = get_noc_addr(
+        uint64_t worker_semaphore_address;
+        worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
         this->cached_worker_semaphore_address = worker_semaphore_address;
     }

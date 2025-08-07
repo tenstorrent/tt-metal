@@ -38,6 +38,9 @@ def _get_rich_table(
         logger.error("Error getting device mesh shape: {}.", e)
         rows, cols = 0, 0
 
+    view = mesh_device.get_view()
+    fully_local = view.fully_local()
+
     mesh_table = Table(
         title=f"MeshDevice(rows={rows}, cols={cols}):",
         show_header=False,
@@ -56,18 +59,19 @@ def _get_rich_table(
         row_cells = []
         for col_idx in range(cols):
             try:
-                device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
-            except Exception as e:
-                logger.error("Error fetching device from MeshDevice at row {}, col {}: {}.", row_idx, col_idx, e)
-                device_id = None
-
-            try:
-                device_id = f"Dev. ID: {device_id}" if device_id is not None else "Empty"
-                coords = f"({row_idx}, {col_idx})"
+                coord = ttnn.MeshCoordinate(row_idx, col_idx)
+                locality = "Local\n" if view.is_local(coord) else "Remote\n"
+                locality = "" if fully_local else locality
+                device_id = (
+                    f"Dev. ID: {mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))}\n"
+                    if view.is_local(coord)
+                    else "Unknown\n"
+                )
+                coords = f"({row_idx}, {col_idx})\n"
                 annotation = annotate_cell(device_id) if annotate_cell and device_id is not None else ""
 
-                cell_content = Text(f"{device_id}\n{coords}\n{annotation}", justify="center")
-                cell_content.truncate(CELL_SIZE * 3, overflow="ellipsis")  # 3 lines max
+                cell_content = Text(f"{locality}{device_id}{coords}{annotation}", justify="center")
+                cell_content.truncate(CELL_SIZE * 4, overflow="ellipsis")  # 4 lines max
             except AttributeError as e:
                 logger.error("Error formatting cell content at row {}, col {}: {}.", row_idx, col_idx, e)
                 cell_content = Text("Error", justify="center")
@@ -114,6 +118,102 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" 
     Console().print(mesh_table)
 
 
+def visualize_system_mesh():
+    """
+    Print SystemMesh global and local shapes.
+    """
+    from rich.console import Console
+    from loguru import logger
+
+    try:
+        system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+        global_shape = system_mesh_desc.shape()
+        local_shape = system_mesh_desc.local_shape()
+    except Exception as e:
+        logger.error(f"Error accessing SystemMesh: {e}")
+        return
+
+    console = Console()
+    console.print(f"\n[bold green]SystemMesh Global Shape: {global_shape}[/bold green]")
+    console.print(f"\n[bold blue]SystemMesh Local Shape: {local_shape}[/bold blue]\n")
+    console.print(create_system_mesh_table())
+
+
+def create_system_mesh_table():
+    """
+    Create a visual table representation of the system mesh layout.
+    """
+    from rich import box
+    from rich.align import Align
+    from rich.table import Table
+    from rich.text import Text
+    from rich.style import Style
+    from loguru import logger
+
+    CELL_SIZE = 30
+
+    try:
+        system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+
+        # TODO: Remove shape indexing workaround after exposing subscripts in pybind11
+        global_shape = tuple(system_mesh_desc.shape())
+        local_shape = tuple(system_mesh_desc.local_shape())
+        rows, cols = global_shape[0], global_shape[1]
+        local_rows, local_cols = local_shape[0], local_shape[1]
+    except Exception as e:
+        logger.error("Error getting system mesh shapes: {}.", e)
+        return None
+
+    all_local = system_mesh_desc.all_local()
+
+    mesh_table = Table(
+        title=f"SystemMesh Global Shape: ({rows}, {cols}) | Local Shape: ({local_rows}, {local_cols})",
+        show_header=False,
+        show_footer=False,
+        box=box.SQUARE,
+        expand=False,
+        show_lines=True,
+        padding=(0, 0),
+    )
+
+    for _ in range(cols):
+        mesh_table.add_column(justify="center", vertical="middle", width=CELL_SIZE)
+
+    # Populate table
+    for row_idx in range(rows):
+        row_cells = []
+        for col_idx in range(cols):
+            try:
+                coords = f"({row_idx}, {col_idx})"
+                coord = ttnn.MeshCoordinate(row_idx, col_idx)
+
+                # Create cell content
+                if all_local:
+                    device_id = f"Dev. ID: {system_mesh_desc.get_device_id(coord)}"
+                    cell_content = Text(f"{device_id}\n{coords}", justify="center")
+                    cell_style = Style(bgcolor="dark_green")
+                else:
+                    is_local = system_mesh_desc.is_local_at(coord)
+                    locality = "Local\n" if is_local else "Remote\n"
+                    device_id = f"Dev. ID: {system_mesh_desc.get_device_id(coord)}\n" if is_local else "Unknown\n"
+                    cell_content = Text(f"{locality}{device_id}{coords}", justify="center")
+                    cell_style = None
+
+                cell_content.truncate(CELL_SIZE * 3, overflow="ellipsis")
+            except Exception as e:
+                logger.error("Error formatting cell content at row {}, col {}: {}.", row_idx, col_idx, e)
+                cell_content = Text("Error", justify="center")
+                cell_style = None
+
+            cell = Align(cell_content, "center", vertical="middle")
+            if cell_style:
+                cell.style = cell_style
+            row_cells.append(cell)
+        mesh_table.add_row(*row_cells)
+
+    return mesh_table
+
+
 def get_num_devices() -> List[int]:
     return ttnn._ttnn.device.GetNumAvailableDevices()
 
@@ -133,11 +233,11 @@ def get_device_ids() -> List[int]:
 
 
 def open_mesh_device(
-    mesh_shape: ttnn.MeshShape,
+    mesh_shape: ttnn.MeshShape = None,
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
-    dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
+    dispatch_core_config: ttnn.DispatchCoreConfig = None,
     offset: Optional[ttnn.MeshCoordinate] = None,
     physical_device_ids: List[int] = [],
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
@@ -146,7 +246,7 @@ def open_mesh_device(
     Open a mesh device with the specified configuration.
 
     Args:
-        mesh_shape (ttnn.MeshShape): The shape of the mesh device.
+        mesh_shape (ttnn.MeshShape, optional): The shape of the mesh device. Defaults to the global shape of the system mesh.
         l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
         trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
         num_command_queues (int, optional): Number of command queues. Defaults to 1.
@@ -159,12 +259,12 @@ def open_mesh_device(
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
 
     """
-    return ttnn._ttnn.multi_device.MeshDevice(
-        mesh_shape=mesh_shape,
+    return ttnn._ttnn.multi_device.open_mesh_device(
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
         num_command_queues=num_command_queues,
-        dispatch_core_config=dispatch_core_config,
+        dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+        mesh_shape=mesh_shape,
         offset=offset,
         physical_device_ids=physical_device_ids,
         worker_l1_size=worker_l1_size,

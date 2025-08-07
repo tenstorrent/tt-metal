@@ -9,9 +9,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, get_rot_transformation_mat
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.rope import get_rot_mats
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -65,7 +67,7 @@ def test_decoder_inference(
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -84,13 +86,12 @@ def test_decoder_inference(
     all_tests_pass = True
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(
-        model_args.head_dim,
-        mesh_device,
-        max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+    rot_mats = get_rot_mats(
+        head_dim=model_args.head_dim,
+        device=mesh_device,
+        seq_len=max_seq_len,
+        theta=model_args.rope_theta,
+        rope_scaling=model_args.rope_scaling,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
@@ -141,7 +142,15 @@ def test_decoder_inference(
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-        pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
+        pt_decode_input = (
+            torch.rand(
+                batch_size,
+                max_seq_len,
+                model_args.dim,
+                dtype=get_ref_model_dype(reference_model, model_args.model_name),
+            )
+            * 2
+        ) - 1
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
@@ -151,7 +160,7 @@ def test_decoder_inference(
             model_args.head_dim,
             model_args.max_seq_len * 2,
             model_args.rope_theta,
-            model_args.rope_scaling_factor,
+            model_args.rope_scaling.factor if model_args.rope_scaling else None,
         )[positions]
 
         # Reference model

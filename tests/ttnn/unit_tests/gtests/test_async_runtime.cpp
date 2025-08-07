@@ -157,8 +157,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     // does not rely on stale buffer state, after the buffer has been destroyed on host
     MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
-    uint32_t buf_size_datums = 1024 * 1024;
-    uint32_t datum_size_bytes = 2;
     ttnn::Shape shape{1, 1, 1024, 1024};
     // Inside the loop, initialize a buffer with limited lifetime.
     // This will asynchronously allocate the buffer, wait for the allocation to complete (address to be assigned to the

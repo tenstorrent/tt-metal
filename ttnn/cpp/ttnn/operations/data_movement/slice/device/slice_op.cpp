@@ -5,6 +5,7 @@
 #include <tt-metalium/constants.hpp>
 #include "slice_op.hpp"
 #include "slice_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -71,9 +72,6 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
     uint32_t start_offset = 0;
 
     if (tensor.padded_shape().rank() >= 2) {
-        const auto& shape = tensor.padded_shape();
-        uint32_t num_pages = tensor.physical_volume() / shape[-1];
-        uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
         start_offset = get_upper_start_offset(tensor, slice_start);
         start_offset += slice_start[-2];
     }
@@ -155,6 +153,19 @@ std::vector<ttnn::TensorSpec> SliceDeviceOperation::compute_output_specs(
     return {ttnn::TensorSpec(
         output_tensor_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), this->output_mem_config))};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+SliceDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, true);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks SliceDeviceOperation::create_program(

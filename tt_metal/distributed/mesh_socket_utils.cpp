@@ -244,7 +244,7 @@ void write_socket_configs(
                 const auto& [sender_core, recv_core] = connection;
                 TT_FATAL(sender_core.device_coord == device_coord, "Internal Error: Sender cores incorrectly grouped.");
                 auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
-                    mesh_device->get_device_fabric_node_id(sender_core.device_coord),
+                    mesh_device->get_fabric_node_id(sender_core.device_coord),
                     tt_fabric::FabricNodeId(
                         tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
                     fabric_config,
@@ -278,7 +278,7 @@ void write_socket_configs(
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                     tt_fabric::FabricNodeId(
                         tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
-                    mesh_device->get_device_fabric_node_id(recv_core.device_coord),
+                    mesh_device->get_fabric_node_id(recv_core.device_coord),
                     fabric_config,
                     SocketEndpoint::RECEIVER);
                 auto sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core.core_coord);
@@ -317,7 +317,7 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
     auto device = socket_endpoint.get_config_buffer()->device();
     for (const auto& [sender_core, recv_core] : config.socket_connection_config) {
         const auto& device_coord = is_sender ? sender_core.device_coord : recv_core.device_coord;
-        auto fabric_node_id = device->get_device_fabric_node_id(device_coord);
+        auto fabric_node_id = device->get_fabric_node_id(device_coord);
         local_endpoint_desc.mesh_ids.push_back(*fabric_node_id.mesh_id);
         local_endpoint_desc.chip_ids.push_back(fabric_node_id.chip_id);
     }

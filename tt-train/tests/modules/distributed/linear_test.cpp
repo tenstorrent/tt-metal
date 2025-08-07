@@ -12,7 +12,6 @@
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
 
@@ -70,19 +69,18 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer);
-    auto bias_xtensor = ttml::core::to_xtensor<float>(bias->get_value(), identity_composer);
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer);
+    auto bias_xtensor = ttml::core::to_xtensor<float>(bias->get_value(), ttml::core::IdentityComposer{});
 
-    auto weight_xtensor_shape = weight_xtensor[0].shape();
+    auto weight_xtensor_shape = weight_xtensor.shape();
     auto test_data_shape = test_data.shape();
 
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     if (has_bias) {
         expected_output += bias_xtensor[0];
     }
@@ -113,18 +111,17 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer);
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer);
 
-    auto weight_xtensor_shape = weight_xtensor[0].shape();
+    auto weight_xtensor_shape = weight_xtensor.shape();
     auto test_data_shape = test_data.shape();
 
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 };
@@ -152,15 +149,14 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer);
-    auto bias_xtensor = ttml::core::to_xtensor<float>(bias->get_value(), identity_composer);
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer);
+    auto bias_xtensor = ttml::core::to_xtensor<float>(bias->get_value(), ttml::core::IdentityComposer{});
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     if (has_bias) {
         expected_output += bias_xtensor[0];
     }
@@ -191,14 +187,13 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer);
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer);
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
 
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
@@ -227,19 +222,18 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer_2 = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 2U);
-    ttml::core::MeshToXTensorVariant<float> concat_composer_3 = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer_2 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 2U);
+    auto concat_composer_3 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer_2);
-    auto bias_xtensor = ttml::core::to_xtensor<float>(bias->get_value(), concat_composer_3);
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer_2);
+    auto bias_xtensor = ttml::core::to_xtensor<float>(bias->get_value(), *concat_composer_3);
 
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     if (has_bias) {
-        expected_output += bias_xtensor[0];
+        expected_output += bias_xtensor;
     }
 
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
@@ -268,15 +262,14 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(output_xtensor[0], output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer_2 = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 2U);
-    ttml::core::MeshToXTensorVariant<float> concat_composer_3 = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer_2 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 2U);
+    auto concat_composer_3 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer_2);
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer_2);
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
 
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
@@ -305,19 +298,18 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer_2 = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 2U);
-    ttml::core::MeshToXTensorVariant<float> concat_composer_3 = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer_2 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 2U);
+    auto concat_composer_3 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer_2);
-    auto bias_xtensor = ttml::core::to_xtensor<float>(bias->get_value(), concat_composer_3);
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer_2);
+    auto bias_xtensor = ttml::core::to_xtensor<float>(bias->get_value(), *concat_composer_3);
 
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     expected_output = expected_output.reshape({1U, 1U, 1U, out_features});
     if (has_bias) {
-        expected_output += bias_xtensor[0];
+        expected_output += bias_xtensor;
     }
 
     EXPECT_TRUE(xt::allclose(
@@ -354,15 +346,14 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer_2 = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 2U);
-    ttml::core::MeshToXTensorVariant<float> concat_composer_3 = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer_2 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 2U);
+    auto concat_composer_3 = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     // (1, 1, out_features, in_features)
-    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), concat_composer_2);
+    auto weight_xtensor = ttml::core::to_xtensor<float>(weight->get_value(), *concat_composer_2);
 
-    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor[0], {0, 1, 3, 2}));
+    auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     expected_output = expected_output.reshape({1U, 1U, 1U, out_features});
 
     EXPECT_TRUE(xt::allclose(
@@ -405,14 +396,15 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto output = layer(tensor);
     output->backward();
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto row_parallel_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto row_parallel_output_xtensor =
+        ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
 
-    auto row_parallel_input_gradients = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
+    auto row_parallel_input_gradients =
+        ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3U);
+    auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 3U);
     auto row_parallel_weight_gradients =
-        ttml::core::to_xtensor<float>(row_parallel_weight->get_grad(), concat_composer);
+        ttml::core::to_xtensor<float>(row_parallel_weight->get_grad(), *concat_composer);
 
     // set generator
     ttml::autograd::ctx().set_generator(generator);
@@ -423,11 +415,11 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
     replicate_layer_output->backward();
-    auto replicate_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto replicate_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
     auto replicate_layer_input_gradients =
-        ttml::core::to_xtensor<float>(replicate_layer_input->get_grad(), identity_composer);
+        ttml::core::to_xtensor<float>(replicate_layer_input->get_grad(), ttml::core::IdentityComposer{});
     auto replicate_layer_weight_gradients =
-        ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), identity_composer);
+        ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), ttml::core::IdentityComposer{});
 
     EXPECT_TRUE(
         xt::allclose(replicate_output_xtensor[0], row_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
@@ -440,9 +432,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
         replicate_layer_input_gradients[1], row_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], row_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0], row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], row_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1], row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
@@ -473,14 +465,14 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     auto output = layer(tensor);
     output->backward();
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto column_parallel_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto column_parallel_output_xtensor =
+        ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
+    auto column_parallel_input_gradients =
+        ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
 
-    auto column_parallel_input_gradients = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
-
-    ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 2U);
+    auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 2U);
     auto column_parallel_weight_gradients =
-        ttml::core::to_xtensor<float>(column_parallel_weight->get_grad(), concat_composer);
+        ttml::core::to_xtensor<float>(column_parallel_weight->get_grad(), *concat_composer);
 
     // set generator
     ttml::autograd::ctx().set_generator(generator);
@@ -491,11 +483,11 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
     replicate_layer_output->backward();
-    auto replicate_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto replicate_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
     auto replicate_layer_input_gradients =
-        ttml::core::to_xtensor<float>(replicate_layer_input->get_grad(), identity_composer);
+        ttml::core::to_xtensor<float>(replicate_layer_input->get_grad(), ttml::core::IdentityComposer{});
     auto replicate_layer_weight_gradients =
-        ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), identity_composer);
+        ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), ttml::core::IdentityComposer{});
 
     EXPECT_TRUE(
         xt::allclose(replicate_output_xtensor[0], column_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
@@ -508,9 +500,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
         replicate_layer_input_gradients[1], column_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], column_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], column_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
@@ -541,14 +533,15 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     auto output = layer(tensor);
     output->backward();
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto column_parallel_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto column_parallel_output_xtensor =
+        ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
 
-    auto column_parallel_input_gradients = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
+    auto column_parallel_input_gradients =
+        ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
 
-    ttml::core::MeshToXTensorVariant<float> concat_composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 2U);
+    auto concat_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, 2U);
     auto column_parallel_weight_gradients =
-        ttml::core::to_xtensor<float>(column_parallel_weight->get_grad(), concat_composer);
+        ttml::core::to_xtensor<float>(column_parallel_weight->get_grad(), *concat_composer);
 
     // set generator
     ttml::autograd::ctx().set_generator(generator);
@@ -559,11 +552,11 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
     replicate_layer_output->backward();
-    auto replicate_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), identity_composer);
+    auto replicate_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
     auto replicate_layer_input_gradients =
-        ttml::core::to_xtensor<float>(replicate_layer_input->get_grad(), identity_composer);
+        ttml::core::to_xtensor<float>(replicate_layer_input->get_grad(), ttml::core::IdentityComposer{});
     auto replicate_layer_weight_gradients =
-        ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), identity_composer);
+        ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), ttml::core::IdentityComposer{});
 
     EXPECT_TRUE(
         xt::allclose(replicate_output_xtensor[0], column_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
@@ -576,7 +569,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
         replicate_layer_input_gradients[1], column_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], column_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], column_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
 };

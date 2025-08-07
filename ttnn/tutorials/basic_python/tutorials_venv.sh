@@ -34,4 +34,4 @@ echo "Installing dev dependencies"
 python3 -m pip install -r $(pwd)/tutorials-dev.txt
 
 echo "Installing tt-metal"
-pip install -e $(pwd)/../../../
+pip install -e $(realpath $(pwd)/../../../)

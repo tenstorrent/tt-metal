@@ -19,7 +19,6 @@ void ScaledDotProductAttentionDecode::validate(
     if (use_mla) {
         TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors and mask");
         TT_FATAL(this->head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
-        TT_FATAL(!this->paged_attention, "Paged attention is untested for multi-latent attention decode!");
         TT_FATAL(this->is_causal, "Multi-latent attention decode only tested for causal!");
     } else {
         TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");

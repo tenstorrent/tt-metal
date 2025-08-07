@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 struct unicast_mode {
@@ -79,7 +80,6 @@ void kernel_main() {
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(worker_teardown_sem_addr));
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(last_message_semaphore_address));
-    auto packet_header_buffer_cb_id = get_arg_val<uint32_t>(arg_idx++);
 
     transmit_config config;
     if (mcast_mode) {
@@ -112,7 +112,7 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
         StreamId{std::numeric_limits<uint32_t>::max()});
 
-    sender.open();
+    sender.open<true>();
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
@@ -125,10 +125,7 @@ void kernel_main() {
     uint32_t buffer_index = 0;
     cb_wait_front(cb_id_in0, 1);
 
-    cb_reserve_back(packet_header_buffer_cb_id, 1);
-
-    auto packet_header_addr = get_write_ptr(packet_header_buffer_cb_id);
-    auto* packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
+    auto* packet_header = PacketHeaderPool::allocate_header();
     for (uint32_t p = 0; p < total_pages_to_send; p += num_pages_per_send) {
         uint32_t pages_to_send = std::min<uint32_t>(num_pages_per_send, total_pages_to_send - p);
 
@@ -146,7 +143,6 @@ void kernel_main() {
                 ->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
-#ifdef ARCH_WORMHOLE
             if (write_scatter_mode && pages_to_send == 2) {
                 uint64_t dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
                 packet_header->to_chip_unicast(config.unicast.distance)
@@ -154,9 +150,7 @@ void kernel_main() {
                         tt::tt_fabric::NocUnicastScatterCommandHeader{
                             {dest_noc_address, dest_noc_address2}, (uint16_t)page_size},
                         (pages_to_send * page_size));
-            } else
-#endif
-            {
+            } else {
                 packet_header->to_chip_unicast(config.unicast.distance)
                     ->to_noc_unicast_write(
                         tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));

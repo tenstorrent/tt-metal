@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks argmax_single_core(
     tt::tt_metal::CircularBufferConfig src_cb_config =
         tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_idx, input_cb_data_format}})
             .set_page_size(src_cb_idx, src_page_size);
-    const auto src_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
 
     // Create output CB based on the output shape's last dimension
     const uint32_t dst_cb_idx = tt::CBIndex::c_1;
@@ -128,7 +128,7 @@ operation::ProgramWithCallbacks argmax_single_core(
     const tt::tt_metal::CircularBufferConfig dst_db_config =
         tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_idx, output_cb_data_format}})
             .set_page_size(dst_cb_idx, dst_page_size);
-    const auto dst_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
 
     const auto src_buffer = input.buffer();
     const auto dst_buffer = output.buffer();
@@ -315,7 +315,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto src_cb_config0 =
         tt::tt_metal::CircularBufferConfig(src_cb_page_size0, {{src_cb_idx, input_cb_data_format}})
             .set_page_size(src_cb_idx, src_cb_page_size0);
-    const auto src_cb0 = tt::tt_metal::CreateCircularBuffer(program, cores0, src_cb_config0);
+    tt::tt_metal::CreateCircularBuffer(program, cores0, src_cb_config0);
 
     // We only create the second CB if there are some cores assigned to the second group
     if (num_cores1 > 0) {
@@ -323,14 +323,14 @@ operation::ProgramWithCallbacks argmax_multi_core(
         const auto src_cb_config1 =
             tt::tt_metal::CircularBufferConfig(src_cb_page_size1, {{src_cb_idx, input_cb_data_format}})
                 .set_page_size(src_cb_idx, src_cb_page_size1);
-        const auto src_cb1 = tt::tt_metal::CreateCircularBuffer(program, cores1, src_cb_config1);
+        tt::tt_metal::CreateCircularBuffer(program, cores1, src_cb_config1);
     }
 
     // Create output CB based on the output shape's last dimension
     const uint32_t dst_cb_idx = tt::CBIndex::c_1;
     const auto dst_db_config = tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_idx, output_cb_data_format}})
                                    .set_page_size(dst_cb_idx, dst_page_size);
-    const auto dst_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
 
     // Create intermediate CB for indices based on number of cores and output shape's last dimension
     const uint32_t red_idxs_cb_idx = tt::CBIndex::c_2;
@@ -338,7 +338,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto red_idxs_db_config =
         tt::tt_metal::CircularBufferConfig(red_idxs_page_size, {{red_idxs_cb_idx, output_cb_data_format}})
             .set_page_size(red_idxs_cb_idx, red_idxs_page_size);
-    const auto red_idxs_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, red_idxs_db_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, red_idxs_db_config);
 
     // Create intermediate CB for values based on number of cores and output shape's last dimension
     const uint32_t red_vals_cb_idx = tt::CBIndex::c_3;
@@ -346,7 +346,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto red_vals_cb_config =
         tt::tt_metal::CircularBufferConfig(red_vals_page_size, {{red_vals_cb_idx, input_cb_data_format}})
             .set_page_size(red_vals_cb_idx, red_vals_page_size);
-    const auto cb_red_vals = tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_cb_config);
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
@@ -442,15 +442,17 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_args});
 
-    tt::tt_metal::KernelHandle reader_kernel_id1 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
-        cores1,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = reader_compile_args});
-
+    tt::tt_metal::KernelHandle reader_kernel_id1 = 0;
+    if (num_cores1 > 0) {
+        reader_kernel_id1 = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+            cores1,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt::tt_metal::NOC::RISCV_1_default,
+                .compile_args = reader_compile_args});
+    }
     const auto cores_coords0 = corerange_to_cores(cores0, num_cores0, true);
     const auto cores_coords1 = corerange_to_cores(cores1, num_cores1, true);
 

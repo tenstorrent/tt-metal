@@ -132,7 +132,6 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
 
     auto& storage = std::get<DeviceStorage>(tensor.storage());
     auto buffer = storage.get_buffer();
-    auto page_size = buffer->page_size();
     auto device = buffer->device();
 
     size_t region_size = buffer->page_size();
@@ -408,7 +407,8 @@ TEST_F(NDShardingSqueezeRankStressTests, TestSqueezeRankStress) {
     iterate_shapes(Shape({4, 4, 4, 4}), [&](const Shape& tensor_shape) {
         iterate_shapes(tensor_shape, [&](const Shape& shard_shape) {
             BufferDistributionSpec dspec(tensor_shape, shard_shape, cores, ShardOrientation::ROW_MAJOR);
-            auto expected_page_mapping = detail::compute_page_mapping(tensor_shape, shard_shape, dspec.cores());
+            auto expected_page_mapping =
+                tt::tt_metal::detail::compute_page_mapping(tensor_shape, shard_shape, dspec.cores());
             EXPECT_EQ(
                 dspec.compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
         });

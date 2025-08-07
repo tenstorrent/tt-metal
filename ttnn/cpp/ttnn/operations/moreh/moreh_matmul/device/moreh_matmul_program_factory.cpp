@@ -133,7 +133,6 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     tt::DataFormat cb_data_format{datatype_to_dataformat_converter(output.dtype())};
-    const auto single_tile_size{tt::tt_metal::detail::TileSize(cb_data_format)};
     const auto num_output_tiles{output.physical_volume() / tt::constants::TILE_HW};
 
     // input tensor
@@ -485,7 +484,7 @@ void MorehMatmulOperation::MultiCoreProgramFactory::override_runtime_arguments(
     const auto other_address = tensor_args.other.buffer()->address();
     const auto output_address = tensor_return_value.buffer()->address();
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);

@@ -12,6 +12,7 @@
 #include <vector>
 #include <utility>
 #include <nlohmann/json.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include "fabric_types.hpp"
 #include "tt_cluster.hpp"
@@ -44,7 +45,7 @@ public:
         std::sort(physical_chip_ids.begin(), physical_chip_ids.end());
 
         for (chip_id_t chip_id_src : physical_chip_ids) {
-            if (device->is_mmio_capable() && (cluster.get_cluster_type() == tt::ClusterType::TG)) {
+            if (device->is_mmio_capable() && (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG)) {
                 // skip lauching on gateways for TG
                 continue;
             }
@@ -53,7 +54,7 @@ public:
             const auto& soc_desc = cluster.get_soc_desc(chip_id_src);
             // Build a mapping of (eth_core --> eth_chan)
             for (auto eth_chan = 0; eth_chan < soc_desc.get_num_eth_channels(); eth_chan++) {
-                auto eth_physical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::PHYSICAL);
+                auto eth_physical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::NOC0);
                 eth_core_to_channel_lookup_.emplace(std::make_tuple(chip_id_src, eth_physical_core), eth_chan);
             }
         }
@@ -108,9 +109,9 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
         });
     }
 
-    topology_json["cluster_type"] = magic_enum::enum_name(cluster.get_cluster_type());
+    topology_json["cluster_type"] = enchantum::to_string(cluster.get_cluster_type());
 
-    topology_json["fabric_config"] = magic_enum::enum_name(tt::tt_metal::MetalContext::instance().get_fabric_config());
+    topology_json["fabric_config"] = enchantum::to_string(tt::tt_metal::MetalContext::instance().get_fabric_config());
     if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
         topology_json["routing_planes"] = nlohmann::ordered_json::array();
         topology_json["device_id_to_fabric_node_id"] = nlohmann::ordered_json::object();
@@ -132,7 +133,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
 
                 for (int j = 0; j < eth_routing_planes_in_dir.size(); j++) {
                     chip_id_t eth_channel = eth_routing_planes_in_dir[j];
-                    device_routing_planes[j]["ethernet_channels"][magic_enum::enum_name(direction)] = eth_channel;
+                    device_routing_planes[j]["ethernet_channels"][enchantum::to_string(direction)] = eth_channel;
                 }
             }
 
@@ -145,7 +146,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
     auto physical_chip_id = *(cluster.get_cluster_desc()->get_all_chips().begin());
     for (int j = 0; j < cluster.get_soc_desc(physical_chip_id).get_num_eth_channels(); j++) {
         tt::umd::CoreCoord edm_eth_core =
-            cluster.get_soc_desc(physical_chip_id).get_eth_core_for_channel(j, CoordSystem::PHYSICAL);
+            cluster.get_soc_desc(physical_chip_id).get_eth_core_for_channel(j, CoordSystem::NOC0);
         topology_json["eth_chan_to_coord"][std::to_string(j)] = {edm_eth_core.x, edm_eth_core.y};
     }
 

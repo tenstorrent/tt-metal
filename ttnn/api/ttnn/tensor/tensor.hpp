@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -61,8 +62,12 @@ public:
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
-    // Constructs a tensor with `Storage` and `TensorSpec`.
-    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
+    [[nodiscard]] Tensor(
+        Storage storage,
+        TensorSpec tensor_spec,
+        DistributedTensorConfig distributed_tensor_config,
+        TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -161,11 +166,6 @@ public:
     [[nodiscard]] T item(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     [[nodiscard]] Tensor to_device(
-        IDevice* target_device,
-        const MemoryConfig& mem_config = MemoryConfig{},
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
-
-    [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
         const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
@@ -201,19 +201,6 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-    // TODO: #22090 - Remove the following getters, after giving clients enough time to migrate.
-    [[deprecated("Use storage() instead")]] const Storage& get_storage() const;
-    [[deprecated("Use storage() instead")]] Storage& get_storage();
-    [[deprecated("Use dtype() instead")]] DataType get_dtype() const;
-    [[deprecated("Use layout() instead")]] Layout get_layout() const;
-    [[deprecated("Use logical_shape() instead")]] const ttnn::Shape& get_logical_shape() const;
-    [[deprecated("Use padded_shape() instead")]] const ttnn::Shape& get_padded_shape() const;
-    [[deprecated("Use tensor_spec() instead")]] const TensorSpec& get_tensor_spec() const;
-    [[deprecated("Use logical_volume() instead")]] uint64_t get_logical_volume() const;
-    [[deprecated("Use physical_volume() instead")]] uint32_t volume() const;
-    [[deprecated("Use distributed_tensor_config() instead")]] const DistributedTensorConfig&
-    get_distributed_tensor_config() const;
-
     const Storage& storage() const;
     Storage& storage();
     DataType dtype() const;
@@ -225,6 +212,9 @@ public:
     uint64_t physical_volume() const;
     const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
+
+    // Multi-device topology configuration - tracks how tensor is distributed across mesh devices
+    const TensorTopology& tensor_topology() const;
 
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     const std::optional<ShardSpec>& shard_spec() const;
@@ -258,12 +248,13 @@ public:
     // Throws if the tensor is not allocated on a device.
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
 
-    // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
-    distributed::MeshDevice* mesh_device() const;
-
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
-    IDevice* device() const;
+    distributed::MeshDevice* device() const;
+
+    // NOTE: Keeping this for backward compatibility.
+    // This is deprecated
+    distributed::MeshDevice* mesh_device() const { return device(); }
 
     bool is_sharded() const;
 
@@ -277,7 +268,11 @@ public:
     }
 
 private:
-    void init(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    void init(
+        Storage storage,
+        TensorSpec tensor_spec,
+        DistributedTensorConfig distributed_tensor_config,
+        TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
 

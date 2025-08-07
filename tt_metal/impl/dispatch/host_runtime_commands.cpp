@@ -30,6 +30,7 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
+#include <tt_stl/overloaded.hpp>
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -58,13 +59,9 @@ bool DispatchStateCheck(bool isFastDispatch) {
 
 Buffer& GetBufferObject(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer) {
     return std::visit(
-        [&](auto&& b) -> Buffer& {
-            using type_buf = std::decay_t<decltype(b)>;
-            if constexpr (std::is_same_v<type_buf, std::shared_ptr<Buffer>>) {
-                return *b;
-            } else {
-                return b.get();
-            }
+        ttsl::overloaded{
+            [](const std::shared_ptr<Buffer>& b) -> Buffer& { return *b; },
+            [](Buffer& b) -> Buffer& { return b; },
         },
         buffer);
 }
@@ -227,15 +224,7 @@ void EnqueueReadSubBuffer(
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
 
-    std::visit(
-        [&](auto&& b) {
-            using T = std::decay_t<decltype(b)>;
-            if constexpr (
-                std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                cq.enqueue_read_buffer(b, dst, region, blocking);
-            }
-        },
-        buffer);
+    cq.enqueue_read_buffer(buffer, dst, region, blocking);
 }
 
 void EnqueueWriteBuffer(
@@ -287,11 +276,20 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
 
 void EnqueueRecordEvent(
     CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Ignore record event in slow dispatch.
+        return;
+    }
     detail::DispatchStateCheck(true);
     cq.enqueue_record_event(event, sub_device_ids);
 }
 
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch conservatively flushes all work since there's no cq.
+        Synchronize(event->device);
+        return;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Worker thread.
     log_trace(
@@ -306,6 +304,11 @@ void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) 
 }
 
 void EventSynchronize(const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch conservatively flushes all work since there's no cq.
+        Synchronize(event->device);
+        return;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Parent thread.
     log_trace(
@@ -329,6 +332,10 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
 }
 
 bool EventQuery(const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch always returns true to avoid infinite blocking. Unclear if this is safe for all situations.
+        return true;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Parent thread.
     bool event_completed = event->device->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id;
@@ -362,14 +369,6 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     }
 }
 
-void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueTrace, cq, trace_id, blocking);
-    detail::DispatchStateCheck(true);
-    TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
-    cq.enqueue_trace(trace_id, blocking);
-}
-
 }  // namespace tt::tt_metal
 
 std::ostream& operator<<(std::ostream& os, const EnqueueCommandType& type) {
@@ -377,7 +376,6 @@ std::ostream& operator<<(std::ostream& os, const EnqueueCommandType& type) {
         case EnqueueCommandType::ENQUEUE_READ_BUFFER: os << "ENQUEUE_READ_BUFFER"; break;
         case EnqueueCommandType::ENQUEUE_WRITE_BUFFER: os << "ENQUEUE_WRITE_BUFFER"; break;
         case EnqueueCommandType::ENQUEUE_PROGRAM: os << "ENQUEUE_PROGRAM"; break;
-        case EnqueueCommandType::ENQUEUE_TRACE: os << "ENQUEUE_TRACE"; break;
         case EnqueueCommandType::ENQUEUE_RECORD_EVENT: os << "ENQUEUE_RECORD_EVENT"; break;
         case EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT: os << "ENQUEUE_WAIT_FOR_EVENT"; break;
         case EnqueueCommandType::FINISH: os << "FINISH"; break;

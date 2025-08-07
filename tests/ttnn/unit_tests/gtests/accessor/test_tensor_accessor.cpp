@@ -14,7 +14,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 // Defines to include tt_metal/hw/inc/accessor/tensor_accessor.h but won't need these
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
@@ -23,13 +23,6 @@ template <int N>
 constexpr auto get_ct_arg();
 #define get_compile_time_arg_val(arg_idx) get_ct_arg<arg_idx>()
 
-template <typename T>
-constexpr T get_arg_val(size_t idx);
-
-template <typename T>
-constexpr T get_common_arg_val(size_t idx);
-
-constexpr uint32_t get_arg_val(int arg_idx);
 namespace tensor_accessor {
 uint64_t get_dram_bank_base_offset(uint32_t base_address, uint32_t bank_id, uint8_t noc);
 }
@@ -446,7 +439,6 @@ TEST(TensorAccessorTestsCRTA, CompiletimeTensorCompileTimeShardShapeRuntimeBanks
     using dspec_t = tensor_accessor::
         DistributionSpec<crta_params::rank, crta_params::num_banks, TensorShapeT, ShardShapeT, bank_coords>;
 
-    std::array<uint32_t, crta_params::rank> shard_shape_array = {1, 2};
     std::array<uint16_t, crta_params::num_banks> bank_coord_array{0, 1, 2, 3};
 
     auto dspec_val = dspec_t({}, {}, bank_coord_array);

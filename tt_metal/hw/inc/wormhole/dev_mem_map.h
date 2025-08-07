@@ -100,19 +100,29 @@
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
-#define MEM_TENSIX_ROUTING_TABLE_SIZE 2064
-#if (MEM_TENSIX_ROUTING_TABLE_BASE % 16 != 0) || (MEM_TENSIX_ROUTING_TABLE_SIZE % 16 != 0)
-#error "Tensix routing table base and size must be 16-byte aligned"
-#endif
+#define MEM_TENSIX_ROUTING_TABLE_SIZE 784
 
 // Tensix fabric connection metadata for workers
 #define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
-#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 592  // sizeof(tensix_fabric_connections_l1_info_t)
-#if (MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 != 0) || (MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 != 0)
-#error "Tensix fabric connections base and size must be 16-byte aligned"
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 688        // sizeof(tensix_fabric_connections_l1_info_t)
+#define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 432  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
+
+// Packet header pool sizing constants
+#define PACKET_HEADER_MAX_SIZE 64
+#define PACKET_HEADER_MAX_DIRECTIONS \
+    4 * 2 * MaxDMProcessorsPerCoreType  // (EAST, WEST, NORTH, SOUTH) * convention * (DM0, DM1)
+
+// Packet header pool for fabric networking
+// Size: 64 * 4 * 2 * 2 = 1024
+#define MEM_PACKET_HEADER_POOL_BASE (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
+#define MEM_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * PACKET_HEADER_MAX_DIRECTIONS)
+#if (MEM_PACKET_HEADER_POOL_BASE % 16 != 0) || (MEM_PACKET_HEADER_POOL_SIZE % 16 != 0)
+#error "Packet header pool base and size must be 16-byte aligned"
 #endif
 
-#define MEM_MAP_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
+// Read-only reserved memory boundary for watcher checks
+#define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
+#define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"

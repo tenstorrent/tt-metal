@@ -16,9 +16,10 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_accessor_args.hpp"
+#include "ttnn/api/ttnn/distributed/api.hpp"
 
 namespace tensor_accessor_device_tests {
 
@@ -73,7 +74,7 @@ static void test_single_core_reshard(
     CBHandle cb_in0_idx = tt::CBIndex::c_0;
     auto c_in0_config = CircularBufferConfig(aligned_page_size * num_tiles, {{cb_in0_idx, data_format}})
                             .set_page_size(cb_in0_idx, aligned_page_size);
-    auto cb_in0_id = CreateCircularBuffer(program, grid, c_in0_config);
+    CreateCircularBuffer(program, grid, c_in0_config);
 
     const auto input_accessor_args = TensorAccessorArgs(*input_buffer, params.crta_config);
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer, params.crta_config);
@@ -117,10 +118,15 @@ static void test_single_core_reshard(
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
     auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
-    auto output_vec = output_tensor.template to_vector<T>();
+    auto output_tensor_cpu = output_tensor.cpu(true);
+
+    // Data should be only in the first shard
+    Tensor output_tensor_shard0 = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_shard0.to_vector<T>();
+
     EXPECT_EQ(output_vec, src);
 }
 
@@ -156,8 +162,8 @@ static void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distrib
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
 
     std::vector<uint32_t> compile_time_args{aligned_page_size};
-    input_accessor_args.append_args(compile_time_args);
-    output_accessor_args.append_args(compile_time_args);
+    input_accessor_args.append_to(compile_time_args);
+    output_accessor_args.append_to(compile_time_args);
 
     KernelHandle kernel_id = CreateKernel(
         program,
@@ -183,10 +189,15 @@ static void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distrib
     }
 
     auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
-    auto output_vec = output_tensor.template to_vector<T>();
+    auto output_tensor_cpu = output_tensor.cpu(true);
+
+    // Data should be only in the first shard
+    Tensor output_tensor_shard0 = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_shard0.to_vector<T>();
+
     EXPECT_EQ(output_vec, src);
 }
 

@@ -85,6 +85,7 @@ struct WatcherSettings {
     bool phys_coords = false;
     bool text_start = false;
     bool skip_logging = false;
+    bool noc_sanitize_linked_transaction = false;
     int interval_ms = 0;
 };
 
@@ -108,6 +109,9 @@ class RunTimeOptions {
 
     bool is_visible_devices_env_var_set = false;
     std::vector<uint32_t> visible_devices;
+
+    bool is_custom_fabric_mesh_graph_desc_path_set = false;
+    std::string custom_fabric_mesh_graph_desc_path;
 
     bool build_map_enabled = false;
 
@@ -189,9 +193,14 @@ class RunTimeOptions {
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
 
-    // Special case for watcher_dump testing, when we want to keep errors around. TODO: remove this when watcher_dump
-    // goes away.
-    bool watcher_keep_errors = false;
+    // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
+    bool enable_2_erisc_mode_with_fabric = false;
+
+    // Log kernels compilation commands
+    bool log_kernels_compilation_commands = false;
+
+    // Enable fabric performance telemetry
+    bool enable_fabric_telemetry = false;
 
 public:
     RunTimeOptions();
@@ -234,6 +243,12 @@ public:
     inline void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
     inline bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
     inline void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
+    inline bool get_watcher_noc_sanitize_linked_transaction() const {
+        return watcher_settings.noc_sanitize_linked_transaction;
+    }
+    inline void set_watcher_noc_sanitize_linked_transaction(bool enabled) {
+        watcher_settings.noc_sanitize_linked_transaction = enabled;
+    }
     inline const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     inline bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
@@ -397,9 +412,6 @@ public:
     inline unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline bool get_fd_fabric() const { return fd_fabric_en && !using_slow_dispatch; }
-    inline void set_fd_fabric(bool enable) { fd_fabric_en = enable; }
-
     inline uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
 
@@ -446,7 +458,24 @@ public:
 
     inline bool get_force_context_reinit() const { return force_context_reinit; }
 
-    inline bool get_watcher_keep_errors() const { return watcher_keep_errors; }
+    // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
+    // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
+    inline bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
+
+    inline bool is_custom_fabric_mesh_graph_desc_path_specified() const {
+        return is_custom_fabric_mesh_graph_desc_path_set;
+    }
+    inline std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    inline bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
+
+    // If true, the fabric (routers) will collect coarse grain telemetry data in software. This flag's state does not
+    // affect the ability to capture Ethernet Subsystem register-read-based telemetry data.
+    // This BW telemetry is coarse grain and records the total time that the reouter has unsent and inflight packets.
+    //
+    // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
+    inline bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
+    inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

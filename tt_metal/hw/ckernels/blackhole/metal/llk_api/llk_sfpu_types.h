@@ -78,6 +78,7 @@ enum SfpuType {
     sub_int32,
     sub_uint16,
     mul_uint16,
+    mul_int32,
     topk_local_sort,
     topk_merge,
     topk_rebuild,
@@ -112,4 +113,8 @@ enum SfpuType {
     unary_min,
     gcd,
     lcm,
+    hardsigmoid,
+    where,
+    softsign,
+    celu
 };

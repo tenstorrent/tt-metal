@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov4.common import get_mesh_mappers
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE, get_mesh_mappers
 from models.demos.yolov4.post_processing import load_class_names, plot_boxes_cv2, post_processing
 from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
 from models.experimental.yolo_eval.utils import LoadImages
@@ -160,7 +160,9 @@ def run_yolov4_coco(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "input_loc",
@@ -201,7 +203,9 @@ def test_yolov4(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "input_loc",
@@ -242,7 +246,9 @@ def test_yolov4_dp(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",
@@ -275,7 +281,9 @@ def test_yolov4_coco(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",

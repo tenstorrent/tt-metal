@@ -51,9 +51,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program_at(
     const MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    uint32_t device_index = 0;
-    std::optional<chip_id_t> receiver_device_id;
-    std::optional<chip_id_t> sender_device_id;
     auto target_device = input_tensors.at(0).mesh_device() ? input_tensors.at(0).mesh_device()->get_device(mesh_coord)
                                                            : input_tensors.at(0).device();
     ccl::SenderRecieverConfig config =
@@ -160,7 +157,7 @@ Tensor reduce_scatter_impl(
     TT_FATAL(
         topology == ttnn::ccl::Topology::Linear,
         "This all_gather API with cluster_axis is currently supported only for the Linear topology");
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int16_t rank = input_tensor.logical_shape().rank();
@@ -222,11 +219,6 @@ std::vector<Tensor> reduce_scatter(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
-    std::vector<IDevice*> devices;
-    devices.reserve(input_tensors.size());
-    for (const auto& input_tensor : input_tensors) {
-        devices.push_back(input_tensor.device());
-    }
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
@@ -239,7 +231,7 @@ std::vector<Tensor> reduce_scatter(
             topology,
             user_defined_num_workers,
             user_defined_num_buffers_per_channel,
-            devices));
+            ttnn::ccl::get_active_physical_devices(input_tensors)));
     }
     return output_tensors;
 }

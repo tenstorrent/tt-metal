@@ -20,8 +20,8 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
 
-    auto gamma_grad = outputs[0];
-    auto beta_grad = outputs[1];
+    const auto& gamma_grad = outputs[0];
+    const auto& beta_grad = outputs[1];
     auto num_groups = operation_attributes.num_groups;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -55,7 +55,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     const auto Wt = w / TILE_WIDTH;
 
     const auto num_channels = c;
-    const auto num_rows = num_channels;  // outer_size
 
     const auto batch = n;
     const auto HtWt = Ht * Wt;

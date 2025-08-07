@@ -84,8 +84,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
     auto mesh_device = input_tensor[0].mesh_device();
-    const bool enable_async_output_tensor = false;
-    const bool enable_persistent_fabric_mode = true;
     const bool is_first_chip = ring_index == 0;
     const bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -110,7 +108,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = input_tensor;
-    std::vector<Tensor> output_tensors = output_tensor;
+    const std::vector<Tensor>& output_tensors = output_tensor;
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
@@ -142,7 +140,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     const uint32_t num_pages_per_packet =
         std::min((uint32_t)(packet_size_bytes / l1_scratch_cb_page_size_bytes), max_scatter_write_pages);
     const uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
-    const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].get_dtype());
+    const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
     uint32_t sender_forward_cb_index = tt::CB::c_in0;
@@ -150,15 +148,13 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_forward_cb_index, df}})
             .set_page_size(sender_forward_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_sender_forward_workers =
-        CreateCircularBuffer(program, sender_forward_core_ranges, cb_sender_forward_config);
+    CreateCircularBuffer(program, sender_forward_core_ranges, cb_sender_forward_config);
     uint32_t sender_backward_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_sender_backward_config =
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_backward_cb_index, df}})
             .set_page_size(sender_backward_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_sender_backward_workers =
-        CreateCircularBuffer(program, sender_backward_core_ranges, cb_sender_backward_config);
+    CreateCircularBuffer(program, sender_backward_core_ranges, cb_sender_backward_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_forward_CB_index = tt::CB::c_in1;
@@ -169,27 +165,21 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_forward_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_forward_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_forward_CB_handle =
-        CreateCircularBuffer(program, sender_forward_core_ranges, cb_reserved_packet_header_forward_config);
+    CreateCircularBuffer(program, sender_forward_core_ranges, cb_reserved_packet_header_forward_config);
     const auto reserved_packet_header_backward_CB_index = tt::CB::c_in1;
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_backward_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_backward_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_backward_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_backward_CB_handle =
-        CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
+    CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
 
     // Tensor Info
-    const auto input_tensor_layout = input_tensor[0].buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor[0].buffer()->buffer_type();
-    const auto input_tensor_page_layout = input_tensor[0].layout();
     const auto input_tensor_num_pages = input_tensor[0].buffer()->num_pages();
-    const auto output_tensor_layout = output_tensor[0].buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_tensor[0].buffer()->buffer_type();
-    const auto output_tensor_page_layout = output_tensor[0].layout();
-    const auto input_tensor_shape = input_tensor[0].get_padded_shape();
-    const auto output_tensor_shape = output_tensor[0].get_padded_shape();
+    const auto input_tensor_shape = input_tensor[0].padded_shape();
+    const auto output_tensor_shape = output_tensor[0].padded_shape();
     const uint32_t num_inputs = input_tensor.size();
 
     uint32_t tiles_to_write_per_packet = 1;

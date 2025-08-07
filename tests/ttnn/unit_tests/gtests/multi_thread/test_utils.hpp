@@ -20,8 +20,6 @@ namespace ttnn::distributed::test {
 using namespace tt;
 using namespace tt_metal;
 
-Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, QueueId cq_id);
-
 struct SubdeviceInfo {
     std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_managers;
     std::unordered_map<chip_id_t, SubDeviceId> worker_subdevice_id;
@@ -45,11 +43,5 @@ void persistent_fabric_teardown_sequence(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-
-std::tuple<
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore>
-create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, IDevice* device);
 
 }  // namespace ttnn::distributed::test

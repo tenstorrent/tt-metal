@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <enchantum/enchantum.hpp>
 #include "metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
@@ -39,12 +40,6 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
         "Worker L1 size {} is larger than max size {}",
         worker_l1_size,
         max_worker_l1_size);
-}
-
-// Check for environment variable override for custom mesh graph descriptor path
-const char* get_custom_mesh_graph_desc_path() {
-    const char* custom_mesh_graph_desc_path = std::getenv("TT_MESH_GRAPH_DESC_PATH");
-    return custom_mesh_graph_desc_path;
 }
 
 }  // namespace
@@ -107,9 +102,9 @@ void MetalContext::initialize(
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
     // Need DispatchMemMap for both dispatch core types
     tt_metal::DispatchSettings::initialize(*cluster_);
-    dispatch_mem_map_[magic_enum::enum_integer(CoreType::WORKER)] =
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
         std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
-    dispatch_mem_map_[magic_enum::enum_integer(CoreType::ETH)] =
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
     // Initialize debug servers. Attaching individual devices done below
     if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -232,11 +227,21 @@ MetalContext& MetalContext::instance() {
 }
 
 MetalContext::MetalContext() {
+    // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
+    // to initialize the control plane.
+    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
+        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
+    }
+
     bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+
+    // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
+    // how MetalContext lifetime will work through the API.
+    std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
 distributed::multihost::DistributedContext& MetalContext::get_distributed_context() {
@@ -245,6 +250,7 @@ distributed::multihost::DistributedContext& MetalContext::get_distributed_contex
 }
 
 MetalContext::~MetalContext() {
+    distributed_context_.reset();
     cluster_.reset();
     hal_.reset();
 }
@@ -283,7 +289,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map() const {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
-    auto& mem_map = dispatch_mem_map_[magic_enum::enum_integer(core_type)];
+    auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
     TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before intializing it.", core_type);
     return *mem_map;
 }
@@ -363,29 +369,38 @@ void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
 }
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
-    if (!global_control_plane_) {
+    if (!control_plane_) {
         this->initialize_control_plane();
     }
-    return global_control_plane_->get_local_node_control_plane();
+    return *control_plane_;
 }
 
-void MetalContext::set_custom_control_plane_mesh_graph(
+void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
-
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
-        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+    // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
+    this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
+    custom_mesh_graph_desc_path_ = mesh_graph_desc_file;
     this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
-void MetalContext::set_default_control_plane_mesh_graph() {
+void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
-    global_control_plane_.reset();
+    // Reset the control plane, since it was initialized with custom parameters.
+    control_plane_.reset();
+    // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
+    // mapping.
+    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
+    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
+        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
+    } else {
+        custom_mesh_graph_desc_path_ = std::nullopt;
+    }
     this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
@@ -405,6 +420,7 @@ void MetalContext::set_fabric_config(
     std::optional<uint8_t> num_routing_planes) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
     force_reinit_ = true;
+
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED || fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
@@ -473,17 +489,25 @@ tt_fabric::FabricConfig MetalContext::get_fabric_config() const {
     return fabric_config_;
 }
 
+void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
+    if (logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
+        log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
+        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
+    } else {
+        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+    }
+}
+
 void MetalContext::initialize_control_plane() {
-    if (auto* custom_mesh_graph_desc_path = get_custom_mesh_graph_desc_path(); custom_mesh_graph_desc_path != nullptr) {
-        std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path);
+    if (custom_mesh_graph_desc_path_.has_value()) {
+        std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
         TT_FATAL(
             std::filesystem::exists(mesh_graph_desc_path),
             "Custom mesh graph descriptor file not found: {}",
             mesh_graph_desc_path.string());
 
         log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
-        global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
-            mesh_graph_desc_path.string());
+        this->construct_control_plane(mesh_graph_desc_path);
         return;
     }
 
@@ -492,10 +516,10 @@ void MetalContext::initialize_control_plane() {
     std::string mesh_graph_descriptor;
     auto cluster_type = cluster_->get_cluster_type();
     switch (cluster_type) {
-        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::GALAXY:
+        case tt::tt_metal::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::GALAXY:
             if (tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type) ==
                 tt::tt_fabric::FabricType::TORUS_XY) {
                 mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
@@ -503,21 +527,24 @@ void MetalContext::initialize_control_plane() {
                 mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
             }
             break;
-        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::N300_2x2: mesh_graph_descriptor = "n300_2x2_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::INVALID: TT_THROW("Unknown cluster type");
+        case tt::tt_metal::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0:
+            mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml";
+            break;
+        case tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE:
+            mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml";
+            break;
+        case tt::tt_metal::ClusterType::N300_2x2: mesh_graph_descriptor = "n300_2x2_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::INVALID: TT_THROW("Unknown cluster type");
     }
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
 
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
-        mesh_graph_desc_path.string());
+    this->construct_control_plane(mesh_graph_desc_path);
 }
 
 void MetalContext::reset_cores(chip_id_t device_id) {
@@ -880,7 +907,7 @@ void MetalContext::initialize_firmware(
         }
         default:
             TT_THROW(
-                "Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
+                "Unsupported programable core type {} to initialize build states", enchantum::to_string(core_type));
     }
 
     cluster_->write_core(
@@ -951,16 +978,16 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel, noc);
             auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel, noc);
             auto physical_worker_dram_ep =
-                soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+                soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
             auto physical_eth_dram_ep =
-                soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+                soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
             dram_cores.insert(physical_worker_dram_ep);
             dram_cores.insert(physical_eth_dram_ep);
         }
     }
 
     const std::vector<tt::umd::CoreCoord>& eth_cores =
-        soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);  // make these translated and then convert to physical
+        soc_d.get_cores(CoreType::ETH, CoordSystem::NOC0);  // make these translated and then convert to physical
 
     TT_ASSERT(
         pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_PHYSICAL_NON_WORKER_CORES,

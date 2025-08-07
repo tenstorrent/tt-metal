@@ -40,9 +40,9 @@ class TtnnUFLDV2Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=dealloc_act,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
-            enable_subblock_padding=False,
+            enable_act_double_buffer=True if is_blk else False,
+            enable_weights_double_buffer=True if is_blk else False,
+            enable_split_reader=True if not is_blk else False,
             reshard_if_not_optimal=True,
             activation=activation,
         )

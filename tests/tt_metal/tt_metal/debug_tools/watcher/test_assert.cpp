@@ -6,7 +6,6 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <functional>
-#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <variant>
@@ -154,17 +153,14 @@ static void RunTest(
 
     // Run the kernel, don't expect an issue here.
     log_info(LogTest, "Running args that shouldn't assert...");
-    // TODO: #24887, ND issue with this test - only run once below when issue is fixed
-    fixture->RunProgram(device, program);
-    fixture->RunProgram(device, program);
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(device, program, true);
     log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
     const std::vector<uint32_t> unsafe_args = {3, 3, static_cast<uint32_t>(assert_type)};
     SetRuntimeArgs(program, assert_kernel, logical_core, unsafe_args);
 
-    // Run the kerel, expect an exit due to the assert.
+    // Run the kernel, expect an exit due to the assert.
     log_info(LogTest, "Running args that should assert...");
     fixture->RunProgram(device, program);
 
@@ -216,13 +212,11 @@ static void RunTest(
             kernel);
     }
 
-    log_info(LogTest, "Expected error: {}", expected);
     std::string exception = "";
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception == "");
-    log_info(LogTest, "Reported error: {}", exception);
-    EXPECT_TRUE(expected == MetalContext::instance().watcher_server()->exception_message());
+    EXPECT_EQ(expected, MetalContext::instance().watcher_server()->exception_message());
 }
 }
 

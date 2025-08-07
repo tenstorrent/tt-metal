@@ -31,10 +31,26 @@ struct AvgPoolConfig {
     uint32_t ceil_h;
     uint32_t ceil_w;
     bool count_include_pad;
-    uint32_t pad_h;
-    uint32_t pad_w;
+    uint32_t pad_t;
+    uint32_t pad_b;
+    uint32_t pad_l;
+    uint32_t pad_r;
     uint32_t out_nhw_per_core;
     std::optional<int32_t> divisor_override;
+};
+
+struct FactoryParameters {
+    uint32_t multi_buffering_factor;
+    bool split_reader;
+    uint32_t nbytes;
+    tt::DataFormat data_format;
+    uint32_t in_ntiles_c;
+    bool is_avg_pool;
+    uint32_t max_rows_for_reduction;
+    bool is_large_kernel;
+    uint32_t MAX_TILES_PER_REDUCTION;
+    bool is_wide_reduction;
+    uint32_t num_tilized_rows;
 };
 
 uint32_t get_bf16_pool_scalar(
@@ -72,6 +88,9 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override);
+
+FactoryParameters get_factory_parameters(
+    uint32_t num_shards_c, const Tensor& input, uint32_t kernel_h, uint32_t kernel_w, Pool2DType pool_type);
 
 uint32_t calculate_L1_usage(
     const Tensor& input,

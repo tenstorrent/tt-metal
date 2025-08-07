@@ -151,6 +151,7 @@ mm_test_cases = [
 ]
 
 
+@skip_for_blackhole("Blackhole has not been tested, see #25544")
 @pytest.mark.parametrize("test_config", mm_test_cases, ids=[c["id"] for c in mm_test_cases])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -326,6 +327,7 @@ def test_grid_size_sdxl_matmul(
     )
 
 
+@skip_for_blackhole("Blackhole has not been tested, see #25544")
 @skip_for_wormhole_b0("Use test_grid_size_ff1_matmul for blackhole!")
 @pytest.mark.parametrize("test_config", mm_test_cases, ids=[c["id"] for c in mm_test_cases])
 @pytest.mark.parametrize(

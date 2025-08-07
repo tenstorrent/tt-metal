@@ -75,7 +75,6 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
-    const auto single_tile_size{tt::tt_metal::detail::TileSize(cb_data_format)};
 
     const auto& input_grad_shape = input_grad.padded_shape();
     const auto& input_grad_shape_wo_padding = input_grad.logical_shape();
@@ -163,7 +162,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     }
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp";
-    const auto compute_kernel_1_id = CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -235,7 +234,7 @@ void MorehSumBackwardOperation::ProgramFactory::override_runtime_arguments(
     auto output_grad_buffer = tensor_args.output_grad.buffer();
     auto input_grad_buffer = tensor_return_value.buffer();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {

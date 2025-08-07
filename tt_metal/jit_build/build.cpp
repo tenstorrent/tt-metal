@@ -210,6 +210,9 @@ void JitBuildEnv::init(
     if (rtoptions.get_watcher_noinline()) {
         this->defines_ += "-DWATCHER_NOINLINE ";
     }
+    if (rtoptions.get_watcher_noc_sanitize_linked_transaction()) {
+        this->defines_ += "-DWATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION ";
+    }
     for (auto& feature : rtoptions.get_watcher_disabled_features()) {
         this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
     }
@@ -362,7 +365,7 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
 
     // clang-format off
     this->includes_ = env_.includes_ +
-        "-I " + env_.root_ + "tt_metal/hw/firmware/src " +
+        "-I " + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
     // clang-format on
@@ -381,9 +384,9 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
                 this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
             }
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/brisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/brisc.cc");
             } else {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/brisck.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/brisck.cc");
             }
 
             if (this->is_fw_) {
@@ -405,9 +408,9 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
             }
 
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc");
             } else {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisck.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc");
             }
 
             if (this->is_fw_) {
@@ -452,11 +455,11 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " +
         "-I" + env_.gpp_include_dir_ + " " +
-        "-I" + env_.root_ + "tt_metal/hw/firmware/src " +
+        "-I" + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx " +
         "-I" + env_.root_ + "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
     // clang-format on
 
-    this->srcs_.push_back(std::string("tt_metal/hw/firmware/src/trisc") + (this->is_fw_ ? "" : "k") + ".cc");
+    this->srcs_.push_back(std::string("tt_metal/hw/firmware/src/tt-1xx/trisc") + (this->is_fw_ ? "" : "k") + ".cc");
 
     // Incrementing the '0' is much cheaper that piecemeal
     // construction. Sue me.
@@ -527,12 +530,12 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                 "-DERISC "
                 "-DRISC_B0_HW ";
 
-            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx ";
 
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
             } else {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
             }
 
             if (this->is_fw_) {
@@ -561,10 +564,10 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
-                this->srcs_.push_back("tt_metal/hw/firmware/src/erisc-crt0.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/erisc-crt0.cc");
             } else {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/erisck.cc");
             }
 
             string linker_str;
@@ -632,12 +635,12 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 "-DERISC "
                 "-DRISC_B0_HW ";  // do we need this for BH?
 
-            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx ";
 
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisc.cc");
             } else {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisck.cc");
             }
 
             if (this->is_fw_) {
@@ -657,11 +660,11 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 "-DCOMPILE_FOR_IDLE_ERISC=1 "
                 "-DERISC "
                 "-DRISC_B0_HW ";
-            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx ";
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/subordinate_idle_erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_idle_erisc.cc");
             } else {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisck.cc");
             }
             if (this->is_fw_) {
                 this->lflags_ +=
@@ -724,7 +727,9 @@ void JitBuildState::compile_one(
     cmd += "-c -o " + obj + " " + src + " ";
     cmd += defines;
 
-    log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
+        log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+    }
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() && settings) {
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
@@ -775,7 +780,9 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     cmd += lflags;
     cmd += this->link_objs_;
     cmd += "-o " + out_dir + this->target_name_ + ".elf";
-    log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
+        log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
+    }
     if (!tt::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "link", cmd, log_file);
     }

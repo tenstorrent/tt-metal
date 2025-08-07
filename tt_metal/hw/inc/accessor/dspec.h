@@ -93,7 +93,6 @@ struct DistributionSpec {
         uint32_t* shard_shape_ptr = nullptr,
         uint16_t* bank_coords_ptr = nullptr) {
         uint32_t rank = has_static_rank ? RankCT : rank_rt;
-        uint32_t num_banks = has_static_num_banks ? NumBanksCT : num_banks_rt;
 
         auto span_from_pointer = []<typename T>(auto& arr, T* ptr, size_t size) { arr = detail::Span<T>(ptr, size); };
 

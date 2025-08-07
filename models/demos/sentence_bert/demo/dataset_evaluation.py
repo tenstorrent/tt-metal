@@ -16,6 +16,7 @@ from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 import ttnn
+from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 
@@ -32,23 +33,18 @@ def load_sts_tr(split="test"):
     return Dataset.from_pandas(df)
 
 
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
-)
-@pytest.mark.parametrize(
-    "model_name, sequence_length,batch_size,num_samples",
-    [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, 4)],
-)
-def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num_samples, start=0, end=7):
+def run_sentence_bert_eval(device, model_name, sequence_length, batch_size, num_samples, model_location_generator):
+    batch_size = batch_size * device.get_num_devices()
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    transformers_model = transformers.AutoModel.from_pretrained(model_name).eval()
     config = transformers.BertConfig.from_pretrained(model_name)
     dataset = load_sts_tr("test")
     true_scores = []
     ref_pred_scores = []
     ttnn_pred_scores = []
     reference_module = BertModel(config).to(torch.bfloat16)
-    reference_module.load_state_dict(transformers_model.state_dict())
+    reference_module = load_torch_model(
+        reference_module, target_prefix="", model_location_generator=model_location_generator
+    )
     ttnn_module = None
     for i in tqdm(range(num_samples), desc="Evaluating"):
         example = dataset[i]
@@ -76,6 +72,7 @@ def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num
         if ttnn_module is None:
             ttnn_module = SentenceBERTPerformantRunner(
                 device=device,
+                model_location_generator=model_location_generator,
                 input_ids=input_ids,
                 extended_mask=extended_mask,
                 attention_mask=attention_mask,
@@ -84,7 +81,9 @@ def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num
             )
             ttnn_module._capture_sentencebert_trace_2cqs()
         ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
-        ttnn_sentence_embeddings = ttnn.to_torch(ttnn_out, dtype=torch.float32)
+        ttnn_sentence_embeddings = ttnn.to_torch(
+            ttnn_out, dtype=torch.float32, mesh_composer=ttnn_module.runner_infra.output_mesh_composer
+        )
         sim1 = F.cosine_similarity(reference_sentence_embeddings[:1], reference_sentence_embeddings[-1:]).item()
         sim2 = F.cosine_similarity(ttnn_sentence_embeddings[:1], ttnn_sentence_embeddings[-1:]).item()
         ref_pred_score, ttnn_pred_score = (sim1 + 1) * 2.5, (sim2 + 1) * 2.5  # scale from [-1, 1] to [0, 5]
@@ -98,3 +97,31 @@ def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num
         f"Cosine Pearson correlation and Spearman correlation for reference model: {pearson1:.4f}, {spearman1:.4f}"
     )
     logger.info(f"Cosine Pearson correlation and Spearman correlation for ttnn model: {pearson2:.4f}, {spearman2:.4f}")
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_name, sequence_length,batch_size,num_samples",
+    [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, 4)],
+)
+def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num_samples, model_location_generator):
+    return run_sentence_bert_eval(
+        device, model_name, sequence_length, batch_size, num_samples, model_location_generator
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_name, sequence_length,device_batch_size,num_samples",
+    [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, 4)],
+)
+def test_sentence_bert_eval_dp(
+    mesh_device, model_name, sequence_length, device_batch_size, num_samples, model_location_generator
+):
+    return run_sentence_bert_eval(
+        mesh_device, model_name, sequence_length, device_batch_size, num_samples, model_location_generator
+    )
