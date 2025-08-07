@@ -8,6 +8,7 @@ import os
 import fiftyone
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.utils.common_demo_utils import (

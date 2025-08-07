@@ -162,7 +162,7 @@ def postprocess(preds, img, orig_imgs, batch, names, path, dataset, save_dir="mo
     )
 
     results = []
-    from models.experimental.yolo_eval.utils import Results
+    from models.demos.utils.common_demo_utils import Results
 
     for i, det in enumerate(pred):
         im0 = orig_imgs[i] if isinstance(orig_imgs, list) else orig_imgs
