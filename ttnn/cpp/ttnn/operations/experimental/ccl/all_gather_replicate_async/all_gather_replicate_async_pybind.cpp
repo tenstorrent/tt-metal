@@ -12,7 +12,6 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_replicate_async/all_gather_replicate_async.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
