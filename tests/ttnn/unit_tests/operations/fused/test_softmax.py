@@ -389,3 +389,38 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
     assert output_tensor.shape == torch_output_tensor.shape
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
+
+def test_softmax_sd(device):
+    shape = (1, 16, 256, 256)
+
+    input = torch.randn(shape, dtype=torch.bfloat16).float() * 10
+
+    out_torch = ttnn.softmax_in_place.golden_function(input)
+
+    softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        subblock_w=1,
+        block_h=2,
+        block_w=8,
+    )
+
+    mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            [64, 256],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardMode.PHYSICAL,
+        ),
+    )
+
+    input = ttnn.from_torch(input, device=device, layout=ttnn.Layout.TILE, memory_config=mem_config)
+
+    out = ttnn.softmax_in_place(
+        input,
+        program_config=softmax_program_config,
+    )
+
+    passed, pcc = assert_with_pcc(out_torch, ttnn.to_torch(out), pcc=0.999)
