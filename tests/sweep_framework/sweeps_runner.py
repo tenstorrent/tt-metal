@@ -238,6 +238,22 @@ def get_initiated_by():
         return get_username()
 
 
+def get_github_pipeline_id() -> Optional[int]:
+    """Get a CI pipeline identifier suitable for joining CICD metadata tables.
+
+    Prefer GitHub Actions run id if present; otherwise fall back to generic CI_PIPELINE_ID.
+    Returns an int when available, otherwise None.
+    """
+    run_id = os.getenv("GITHUB_RUN_ID") or os.getenv("CI_PIPELINE_ID")
+    if not run_id:
+        return None
+    try:
+        return int(run_id)
+    except ValueError:
+        # Unexpected non-integer; keep it unset for type consistency
+        return None
+
+
 def run(test_module, input_queue, output_queue, config: SweepsConfig):
     device_generator = get_devices(test_module)
     try:
@@ -519,6 +535,7 @@ def run_sweeps(
             "status": "success",
             "run_contents": run_contents,
             "device": ttnn.get_arch_name(),
+            "github_pipeline_id": get_github_pipeline_id(),
         }
         run_id = result_dest.initialize_run(run_metadata)
         if run_id:

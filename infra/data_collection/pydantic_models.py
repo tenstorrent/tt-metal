@@ -441,6 +441,10 @@ class SweepsRunMetadata(BaseModel):
     git_author: Optional[str] = Field(None, description="Git author configured in the environment.")
     git_branch_name: Optional[str] = Field(None, description="Current git branch name.")
     git_commit_hash: Optional[str] = Field(None, description="Short git commit hash for the run.")
+    github_pipeline_id: Optional[int] = Field(
+        None,
+        description="Identifier for the GitHub Actions pipeline run (GITHUB_RUN_ID) or analogous CI pipeline id.",
+    )
 
     start_time_ts: datetime = Field(description="Timestamp with timezone when the sweeps run started.")
     end_time_ts: Optional[datetime] = Field(None, description="Timestamp with timezone when the sweeps run ended.")
