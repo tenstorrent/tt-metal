@@ -62,8 +62,8 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
     const auto eth_send_binary = [=]() {
         internal_::eth_send_packet<false>(
             0,
-            MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH >> 4,
-            MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH >> 4,
+            MEM_LITE_FABRIC_INIT_LOCAL_L1_BASE_SCRATCH >> 4,
+            MEM_LITE_FABRIC_INIT_LOCAL_L1_BASE_SCRATCH >> 4,
             MEM_ERISC_LOCAL_SIZE >> 4);
         internal_::eth_send_packet<false>(
             0, config_struct->binary_addr >> 4, config_struct->binary_addr >> 4, config_struct->binary_size >> 4);
@@ -138,7 +138,7 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
 
 #else
                 ConnectedRisc1Interface::assert_connected_dm1_reset();
-                ConnectedRisc1Interface::set_pc(MEM_AERISC_FIRMWARE_BASE);
+                ConnectedRisc1Interface::set_pc(MEM_LITE_FABRIC_FIRMWARE_BASE);
                 eth_send_config();
                 eth_send_binary();
                 ConnectedRisc1Interface::deassert_connected_dm1_reset();

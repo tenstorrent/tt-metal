@@ -12,7 +12,7 @@
 namespace lite_fabric {
 
 int CompileLiteFabric(
-    std::shared_ptr<tt::Cluster> cluster,
+    tt::Cluster& cluster,
     const std::filesystem::path& root_dir,
     const std::filesystem::path& out_dir,
     const std::vector<std::string>& defines = {});
