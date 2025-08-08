@@ -122,21 +122,22 @@ void kernel_main() {
         cb_pop_front(cb_id_in0, pages_to_send);
     }
 
+    // Send completion signal to receiver on remote device
+    // Note: We no longer initialize or wait for the semaphore here
+    // The receiver will initialize and wait for it
+    // Compute the NOC address of the global semaphore on the receiver device
+    uint64_t last_message_semaphore_noc0_addr =
+        safe_get_noc_addr(receiver_noc_x, receiver_noc_y, (uint32_t)last_message_semaphore_address, 0);
     if constexpr (!mcast_mode) {
-        sender.wait_for_empty_write_slot();
-
-        // Send completion signal to receiver on remote device
-        // Note: We no longer initialize or wait for the semaphore here
-        // The receiver will initialize and wait for it
-        // Compute the NOC address of the global semaphore on the receiver device
-        uint64_t last_message_semaphore_noc0_addr =
-            safe_get_noc_addr(receiver_noc_x, receiver_noc_y, (uint32_t)last_message_semaphore_address, 0);
         packet_header->to_chip_unicast(config.unicast.distance);
-        packet_header->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
-
-        sender.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    } else {
+        packet_header->to_chip_unicast(config.mcast.distance + config.mcast.range - 1);
     }
+    packet_header->to_noc_unicast_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
+
+    sender.wait_for_empty_write_slot();
+    sender.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
     sender.close();
 }

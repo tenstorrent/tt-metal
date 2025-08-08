@@ -370,6 +370,14 @@ static void run_programs(std::vector<Program>& programs, const std::vector<IDevi
     }
 }
 
+static void write_to_buffer(IDevice* device, std::shared_ptr<Buffer> buffer, std::vector<uint32_t>& data) {
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        tt_metal::detail::WriteToBuffer(buffer, data);
+    } else {
+        tt_metal::EnqueueWriteBuffer(device->command_queue(), buffer, data, true);
+    }
+}
+
 static std::tuple<std::shared_ptr<Buffer>, std::vector<uint32_t>> build_input_buffer(
     IDevice* first_device, size_t tensor_size_bytes, const BankedConfig& test_config) {
     auto inputs = std::vector<uint32_t>(tensor_size_bytes / sizeof(uint32_t), 0);
@@ -378,11 +386,7 @@ static std::tuple<std::shared_ptr<Buffer>, std::vector<uint32_t>> build_input_bu
     // Input buffer
     auto local_input_buffer = CreateBuffer(InterleavedBufferConfig{
         first_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        tt_metal::detail::WriteToBuffer(local_input_buffer, inputs);
-    } else {
-        tt_metal::EnqueueWriteBuffer(first_device->command_queue(), local_input_buffer, inputs, true);
-    }
+    write_to_buffer(first_device, local_input_buffer, inputs);
     return {local_input_buffer, inputs};
 }
 
@@ -452,14 +456,10 @@ static void generate_fabric_test_kernels(
     uint32_t page_size,
     uint32_t num_pages_total,
     uint32_t num_pages_per_edm_buffer,
-    // uint32_t local_worker_fabric_semaphore_id,
-    // uint32_t local_worker_teardown_semaphore_id,
-    // uint32_t local_worker_last_message_semaphore_id,
     uint32_t dram_input_buffer_base_addr,
     bool src_is_dram,
     uint32_t dram_output_buffer_base_addr,
     bool dest_is_dram,
-    // uint32_t worker_buffer_index_semaphore_id,
     Program& receiver_program,
     IDevice* receiver_device,
     const CoreCoord& receiver_worker_core,
@@ -484,7 +484,6 @@ static void generate_fabric_test_kernels(
     receiver_noc_x = receiver_noc_coord.x;
     receiver_noc_y = receiver_noc_coord.y;
 
-    // const auto& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
         num_pages_total,  //
@@ -624,11 +623,7 @@ inline bool RunLoopbackTest(
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
     log_info(tt::LogTest, "Writing all zeros to output buffer");
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
-    } else {
-        tt_metal::EnqueueWriteBuffer(receiver_device->command_queue(), output_buffer, all_zeros, true);
-    }
+    write_to_buffer(receiver_device, output_buffer, all_zeros);
 
     auto local_input_buffer_address = local_input_buffer->address();
     auto output_buffer_address = output_buffer->address();
@@ -694,9 +689,7 @@ static bool RunLineFabricTest(
     log_info(tt::LogTest, "Running line fabric test");
     const std::size_t edm_buffer_size_no_header = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     log_info(tt::LogTest, "EDM buffer size no header: {}", edm_buffer_size_no_header);
-    const size_t local_chip_id = 0;
-    const size_t remote_chip_id = 1;
-    auto program_ptrs = std::vector<Program*>(devices.size());
+    auto program_ptrs = std::vector<Program*>(programs.size());
     std::transform(programs.begin(), programs.end(), program_ptrs.begin(), [](auto& program) { return &program; });
 
     std::vector<CoreCoord> worker_cores = {CoreCoord(0, 0)};
@@ -730,7 +723,7 @@ static bool RunLineFabricTest(
                     devices.at(i), test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type},
                 output_buffers[0]->address()));
         }
-        tt_metal::detail::WriteToBuffer(output_buffers.back(), all_zeros);
+        write_to_buffer(devices[i], output_buffers[i], all_zeros);
     }
     auto local_output_buffer_address = output_buffers[0]->address();
     bool all_same_addr = std::ranges::all_of(output_buffers, [local_output_buffer_address](const auto& buffer) {
@@ -749,8 +742,7 @@ static bool RunLineFabricTest(
     const std::size_t pages_per_send = edm_buffer_size_no_header / page_size;
 
     // For multicast, create a receiver program on the furthest device
-    auto furthest_device = devices.back();
-    programs.push_back(Program());
+    auto receiver_device = devices.at(mcast_last_chip);
     auto& receiver_program = programs.back();
     CoreCoord receiver_worker_core = {0, 1};  // Different core from sender
 
@@ -769,7 +761,7 @@ static bool RunLineFabricTest(
         local_output_buffer_address,
         dest_is_dram,
         receiver_program,
-        furthest_device,
+        receiver_device,
         receiver_worker_core,
         scatter_write);
 
@@ -777,7 +769,7 @@ static bool RunLineFabricTest(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    run_programs(programs, devices);
+    run_programs(programs, {devices[0], receiver_device});
     log_info(tt::LogTest, "Reading back outputs");
 
     bool pass = true;
@@ -829,13 +821,13 @@ static int TestLineFabricEntrypoint(
         mesh_device.get_device(MeshCoordinate(0, 2)),
         mesh_device.get_device(MeshCoordinate(0, 3))};
 
-    std::vector<Program> programs(1);
+    std::vector<Program> programs(2);
 
     auto launch_workers = [&](std::vector<Program>& _programs) -> bool {
         bool success = false;
         try {
             success = RunLineFabricTest(
-                std::vector<IDevice*>{devices[0]},
+                devices,
                 _programs,
                 mcast_first_chip,
                 mcast_last_chip,
@@ -854,7 +846,7 @@ static int TestLineFabricEntrypoint(
     };
     bool success = launch_workers(programs);
 
-    std::vector<Program> second_run_programs(1);
+    std::vector<Program> second_run_programs(2);
     success = launch_workers(second_run_programs);
 
     test_fixture.TearDown();
