@@ -168,7 +168,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes, input_page_size - width_offset);
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
-
+        reader_kernel_args[2] = this_input_row_size_bytes;
         uint32_t addr_offset = 5;
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = num_sticks_per_core;
@@ -186,7 +186,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
             this_input_row_size_bytes);
 
         std::vector<uint32_t> writer_kernel_args = {
-            num_sticks_per_core, output_row_size_elems, input_row_size_bytes, output_row_size_bytes};
+            num_sticks_per_core, output_row_size_elems, this_input_row_size_bytes, output_row_size_bytes};
         ret_val[core_index] = {reader_kernel_args, writer_kernel_args};
         core_index++;
     }
