@@ -321,7 +321,11 @@ std::map<std::string, std::string> get_defines_fp32(
             op_name = "mul_binary_tile";
             break;
         case BinaryOpType::SQUARED_DIFFERENCE:
-            op_name = "sub_binary_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "sub_int32_tile";
+            } else {
+                op_name = "sub_binary_tile";
+            }
             new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst1));
             break;
         case BinaryOpType::BIAS_GELU:
