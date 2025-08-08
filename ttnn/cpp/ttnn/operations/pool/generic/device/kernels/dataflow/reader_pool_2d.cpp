@@ -82,6 +82,8 @@ template <
     bool last_tile_is_partial>
 ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
+    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
+    // otherwise we can reduce 8 tiles at a time.
     constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = in_c / TILE_WIDTH;
@@ -97,26 +99,23 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
             read_bytes =
                 (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
         }
-
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         uint32_t processed_sticks = 0;
         cb_reserve_back(in_cb_id, 1);
-
         for (uint32_t h = 0; h < window_h; ++h) {
-            for (uint32_t w = 0; w < window_w; ++w) {
-                const uint32_t stick_offset = ind + w + h * in_w_padded;
+            auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
+                const uint32_t stick_offset = ind + w_offset + h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
-
-                noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
+                noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
                 if constexpr (tilize_reconfig) {
-                    in_l1_write_addr += read_bytes;
+                    in_l1_write_addr += read_bytes * w_multiple;
                 } else {
-                    in_l1_write_addr += max_write_inc;
+                    in_l1_write_addr += max_write_inc * w_multiple;
                 }
-                processed_sticks++;
+                processed_sticks += w_multiple;
                 if constexpr (is_large_kernel) {
                     if ((processed_sticks % max_sticks_for_reduction) == 0 ||
                         processed_sticks == total_elems_to_reduce) {
@@ -140,9 +139,23 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         }
                     }
                 }
+            };
+
+            bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c;
+            if constexpr (is_large_kernel) {
+                bool whole_row_remaining =
+                    window_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
+                use_contiguous_read &= whole_row_remaining;
+            }
+
+            if (use_contiguous_read) {  // read entire row as one chunk
+                process_h(0, window_w);
+            } else {  // read rows stick by stick
+                for (uint32_t w = 0; w < window_w; ++w) {
+                    process_h(w, 1);
+                }
             }
         }
-
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
             cb_push_back(in_cb_id, 1);
