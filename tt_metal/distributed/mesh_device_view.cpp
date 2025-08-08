@@ -44,10 +44,18 @@ MeshDeviceView::MeshDeviceView(
     const MeshShape& shape,
     const std::vector<MaybeRemote<IDevice*>>& devices,
     const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids) :
-    devices_(shape, devices), fabric_node_ids_(shape, fabric_node_ids) {
+    devices_(shape, devices), fabric_node_ids_(shape, fabric_node_ids), mesh_id_(fabric_node_ids.front().mesh_id) {
     if (devices_.shape().dims() == 2) {
         shape_2d_ = Shape2D(devices_.shape()[0], devices_.shape()[1]);
     }
+
+    TT_FATAL(
+        std::all_of(
+            fabric_node_ids.begin(),
+            fabric_node_ids.end(),
+            [this](const auto& fabric_node_id) { return fabric_node_id.mesh_id == mesh_id_; }),
+        "All fabric node ids in MeshDeviceView must have the same mesh id: {}",
+        mesh_id_);
 
     // Build coordinate map.
     bool all_local = true;
@@ -118,6 +126,7 @@ std::vector<std::vector<IDevice*>> MeshDeviceView::get_column_views() const {
 bool MeshDeviceView::empty() const noexcept { return devices_.shape().mesh_size() == 0; }
 size_t MeshDeviceView::size() const noexcept { return devices_.shape().mesh_size(); }
 const MeshShape& MeshDeviceView::shape() const noexcept { return devices_.shape(); }
+tt::tt_fabric::MeshId MeshDeviceView::mesh_id() const noexcept { return mesh_id_; }
 
 bool MeshDeviceView::contains(const MeshCoordinate& coord) const noexcept {
     return devices_.coord_range().contains(coord);
