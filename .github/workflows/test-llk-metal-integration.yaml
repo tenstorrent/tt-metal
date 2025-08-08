@@ -106,13 +106,14 @@ jobs:
             echo "🔍 Checking if branch needs updates from latest submodule main..."
             BRANCH_VS_MAIN_COMMITS=$(git rev-list --count HEAD..origin/main)
             if [ "$BRANCH_VS_MAIN_COMMITS" -gt 0 ]; then
-              echo "🔄 Branch is $BRANCH_VS_MAIN_COMMITS commits behind latest main - rebasing to include latest changes"
-              if ! git rebase origin/main; then
-                echo "❌ Rebase onto latest main failed - conflicts need manual resolution"
-                echo "💡 Please rebase your branch locally onto latest submodule main and resolve conflicts"
+              echo "🔄 Branch is $BRANCH_VS_MAIN_COMMITS commits behind latest main - merging latest changes"
+              if ! git merge origin/main --no-edit; then
+                echo "❌ Merge with latest main failed - conflicts need manual resolution"
+                echo "💡 This suggests genuine conflicts between your changes and recent main updates"
+                echo "💡 Please resolve conflicts locally and push updated branch"
                 exit 1
               fi
-              echo "✅ Successfully rebased branch onto latest submodule main"
+              echo "✅ Successfully merged latest submodule main into branch"
             else
               echo "✅ Branch is up to date with latest submodule main"
             fi
