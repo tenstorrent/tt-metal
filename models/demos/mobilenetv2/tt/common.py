@@ -23,7 +23,7 @@ class TtMobileNetV2Conv2D:
         width_shard=False,
         act_blocks=32,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
+        enable_split_reader=True,
         reshard_if_not_optimal=True,
         activation_dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
