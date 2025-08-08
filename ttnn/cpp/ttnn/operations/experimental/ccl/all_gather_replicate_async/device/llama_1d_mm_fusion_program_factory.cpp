@@ -17,6 +17,7 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -1928,6 +1929,7 @@ process_gather_in0_program_and_create_override_variables(
         (std::uint32_t)remote_cb_index,
         (std::uint32_t)0,  // no need to signaler for the fused op
     };
+    tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
 
     /* compute kernel args */
     const uint32_t out_block_num_subblocks = out_block_tiles / out_subblock_num_tiles;
