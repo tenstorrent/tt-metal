@@ -175,8 +175,8 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     bool bad_linked_transaction = false;
     switch(feature) {
         case SanitizeAddress:
-            output_buf_noc_xy.x = 26;
-            output_buf_noc_xy.y = 18;
+            output_buf_noc_xy.x = 95;
+            output_buf_noc_xy.y = 31;
             break;
         case SanitizeAlignmentL1Write:
             output_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
