@@ -856,7 +856,19 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     }
 }
 
-// set transaction id for a noc read
+// clang-format off
+/**
+ * Sets the transaction id for a noc transaction.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Which command buffer to use for the transaction    | uint32_t  | 0 - 3       | True     |
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | True     |
+ */
+// clang-format on
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
