@@ -586,3 +586,15 @@ def save_and_get_path(path, tensor):
     return SavedWeight(
         path=path, memory_config=memory_config
     )  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+
+
+def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> set[ttnn.MeshCoordinate]:
+    """Get mesh coordinates for a given mesh shape and optional row and column indices."""
+    if row:
+        assert 0 <= row < mesh_shape[0], "Row index out of bounds"
+    if col:
+        assert 0 <= col < mesh_shape[1], "Column index out of bounds"
+
+    row_select = range(mesh_shape[0]) if row is None else [row]
+    col_select = range(mesh_shape[1]) if col is None else [col]
+    return [ttnn.MeshCoordinate(r, c) for r in row_select for c in col_select]
