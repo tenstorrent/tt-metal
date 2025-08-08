@@ -24,8 +24,6 @@ class TT_CCL:
             }
         )
 
-        self.is_galaxy = ttnn.GetNumAvailableDevices() == 32
-
         self.barrier_semaphore_idx = 0
         self.barrier_semaphore_handles = []
 
@@ -78,11 +76,6 @@ def tt_all_reduce(
     dtype=ttnn.bfloat16,
     use_composite=False,
 ):
-    # TODO: #26353
-    # We get a hang in RS-ring when running DP-4 on GLX
-    # This is a temporary workaround until the hang is fixed
-    rs_topology = ttnn.Topology.Linear if tt_ccl.is_galaxy else topology
-
     # N150
     if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
@@ -122,7 +115,7 @@ def tt_all_reduce(
                 num_links=num_reduce_scatter_links,
                 memory_config=memory_config,
                 intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=rs_topology,
+                topology=topology,
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
@@ -218,7 +211,7 @@ def tt_all_reduce(
                 cluster_axis=cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
                 intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=rs_topology,
+                topology=topology,
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
