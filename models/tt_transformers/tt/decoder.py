@@ -311,7 +311,11 @@ class TransformerBlock(LightweightModule):
 
         # phi-1 uses MHA and MLP layers in a parallel configuration (see the phi-1 paper for details)
         else:
-            x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
+            input_mem_cfg = self.model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+            if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+                x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg)
+            else:
+                x = ttnn.to_memory_config(x, input_mem_cfg)
             # MLP takes replicated inputs and produces fractured outputs
             feed_forward_hidden_states = self.feed_forward.forward(x, mode)
             activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
@@ -339,5 +343,6 @@ class TransformerBlock(LightweightModule):
             ttnn.deallocate(feed_forward_hidden_states)
             ttnn.deallocate(x_new)
             
+            ttnn.deallocate(x)
 
         return out  # fractured across devices

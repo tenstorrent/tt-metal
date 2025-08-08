@@ -149,7 +149,7 @@ class MLP(LightweightModule):
             )
 
             
-        ttnn.deallocate(x)
+        # ttnn.deallocate(x)
 
         if TG:
             # if mode == "decode" and self.dim!=8192:
