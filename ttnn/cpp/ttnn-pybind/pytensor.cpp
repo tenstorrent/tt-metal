@@ -373,7 +373,6 @@ PyTensorPreparedConversion prepare_torch_tensor_conversion(
         {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT8,     .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::ROW_MAJOR}, {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
-        {{.torch_dtype = "int32",   .optional_data_type = DataType::BFLOAT16,  .optional_layout = Layout::ROW_MAJOR}, {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
 
         {{.torch_dtype = "uint8",   .optional_data_type = DataType::INT32,     .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = "int32" }},
         {{.torch_dtype = "uint8",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::UINT32, .torch_convert_dtype = "int32" }},
