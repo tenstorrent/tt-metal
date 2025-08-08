@@ -238,7 +238,7 @@ def create_tt_model(
             32,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            2048,  # max_generated_tokens
+            1024,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
@@ -255,7 +255,24 @@ def create_tt_model(
             32,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            2048,  # max_generated_tokens
+            1024,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # evals-long-prompts run (Throughput) - 1 user, smaller prompts, batch repeat 12
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_very_long.json",  # input_prompts
+            True,  # instruct mode
+            12,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            1024,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
@@ -442,6 +459,7 @@ def create_tt_model(
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
+        "evals-long-prompts",  # Single user, 12 repeated batches, very long prompts (4K ~ 128K)
         "repeat2",  # latency with 2 repeat batches
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
