@@ -6,8 +6,6 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-
 #include <impl/context/metal_context.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -22,11 +20,14 @@
 
 #include <tt-metalium/tt_metal.hpp>
 
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
 namespace tt::tt_metal::distributed {
 
-using tt_fabric::HostRankId;
-using tt_fabric::MeshId;
-using tt_fabric::MeshScope;
+using ::testing::ElementsAre;
+using ::tt::tt_fabric::HostRankId;
+using ::tt::tt_fabric::MeshId;
+using ::tt::tt_fabric::MeshScope;
 
 // Parameterized test fixture for mesh device validation
 class BigMeshDualRankMeshShapeSweepFixture : public MeshDeviceFixtureBase, public testing::WithParamInterface<MeshShape> {
@@ -37,40 +38,8 @@ class BigMeshDualRankMeshShapeSweepFixture : public MeshDeviceFixtureBase, publi
             }) {}
 };
 
-using BigMeshDualRankTest2x4 = MeshDevice2x4Fixture;
-
-TEST(BigMeshDualRankTest, DistributedContext) {
-    auto& dctx = MetalContext::instance().get_distributed_context();
-    auto world_size = dctx.size();
-    EXPECT_EQ(*world_size, 2);
-}
-
-TEST(BigMeshDualRankTest, LocalRankBinding) {
-    auto& dctx = MetalContext::instance().get_distributed_context();
-    auto& control_plane = MetalContext::instance().get_control_plane();
-
-    tt_fabric::HostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
-    if (*dctx.rank() == 0) {
-        EXPECT_EQ(*local_rank_binding, 0);
-    } else {
-        EXPECT_EQ(*local_rank_binding, 1);
-    }
-}
-
-TEST(BigMeshDualRankTest, SystemMeshValidation) {
-    EXPECT_NO_THROW({
-        const auto& system_mesh = SystemMesh::instance();
-        EXPECT_EQ(system_mesh.shape(), MeshShape(2, 4));
-        EXPECT_EQ(system_mesh.local_shape(), MeshShape(2, 2));
-    });
-}
-
-TEST_P(BigMeshDualRankMeshShapeSweepFixture, MeshDeviceValidation) {
-    EXPECT_EQ(mesh_device_->shape(), GetParam());
-}
-
 INSTANTIATE_TEST_SUITE_P(
-    MeshDeviceTests,
+    BigMeshDualRankMeshShapeSweep,
     BigMeshDualRankMeshShapeSweepFixture,
     ::testing::Values(
         MeshShape(2, 4),
@@ -83,7 +52,49 @@ INSTANTIATE_TEST_SUITE_P(
         MeshShape(1, 8),
         MeshShape(8, 1)));
 
-TEST(BigMeshDualRankTest, SystemMeshShape) {
+using BigMeshDualRankTest2x4 = MeshDevice2x4Fixture;
+
+TEST(BigMeshDualRankTest, DistributedContext) {
+    auto& dctx = MetalContext::instance().global_distributed_context();
+    EXPECT_EQ(dctx.size(), multihost::Size(2));
+}
+
+TEST(BigMeshDualRankTest, LocalRankBinding) {
+    auto& dctx = MetalContext::instance().global_distributed_context();
+    auto& control_plane = MetalContext::instance().get_control_plane();
+
+    tt_fabric::HostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
+    if (dctx.rank() == multihost::Rank(0)) {
+        EXPECT_EQ(local_rank_binding, HostRankId(0));
+    } else {
+        EXPECT_EQ(local_rank_binding, HostRankId(1));
+    }
+
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    ASSERT_THAT(local_mesh_ids, ElementsAre(MeshId(0)));
+
+    if (*dctx.rank() == 0) {
+        EXPECT_EQ(control_plane.get_local_mesh_offset(), MeshCoordinate(0, 0));
+    } else {
+        EXPECT_EQ(control_plane.get_local_mesh_offset(), MeshCoordinate(0, 2));
+    }
+
+    const auto distributed_context = control_plane.get_distributed_context(MeshId(0));
+    ASSERT_NE(distributed_context, nullptr);
+    EXPECT_EQ(distributed_context->size(), multihost::Size(2));
+    EXPECT_EQ(distributed_context->rank(), dctx.rank());
+
+    // TODO: #24728 - support multi-mesh environments, where these 2 contexts are different (sub-context vs global).
+    EXPECT_EQ(MetalContext::instance().global_distributed_context().id(), distributed_context->id());
+}
+
+TEST_P(BigMeshDualRankMeshShapeSweepFixture, MeshDeviceValidation) {
+    EXPECT_EQ(mesh_device_->shape(), GetParam());
+}
+
+TEST(BigMeshDualRankTest2x4, SystemMeshValidation) {
+    ASSERT_NO_THROW({ SystemMesh::instance(); });
+
     const auto& system_mesh = SystemMesh::instance();
     EXPECT_EQ(system_mesh.local_shape(), MeshShape(2, 2));
 
@@ -125,11 +136,10 @@ TEST(BigMeshDualRankTest, SystemMeshShape) {
     EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 3)).chip_id, 7);
 }
 
-TEST(BigMeshDualRankTest, DistributedHostBuffer) {
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
+TEST(BigMeshDualRankTest2x4, DistributedHostBuffer) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    DistributedHostBuffer host_buffer = DistributedHostBuffer::create(mesh_device->get_view());
+    DistributedHostBuffer host_buffer = DistributedHostBuffer::create(mesh_device_->get_view());
     auto rank = control_plane.get_local_host_rank_id_binding();
 
     host_buffer.emplace_shard(MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{0, 0, 0}); });

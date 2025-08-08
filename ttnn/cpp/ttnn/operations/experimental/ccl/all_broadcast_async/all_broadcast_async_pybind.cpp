@@ -32,9 +32,16 @@ void bind_all_broadcast_async(pybind11::module& module, const ccl_operation_t& o
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+               const std::optional<GlobalSemaphore>& barrier_semaphore) -> std::vector<ttnn::Tensor> {
                 return self(
-                    input_tensor, multi_device_global_semaphore, num_links, memory_config, topology, subdevice_id);
+                    input_tensor,
+                    multi_device_global_semaphore,
+                    num_links,
+                    memory_config,
+                    topology,
+                    subdevice_id,
+                    barrier_semaphore);
             },
             py::arg("input_tensor"),
             py::arg("multi_device_global_semaphore"),
@@ -42,7 +49,8 @@ void bind_all_broadcast_async(pybind11::module& module, const ccl_operation_t& o
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
-            py::arg("subdevice_id") = std::nullopt},
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("barrier_semaphore") = std::nullopt},
 
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
@@ -54,7 +62,8 @@ void bind_all_broadcast_async(pybind11::module& module, const ccl_operation_t& o
                const std::optional<ttnn::Tensor>& persistent_output_tensor,
                const std::optional<size_t> num_preferred_links,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+               const std::optional<GlobalSemaphore>& barrier_semaphore) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     cluster_axis,
@@ -64,7 +73,8 @@ void bind_all_broadcast_async(pybind11::module& module, const ccl_operation_t& o
                     persistent_output_tensor,  // = std::nullopt,
                     memory_config,             // = std::nullopt,
                     num_preferred_links,       // = std::nullopt,
-                    subdevice_id);             // = std::nullopt
+                    subdevice_id,              // = std::nullopt
+                    barrier_semaphore);        // = std::nullopt
             },
             py::arg("input_tensor"),
             py::arg("cluster_axis"),
@@ -75,7 +85,8 @@ void bind_all_broadcast_async(pybind11::module& module, const ccl_operation_t& o
             py::arg("persistent_output_tensor") = std::nullopt,
             py::arg("num_links") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt});
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("barrier_semaphore") = std::nullopt});
 }
 
 }  // namespace
