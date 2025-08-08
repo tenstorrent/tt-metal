@@ -743,7 +743,7 @@ bool LightMetalReplayImpl::run() {
 
         // Just loop over all commands, and execute. This is purposely kept simple for prototyping v0.
         // TODO (kmabee) - should expand to cover, multiple devices, cqs, etc.
-        uint32_t idx = 1;
+        [[maybe_unused]] uint32_t idx = 1;
         for (const auto* cmd : *commands) {
             auto str_name = std::string(EnumNameCommandType(cmd->cmd_type()));
             log_trace(tt::LogMetalTrace, "Executing Binary CMD {}/{} (Type: {})", idx++, commands->size(), str_name);

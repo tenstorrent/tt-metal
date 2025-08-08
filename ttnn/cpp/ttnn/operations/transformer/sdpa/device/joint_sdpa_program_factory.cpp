@@ -72,7 +72,7 @@ operation::ProgramWithCallbacks joint_sdpa(
     const uint32_t cat_Sq = padded_Nq + padded_Lq;
     const uint32_t cat_Sk = padded_Nk + padded_Lk;
 
-    const uint32_t cat_Sqt = cat_Sq / TILE_HEIGHT;
+    [[maybe_unused]] const uint32_t cat_Sqt = cat_Sq / TILE_HEIGHT;
     const uint32_t cat_Skt = cat_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
 

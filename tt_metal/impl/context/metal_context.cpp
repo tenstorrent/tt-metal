@@ -130,7 +130,7 @@ void MetalContext::initialize(
         if (rtoptions_.get_clear_dram()) {
             clear_dram_state(device_id);
         }
-        int ai_clk = cluster_->get_device_aiclk(device_id);
+        [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
         log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
         generate_device_bank_to_noc_tables(device_id);
 
@@ -892,7 +892,7 @@ void MetalContext::initialize_firmware(
                                 .get_firmware_build_state(device_id, core_type_idx, processor_class, eriscv_id)
                                 .get_target_out_path("");
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
-                        uint32_t fw_size = binary_mem.get_text_size();
+                        [[maybe_unused]] uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                         llrt::test_load_write_read_risc_binary(
                             binary_mem, device_id, virtual_core, core_type_idx, processor_class, eriscv_id);

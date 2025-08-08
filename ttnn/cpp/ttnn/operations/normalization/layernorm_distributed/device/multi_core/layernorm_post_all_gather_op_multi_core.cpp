@@ -478,7 +478,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     // std::vector<std::shared_ptr<CircularBuffer>>
 
     for (const auto& cb : program.circular_buffers()) {
-        for (const auto index : cb->buffer_indices()) {
+        for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
             log_debug(tt::LogOp, "cb_id {}", index);
             log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
             log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));

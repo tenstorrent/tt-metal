@@ -123,7 +123,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
-    auto src_device = mesh_device->get_device(mesh_coordinate);
+    [[maybe_unused]] auto src_device = mesh_device->get_device(mesh_coordinate);
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;

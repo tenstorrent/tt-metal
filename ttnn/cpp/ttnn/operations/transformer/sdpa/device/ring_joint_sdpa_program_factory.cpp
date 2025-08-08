@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const uint32_t cat_Sq = local_N + padded_Lq;
     const uint32_t cat_Sk = global_N + padded_Lk;
 
-    const uint32_t cat_Sqt = cat_Sq / tt::constants::TILE_HEIGHT;
+    [[maybe_unused]] const uint32_t cat_Sqt = cat_Sq / tt::constants::TILE_HEIGHT;
     const uint32_t cat_Skt = cat_Sk / tt::constants::TILE_HEIGHT;
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
 
@@ -99,7 +99,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t q_num_chunks = cat_Sq / q_chunk_size;
-    const uint32_t k_num_chunks = cat_Sk / k_chunk_size;
+    [[maybe_unused]] const uint32_t k_num_chunks = cat_Sk / k_chunk_size;
     const uint32_t N_k_num_chunks_local = local_N / k_chunk_size;
     const uint32_t L_k_num_chunks = padded_Lk / k_chunk_size;
     const uint32_t global_logical_NK_chunks = tt::div_up(logical_n, k_chunk_size);

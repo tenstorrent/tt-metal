@@ -1931,7 +1931,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
 
     auto& all_cores = shard_spec.grid;
-    uint32_t num_cores = shard_spec.num_cores();
+    [[maybe_unused]] uint32_t num_cores = shard_spec.num_cores();
     auto bbox = shard_spec.grid.bounding_box();
     CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
     uint32_t num_cores_x = grid_size.x;

@@ -478,7 +478,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             core_index_offset += num_cores_per_batch * num_cores_per_group;
         }
     }
-    for (auto& coord : mcast_sender_core_ranges) {
+    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges) {
         log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     for (int i = 0; i < num_cores; ++i) {
@@ -487,7 +487,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             mcast_receiver_core_ranges.insert(CoreRange(core_coords[i]));
         }
     }
-    for (auto& coord : mcast_receiver_core_ranges) {
+    for ([[maybe_unused]] auto& coord : mcast_receiver_core_ranges) {
         log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     CoreRangeSet mcast_sender_cores = CoreRangeSet(mcast_sender_core_ranges);
@@ -1522,13 +1522,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             core_index_offset += num_cores_per_batch * num_cores_per_group;
         }
     }
-    for (auto& coord : mcast_sender_core_ranges_all) {
+    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges_all) {
         log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
-    for (auto& coord : mcast_sender_core_ranges_group_1) {
+    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges_group_1) {
         log_debug(tt::LogOp, "mcast sender coord group 1: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
-    for (auto& coord : mcast_sender_core_ranges_group_2) {
+    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges_group_2) {
         log_debug(tt::LogOp, "mcast sender coord group 2: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     for (int i = 0; i < num_cores; ++i) {
@@ -1543,13 +1543,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             }
         }
     }
-    for (auto& coord : mcast_receiver_core_ranges_all) {
+    for ([[maybe_unused]] auto& coord : mcast_receiver_core_ranges_all) {
         log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
-    for (auto& coord : mcast_receiver_core_ranges_group_1) {
+    for ([[maybe_unused]] auto& coord : mcast_receiver_core_ranges_group_1) {
         log_debug(tt::LogOp, "mcast receiver coord group 1: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
-    for (auto& coord : mcast_receiver_core_ranges_group_2) {
+    for ([[maybe_unused]] auto& coord : mcast_receiver_core_ranges_group_2) {
         log_debug(tt::LogOp, "mcast receiver coord group 2: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     CoreRangeSet mcast_sender_cores_group_1 = CoreRangeSet(mcast_sender_core_ranges_group_1);

@@ -131,10 +131,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
     // dram banks
     uint32_t num_dram_banks = all_worker_cores_ordered.size();
-    for (auto core : corerange_to_cores(all_worker_cores)) {
+    for ([[maybe_unused]] auto core : corerange_to_cores(all_worker_cores)) {
         log_debug(tt::LogOp, "all_worker_cores_log: {}", core);
     }
-    for (auto core : all_worker_cores_ordered) {
+    for ([[maybe_unused]] auto core : all_worker_cores_ordered) {
         log_debug(tt::LogOp, "all_worker_cores_ordered: {}", core);
     }
 
@@ -260,10 +260,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     CoreRangeSet mcast_senders = CoreRangeSet(input_all_storage_cores_set);
     CoreRangeSet mcast_receivers = CoreRangeSet(all_worker_cores_set);
 
-    for (auto core : corerange_to_cores(mcast_senders)) {
+    for ([[maybe_unused]] auto core : corerange_to_cores(mcast_senders)) {
         log_debug(tt::LogOp, "mcast_senders: {}", core);
     }
-    for (auto core : corerange_to_cores(mcast_receivers)) {
+    for ([[maybe_unused]] auto core : corerange_to_cores(mcast_receivers)) {
         log_debug(tt::LogOp, "mcast_receivers: {}", core);
     }
 
@@ -273,7 +273,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     all_cores_set.insert(mcast_receivers.ranges().begin(), mcast_receivers.ranges().end());
     CoreRangeSet all_cores = CoreRangeSet(all_cores_set);
 
-    for (auto core : corerange_to_cores(all_cores)) {
+    for ([[maybe_unused]] auto core : corerange_to_cores(all_cores)) {
         log_debug(tt::LogOp, "all_cores: {}", core);
     }
 

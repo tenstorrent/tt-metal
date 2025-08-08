@@ -35,7 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
 
     const auto& input_shape = input.padded_shape();
 
-    const auto N = input_shape[0];
+    [[maybe_unused]] const auto N = input_shape[0];
     const auto C = input_shape[1];
     const auto Ht = input_shape[2] / TILE_HEIGHT;
     const auto Wt = input_shape[3] / TILE_WIDTH;
