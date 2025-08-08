@@ -123,4 +123,5 @@ enum class SfpuType {
     celu,
     max_pool_with_indices,
     selu,
+    rpow,
 };
