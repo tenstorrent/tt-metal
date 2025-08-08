@@ -246,7 +246,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    FactoryParameters params = get_factory_parameters(num_shards_c, inputs[0], kernel_h, kernel_w, pool_type);
+    FactoryParameters params =
+        get_factory_parameters(num_shards_c, inputs[0], kernel_h, kernel_w, pool_type, return_indices);
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
@@ -483,7 +484,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         one_scalar_per_core,
         config_cb_id,
         params.multi_buffering_factor,
-        stride_w};
+        stride_w,
+        (uint32_t)return_indices};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -521,7 +523,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
         out_cb_id,
-        one_scalar_per_core};
+        one_scalar_per_core,
+        (uint32_t)return_indices};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

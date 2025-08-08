@@ -92,7 +92,12 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     std::optional<int32_t> divisor_override);
 
 FactoryParameters get_factory_parameters(
-    uint32_t num_shards_c, const Tensor& input, uint32_t kernel_h, uint32_t kernel_w, Pool2DType pool_type);
+    uint32_t num_shards_c,
+    const Tensor& input,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    Pool2DType pool_type,
+    bool return_indices);
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
