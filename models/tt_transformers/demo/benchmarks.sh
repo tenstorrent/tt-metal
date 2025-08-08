@@ -1,7 +1,5 @@
 #!/bin/bash
 
-
-
 echo "LOG_METAL: Checking number of devices"
 python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
 
