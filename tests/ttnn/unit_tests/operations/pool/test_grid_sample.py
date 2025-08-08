@@ -350,7 +350,7 @@ def test_grid_sample_parametrized_dimensions(device, input_dims, grid_dims):
         ((48, 32, 40, 23), (48, 4832, 1, 2)),
         ((48, 32, 20, 12), (48, 4832, 1, 2)),
         ((48, 32, 10, 6), (48, 4832, 1, 2)),
-        ((8, 32, 50, 50), (8, 3604, 1, 2))
+        ((8, 32, 50, 50), (8, 3604, 1, 2)),
         # Small test cases for correctness verification
         # ((1, 4, 4, 8), (1, 2, 2, 2)),      # Small input, small grid
         # ((1, 8, 8, 16), (1, 4, 4, 2)),     # Medium input, small grid
