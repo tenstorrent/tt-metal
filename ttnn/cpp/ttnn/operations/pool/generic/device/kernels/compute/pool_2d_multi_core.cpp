@@ -7,7 +7,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -44,6 +44,7 @@ inline void reduce_h_fused(
     }
     cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
+    // dprint_tensix_dest_reg(0);
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
         tmp_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
@@ -159,12 +160,12 @@ void MAIN {
         if constexpr (is_out_tiled) {  // TODO: make sure 32 rows and then tilize. go into the loop. ^
             if (i == 31) {
                 DPRINT << "ci:" << i << "/" << nsticks_per_core << "/" << partial_iter_output_tiles << ENDL();
-                tilize_init_short(tmp_cb_id, partial_iter_output_tiles * TILE_HEIGHT, out_cb_id);
+                tilize_init_short(tmp_cb_id, partial_iter_output_tiles, out_cb_id);
                 cb_wait_front(tmp_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
                 cb_reserve_back(out_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
-                tilize_block(tmp_cb_id, partial_iter_output_tiles * TILE_HEIGHT, out_cb_id);
+                tilize_block(tmp_cb_id, partial_iter_output_tiles, out_cb_id);
                 cb_push_back(out_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
-                cb_pop_front(tmp_cb_id, partial_iter_output_tiles * nsticks_per_core);
+                cb_pop_front(tmp_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
                 tilize_uninit(tmp_cb_id, out_cb_id);  // TODO: verify output is a multiple of 32, output to out cb.
             }
         }

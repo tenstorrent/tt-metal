@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 #include "reader_pool2d_sharded_common.hpp"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -155,6 +155,9 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
     constexpr uint32_t stride_w = get_compile_time_arg_val(31);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(32);
+
+    uint32_t out_cb_base_rd_addr = get_read_ptr(out_cb_id);
 
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
@@ -282,4 +285,7 @@ void kernel_main() {
             in_w_padded,
             in_nbytes_c>(clear_value_addr, in_l1_read_base_addr, 0);
     }
+
+    cb_wait_front(out_cb_id, 32);
+    tt::data_movement::common::print_bf16_pages(out_cb_base_rd_addr, 32, 32);
 }  // kernel_main()

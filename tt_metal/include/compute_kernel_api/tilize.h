@@ -14,6 +14,10 @@
 #include "llk_unpack_tilize_api.h"
 #endif
 
+#include "debug/dprint.h"
+#include "debug/dprint_pages.h"
+#include "debug/dprint_tensix.h"
+
 namespace ckernel {
 
 /**
@@ -149,6 +153,8 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
             0 /*dst index*/)));
         PACK((llk_pack<DST_ACCUM_MODE, false, false>(0 /*tile index*/, ocb)));
+
+        dprint_tensix_dest_reg(0);
 
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));

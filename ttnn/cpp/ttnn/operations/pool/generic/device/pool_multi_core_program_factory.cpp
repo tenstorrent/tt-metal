@@ -574,7 +574,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         multi_buffering_factor,
         sync_cb_id1,
         sync_cb_id2,  // 30
-        stride_w};
+        stride_w,
+        out_cb_id};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
