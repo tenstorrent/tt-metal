@@ -1,7 +1,7 @@
 from typing import NamedTuple
 
 import ttnn
-from manager import CCLManager
+from .manager import CCLManager
 
 
 class ParallelFactor(NamedTuple):
@@ -13,6 +13,12 @@ class DiTParallelConfig(NamedTuple):
     cfg_parallel: ParallelFactor
     tensor_parallel: ParallelFactor
     sequence_parallel: ParallelFactor
+
+
+class OldParallelConfig(NamedTuple):
+    mesh_shape: tuple[int, int]
+    factor: int
+    mesh_axis: int
 
 
 # TODO: Simplify with CCLManager
@@ -87,7 +93,7 @@ class EncoderParallelManager:
         self.num_links = num_links
         self.topology = topology
 
-        self.tensor_parallel = ParallelConfig(
+        self.tensor_parallel = OldParallelConfig(
             mesh_shape=tuple(mesh_device.shape), factor=mesh_device.shape[mesh_axis], mesh_axis=mesh_axis
         )
 

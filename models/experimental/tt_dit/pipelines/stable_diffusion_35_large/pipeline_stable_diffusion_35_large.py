@@ -7,30 +7,32 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List
+from PIL import Image
 
 import torch
 import tqdm
 import ttnn
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
+from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
 from contextlib import contextmanager, nullcontext
 
 # NOTE: Importing from old implementation
-from ...stable_diffusion_35_large.tt.clip_encoder import (
+from ....stable_diffusion_35_large.tt.clip_encoder import (
     TtCLIPTextTransformer,
     TtCLIPTextTransformerParameters,
     TtCLIPConfig,
 )
-from ...stable_diffusion_35_large.tt.t5_encoder import TtT5Encoder, TtT5EncoderParameters
-from ...stable_diffusion_35_large.tt.fun_vae_decoder.fun_vae_decoder import sd_vae_decode, TtVaeDecoderParameters
+from ....stable_diffusion_35_large.tt.t5_encoder import TtT5Encoder, TtT5EncoderParameters
+from ....stable_diffusion_35_large.tt.fun_vae_decoder.fun_vae_decoder import sd_vae_decode, TtVaeDecoderParameters
 
 # NOTE: SD35Transformer is the new tt-dit implementation
-from ..models.transformers.transformer_sd35 import SD35Transformer2DModel
-from ..parallel.manager import CCLManager
-from ..parallel.config import DiTParallelConfig, create_vae_parallel_manager, EncoderParallelManager
+from ...models.transformers.transformer_sd35 import SD35Transformer2DModel
+from ...parallel.manager import CCLManager
+from ...parallel.config import DiTParallelConfig, create_vae_parallel_manager, EncoderParallelManager
 
 TILE_SIZE = 32
 
@@ -113,7 +115,7 @@ class StableDiffusion3Pipeline:
         logger.info(f"Parallel config: {parallel_config}")
         logger.info(f"Original mesh shape: {mesh_device.shape}")
         logger.info(f"Creating submeshes with shape {submesh_shape}")
-        self.submesh_devices = self._mesh_device.create_submeshes(submesh_shape)
+        self.submesh_devices = self._mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape))
 
         self.ccl_managers = [
             CCLManager(submesh_device, num_links=1, topology=ttnn.Topology.Linear)
@@ -121,9 +123,9 @@ class StableDiffusion3Pipeline:
         ]
         # Hacky submesh reshapes and assignment to parallelize encoders and VAE
         encoder_device = self.submesh_devices[0]
-        self.original_submesh_shape = tuple(encoder_device.mesh_shape)
+        self.original_submesh_shape = tuple(encoder_device.shape)
 
-        if encoder_device.mesh_shape[1] != 4:
+        if encoder_device.shape[1] != 4:
             # If reshaping, vae_device must be on submesh 0. That means T5 can't fit, so disable it.
             vae_submesh_idx = 0
             if enable_t5_text_encoder:
@@ -132,7 +134,7 @@ class StableDiffusion3Pipeline:
                 )
                 enable_t5_text_encoder = False
 
-            cfg_shape = tuple(encoder_device.mesh_shape)
+            cfg_shape = tuple(encoder_device.shape)
             assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
             logger.info(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP")
             encoder_device.reshape(ttnn.MeshShape(1, 4))
@@ -149,7 +151,7 @@ class StableDiffusion3Pipeline:
         )
         vae_parallel_manager = create_vae_parallel_manager(vae_device, self.ccl_managers[vae_submesh_idx])
         # HACK: reshape submesh device 0 from 1D to 2D
-        self.submesh_devices[0].reshape(ttnn.MeshShape(*original_submesh_shape))
+        self.submesh_devices[0].reshape(ttnn.MeshShape(*self.original_submesh_shape))
 
         self.encoder_parallel_manager = encoder_parallel_manager
         self.vae_parallel_manager = vae_parallel_manager
@@ -171,7 +173,7 @@ class StableDiffusion3Pipeline:
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_name_checkpoint, subfolder="scheduler")
         self._torch_vae = AutoencoderKL.from_pretrained(model_name_checkpoint, subfolder="vae")
 
-        torch_transformer = SD3Transformer2DModel.from_pretrained(
+        torch_transformer = TorchSD3Transformer2DModel.from_pretrained(
             model_name_checkpoint,
             subfolder="transformer",
             torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
@@ -185,7 +187,7 @@ class StableDiffusion3Pipeline:
         assert isinstance(self._text_encoder_2, CLIPTextModelWithProjection)
         assert isinstance(self._scheduler, FlowMatchEulerDiscreteScheduler)
         assert isinstance(self._torch_vae, AutoencoderKL)
-        assert isinstance(torch_transformer, SD3Transformer2DModel)
+        assert isinstance(torch_transformer, TorchSD3Transformer2DModel)
 
         logger.info("creating TT-NN transformer...")
 
@@ -234,6 +236,7 @@ class StableDiffusion3Pipeline:
 
         self._num_channels_latents = torch_transformer.config.in_channels
         self._joint_attention_dim = torch_transformer.config.joint_attention_dim
+        self.patch_size = 2  # SD3.5 uses patch_size of 2
 
         self._block_out_channels = self._torch_vae.config.block_out_channels
         self._torch_vae_scaling_factor = self._torch_vae.config.scaling_factor
@@ -451,7 +454,7 @@ class StableDiffusion3Pipeline:
         seed: int | None = None,
         traced: bool = False,
         clip_skip: int | None = None,
-    ) -> None:
+    ) -> List[Image.Image]:
         timer = self.timing_collector
 
         with timer.time_section("total") if timer else nullcontext():
@@ -520,7 +523,7 @@ class StableDiffusion3Pipeline:
             tt_latents_step_list = []
             for i, submesh_device in enumerate(self.submesh_devices):
                 tt_prompt_embeds = ttnn.from_torch(
-                    prompt_embeds[i].unsqueeze(0)
+                    prompt_embeds[i].unsqueeze(0).unsqueeze(0)
                     if self.dit_parallel_config.cfg_parallel.factor == 2
                     else prompt_embeds,
                     layout=ttnn.TILE_LAYOUT,
@@ -534,7 +537,7 @@ class StableDiffusion3Pipeline:
                 )
 
                 tt_pooled_prompt_embeds = ttnn.from_torch(
-                    pooled_prompt_embeds[i].unsqueeze(0)
+                    pooled_prompt_embeds[i].unsqueeze(0).unsqueeze(0).unsqueeze(0)
                     if self.dit_parallel_config.cfg_parallel.factor == 2
                     else pooled_prompt_embeds,
                     layout=ttnn.TILE_LAYOUT,
@@ -591,7 +594,7 @@ class StableDiffusion3Pipeline:
                     tt_sigma_difference_list = []
                     for submesh_device in self.submesh_devices:
                         tt_timestep = ttnn.full(
-                            [1, 1],
+                            [1, 1, 1, 1],
                             fill_value=t,
                             layout=ttnn.TILE_LAYOUT,
                             dtype=ttnn.float32,
@@ -697,18 +700,20 @@ class StableDiffusion3Pipeline:
         prompt_sequence_length: int,
         spatial_sequence_length: int,
         traced: bool,
-    ) -> None:
+    ) -> List[ttnn.Tensor]:
         def inner(latent, prompt, pooled_projection, timestep, cfg_index):
-            if do_classifier_free_guidance and not self.parallel_manager.is_cfg_parallel:
+            if do_classifier_free_guidance and not self.dit_parallel_config.cfg_parallel.factor > 1:
                 latent_model_input = ttnn.concat([latent, latent])
             else:
                 latent_model_input = latent
+
             noise_pred = self.transformers[cfg_index](
                 spatial=latent_model_input,
-                prompt=prompt,
-                pooled_projection=pooled_projection,
+                prompt_embed=prompt,
+                pooled_projections=pooled_projection,
                 timestep=timestep,
                 N=spatial_sequence_length,
+                L=prompt_sequence_length,
             )
 
             noise_pred = _reshape_noise_pred(
@@ -782,7 +787,7 @@ class StableDiffusion3Pipeline:
                 noise_pred_list.append(noise_pred)
 
         if do_classifier_free_guidance:
-            if not self.dit_parallel_config.is_cfg_parallel:
+            if not self.dit_parallel_config.cfg_parallel.factor > 1:
                 split_pos = noise_pred_list[0].shape[0] // 2
                 uncond = noise_pred_list[0][0:split_pos]
                 cond = noise_pred_list[0][split_pos:]
