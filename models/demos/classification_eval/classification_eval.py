@@ -2,14 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
+import pytest
 import torch
 import torchvision
-import pytest
 import transformers
+from loguru import logger
 from transformers import AutoImageProcessor
-from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
+
 import ttnn
+from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.utils.common_demo_utils import get_data_loader, load_imagenet_dataset
 
 
@@ -198,8 +199,9 @@ def test_vit_image_classification_eval(
     batch_size_per_device,
     model_location_generator,
 ):
-    from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
     from transformers import ViTForImageClassification
+
+    from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
     from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch
 
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
@@ -252,8 +254,8 @@ def test_resnet50_image_classification_eval(
     weight_dtype,
     model_location_generator,
 ):
-    from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
     from models.demos.ttnn_resnet.tests.demo_utils import get_batch
+    from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
 
     if model_type == "torch_model":
         torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1)
@@ -285,9 +287,9 @@ def test_resnet50_image_classification_eval(
 def run_mobilenetv2_image_classification_eval(
     device, model_type, device_batch_size, res, model_location_generator, reset_seeds
 ):
+    from models.demos.mobilenetv2.common import load_torch_model
     from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
     from models.demos.mobilenetv2.runner.performant_runner import MobileNetV2Trace2CQ
-    from models.demos.mobilenetv2.common import load_torch_model
     from models.demos.ttnn_resnet.tests.demo_utils import get_batch
 
     model_version = "microsoft/resnet-50"

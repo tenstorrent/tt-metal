@@ -25,54 +25,54 @@ To run the test of ttnn vs ground truth, please follow the following commands:
 **YoloV4:** <br>
 **_For 320x320,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution0-1-act_dtype0-weight_dtype0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution0-1-act_dtype0-weight_dtype0-device_params0-tt_model]
  ```
 
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution1-1-act_dtype0-weight_dtype0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution1-1-act_dtype0-weight_dtype0-device_params0-tt_model]
  ```
 
 **YoloV8s_World:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-tt_model]
  ```
 
 **YoloV8x:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-tt_model]
  ```
 
 **YoloV10x:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov10x[res0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov10x[res0-device_params0-tt_model]
  ```
 
 **YoloV9c:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov9c[res0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov9c[res0-device_params0-tt_model]
  ```
 
 **YoloV8s** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s[res0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8s[res0-device_params0-tt_model]
  ```
 
 **YoloV11n:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
  ```
 
 **YoloV7:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov7[res0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov7[res0-device_params0-tt_model]
  ```
 
  **YoloV12x:** <br>
@@ -107,54 +107,54 @@ To run the test of ttnn vs ground truth, please follow the following commands:
 **YOLOv4:** <br>
 **_For 320x320,_**<br>
 ```sh
-pytest models/experimental/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution0-1-act_dtype0-weight_dtype0-device_params0-torch_model]
+pytest models/demos/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution0-1-act_dtype0-weight_dtype0-device_params0-torch_model]
 ```
 
 **_For 640x640,_**<br>
 ```sh
-pytest models/experimental/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution1-1-act_dtype0-weight_dtype0-device_params0-torch_model]
+pytest models/demos/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution1-1-act_dtype0-weight_dtype0-device_params0-torch_model]
 ```
 
 **YoloV8s_World:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-torch_model]
  ```
 
  **YoloV8x:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-torch_model]
  ```
 
 **YoloV10x:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov10x[res0-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov10x[res0-device_params0-torch_model]
  ```
 
 **YoloV9c:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov9c[res0-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov9c[res0-device_params0-torch_model]
  ```
 
 **YoloV8s** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s[res0-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8s[res0-device_params0-torch_model]
  ```
 
 **YoloV11n:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-torch_model]
  ```
 
 **YoloV7:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov7[res0-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov7[res0-device_params0-torch_model]
  ```
 
 **YoloV12x:** <br>

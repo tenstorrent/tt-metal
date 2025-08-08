@@ -16,14 +16,9 @@ from sklearn.metrics import average_precision_score, precision_recall_curve
 from torch import nn
 
 import ttnn
+from models.demos.yolo_eval.utils import LoadImages, postprocess, preprocess
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
 from models.utility_functions import disable_persistent_kernel_cache
-
-from models.experimental.yolo_eval.utils import (
-    LoadImages,
-    postprocess,
-    preprocess,
-)
 
 
 def iou(pred_box, gt_box):
@@ -475,8 +470,8 @@ def test_run_yolov4_eval(
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov8s_world(device, model_type, res, reset_seeds, model_location_generator):
-    from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
     from models.demos.yolov8s_world.common import load_torch_model
+    from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
 
     if model_type == "torch_model":
         model = load_torch_model(model_location_generator).model
@@ -518,8 +513,8 @@ def test_yolov8s_world(device, model_type, res, reset_seeds, model_location_gene
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov8x(device, model_type, res, reset_seeds, model_location_generator):
-    from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
     from models.demos.yolov8x.common import load_torch_model
+    from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
 
     if model_type == "torch_model":
         torch_model = load_torch_model(model_location_generator=model_location_generator)
@@ -555,8 +550,8 @@ def test_yolov8x(device, model_type, res, reset_seeds, model_location_generator)
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov10x(device, model_type, res, reset_seeds, model_location_generator):
-    from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
     from models.demos.yolov10x.common import load_torch_model
+    from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
 
     if model_type == "torch_model":
         model = load_torch_model(model_location_generator)
@@ -595,8 +590,8 @@ def test_yolov10x(device, model_type, res, reset_seeds, model_location_generator
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov9c(device, model_type, res, reset_seeds, model_location_generator):
-    from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
     from models.demos.yolov9c.common import load_torch_model
+    from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 
     if model_type == "torch_model":
         model = load_torch_model(model_task="detect", model_location_generator=model_location_generator)
@@ -639,8 +634,8 @@ def test_yolov9c(device, model_type, res, reset_seeds, model_location_generator)
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov8s(device, model_type, res, reset_seeds, model_location_generator):
-    from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
     from models.demos.yolov8s.common import load_torch_model
+    from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
 
     if model_type == "torch_model":
         torch_model = load_torch_model(model_location_generator=model_location_generator)
@@ -675,8 +670,8 @@ def test_yolov8s(device, model_type, res, reset_seeds, model_location_generator)
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov11n(device, model_type, res, reset_seeds, model_location_generator):
-    from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
     from models.demos.yolov11.common import load_torch_model
+    from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
 
     if model_type == "torch_model":
         model = load_torch_model(model_location_generator=model_location_generator)
@@ -710,10 +705,11 @@ def test_yolov11n(device, model_type, res, reset_seeds, model_location_generator
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov7(device, model_type, res, reset_seeds, model_location_generator):
+    import sys
+
+    from models.demos.yolov7.common import load_torch_model
     from models.demos.yolov7.reference import yolov7_model, yolov7_utils
     from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
-    import sys
-    from models.demos.yolov7.common import load_torch_model
 
     sys.modules["models.common"] = yolov7_utils
     sys.modules["models.yolo"] = yolov7_model
