@@ -21,7 +21,7 @@ ttnn::Tensor ExecuteGridSample::invoke(
     bool align_corners,
     const std::optional<MemoryConfig>& memory_config) {
     // Use input memory config if not specified
-    auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+    auto output_memory_config = memory_config.value_or(grid.memory_config());
 
     // Create the device operation
     auto output_tensors = operation::run(

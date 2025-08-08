@@ -83,7 +83,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     // No double buffering so far
 
-    uint32_t buffering_factor = 1;  // No double buffering for now
+    uint32_t buffering_factor = 2;  // No double buffering for now
 
     // CB0: Grid data buffer (holds grid coordinates for current output position)
     const uint32_t grid_cb_num_pages = buffering_factor;
