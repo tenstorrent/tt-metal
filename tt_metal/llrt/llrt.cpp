@@ -320,6 +320,8 @@ void send_msg_to_eth_mailbox(
         "target core for send_msg_to_eth_mailbox {} (virtual) must be an active ethernet core",
         virtual_core.str());
 
+    log_info(tt::LogMetal, "Sending msg to eth mailbox on core {}", virtual_core.str());
+
     const auto max_args = hal.get_eth_fw_mailbox_arg_count();
     const auto mailbox_addr = hal.get_eth_fw_mailbox_address(mailbox_index);
     const auto status_mask = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_STATUS_MASK);
