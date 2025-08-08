@@ -44,7 +44,7 @@ jobs:
           - name: debug_tools and device and dispatch
             cmd: |
               # ./build/test/tt_metal/unit_tests_debug_tools
-              # ./build/test/tt_metal/unit_tests_device
+              ./build/test/tt_metal/unit_tests_device
               ./build/test/tt_metal/unit_tests_dispatch
           # - name: llk
           #   cmd: ./build/test/tt_metal/unit_tests_llk
