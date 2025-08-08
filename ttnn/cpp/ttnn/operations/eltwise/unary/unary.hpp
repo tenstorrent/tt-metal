@@ -273,6 +273,15 @@ struct Hardtanh {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Softshrink {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float lambda = 0.5f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Deg2Rad {
     static Tensor invoke(
         QueueId queue_id,
@@ -426,6 +435,7 @@ constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::u
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
 constexpr auto hardtanh = ttnn::register_operation<"ttnn::hardtanh", ttnn::operations::unary::Hardtanh>();
+constexpr auto softshrink = ttnn::register_operation<"ttnn::softshrink", ttnn::operations::unary::Softshrink>();
 constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operations::unary::Deg2Rad>();
 constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
