@@ -223,13 +223,13 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)in0_is_dram,
         (std::uint32_t)input_page_size,
-        (std::uint32_t)weights_is_dram,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)weight_block_size,
         (std::uint32_t)num_tiles_per_block,
         (std::uint32_t)input_block_size_bytes};
+    TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
+    TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
     std::map<std::string, std::string> embedding_defines = {
         {enchantum::to_string(embeddings_type).data(), "1"},
@@ -495,12 +495,12 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         (std::uint32_t)out_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)in0_is_dram,
         (std::uint32_t)input_page_size,
-        (std::uint32_t)weights_is_dram,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)block_height,
         (std::uint32_t)block_height * input_element_size_bytes};
+    TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
+    TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -715,12 +715,12 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)in0_is_dram,
         (std::uint32_t)input_page_size,
-        (std::uint32_t)weights_is_dram,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)a.logical_shape()[-1],  // width/length of a row
         (std::uint32_t)FACE_HEIGHT};
+    TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
+    TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
