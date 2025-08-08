@@ -20,6 +20,8 @@ def find_closest_largest_divisor(num: int, start_divisor: int):
 def _golden_function(input_tensor: ttnn.Tensor, dim: Optional[int] = None, **_):
     import torch
 
+    dim = dim or -1
+
     return torch.nn.Softmax(dim)(input_tensor)
 
 
