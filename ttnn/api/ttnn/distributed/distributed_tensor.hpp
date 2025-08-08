@@ -138,17 +138,4 @@ Tensor create_distributed_tensor(
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer);
 
-namespace host_ccl {
-
-// Performs an host-side all-gather collective communication operation on a distributed host tensor.
-//
-// Returns a new distributed host tensor containing all gathered data from all ranks.
-// The returned tensor will be fully replicated on each rank and contain the complete dataset.
-//
-// This operation requires all ranks in the distributed context to participate.
-// TODO: Add support for supplying DistributedContext that may be a subset of global context.
-Tensor all_gather(const Tensor& tensor);
-
-} // namespace host_ccl
-
 }  // namespace ttnn::distributed

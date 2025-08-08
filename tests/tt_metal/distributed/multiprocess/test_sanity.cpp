@@ -92,7 +92,7 @@ TEST_P(BigMeshDualRankMeshShapeSweepFixture, MeshDeviceValidation) {
     EXPECT_EQ(mesh_device_->shape(), GetParam());
 }
 
-TEST(BigMeshDualRankTest2x4, SystemMeshValidation) {
+TEST_F(BigMeshDualRankTest2x4, SystemMeshValidation) {
     ASSERT_NO_THROW({ SystemMesh::instance(); });
 
     const auto& system_mesh = SystemMesh::instance();
@@ -136,7 +136,7 @@ TEST(BigMeshDualRankTest2x4, SystemMeshValidation) {
     EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 3)).chip_id, 7);
 }
 
-TEST(BigMeshDualRankTest2x4, DistributedHostBuffer) {
+TEST_F(BigMeshDualRankTest2x4, DistributedHostBuffer) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     DistributedHostBuffer host_buffer = DistributedHostBuffer::create(mesh_device_->get_view());

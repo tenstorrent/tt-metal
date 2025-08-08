@@ -27,6 +27,7 @@
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
+#include "ttnn/distributed/host_ccl.hpp"
 
 namespace ttnn::distributed {
 namespace {
@@ -354,47 +355,6 @@ private:
     MeshMapperConfig config_;
     tt::tt_metal::DistributedTensorConfig distributed_tensor_config_;
 };
-
-
-namespace host_ccl {
-
-using namespace tt::tt_metal;
-
-Tensor all_gather(const Tensor& tensor) {
-    TT_FATAL(tensor.storage_type() == StorageType::HOST, "Tensor must be on host");
-    auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-
-    // Destination buffer for all-gather data is fully local on each host.
-    auto all_gather_buffer = DistributedHostBuffer::create(tensor.host_storage().buffer().shape());
-
-    for (const auto& coord : tensor.host_storage().buffer().shard_coords()) {
-        auto shard = tensor.host_storage().buffer().get_shard(coord);
-
-        // Run all-reduce to determine which rank has data for this shard.
-        int has_data = shard.has_value() ? *ctx->rank() : -1;
-        int has_data_rank = -1;
-
-        ctx->all_reduce(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&has_data), sizeof(int)),
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&has_data_rank), sizeof(int)),
-            tt::tt_metal::distributed::multihost::ReduceOp::MAX,
-            tt::tt_metal::distributed::multihost::DType::INT32);
-
-        TT_FATAL(has_data_rank != -1, "Failed to find shard for rank {}", *ctx->rank());
-
-        if (shard.has_value()) {
-            ctx->broadcast(shard->view_bytes(), tt::tt_metal::distributed::multihost::Rank(has_data_rank));
-            all_gather_buffer.emplace_shard(coord, [&shard]() { return *shard; });
-        } else {
-            HostBuffer buffer = tt::tt_metal::tensor_impl::allocate_host_buffer(tensor.tensor_spec());
-            ctx->broadcast(buffer.view_bytes(), tt::tt_metal::distributed::multihost::Rank(has_data_rank));
-            all_gather_buffer.emplace_shard(coord, [&buffer]() { return std::move(buffer); });
-        }
-    }
-    return Tensor(HostStorage{std::move(all_gather_buffer)}, tensor.tensor_spec(), AllGatherTensor{}, tensor.tensor_topology());
-}
-
-} // namespace host_ccl
 
 class MeshToTensor::Impl {
 public:

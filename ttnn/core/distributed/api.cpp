@@ -15,7 +15,7 @@
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <ttnn/distributed/distributed_tensor_config.hpp>
-#include "ttnn/distributed/distributed_tensor.hpp"
+#include <ttnn/distributed/host_ccl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <ttnn/distributed/types.hpp>
