@@ -396,9 +396,20 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // Create aggregated tensor spec based on intermediate tensor
-    const auto& intermediate_tensor = input_tensors[2];
-    auto intermediate_shape = intermediate_tensor.padded_shape();
-    auto intermediate_shard_shape = intermediate_tensor.memory_config().shard_spec()->shape;
+    // const auto& intermediate_tensor = input_tensors[2];
+    // auto intermediate_shape = intermediate_tensor.padded_shape();
+    // auto intermediate_shard_shape = intermediate_tensor.memory_config().shard_spec()->shape;
+
+    const auto& input_tensor0 = input_tensors[0];
+    const auto& input_tensor1 = input_tensors[1];
+
+    auto intermediate_shape = input_tensor0.padded_shape();
+    intermediate_shape[-1] = intermediate_shape[-1] * this->all_gather_replicate_async_struct.ring_size;
+    auto intermediate_shard_shape = this->all_gather_replicate_async_struct.output_mem_config.shard_spec()->shape;
+    std::cout << "LLONG DEBUG: intermediate_shape: " << intermediate_shape[0] << " " << intermediate_shape[1] << " "
+              << intermediate_shape[2] << " " << intermediate_shape[3] << std::endl;
+    std::cout << "LLONG DEBUG: intermediate_shard_shape: " << intermediate_shard_shape[0] << " "
+              << intermediate_shard_shape[1] << " " << std::endl;
 
     // Calculate aggregated tensor shape and shard specs
     auto aggregated_shape = intermediate_shape;
@@ -424,8 +435,7 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
 
     TensorSpec aggregated_tensor_spec = TensorSpec(
         aggregated_shape,
-        TensorLayout(
-            intermediate_tensor.dtype(), intermediate_tensor.tensor_spec().page_config(), aggregated_mem_config));
+        TensorLayout(input_tensor0.dtype(), input_tensor0.tensor_spec().page_config(), aggregated_mem_config));
 
     // Matmul output spec - using aggregated tensor as input to matmul
     ttnn::TensorSpec matmul_output_specs =

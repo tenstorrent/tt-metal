@@ -285,7 +285,7 @@ def run_llama_all_gather_matmul_impl(
         ),
     )
     ag_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             intermediate_core_range_set,
