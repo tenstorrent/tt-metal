@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
 #include <impl/context/metal_context.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -26,13 +28,24 @@ using tt_fabric::HostRankId;
 using tt_fabric::MeshId;
 using tt_fabric::MeshScope;
 
-TEST(BigMeshDualRankTest2x4, DistributedContext) {
+// Parameterized test fixture for mesh device validation
+class BigMeshDualRankMeshShapeSweepFixture : public MeshDeviceFixtureBase, public testing::WithParamInterface<MeshShape> {
+    public:
+        BigMeshDualRankMeshShapeSweepFixture() :
+            MeshDeviceFixtureBase(Config{
+                .mesh_shape = GetParam(),
+            }) {}
+};
+
+using BigMeshDualRankTest2x4 = MeshDevice2x4Fixture;
+
+TEST(BigMeshDualRankTest, DistributedContext) {
     auto& dctx = MetalContext::instance().get_distributed_context();
     auto world_size = dctx.size();
     EXPECT_EQ(*world_size, 2);
 }
 
-TEST(BigMeshDualRankTest2x4, LocalRankBinding) {
+TEST(BigMeshDualRankTest, LocalRankBinding) {
     auto& dctx = MetalContext::instance().get_distributed_context();
     auto& control_plane = MetalContext::instance().get_control_plane();
 
@@ -44,7 +57,7 @@ TEST(BigMeshDualRankTest2x4, LocalRankBinding) {
     }
 }
 
-TEST(BigMeshDualRankTest2x4, SystemMeshValidation) {
+TEST(BigMeshDualRankTest, SystemMeshValidation) {
     EXPECT_NO_THROW({
         const auto& system_mesh = SystemMesh::instance();
         EXPECT_EQ(system_mesh.shape(), MeshShape(2, 4));
@@ -52,28 +65,13 @@ TEST(BigMeshDualRankTest2x4, SystemMeshValidation) {
     });
 }
 
-TEST(BigMeshDualRankTest2x4, MeshDevice2x4Validation) {
-    auto mesh_device = MeshDevice::create(
-        MeshDeviceConfig(MeshShape(2, 4)),
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        1,
-        tt::tt_metal::DispatchCoreType::WORKER);
-    EXPECT_EQ(mesh_device->shape(), MeshShape(2, 4));
-}
-
-// Parameterized test fixture for mesh device validation
-class BigMeshDualRankTest2x4Fixture : public ::testing::Test, public ::testing::WithParamInterface<MeshShape> {};
-
-TEST_P(BigMeshDualRankTest2x4Fixture, MeshDeviceValidation) {
-    MeshShape mesh_shape = GetParam();
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig(mesh_shape), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
-    EXPECT_EQ(mesh_device->shape(), mesh_shape);
+TEST_P(BigMeshDualRankMeshShapeSweepFixture, MeshDeviceValidation) {
+    EXPECT_EQ(mesh_device_->shape(), GetParam());
 }
 
 INSTANTIATE_TEST_SUITE_P(
     MeshDeviceTests,
-    BigMeshDualRankTest2x4Fixture,
+    BigMeshDualRankMeshShapeSweepFixture,
     ::testing::Values(
         MeshShape(2, 4),
         /* Issue #25355: Cannot create a MeshDevice with only one rank active.
@@ -85,7 +83,7 @@ INSTANTIATE_TEST_SUITE_P(
         MeshShape(1, 8),
         MeshShape(8, 1)));
 
-TEST(BigMeshDualRankTest2x4, SystemMeshShape) {
+TEST(BigMeshDualRankTest, SystemMeshShape) {
     const auto& system_mesh = SystemMesh::instance();
     EXPECT_EQ(system_mesh.local_shape(), MeshShape(2, 2));
 
@@ -127,7 +125,7 @@ TEST(BigMeshDualRankTest2x4, SystemMeshShape) {
     EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 3)).chip_id, 7);
 }
 
-TEST(BigMeshDualRankTest2x4, DistributedHostBuffer) {
+TEST(BigMeshDualRankTest, DistributedHostBuffer) {
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -158,9 +156,8 @@ TEST(BigMeshDualRankTest2x4, DistributedHostBuffer) {
     host_buffer.apply(validate_local_shards);
 }
 
-TEST(BigMeshDualRankTest2x4Fixture, SimpleShardedBufferTest) {
+TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
     // Simple test with a 2x4 mesh, 64x128 buffer, 32x32 shards
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
@@ -177,16 +174,16 @@ TEST(BigMeshDualRankTest2x4Fixture, SimpleShardedBufferTest) {
         .shard_orientation = ShardOrientation::ROW_MAJOR,
     };
 
-    auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device.get());
+    auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device_.get());
 
     // Create input data
     std::vector<uint32_t> src_vec(global_buffer_shape.height() * global_buffer_shape.width(), 0);
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
     // Write and read back
-    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), mesh_buffer, src_vec);
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec);
     std::vector<uint32_t> dst_vec;
-    EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst_vec, mesh_buffer);
+    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer);
 
     // The expectation is that EnqueueWriteMeshBuffer/EnqueueReadMeshBuffer
     // should handle sharding/unsharding transparently, so dst should equal src
@@ -195,7 +192,7 @@ TEST(BigMeshDualRankTest2x4Fixture, SimpleShardedBufferTest) {
         auto shard_col = i % global_buffer_shape.width();
         auto device_row = shard_row / shard_shape.height();
         auto device_col = shard_col / shard_shape.width();
-        if (mesh_device->is_local(MeshCoordinate(device_row, device_col))) {
+        if (mesh_device_->is_local(MeshCoordinate(device_row, device_col))) {
             EXPECT_EQ(dst_vec[i], src_vec[i]) << "Mismatch at index: " << i;
         }
     }

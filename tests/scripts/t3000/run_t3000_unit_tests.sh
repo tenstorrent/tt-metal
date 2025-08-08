@@ -48,7 +48,7 @@ run_t3000_dual_rank_big_mesh_tests() {
   local mpi_args="--allow-run-as-root --tag-output"
 
   # Run tests using the helper function
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTest2x4*"
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRank*"
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*MeshWorkloadTestSuite*"
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*MeshWorkloadTestT3000*"
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/ttnn/unit_tests_ttnn --gtest_filter="*LaunchOperationT3000Test*"
