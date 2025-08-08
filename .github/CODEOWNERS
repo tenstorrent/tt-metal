@@ -84,7 +84,7 @@ tt_metal/tools/mem_bench @nhuang-tt # should be moved to tests micro benchmark?
 tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT
 tt_metal/tools/watcher_dump/ @pgkeller
 tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
-tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
+tt_metal/tools/profiler/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 

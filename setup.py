@@ -307,7 +307,7 @@ class CMakeBuild(build_ext):
             "include/**/*",
             "kernels/**/*",
             "third_party/tt_llk/**/*",
-            "tools/profiler/*",
+            "tools/profiler/**/*",
             "soc_descriptors/*.yaml",
         ]
         copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)
