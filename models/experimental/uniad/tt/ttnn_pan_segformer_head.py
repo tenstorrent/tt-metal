@@ -200,6 +200,7 @@ class TtPansegformerHead(nn.Module):
         self.loss_cls = True
         if self.loss_cls:
             cls_score = cls_score.sigmoid()
+            # TODO Raised issue fo - <https://github.com/tenstorrent/tt-metal/issues/26183>
             scores, indexes = cls_score.view(-1).topk(max_per_img)
             det_labels = indexes % self.num_things_classes
             bbox_index = indexes // self.num_things_classes
