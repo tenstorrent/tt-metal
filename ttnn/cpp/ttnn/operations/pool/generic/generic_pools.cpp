@@ -210,6 +210,8 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
             ttnn::to_memory_config(index_full_uint16, input_tensor_sharded.memory_config(), std::nullopt);
     }
 
+    std::vector<Tensor> haloed_tensors;
+
     // call the halo uop
     Tensor haloed_tensor = ttnn::halo(
         queue_id,
@@ -221,10 +223,10 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         input_tensor_sharded.memory_config(),
         is_out_tiled,
         in_place_halo);
+    haloed_tensors.push_back(std::move(haloed_tensor));
 
-    Tensor haloed_index;
     if (return_indices) {
-        haloed_index = ttnn::halo(
+        Tensor haloed_index = ttnn::halo(
             queue_id,
             index_tensor_sharded,
             sliding_window_config,
@@ -234,6 +236,7 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
             index_tensor_sharded.memory_config(),
             is_out_tiled,
             in_place_halo);
+        haloed_tensors.push_back(std::move(haloed_index));
     }
 
     const uint32_t pre_allocate_size =
@@ -242,8 +245,7 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
     // call the pool2d uop
     std::vector<Tensor> output_tensors = ttnn::prim::pool2d(
         queue_id,
-        haloed_tensor,
-        return_indices ? std::make_optional(haloed_index) : std::nullopt,
+        haloed_tensors,
         sliding_window_config,
         pool_type,
         DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
@@ -264,10 +266,10 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
             output_tensors.size() == 2,
             "Expected two output tensors when return_indices is true, but got {}.",
             output_tensors.size());
-        return std::make_pair(output_tensors[0], output_tensors[1]);
+        return std::make_pair(std::move(output_tensors[0]), std::move(output_tensors[1]));
     } else {
         TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
-        return output_tensors[0];
+        return std::move(output_tensors[0]);
     }
 }
 
