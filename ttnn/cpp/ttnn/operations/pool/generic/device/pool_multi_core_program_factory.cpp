@@ -207,6 +207,7 @@ static Tensor create_scalar_config_tensor(
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
     Program& program,
     const Tensor& input,
+    const std::optional<Tensor>& index,
     const Tensor& reader_indices,
     uint32_t reader_indices_size,
     std::vector<Tensor>& outputs,
@@ -297,6 +298,22 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t raw_in_cb_pagesize = in_nbytes_c;
     const auto [raw_in_cb_id, raw_in_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, raw_in_cb_pagesize, raw_in_cb_npages, params.data_format, input.buffer());
+    uint32_t raw_in_idx_cb_id = 32;
+    tt::tt_metal::CBHandle raw_in_idx_cb = 0;
+    if (return_indices) {
+        TT_FATAL(index.has_value(), "Index tensor must be provided if return_indices is true");
+        uint32_t raw_in_idx_cb_npages = raw_in_cb_npages;
+        uint32_t raw_in_idx_cb_pagesize = input_shape[3] / num_shards_c * params.index_nbytes;
+        raw_in_idx_cb_id = next_cb_index++;
+        std::tie(raw_in_idx_cb_id, raw_in_idx_cb) = tt::tt_metal::create_cb(
+            next_cb_index++,
+            program,
+            all_cores,
+            raw_in_idx_cb_pagesize,
+            raw_in_idx_cb_npages,
+            params.index_format,
+            index.value().buffer());
+    }
 
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", raw_in_cb_id, raw_in_cb_pagesize, raw_in_cb_npages);
 
@@ -355,16 +372,27 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                                                      // block of c if its greater than 8 tiles)
     const uint32_t out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.in_ntiles_c;
 
-    const auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
+    const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, outputs[0].buffer());
+
+    uint32_t out_idx_cb_id = 32;
+    tt::tt_metal::CBHandle out_idx_cb = 0;
     if (return_indices) {
         TT_FATAL(
             outputs.size() == 2,
             "When return_indices is true, there should be two outputs, but got {}",
             outputs.size());
-        tt::DataFormat idx_data_format = datatype_to_dataformat_converter(DataType::UINT16);
-        const auto [out_idx_cb_id, cb_out_idx] = tt::tt_metal::create_cb(
-            next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, idx_data_format, outputs[1].buffer());
+        uint32_t out_idx_cb_npages = out_cb_npages;
+        uint32_t out_idx_cb_pagesize =
+            std::min(tt::constants::TILE_WIDTH, outputs[0].shard_spec().value().shape[1]) * params.index_nbytes;
+        std::tie(out_idx_cb_id, out_idx_cb) = tt::tt_metal::create_cb(
+            next_cb_index++,
+            program,
+            all_cores,
+            out_idx_cb_pagesize,
+            out_idx_cb_npages,
+            params.index_format,
+            outputs[1].buffer());
     }
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
@@ -581,7 +609,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
          .reader1_kernel = reader1_kernel,
          .compute_kernel = compute_kernel,
          .raw_in_cb = raw_in_cb,
-         .cb_out = cb_out,
+         .raw_in_idx_cb = raw_in_idx_cb,
+         .out_cb = out_cb,
+         .out_idx_cb = out_idx_cb,
          .ncores = ncores,
          .reader_indices_storage = reader_indices_storage,
          .scalar_config_storage = scalar_config_storage}};
@@ -590,6 +620,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     const auto& input = tensor_args.input_tensor_;
+    const std::optional<Tensor>& index = tensor_args.index_tensor_;
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
@@ -642,6 +673,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     return pool2d_multi_core_sharded_with_halo_v2_impl_new(
         program,
         input,
+        index,
         reader_indices_on_device,
         top_left_indices[0].size(),
         output_tensors,
@@ -679,21 +711,36 @@ void Pool2D::MultiCore::override_runtime_arguments(
     tensor_return_value_t& output_tensors) {
     auto& program = cached_program.program;
     auto& raw_in_cb = cached_program.shared_variables.raw_in_cb;
-    auto& cb_out = cached_program.shared_variables.cb_out;
+    auto& out_cb = cached_program.shared_variables.out_cb;
 
     const auto& input_tensor = tensor_args.input_tensor_;
-
     auto src_buffer = input_tensor.buffer();
-    bool input_sharded = input_tensor.is_sharded();
-
     auto dst_buffer = output_tensors[0].buffer();
-    bool out_sharded = output_tensors[0].is_sharded();
 
+    bool input_sharded = input_tensor.is_sharded();
     if (input_sharded) {
         UpdateDynamicCircularBufferAddress(program, raw_in_cb, *src_buffer);
     }
+    bool out_sharded = output_tensors[0].is_sharded();
     if (out_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_out, *dst_buffer);
+        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+    }
+
+    if (operation_attributes.sliding_window_config_.return_indices) {
+        TT_FATAL(tensor_args.index_tensor_.has_value(), "Index tensor is required when return_indices is true");
+        auto& raw_in_idx_cb = cached_program.shared_variables.raw_in_idx_cb;
+        auto& out_idx_cb = cached_program.shared_variables.out_cb;
+
+        const auto& index_tensor = tensor_args.index_tensor_;
+        auto src_idx_buffer = index_tensor.value().buffer();
+        auto dst_idx_buffer = output_tensors.size() > 1 ? output_tensors[1].buffer() : nullptr;
+
+        if (input_sharded) {
+            UpdateDynamicCircularBufferAddress(program, raw_in_idx_cb, *src_idx_buffer);
+        }
+        if (out_sharded && dst_idx_buffer) {
+            UpdateDynamicCircularBufferAddress(program, out_idx_cb, *dst_idx_buffer);
+        }
     }
 }
 
