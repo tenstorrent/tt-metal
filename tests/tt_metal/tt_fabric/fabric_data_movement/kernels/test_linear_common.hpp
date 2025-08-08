@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 #include "fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
