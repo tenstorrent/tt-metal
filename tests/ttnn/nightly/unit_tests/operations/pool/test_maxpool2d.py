@@ -108,10 +108,6 @@ def run_max_pool(
     if (in_h + pad_h) < kernel_h or (in_w + pad_w) < kernel_w:
         pytest.skip("kernel is too large for the padded tensor")
 
-    out_n = in_n
-    out_c = (
-        max(in_c, 32) if dtype == ttnn.bfloat8_b else in_c
-    )  # TTNN will pad the output channels to 32 for bfloat8_b only
     ceil_mode_out_shape_adj = False
     if ceil_mode:
         out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1

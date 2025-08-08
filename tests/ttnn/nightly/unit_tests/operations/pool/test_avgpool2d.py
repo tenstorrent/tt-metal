@@ -14,11 +14,11 @@ from models.utility_functions import is_blackhole
 def correct_torch_asym_pad(
     torch_output, input_shape, kernel_size, stride, padding, divisor_override, count_include_pad
 ):
-    in_n, in_c, in_h, in_w = input_shape
+    _, _, in_h, in_w = input_shape
     pad_t, pad_b, pad_l, pad_r = padding
     kernel_h, kernel_w = kernel_size
     stride_h, stride_w = stride
-    out_n, out_c, out_h, out_w = torch_output.shape
+    _, _, out_h, out_w = torch_output.shape
     padded_h = in_h + pad_t + pad_b
     padded_w = in_w + pad_l + pad_r
 
@@ -99,6 +99,8 @@ def run_avg_pool2d(
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
+    stride_h, stride_w = stride
+    dilation_h = dilation_w = 1  # avg pool does not yet support dilation
 
     # handle both 2D and 4D padding
     padding_is_4d = False
@@ -145,10 +147,6 @@ def run_avg_pool2d(
     if (in_h + pad_h) < kernel_h or (in_w + pad_w) < kernel_w:
         pytest.skip("kernel is too large for the padded tensor")
 
-    out_n = in_n
-    out_c = (
-        max(in_c, 32) if dtype == ttnn.bfloat8_b else in_c
-    )  # TTNN will pad the output channels to 32 for bfloat8_b only
     ceil_mode_out_shape_adj = False
     if ceil_mode:
         out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
