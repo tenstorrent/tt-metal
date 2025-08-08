@@ -18,7 +18,6 @@ using json = nlohmann::json;
 
 class MockTelemetryProvider {
 private:
-    static constexpr size_t NUM_ENDPOINTS = 8;
     static constexpr auto UPDATE_INTERVAL = std::chrono::seconds(5);
     
     std::vector<messages::EndpointDescription> endpoints_;
@@ -50,8 +49,6 @@ private:
     
         endpoints_.clear();
         endpoints_.reserve(num_endpoints);
-        
-        
         
         for (size_t i = 0; i < num_endpoints; ++i) {
             messages::EndpointDescription endpoint;
