@@ -9,17 +9,15 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
 from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [1, 1, 128, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "sd35_spatial",
-        "sd35_prompt",
     ],
 )
 @pytest.mark.parametrize(
@@ -28,14 +26,26 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
         (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        )
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
     ],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
         (True, 10),
-        (False, 1),
+        (False, 10),
     ],
     ids=["perf", "check"],
 )
@@ -50,8 +60,8 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_all_gather_async(
+@pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
+def test_all_gather_nightly(
     mesh_device,
     num_devices,
     ag_output_shape,
