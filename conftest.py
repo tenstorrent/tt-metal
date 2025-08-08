@@ -80,7 +80,6 @@ def is_galaxy():
 def is_6u():
     import ttnn
 
-    # 6U has 32 PCIe devices
     return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
 
 
@@ -88,7 +87,6 @@ def is_6u():
 def is_tg_cluster():
     import ttnn
 
-    # TG has 4 PCIe devices
     return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
 
 
