@@ -16,8 +16,8 @@ import torch.nn.functional as F
 from loguru import logger
 from ultralytics import YOLO
 
+from models.demos.yolo_eval.utils import non_max_suppression, scale_boxes
 from models.demos.yolov9c.reference.yolov9c import YoloV9
-from models.experimental.yolo_eval.utils import non_max_suppression, scale_boxes
 
 
 def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
