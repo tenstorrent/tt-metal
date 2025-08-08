@@ -129,8 +129,6 @@ void kernel_main() {
     const uint32_t in1_block_num_tiles = in1_block_height_in_tiles * in1_block_width_in_tiles;
     DPRINT << "in1_block_num_tiles: " << static_cast<uint32_t>(in1_block_num_tiles) << ENDL();
 
-    return;
-
     // Address setup
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);

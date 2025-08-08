@@ -267,9 +267,8 @@ void MAIN {
         }
 
         // Wait to receive in1
-        // currently no need to wait for in1 as in1 is in L1, will bring it back for global cb case
-        // cb_wait_front(sync_cb2, 1);
-        // cb_pop_front(sync_cb2, 1);
+        cb_wait_front(sync_cb2, 1);
+        cb_pop_front(sync_cb2, 1);
 
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t curr_ring_idx = (ring_idx - block + ring_size) % ring_size;
