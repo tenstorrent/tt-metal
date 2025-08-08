@@ -372,12 +372,12 @@ class MLP1D(AbstractModule):
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
-                "multi_device_global_semaphore": ccl.get_semaphore(1),
+                "multi_device_global_semaphore": ccl.get_gather_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
             "reduce_scatter_async": {
-                "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
+                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
         }

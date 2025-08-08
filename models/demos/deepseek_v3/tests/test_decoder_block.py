@@ -13,7 +13,7 @@ from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block import MoEDecoderBlock
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_decode as reference_forward
+from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_decoder as reference_forward
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     MAX_START_POS,

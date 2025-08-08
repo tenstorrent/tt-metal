@@ -166,7 +166,7 @@ class DistributedRMSNorm(RMSNormBase):
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
-                "multi_device_global_semaphore": ccl.get_semaphore(1),
+                "multi_device_global_semaphore": ccl.get_gather_sem(1),
             },
         }
 

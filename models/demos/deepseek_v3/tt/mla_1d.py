@@ -888,12 +888,12 @@ class MLA1D(SharedStateAddOn, AbstractModule):
 
         # CCL states setup (Must be in order of execution)
         get_rs_params = lambda axis: {
-            "from_remote_multi_device_global_semaphore": ccl.get_semaphore(axis=axis),
-            "to_remote_multi_device_global_semaphore": ccl.get_semaphore(axis=axis),
+            "from_remote_multi_device_global_semaphore": ccl.get_from_sem(axis=axis),
+            "to_remote_multi_device_global_semaphore": ccl.get_to_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         get_ag_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_semaphore(axis=axis),
+            "multi_device_global_semaphore": ccl.get_gather_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         ccl_states_prefill = {
