@@ -6,7 +6,6 @@ import os
 import pytest
 
 import ttnn
-from models.utility_functions import is_blackhole
 
 
 @pytest.fixture
@@ -20,9 +19,7 @@ def device_params(request, galaxy_type):
     is_single_device = (mesh_device == (1, 1)) if isinstance(mesh_device, tuple) else (mesh_device == 1)
 
     if "fabric_config" in params:
-        # TODO: 26411
-        # Remove this blackhole condition once fabric CCLs are working on blackhole
-        if is_blackhole() or is_single_device:
+        if is_single_device:
             params["fabric_config"] = None
         elif params["fabric_config"] == True:
             params["fabric_config"] = (
