@@ -128,7 +128,7 @@ struct DeviceProfilerDataPoint {
     uint32_t run_host_id{};
     std::string zone_name;
     std::string op_name;
-    kernel_profiler::PacketTypes packet_type;
+    kernel_profiler::PacketTypes packet_type{kernel_profiler::PacketTypes::ZONE_START};
     uint64_t source_line{};
     std::string source_file;
     nlohmann::json meta_data;
@@ -144,7 +144,7 @@ struct FabricEventDataPoints {
 class DeviceProfiler {
 private:
     // Device architecture
-    tt::ARCH device_arch;
+    tt::ARCH device_arch{tt::ARCH::Invalid};
 
     // Device ID
     chip_id_t device_id{};
