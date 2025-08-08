@@ -2534,23 +2534,44 @@ def test_sub_implicit_broadcast(device, shapes):
         [[8, 16, 1], [1, 1, 32]],
     ],
 )
-def test_remainder_implicit_broadcast(device, shapes):
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.int32, ttnn.int32),
+        (torch.float32, ttnn.float32),
+    ],
+)
+def test_remainder_implicit_broadcast(device, shapes, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.float32)
-    torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.float32)
-    torch_output_tensor = torch.remainder(torch_input_tensor_a, torch_input_tensor_b)
+    if torch_dtype == torch.int32:
+        torch_input_tensor_a = torch.randint(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, shapes[0], dtype=torch.int32
+        )
+        torch_input_tensor_b = torch.randint(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, shapes[1], dtype=torch.int32
+        )
+    else:
+        torch_input_tensor_a = torch.empty(shapes[0], dtype=torch.float32).uniform_(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max
+        )
+        torch_input_tensor_b = torch.empty(shapes[1], dtype=torch.float32).uniform_(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max
+        )
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
-        dtype=ttnn.float32,
+        dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
-        dtype=ttnn.float32,
+        dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
