@@ -638,7 +638,7 @@ template <eth_chan_directions downstream_direction, bool has_both_axes>
 FORCE_INLINE void update_header_and_cached_routing_fields(
     tt_l1_ptr MeshPacketHeader* packet_start, LowLatencyMeshRoutingFields& cached_routing_fields) {
     // need to update only when mcast is active
-    if (packet_start->mcast_params[downstream_direction]) {
+    if (packet_start->is_mcast_active && packet_start->mcast_params[downstream_direction]) {
         if constexpr (has_both_axes) {
             if constexpr (
                 downstream_direction == eth_chan_directions::NORTH ||
