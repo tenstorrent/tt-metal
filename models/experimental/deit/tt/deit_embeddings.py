@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional
 import torch
 from torch import nn
@@ -11,7 +12,7 @@ from models.experimental.deit.tt.deit_patch_embeddings import DeiTPatchEmbedding
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
 
-class DeiTEmbeddings(nn.Module):
+class DeiTEmbeddings(LightweightModule):
     def __init__(
         self,
         config: DeiTConfig(),

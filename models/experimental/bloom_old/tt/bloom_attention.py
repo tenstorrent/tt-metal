@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import math
 from torch.nn import functional as F
@@ -61,7 +62,7 @@ def merge_heads(x: torch.Tensor, num_heads, head_dim) -> torch.Tensor:
     return x.reshape(batch_size, seq_length, num_heads * head_dim)
 
 
-# class BloomAttention(torch.nn.Module):
+# class BloomAttention(LightweightModule):
 #     def __init__(self, dict_name, num, bloom_reference_model, hidden_size, num_heads, hidden_dropout, beta):
 #         super().__init__()
 
@@ -195,7 +196,7 @@ def merge_heads(x: torch.Tensor, num_heads, head_dim) -> torch.Tensor:
 #         return output_tensor
 
 
-class TtBloomAttention(torch.nn.Module):
+class TtBloomAttention(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 
