@@ -28,6 +28,7 @@
 
     <script type="module">
          import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
+         import { HierarchicalTelemetryStore } from './js/hierarchical_telemetry_store.js';
 
         class DumpTelemetry extends LitElement {
             static properties = {
@@ -39,6 +40,7 @@
                 this.text = '';
                 this._pollInterval = null;
                 this._eventSource = null;
+                this._telemetry_store = new HierarchicalTelemetryStore();
             }
 
             static styles = css`
@@ -123,6 +125,23 @@
                         try {
                             const data = JSON.parse(event.data);
                             this._appendToText(`[SSE] ${JSON.stringify(data)}`);
+
+                            // Handle message
+                            if (data["type"] == "EndpointDefinitionMessage") {
+                                for (const endpoint of data["endpoints"]) {
+                                    const path = data["host"] + "_" + endpoint["from"];
+                                    const id = endpoint["id"];
+                                    const state = endpoint["state"]["up"];
+                                    this._telemetry_store.addPath(path, id, state);
+                                    console.log(this._telemetry_store);
+                                }
+                            } else if (data["type"] == "EndpointStateChangeMessage") {
+                                for (const endpoint of data["endpoints"]) {
+                                    const id = endpoint["id"];
+                                    const state = endpoint["up"];
+                                    this._telemetry_store.updateState(id, state);
+                                }
+                            }
                         } catch (error) {
                             // If it's not JSON, append as-is
                             this._appendToText(`[SSE] ${event.data}`);

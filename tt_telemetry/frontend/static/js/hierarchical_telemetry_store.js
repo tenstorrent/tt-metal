@@ -86,6 +86,8 @@ export class HierarchicalTelemetryStore {
             map = map.get(current_part);
         }
 
+        console.log(`[HierarchicalTelemetryStore] Added ${id}:${path}`);
+
         // Update state
         this.updateState(id, initialState, true);
     }

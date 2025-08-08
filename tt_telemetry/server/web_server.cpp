@@ -279,6 +279,8 @@ public:
                             sse_clients_.end());
                     }
 
+                    std::cout << "Connection finished" << std::endl;
+
                     return true;
                 }
             );
