@@ -48,6 +48,17 @@ jobs:
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
           {
+            name: "[QB] Llama-3.1-8B-Instruct",
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server-timeout: 5,
+            benchmark-timeout: 5,
+            runner-label: bh-quietbox,
+            mesh-device: P150x4,
+            tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"data_parallel\": 4}",
+            owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          },
+          {
             name: "[RB] Llama-3.1-8B-Instruct",
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 35,
@@ -104,7 +115,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - ${{ inputs.runner-label == 'BH-LLMBox' && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/huggingface' }}:/mnt/MLPerf/huggingface:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
