@@ -90,9 +90,11 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
 
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-        uint32_t read_bytes = wide_reduction ? (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION
-                                                                         : MAX_BYTES_PER_REDUCTION
-                                             : in_nbytes_c;
+        uint32_t read_bytes = in_nbytes_c;
+        if constexpr (wide_reduction) {
+            read_bytes =
+                (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
+        }
 
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         uint32_t processed_sticks = 0;
