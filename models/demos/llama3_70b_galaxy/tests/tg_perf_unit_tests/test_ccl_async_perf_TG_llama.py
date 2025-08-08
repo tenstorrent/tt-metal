@@ -463,7 +463,7 @@ def test_ag_matmul_tg_llama_perf(
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"all_gather_replicate"
+    step_name = f"all_gather_matmul"
 
     subdir = "llama_ccl_perf"
     command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_llama_all_gather_matmul"

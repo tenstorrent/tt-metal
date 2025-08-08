@@ -2019,7 +2019,7 @@ process_gather_in0_program_and_create_override_variables(
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "reader_bmm_tile_layout_in0_ring_all_gather.cpp",  // Keep same kernel name
         all_cores,
         tt_metal::DataMovementConfig{
@@ -2030,7 +2030,7 @@ process_gather_in0_program_and_create_override_variables(
     // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "reader_bmm_tile_layout_in1_ring_all_gather.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
@@ -2042,7 +2042,7 @@ process_gather_in0_program_and_create_override_variables(
 
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/compute/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/compute/"
         "bmm_large_block_zm_fused_bias_activation_gathered.cpp",
         all_cores,
         tt_metal::ComputeConfig{

@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_gather_replicate_async_pybind.hpp"
+#include "llama_all_gather_matmul_async_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_replicate_async/all_gather_replicate_async.hpp"
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
