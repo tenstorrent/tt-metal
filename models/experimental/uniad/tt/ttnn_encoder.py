@@ -7,8 +7,8 @@ import numpy as np
 import copy
 import warnings
 import ttnn
-from models.experimental.uniad.tt.tt_temporal_self_attention import TtTemporalSelfAttention
-from models.experimental.uniad.tt.tt_spatial_cross_attention import TtSpatialCrossAttention
+from models.experimental.uniad.tt.ttnn_temporal_self_attention import TtTemporalSelfAttention
+from models.experimental.uniad.tt.ttnn_spatial_cross_attention import TtSpatialCrossAttention
 from models.experimental.uniad.tt.ttnn_ffn import TtFFN
 
 
