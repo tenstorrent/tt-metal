@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 import pytest
 import torch
 from diffusers import DiffusionPipeline
@@ -96,24 +97,60 @@ def run_demo_inference(
 
     cpu_device = "cpu"
 
-    all_embeds = [
-        pipeline.encode_prompt(
-            prompt=prompt,
-            prompt_2=None,
-            device=cpu_device,
-            num_images_per_prompt=1,
-            do_classifier_free_guidance=True,
-            negative_prompt=None,
-            negative_prompt_2=None,
-            prompt_embeds=None,
-            negative_prompt_embeds=None,
-            pooled_prompt_embeds=None,
-            negative_pooled_prompt_embeds=None,
-            lora_scale=None,
-            clip_skip=None,
+    embed_start_time = time.time()
+    # all_embeds = [
+    #     pipeline.encode_prompt(
+    #         prompt=prompt,
+    #         prompt_2=None,
+    #         device=cpu_device,
+    #         num_images_per_prompt=1,
+    #         do_classifier_free_guidance=True,
+    #         negative_prompt=None,
+    #         negative_prompt_2=None,
+    #         prompt_embeds=None,
+    #         negative_prompt_embeds=None,
+    #         pooled_prompt_embeds=None,
+    #         negative_pooled_prompt_embeds=None,
+    #         lora_scale=None,
+    #         clip_skip=None,
+    #     )
+    #     for prompt in prompts
+    # ]
+
+    all_embeds = pipeline.encode_prompt(
+        prompt=prompts,  # Pass the entire list at once
+        prompt_2=None,
+        device=cpu_device,
+        num_images_per_prompt=1,
+        do_classifier_free_guidance=True,
+        negative_prompt=None,
+        negative_prompt_2=None,
+        prompt_embeds=None,
+        negative_prompt_embeds=None,
+        pooled_prompt_embeds=None,
+        negative_pooled_prompt_embeds=None,
+        lora_scale=None,
+        clip_skip=None,
+    )
+    (
+        prompt_embeds_batch,
+        negative_prompt_embeds_batch,
+        pooled_prompt_embeds_batch,
+        negative_pooled_prompt_embeds_batch,
+    ) = all_embeds
+    all_embeds = list(
+        zip(
+            torch.split(prompt_embeds_batch, 1, dim=0),
+            torch.split(negative_prompt_embeds_batch, 1, dim=0),
+            torch.split(pooled_prompt_embeds_batch, 1, dim=0),
+            torch.split(negative_pooled_prompt_embeds_batch, 1, dim=0),
         )
-        for prompt in prompts
-    ]
+    )
+    embed_end_time = time.time()
+    print("embed time = ", embed_end_time - embed_start_time)
+
+    print("All embeds length = ", len(all_embeds))
+    print("all_embeds = ", all_embeds)
 
     # Reorder all_embeds to prepare for splitting across devices
     items_per_core = len(all_embeds) // batch_size  # this will always be a multiple of batch_size because of padding
