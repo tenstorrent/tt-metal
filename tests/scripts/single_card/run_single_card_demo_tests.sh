@@ -377,16 +377,18 @@ run_vgg_unet_demo() {
 
  # vgg_unet eval
 <<<<<<< HEAD
+<<<<<<< HEAD
   pytest -n auto models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp --timeout 600
 >>>>>>> ef197810ae (Update run_single_card_demo_tests.sh)
 
 }
 
 =======
+=======
+>>>>>>> 20e7f2290d ( check vanilla_unet for lower iterations and fix yolov6l, segformer eval and mobv2 e2e perf)
   pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
 
 }
->>>>>>> 668b02d9e9 (Update run_single_card_demo_tests.sh)
 
 run_yolov12x_demo() {
 
