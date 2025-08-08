@@ -2,19 +2,7 @@ name: "(Blackhole) Blackhole nightly tests"
 
 on:
   workflow_dispatch:
-    inputs:
-      runner-label:
-        description: 'Valid inputs: ["P100", "P150b"] (both cards), ["P100"] (P100 only), ["P150b"] (P150 only)'
-        required: false
-        type: string
-        default: '["P100", "P150b"]'
   workflow_call:
-    inputs:
-      runner-label:
-        description: 'Valid inputs: ["P100", "P150b"] (both cards), ["P100"] (P100 only), ["P150b"] (P150 only)'
-        required: false
-        type: string
-        default: '["P100", "P150b"]'
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
@@ -40,32 +28,70 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  blackhole-llmbox-demo-tests:
+  blackhole-multi-card-demo-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-demo-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: LLMBox Demo tests
+            runner-label: BH-LLMBox
+            extra-tag: pipeline-perf
+            num_devices: 4
+          - name: DeskBox Demo tests
+            runner-label: BH-DeskBox
+            extra-tag: pipeline-functional
+            num_devices: 2
+          # - name: RackBox Demo tests
+          #   runner-label: BH-RackBox
+          #   extra-tag: pipeline-functional
+          #   num_devices: 8
     with:
-      runner-label: BH-LLMBox
+      runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  blackhole-llmbox-unit-tests:
+      extra-tag: ${{ matrix.test-group.extra-tag }}
+      num_devices: ${{ matrix.test-group.num_devices }}
+  blackhole-multi-card-unit-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-unit-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: LLMBox unit tests
+            runner-label: BH-LLMBox
+          - name: DeskBox unit tests
+            runner-label: BH-DeskBox
+          # - name: RackBox unit tests
+          #   runner-label: BH-RackBox
     with:
       arch: blackhole
-      runner-label: BH-LLMBox
+      runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  blackhole-llmbox-ttnn-stress-tests:
+  blackhole-multi-card-ttnn-stress-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: LLMBox ttnn stress tests
+            runner-label: BH-LLMBox
+          - name: DeskBox ttnn stress tests
+            runner-label: BH-DeskBox
+          # - name: RackBox unit tests
+          #   runner-label: BH-RackBox
     with:
       arch: blackhole
-      runner-label: BH-LLMBox
+      runner-label: ${{ matrix.test-group.runner-label }}
       timeout: 45
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
