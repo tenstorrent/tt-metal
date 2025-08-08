@@ -37,7 +37,7 @@ def test_qwen_mlp_rs(mesh_device):
         ]
     )
     REDUCE_SCATTER_INTERIM_MEMCFG = ttnn.create_sharded_memory_config(
-        shape=(64, 512),
+        shape=(32, 512),
         core_grid=PACKET_WORKER_CRS,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -48,7 +48,7 @@ def test_qwen_mlp_rs(mesh_device):
 
     # 512 = 4 devices * 4 pages per packet * 32 tile_width
     persistent_interim_buffers = ttnn.from_torch(  # We need to be able to fit 2*3840 into the second dimension
-        torch.zeros((*(16, 4), 32, 3840)),
+        torch.zeros((*(8, 4), 32, 3840)),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
