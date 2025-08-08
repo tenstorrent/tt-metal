@@ -4,8 +4,25 @@ add_library(TTNN::Ops::Experimental::CCL ALIAS ttnn_op_experimental_ccl)
 target_precompile_headers(ttnn_op_experimental_ccl REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 
+set_target_properties(
+    ttnn_op_experimental_ccl
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
+
 target_sources(
     ttnn_op_experimental_ccl
+    PUBLIC
+        FILE_SET headers
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            send_recv_async/send_async/device/kernels/sender_reader.cpp
+            send_recv_async/send_async/device/kernels/sender_writer.cpp
+            send_recv_async/recv_async/device/kernels/receiver_inplace_writer.cpp
+            send_recv_async/recv_async/device/kernels/receiver_writer.cpp
+            send_recv_async/recv_async/device/kernels/receiver_reader.cpp
     PRIVATE
         llama_common.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
@@ -71,22 +88,11 @@ target_link_libraries(
 
 install(TARGETS ttnn_op_experimental_ccl LIBRARY COMPONENT tar)
 
-# List of specific JIT kernel files to be installed for runtime access.
-set(TTNN_OP_EXPERIMENTAL_CCL_JIT_FILES
-    send_recv_async/send_async/device/kernels/sender_reader.cpp
-    send_recv_async/send_async/device/kernels/sender_writer.cpp
-    send_recv_async/recv_async/device/kernels/receiver_inplace_writer.cpp
-    send_recv_async/recv_async/device/kernels/receiver_writer.cpp
-    send_recv_async/recv_async/device/kernels/receiver_reader.cpp
-)
-
-# Install each file individually to preserve its directory structure.
-foreach(JIT_FILE ${TTNN_OP_EXPERIMENTAL_CCL_JIT_FILES})
-    get_filename_component(JIT_FILE_PATH ${JIT_FILE} DIRECTORY)
-    install(
-        FILES
-            ${CMAKE_CURRENT_SOURCE_DIR}/${JIT_FILE}
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl/${JIT_FILE_PATH}
+install(
+    TARGETS
+        ttnn_op_experimental_ccl
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl
         COMPONENT ttnn-runtime
-    )
-endforeach()
+)
