@@ -34,7 +34,7 @@ def reference_model(hf_config, use_bitonic_sort):
 @pytest.mark.parametrize(
     "topk_fallback,use_bitonic_sort",
     [
-        (False, True),
+        (True, True),
     ],
 )
 def test_forward_pass(

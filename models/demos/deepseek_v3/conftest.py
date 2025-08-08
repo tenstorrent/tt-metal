@@ -96,4 +96,4 @@ def ccl(mesh_device):
 
 @pytest.fixture(scope="session")
 def deepseek_cache_path():
-    return Path(os.getenv("DEEPSEEK_V3_CACHE", "/localdev/kpaigwar/deepseek-v3-cache"))
+    return Path(os.getenv("DEEPSEEK_V3_CACHE", "/proj_sw/user_dev/deepseek-v3-cache"))
