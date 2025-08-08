@@ -317,18 +317,22 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
             max_num_sticks_this_core += size_till_end[j] * accumulated_input_total_per_dim[j - 1];
         }
 
+        uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes, output_row_size_bytes - width_offset);
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
         writer_kernel_args[0] += width_offset;
+        writer_kernel_args[2] = this_input_row_size_bytes;
 
         uint32_t num_sticks_this_core = std::min(num_sticks_per_core, max_num_sticks_this_core + 1);
 
         log_trace(
             tt::LogOp,
-            "Start ID: {}, Start ID per dim : {} , Size till end : {} Num Sticks: {} for Core: {}",
+            "Start ID: {}, Start ID per dim : {} , Size till end : {} Num Sticks: {}, this_input_row_size_bytes: {} "
+            "for Core: {}",
             start_id,
             id_per_dim,
             size_till_end,
             num_sticks_this_core,
+            this_input_row_size_bytes,
             core);
         uint32_t addr_offset = 5;  // output buffer addr, output_row_size_bytes, input_row_size_bytes, num_dims
         writer_kernel_args[addr_offset++] = start_id;
