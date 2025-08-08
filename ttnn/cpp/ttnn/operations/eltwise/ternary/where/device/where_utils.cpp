@@ -180,11 +180,12 @@ WhereBroadcastType get_broadcast_type(
         return WhereBroadcastType::NONE;
     }
 
-    // All shapes must have same rank and same dimensions except the last one for COL_BCAST
+    // All shapes must have same rank
     if (pred_shape.rank() != true_shape.rank() || pred_shape.rank() != false_shape.rank()) {
         return WhereBroadcastType::INVALID_BCAST;
     }
 
+    // this will allow only COL bcast - to remove later after adding other bcast support
     // Check if all dimensions except last are the same
     for (int i = 0; i < static_cast<int>(pred_shape.rank()) - 1; ++i) {
         if (pred_shape[i] != true_shape[i] || pred_shape[i] != false_shape[i]) {

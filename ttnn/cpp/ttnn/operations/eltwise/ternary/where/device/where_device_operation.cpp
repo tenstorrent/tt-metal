@@ -144,47 +144,86 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
 
     // Determine output shape based on broadcast pattern
     // For TST/TTS variants, one of the values is a scalar, so we need to handle that case
-    auto predicate_shape = tensor_args.predicate.logical_shape();
 
-    auto broadcast_type = ttnn::operations::ternary::WhereBroadcastType::NONE;
-    if (args.where_variant == WhereVariant::TTT) {
-        // Only compute broadcast type for TTT variant where both values are tensors
-        broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-            predicate_shape,
-            tensor_args.value_true.value().logical_shape(),
-            tensor_args.value_false.value().logical_shape());
+    auto broadcast_type = args.broadcast_type;
+
+    auto output_shape = tensor_args.predicate.logical_shape();
+
+    // all shapes equal
+    if (broadcast_type == WhereBroadcastType::NONE) {
+        return TensorSpec(
+            output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
     }
 
-    const auto output_shape = [&]() {
-        if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
-            // For column broadcast, output shape should be the larger shape (non-broadcasted dimensions)
-            auto pred_shape = tensor_args.predicate.logical_shape();
-            auto true_shape = tensor_args.value_true.value().logical_shape();
-            auto false_shape = tensor_args.value_false.value().logical_shape();
+    const auto compute_broadcasted_output_ternary = [&]() {
+        auto pred_shape = tensor_args.predicate.logical_shape();
+        auto true_shape = tensor_args.value_true.value().logical_shape();
+        auto false_shape = tensor_args.value_false.value().logical_shape();
 
-            // Find the shape with the largest width (non-broadcasted)
-            if (pred_shape[-1] > true_shape[-1] && pred_shape[-1] > false_shape[-1]) {
-                return pred_shape;  // predicate has largest width
-            } else if (true_shape[-1] > false_shape[-1]) {
-                return true_shape;  // true tensor has largest width
-            } else {
-                return false_shape;  // false tensor has largest width
+        const int rank_a = pred_shape.rank();
+        const int rank_b = true_shape.rank();
+        const int rank_c = false_shape.rank();
+        const int largest_rank = std::max({rank_a, rank_b, rank_c});
+
+        SmallVector<uint32_t> output_shape(largest_rank, 1);
+
+        for (int i = -1; i >= -largest_rank; --i) {
+            auto dim_a = (i >= -rank_a) ? pred_shape[i] : 1;
+            auto dim_b = (i >= -rank_b) ? true_shape[i] : 1;
+            auto dim_c = (i >= -rank_c) ? false_shape[i] : 1;
+
+            // Find the maximum dimension size (ignoring 1s which can be broadcast)
+            uint32_t max_dim = 1;
+            if (dim_a != 1) {
+                max_dim = std::max(max_dim, dim_a);
             }
-        } else {
-            // For TST/TTS variants or non-broadcast TTT, use the non-scalar tensor's shape
-            if (args.where_variant == WhereVariant::TTS) {
-                // value_false is scalar, so output shape matches predicate/value_true
-                return predicate_shape;
-            } else if (args.where_variant == WhereVariant::TST) {
-                // value_true is scalar, so output shape matches predicate/value_false
-                return predicate_shape;
-            } else {
-                // TTT non-broadcast case - default to predicate shape
-                return predicate_shape;
+            if (dim_b != 1) {
+                max_dim = std::max(max_dim, dim_b);
             }
+            if (dim_c != 1) {
+                max_dim = std::max(max_dim, dim_c);
+            }
+
+            // Validate broadcasting compatibility
+            bool compatible = true;
+            if (dim_a != 1 && dim_a != max_dim) {
+                compatible = false;
+            }
+            if (dim_b != 1 && dim_b != max_dim) {
+                compatible = false;
+            }
+            if (dim_c != 1 && dim_c != max_dim) {
+                compatible = false;
+            }
+
+            TT_FATAL(
+                compatible,
+                "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}, dim c: {}",
+                i,
+                dim_a,
+                dim_b,
+                dim_c);
+
+            // For ranks >= 6, ensure exact match (following existing pattern)
+            if (i <= -6) {
+                TT_FATAL(
+                    dim_a == dim_b && dim_b == dim_c,
+                    "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, "
+                    "dim a: {}, dim b: {}, dim c: {}",
+                    i,
+                    dim_a,
+                    dim_b,
+                    dim_c);
+            }
+
+            output_shape[i + largest_rank] = max_dim;
         }
-    }();
+        return ttnn::Shape(output_shape);
+    };
 
+    if (args.where_variant == WhereVariant::TTT) {
+        output_shape = compute_broadcasted_output_ternary();
+    }
     return TensorSpec(output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
 }
 
