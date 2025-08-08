@@ -135,6 +135,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         (std::uint32_t)grid_log2_size,
         (std::uint32_t)input_height,
         (std::uint32_t)input_width,
+        (std::uint32_t)(output_height * output_width),  // output_hw_size at index 13
     };
 
     // Grid sample parameters for pool compute kernel adaptation

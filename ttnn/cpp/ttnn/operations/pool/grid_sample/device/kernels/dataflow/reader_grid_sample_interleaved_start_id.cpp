@@ -40,9 +40,10 @@ void kernel_main() {
     constexpr uint32_t grid_log2_size = get_compile_time_arg_val(10);
     constexpr uint32_t input_height = get_compile_time_arg_val(11);
     constexpr uint32_t input_width = get_compile_time_arg_val(12);
+    constexpr uint32_t output_hw_size = get_compile_time_arg_val(13);
 
-    // constexpr uint32_t output_cb_index = get_compile_time_arg_val(13);
-    // constexpr bool dst_is_dram = get_compile_time_arg_val(14) == 1;
+    // constexpr uint32_t output_cb_index = get_compile_time_arg_val(14);
+    // constexpr bool dst_is_dram = get_compile_time_arg_val(15) == 1;
     // constexpr uint32_t dst_stick_nbytes = get_compile_time_arg_val(15);
     // constexpr bool dst_size_is_power_of_two = get_compile_time_arg_val(16) == 1;
     // constexpr uint32_t dst_log2_size = get_compile_time_arg_val(17);
@@ -89,44 +90,61 @@ void kernel_main() {
         int32_t w0 = static_cast<int32_t>(w_coord_image);
         int32_t w1 = w0 + 1;
 
-        // Read the sticks from input
+        // Efficient boundary checks - do this BEFORE memory reads
+        bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
+        bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
+        bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
+        bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
 
-        uint32_t curr_batch = i / (input_height * input_width);
+        // Calculate batch offset using output dimensions (output_height * output_width)
+        uint32_t curr_batch = i / output_hw_size;
+        uint32_t batch_offset = curr_batch * input_height * input_width;
 
         cb_reserve_back(input_cb_index, 1);
-
         uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
-        uint32_t north_west_stick_index = (curr_batch * input_height * input_width) + (h0 * input_width) +
-                                          w0;  // Calculate the index in the input tensor
-
-        uint64_t dram_read_addr = get_noc_addr(north_west_stick_index, s1);
-        noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+        // Conditionally read 4-corner values based on boundary checks
+        // North-West corner (h0, w0)
+        if (h0_valid && w0_valid) {
+            uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
+            uint64_t dram_read_addr = get_noc_addr(north_west_stick_index, s1);
+            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+        } else {
+            // Fill with zeros for out-of-bounds
+            memset(reinterpret_cast<void*>(l1_write_input_addr), 0, input_stick_nbytes);
+        }
         l1_write_input_addr += input_stick_nbytes;
 
-        uint32_t north_east_stick_index = (curr_batch * input_height * input_width) + (h0 * input_width) +
-                                          w1;  // Calculate the index in the input tensor
-
-        dram_read_addr = get_noc_addr(north_east_stick_index, s1);
-        noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+        // North-East corner (h0, w1)
+        if (h0_valid && w1_valid) {
+            uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
+            uint64_t dram_read_addr = get_noc_addr(north_east_stick_index, s1);
+            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+        } else {
+            memset(reinterpret_cast<void*>(l1_write_input_addr), 0, input_stick_nbytes);
+        }
         l1_write_input_addr += input_stick_nbytes;
 
-        uint32_t south_west_stick_index = (curr_batch * input_height * input_width) + (h1 * input_width) +
-                                          w0;  // Calculate the index in the input tensor
-        dram_read_addr = get_noc_addr(south_west_stick_index, s1);
-        noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+        // South-West corner (h1, w0)
+        if (h1_valid && w0_valid) {
+            uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
+            uint64_t dram_read_addr = get_noc_addr(south_west_stick_index, s1);
+            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+        } else {
+            memset(reinterpret_cast<void*>(l1_write_input_addr), 0, input_stick_nbytes);
+        }
         l1_write_input_addr += input_stick_nbytes;
 
-        uint32_t south_east_stick_index = (curr_batch * input_height * input_width) + (h1 * input_width) +
-                                          w1;  // Calculate the index in the input tensor
-        dram_read_addr = get_noc_addr(south_east_stick_index, s1);
-        noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-        l1_write_input_addr += input_stick_nbytes;
+        // South-East corner (h1, w1)
+        if (h1_valid && w1_valid) {
+            uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
+            uint64_t dram_read_addr = get_noc_addr(south_east_stick_index, s1);
+            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+        } else {
+            memset(reinterpret_cast<void*>(l1_write_input_addr), 0, input_stick_nbytes);
+        }
 
-        float weight_h0, weight_h1, weight_w0, weight_w1;
-
-        float wei1, wei2, wei3, wei4;
-
+        // Calculate bilinear interpolation weights
         float h0_f = static_cast<float>(h0);
         float w0_f = static_cast<float>(w0);
 
@@ -136,31 +154,16 @@ void kernel_main() {
         float h_frac_inv = 1.0f - h_frac;
         float w_frac_inv = 1.0f - w_frac;
 
-        // Efficient boundary checks - now meaningful with signed integers
-        bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
-        bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
-        bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
-        bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
+        // Calculate weights directly - no optimization tricks that break under boundary conditions
+        float wei1 = (h0_valid && w0_valid) ? (h_frac_inv * w_frac_inv) : 0.0f;  // North-West
+        float wei2 = (h0_valid && w1_valid) ? (h_frac_inv * w_frac) : 0.0f;      // North-East
+        float wei3 = (h1_valid && w0_valid) ? (h_frac * w_frac_inv) : 0.0f;      // South-West
+        float wei4 = (h1_valid && w1_valid) ? (h_frac * w_frac) : 0.0f;          // South-East
 
-        // Assign weights using precomputed values
-        weight_h0 = h0_valid ? h_frac_inv : 0.0f;
-        weight_h1 = h1_valid ? h_frac : 0.0f;
-        weight_w0 = w0_valid ? w_frac_inv : 0.0f;
-        weight_w1 = w1_valid ? w_frac : 0.0f;
-
-        // Optimized weight calculation using only 2 multiplications
-        // wei1 = h_frac_inv * w_frac_inv, wei4 = h_frac * w_frac
-        wei1 = weight_h0 * weight_w0;  // h_frac_inv * w_frac_inv
-        wei4 = weight_h1 * weight_w1;  // h_frac * w_frac
-        // wei2 = weight_h0 * weight_w1;
-        // wei3 = weight_h1 * weight_w0;
-        wei2 = weight_h0 - wei1;
-        wei3 = weight_h1 - wei4;
-
-        DPRINT << "Relative coordinates: " << h_coord_rel << " " << w_coord_rel << "\n";
-        DPRINT << "In image coordinates: " << h_coord_image << " " << w_coord_image << "\n";
-        DPRINT << "Integer coordinates: " << h0 << " " << h1 << " " << w0 << " " << w1 << "\n";
-        DPRINT << "Weights: " << wei1 << " " << wei2 << " " << wei3 << " " << wei4 << "\n";
+        // DPRINT << "Relative coordinates: " << h_coord_rel << " " << w_coord_rel << "\n";
+        // DPRINT << "In image coordinates: " << h_coord_image << " " << w_coord_image << "\n";
+        // DPRINT << "Integer coordinates: " << h0 << " " << h1 << " " << w0 << " " << w1 << "\n";
+        // DPRINT << "Weights: " << wei1 << " " << wei2 << " " << wei3 << " " << wei4 << "\n";
         // DPRINT << wei1 << " " << wei2 << " " << wei3 << " " << wei4 << std::endl;
 
         // Fill the scalar CB with the weights

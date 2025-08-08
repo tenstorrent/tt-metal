@@ -338,7 +338,19 @@ def test_grid_sample_parametrized_dimensions(device, input_dims, grid_dims):
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
-        ((1, 32, 32, 224), (1, 1, 256, 2)),
+        ((1, 256, 12, 40), (1, 7, 25281, 2)),
+        ((1, 256, 24, 80), (1, 7, 25281, 2)),
+        ((1, 256, 48, 160), (1, 7, 25281, 2)),
+        ((16, 32, 100, 100), (16, 10000, 4, 2)),
+        ((48, 32, 12, 20), (48, 3567, 8, 2)),
+        ((8, 32, 100, 100), (8, 300, 4, 2)),
+        ((8, 32, 100, 100), (8, 2000, 4, 2)),
+        ((16, 32, 50, 50), (16, 10000, 1, 2)),
+        ((48, 32, 80, 45), (48, 4832, 1, 2)),
+        ((48, 32, 40, 23), (48, 4832, 1, 2)),
+        ((48, 32, 20, 12), (48, 4832, 1, 2)),
+        ((48, 32, 10, 6), (48, 4832, 1, 2)),
+        ((8, 32, 50, 50), (8, 3604, 1, 2))
         # Small test cases for correctness verification
         # ((1, 4, 4, 8), (1, 2, 2, 2)),      # Small input, small grid
         # ((1, 8, 8, 16), (1, 4, 4, 2)),     # Medium input, small grid
@@ -356,17 +368,20 @@ def test_grid_sample_correctness_with_pcc(device, input_shape, grid_shape):
 
     torch.manual_seed(0)  # For reproducible results
 
-    batch_size, input_h, input_w, channels = input_shape
+    batch_size, channels, input_h, input_w = input_shape  # NCHW format
     _, grid_h, grid_w, _ = grid_shape
 
-    # Create input tensor (NHWC format for TTNN)
-    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    # Create input tensor in NCHW format (PyTorch standard)
+    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
+
+    # Convert to NHWC for TTNN
+    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)  # NCHW -> NHWC
 
     # Create varied grid coordinates for more comprehensive testing
     torch_grid = torch.zeros(grid_shape, dtype=torch.bfloat16)
 
-    torch_grid = torch.randn(grid_shape, dtype=torch.bfloat16)
-    torch_grid = torch.clip(torch_grid, -0.9, 0.9)  # Ensure coordinates are in [-1, 1] range
+    torch_grid = torch.randn(grid_shape, dtype=torch.bfloat16) / 3
+    # torch_grid = torch.clip(torch_grid, -1, 1)  # Ensure coordinates are in [-1, 1] range
 
     # torch_grid[:, :, 0, 0] = 0.27
     # torch_grid[:, :, 0, 1] = 0.85
@@ -398,10 +413,9 @@ def test_grid_sample_correctness_with_pcc(device, input_shape, grid_shape):
     #         torch_grid[:, h, w, 1] = y_coord  # y coordinate
 
     # Convert to NCHW for PyTorch grid_sample
-    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
     torch_grid_float = torch_grid.to(torch.float32)
 
-    # Run PyTorch grid_sample (golden reference)
+    # Run PyTorch grid_sample (golden reference) - input is already in NCHW format
     torch_output_nchw = F.grid_sample(
         torch_input_nchw, torch_grid_float, mode="bilinear", padding_mode="zeros", align_corners=False
     )
@@ -415,8 +429,6 @@ def test_grid_sample_correctness_with_pcc(device, input_shape, grid_shape):
 
     ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
-
-    print(torch.min(ttnn_output_torch), torch.max(ttnn_output_torch))
 
     # Check PCC (Pearson Correlation Coefficient)
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
