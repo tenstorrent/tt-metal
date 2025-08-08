@@ -143,7 +143,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 FDMeshCommandQueue::~FDMeshCommandQueue() {
     if (in_use_) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
-        // before going out of scope. This is a blocking operation - it waits
+        // before going out of scope. This is a blocking operation -     it waits
         // for all queued up work to complete.
         // This allows physical device close to proceed correctly, since we still
         // rely on single device CQs during this step. Not needed for functionality

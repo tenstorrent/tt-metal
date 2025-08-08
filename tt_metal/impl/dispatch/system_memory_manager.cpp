@@ -393,35 +393,42 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
 uint32_t SystemMemoryManager::completion_queue_wait_front(
     const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
-    // Define the wait operation as a lambda
-    auto wait_operation = [this, cq_id, &exit_condition]() -> uint32_t {
-        uint32_t write_ptr_and_toggle;
-        uint32_t write_ptr;
-        uint32_t write_toggle;
-        const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+    uint32_t write_ptr_and_toggle;
+    uint32_t write_ptr;
+    uint32_t write_toggle;
+    const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
-        do {
-            write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
-            write_ptr = write_ptr_and_toggle & 0x7fffffff;
-            write_toggle = write_ptr_and_toggle >> 31;
+    // Body of the operation to be timed out
+    auto wait_operation_body =
+        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle, &cq_interface]() -> uint32_t {
+        write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
+        write_ptr = write_ptr_and_toggle & 0x7fffffff;
+        write_toggle = write_ptr_and_toggle >> 31;
 
-            // Check exit condition
-            if (exit_condition.load()) {
-                break;
-            }
-
-        } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
-                 cq_interface.completion_fifo_rd_toggle == write_toggle);
+        if (exit_condition.load()) {
+            return write_ptr_and_toggle;
+        }
 
         return write_ptr_and_toggle;
     };
 
-    return tt::utils::timeout_function(
-        wait_operation, tt::utils::get_timeout_seconds_for_operations(), [&exit_condition]() {
-            exit_condition.store(true);
-            throw std::runtime_error(
-                "TIMEOUT: device timeout, potential hang detected, please check out the documentation");
-        });
+    // Condition to check if the operation should continue
+    auto wait_condition = [&cq_interface, &write_ptr, &write_toggle]() -> bool {
+        return cq_interface.completion_fifo_rd_ptr == write_ptr and
+               cq_interface.completion_fifo_rd_toggle == write_toggle;
+    };
+
+    // Handler for the timeout
+    auto on_timeout = [&exit_condition]() {
+        exit_condition.store(true);
+        throw std::runtime_error(
+            "TIMEOUT: device timeout, potential hang detected, please check out the documentation");
+    };
+
+    tt::utils::timeout_function(
+        wait_operation_body, wait_condition, on_timeout, tt::utils::get_timeout_seconds_for_operations());
+
+    return write_ptr_and_toggle;
 }
 
 void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
