@@ -377,7 +377,7 @@ ALWI void max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_max_init<APPROX>()
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void exp2_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_exp2<true>(idst))); }
+ALWI void exp2_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_exp2<true, DST_ACCUM_MODE>(idst))); }
 
 /**
  * Please refer to documentation for any_init.
