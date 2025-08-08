@@ -952,7 +952,8 @@ def test_demo_text(
         "Llama-3.2-11B",
         "Llama-3.1-70B",
         "Llama-3.3-70B",
-        "Qwen3-32B" "Mistral-7B",
+        "Qwen3-32B",
+        "Mistral-7B",
     ]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
 
