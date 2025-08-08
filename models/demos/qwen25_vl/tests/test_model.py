@@ -14,7 +14,7 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
-    standardize_hf_keys_qwen25_vl,
+    standardize_hf_keys_multimodal,
 )
 from models.utility_functions import comp_allclose, comp_pcc
 
@@ -72,7 +72,7 @@ def test_vision_model_inference(
     # reference_model = Qwen2_5_VisionTransformerPretrainedModel(model_args.hf_config.vision_config)
     # reference_model.load_state_dict(model_args.reference_vision_model().state_dict(), strict=False)
     # FIXME: state_dict = model_args.load_state_dict()
-    state_dict = standardize_hf_keys_qwen25_vl(reference_model.state_dict())
+    state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
