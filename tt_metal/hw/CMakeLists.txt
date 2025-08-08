@@ -12,6 +12,7 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
+    lite_fabric
 )
 set(TYPES
     firmware
