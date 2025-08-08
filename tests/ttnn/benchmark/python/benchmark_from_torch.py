@@ -40,9 +40,6 @@ def test_benchmark_from_torch_two_copy(benchmark):
     benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
 
 
-import inspect
-
-
 @pytest.mark.parametrize("use_device", [True, False])
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize(
