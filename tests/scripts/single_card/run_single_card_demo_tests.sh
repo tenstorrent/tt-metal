@@ -343,7 +343,7 @@ run_yolov7_demo() {
 
 }
 
-run_yolov6l_perf() {
+run_yolov6l_demo() {
 
   pytest models/demos/yolov6l/demo/demo.py
 

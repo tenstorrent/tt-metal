@@ -84,10 +84,12 @@ def evaluation(
                 / "unet.pt"
             )
         sample_count = 0
-        max_samples = 100
+        max_samples = 8
         all_patient_metrics = defaultdict(list)
-
+        folder = 0
         for patient_id in patient_folders:
+            print("folder no is", folder)
+            folder = folder + 1
             if sample_count >= max_samples:
                 break
             patient_path = os.path.join("models/experimental/segmentation_evaluation/imageset", patient_id)
@@ -106,10 +108,11 @@ def evaluation(
             input_list = []
             pred_list = []
             true_list = []
-
+            batch_count = 0
             for i, data in tqdm(enumerate(loader)):
+                print(f" from folder {folder} , batch is {batch_count}")
+                batch_count = batch_count + 1
                 x, y_true = data
-
                 if model_type == "torch_model":
                     y_pred = model(x)
                 else:
@@ -490,6 +493,7 @@ def evaluation(
         from models.demos.segformer.demo.demo_for_semantic_segmentation import (
             SemanticSegmentationDataset,
             shift_gt_indices,
+            custom_collate_fn,
         )
         from torch.utils.data import DataLoader
 
