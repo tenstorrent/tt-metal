@@ -31,7 +31,6 @@ jobs:
             name: "Galaxy CNN model perf tests",
             model-type: "CNN",
             arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}"],
             save-perf-data: false,
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },  # Pavle Josipovic
@@ -50,7 +49,6 @@ jobs:
             cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests',
             timeout: 100,
             tracy: true,
-            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}"],
             save-perf-data: true,
             owner_id: U071CKL4AFK # Ammar Vora
           },
@@ -58,16 +56,15 @@ jobs:
             name: "Galaxy Llama 70B prefill perf tests",
             model-type: "Llama-70B",
             arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}"],
             save-perf-data: true,
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_prefill_model_perf_tg_device --dispatch-mode ""',
             owner_id: U03PUAKE719 # Miguel Tairum
           },
           {
             name: "Galaxy DiT SD3.5 model perf tests",
+            if: inputs.topology == 'topology-6u',
             model-type: "SD3.5",
             arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}"],
             save-perf-data: true,
             cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_35_large/tests/test_performance.py -k "tg_cfg2_sp4_tp4"',
             owner_id: U03FJB5TM5Y # Colman Glagovich
@@ -80,7 +77,10 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
       TT_METAL_HOME: ${{ github.workspace }}
       PYTHONPATH: ${{ github.workspace }}
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on:
+      - arch-wormhole_b0
+      - ${{ inputs.topology }}
+      - ${{ inputs.extra-tag }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
