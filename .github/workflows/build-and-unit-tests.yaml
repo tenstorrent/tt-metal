@@ -45,7 +45,7 @@ jobs:
             cmd: |
               ./build/test/tt_metal/unit_tests_debug_tools
               ./build/test/tt_metal/unit_tests_device
-              export TT_METAL_DPRINT_CORES="all" ./build/test/tt_metal/unit_tests_dispatch
+              export TT_METAL_DPRINT_CORES=all && ./build/test/tt_metal/unit_tests_dispatch
           # - name: llk
           #   cmd: ./build/test/tt_metal/unit_tests_llk
           # - name: FD2

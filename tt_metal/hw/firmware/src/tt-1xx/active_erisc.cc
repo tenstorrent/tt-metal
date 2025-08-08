@@ -219,6 +219,10 @@ void __attribute__((noinline)) Application() {
             // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
             // "invalid" iterations.
             DeviceZoneScopedMainN("ERISC-FW");
+
+            // Below reads kernel config from L1 cache, so we need to invalidate it
+            invalidate_l1_cache();
+
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
 
