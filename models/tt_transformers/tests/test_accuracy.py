@@ -244,6 +244,7 @@ def test_tt_model_acc(
             model_args.rope_theta,
             model_args.rope_scaling_factor,
             model_args.orig_context_len,
+            model_args.partial_rotary_factor,
         )
 
         prefill_input = model_args.prepare_residual_tensor_prefill(
