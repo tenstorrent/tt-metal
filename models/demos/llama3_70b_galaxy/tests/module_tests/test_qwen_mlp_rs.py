@@ -20,6 +20,20 @@ def test_qwen_mlp_rs(mesh_device):
     cores = model_args.sub_core_grids
     global_semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3)]
 
+    PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
+        ]
+    )
+    REDUCE_SCATTER_INTERIM_MEMCFG = ttnn.create_sharded_memory_config(
+        shape=(64, 512),
+        core_grid=PACKET_WORKER_CRS,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
     # Input tensor shape: [1, 1, 32, 3840]
 
     # 512 = 4 devices * 4 pages per packet * 32 tile_width
@@ -28,7 +42,7 @@ def test_qwen_mlp_rs(mesh_device):
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
-        memory_config=model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
+        memory_config=REDUCE_SCATTER_INTERIM_MEMCFG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
     )
 
@@ -40,8 +54,6 @@ def test_qwen_mlp_rs(mesh_device):
         memory_config=model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
     )
-
-    breakpoint()
 
     w1_out = ttnn.from_torch(
         torch.randn(
@@ -66,6 +78,8 @@ def test_qwen_mlp_rs(mesh_device):
         topology=model_config["CCL_TOPOLOGY"],
         cluster_axis=1,
     )
+
+    logger.info(f"Finished RS")
 
     # w1_out_reduced = ttnn.to_memory_config(w1_out_reduced, memory_config=model_config["REDUCE_SCATTER_OUT_MEMCFG"])
 

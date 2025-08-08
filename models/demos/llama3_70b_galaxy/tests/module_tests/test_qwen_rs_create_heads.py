@@ -7,8 +7,19 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     get_core_ranges,
 )
 from models.utility_functions import torch_random
+from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -25,6 +36,16 @@ def test_qwen3_tg_rs_create_heads(
     """
     torch.manual_seed(0)
     galaxy_type = "6U" if ttnn.GetNumPCIeDevices() == 32 else "4U"
+
+    # Setup prefetcher
+    prefetcher_setup = TtLlamaPrefetcherSetup(
+        mesh_device,
+        n_tensors=2,
+        n_layers=1,
+    )
+    mesh_device.set_sub_device_stall_group(
+        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
+    )
 
     sub_core_grids = ttnn.CoreRangeSet(  # 50 cores total
         [
@@ -116,7 +137,7 @@ def test_qwen3_tg_rs_create_heads(
         intermediate_packet_buffer=persistent_buffers,
         dim=3,
         cross_device_semaphore=global_semaphore,
-        subdevice_id=ttnn.SubDeviceId(0),
+        subdevice_id=prefetcher_setup.worker_sub_device_id,
         cluster_axis=1,
         mesh_device=mesh_device,
         topology={"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(galaxy_type),
