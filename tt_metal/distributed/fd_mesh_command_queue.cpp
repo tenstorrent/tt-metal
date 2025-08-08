@@ -49,6 +49,22 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 
+// This macro checks if the device is already hung.
+// If so, it keeps everything working enough to give more
+// data to the user. But at this point the status is unrecoverable.
+// Why not use TT_FATAL? Because we want to keep the device in a state
+// where it can still be used to get more data to the user.
+// for instance, graphtracing can provide the arguments sent to an operation
+// and let the user create a smaller test with those same arguments.
+// Directly using TT_FATAL would not give us that ability.
+#define TT_CANT_OPERATE(condition, message)    \
+    do {                                       \
+        if (condition) {                       \
+            std::cerr << message << std::endl; \
+            return;                            \
+        }                                      \
+    } while (0)
+
 namespace tt {
 namespace tt_metal {
 struct ProgramCommandSequence;
@@ -207,10 +223,12 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
+    reads_processed_cv_.wait(
+        lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    TT_CANT_OPERATE(thread_exception_state_.load(), "Unrecoverable state, Can't enqueue workload");
     auto lock = lock_api_function_();
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
@@ -410,6 +428,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScoped;
+    TT_CANT_OPERATE(thread_exception_state_.load(), "Unrecoverable state, Can't write shard to core");
     auto lock = lock_api_function_();
     if (!mesh_device_->is_local(address.device_coord)) {
         return;
@@ -445,6 +464,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScoped;
+    TT_CANT_OPERATE(thread_exception_state_.load(), "Unrecoverable state, Can't read shard from core");
     auto lock = lock_api_function_();
     if (!mesh_device_->is_local(address.device_coord)) {
         return;
@@ -483,7 +503,8 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_ptr_; });
+    reads_processed_cv_.wait(
+        lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
@@ -491,6 +512,8 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
 
     if (thread_exception_ptr_) {
         num_outstanding_reads_.store(0);
+        reads_processed_cv_.notify_all();
+        lock.unlock();
         auto exception_ptr = thread_exception_ptr_;
         thread_exception_ptr_ = nullptr;
         std::rethrow_exception(exception_ptr);
@@ -512,6 +535,7 @@ void FDMeshCommandQueue::write_shard_to_device(
     if (!mesh_device_->is_local(device_coord)) {
         return;
     }
+    TT_CANT_OPERATE(thread_exception_state_.load(), "Unrecoverable state, Can't write shard to device");
 
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
@@ -540,6 +564,7 @@ void FDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
+    TT_CANT_OPERATE(thread_exception_state_.load(), "Unrecoverable state, Can't read shard from device");
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
@@ -631,8 +656,10 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
+    // TT_CANT_OPERATE(thread_exception_state_.load(), "Unrecoverable state, Can't record event");
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
+
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto event = MeshEvent(
         sysmem_manager.get_next_event(id_),
@@ -696,6 +723,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
 
 void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     auto lock = lock_api_function_();
+    TT_CANT_OPERATE(thread_exception_state_.load(), "Unrecoverable state, Can't wait for event");
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for_each_local(mesh_device_, sync_event.device_range(), [&](const auto& coord) {
@@ -709,7 +737,7 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
-    while (true) {
+    while (thread_exception_state_.load() == false) {
         try {
             {
                 std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
@@ -751,9 +779,12 @@ void FDMeshCommandQueue::read_completion_queue() {
             // We don't have a recovery mechanism for this, so we just need to clean up the state and let the main
             // thread handle it.
             thread_exception_ptr_ = std::current_exception();
+            thread_exception_state_.store(true);
             exit_condition_.store(true);
             num_outstanding_reads_.store(0);
             reads_processed_cv_.notify_all();
+            completion_queue_reads_.clear();
+            reader_thread_cv_.notify_all();
             return;
         }
     }
