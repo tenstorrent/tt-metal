@@ -15,6 +15,10 @@
 #include "debug/dprint_tensix.h"
 #endif
 
+#define TILE_WIDTH 32
+#define FACE_WIDTH 16
+#define FACE_HEIGHT 16
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -36,9 +40,6 @@ void MAIN {
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
-    constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t FACE_WIDTH = 16;
-    constexpr uint32_t FACE_HEIGHT = 16;
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
     constexpr uint32_t num_faces_in_input_tile =
