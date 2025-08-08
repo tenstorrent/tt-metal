@@ -1183,10 +1183,8 @@ void DeviceProfiler::readRiscProfilerResults(
                     riscNumRead = data_buffer.at(index) & 0x7;
                     coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
                     runHostCounterRead = data_buffer.at(index + 1);
-                    auto [base_program_id, _device_id, is_host_fallback_op] =
-                        tt::tt_metal::detail::DecodePerDeviceProgramID(runHostCounterRead);
 
-                    opname = getOpNameIfAvailable(device_id, base_program_id);
+                    opname = getOpNameIfAvailable(device_id, runHostCounterRead);
 
                 } else {
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;

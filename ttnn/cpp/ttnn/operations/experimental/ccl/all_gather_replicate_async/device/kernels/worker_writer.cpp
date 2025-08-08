@@ -10,7 +10,6 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 #include <utility>
-#include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
 
 using address_t = uint32_t;
 FORCE_INLINE void advance_local_read_address_for_fabric_write(
@@ -75,16 +74,6 @@ constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targe
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
-    DPRINT << "Kernel = worker_writer" << ENDL();
-    DPRINT << "my_chip_id: " << my_chip_id << ENDL();
-    DPRINT << "reserved_packet_header_cb_id: " << reserved_packet_header_cb_id << ENDL();
-    DPRINT << "num_packet_headers_storable: " << num_packet_headers_storable << ENDL();
-    DPRINT << "cb0_id: " << cb0_id << ENDL();
-    DPRINT << "packet_size_in_pages: " << packet_size_in_pages << ENDL();
-    DPRINT << "tensor0_page_size: " << tensor0_page_size << ENDL();
-    DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << ENDL();
-    DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << ENDL();
-    DPRINT << ENDL();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -99,16 +88,6 @@ void kernel_main() {
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-
-    DPRINT << "tensor_address0: " << tensor_address0 << ENDL();
-    DPRINT << "num_tiles_per_core: " << num_tiles_per_core << ENDL();
-    DPRINT << "num_tiles_to_read: " << num_tiles_to_read << ENDL();
-    DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << ENDL();
-    DPRINT << "num_cores: " << num_cores << ENDL();
-    DPRINT << "out_ready_sem_bank_addr: " << static_cast<uint32_t>(out_ready_sem_bank_addr) << ENDL();
-    DPRINT << "out_ready_sem_noc0_x: " << static_cast<uint32_t>(out_ready_sem_noc0_x) << ENDL();
-    DPRINT << "out_ready_sem_noc0_y: " << static_cast<uint32_t>(out_ready_sem_noc0_y) << ENDL();
-    DPRINT << ENDL();
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
@@ -156,10 +135,6 @@ void kernel_main() {
         uint64_t noc0_dest_noc_addr =
             get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
-        DPRINT << "num_tiles_to_read_this_core: " << num_tiles_to_read_this_core << ENDL();
-        DPRINT << "core_noc_x[core_id]: " << core_noc_x[core_id] << "core_noc_y[core_id]: " << core_noc_y[core_id]
-               << ENDL();
-        DPRINT << "core_id: " << core_id << " noc0_dest_noc_addr: " << noc0_dest_noc_addr << ENDL();
 
         // This issues a flush barrier
         advance_local_read_address_for_fabric_write(
@@ -212,9 +187,5 @@ void kernel_main() {
     }
 
     fabric_connection.close();
-    // increment locally
-    // uint64_t out_ready_sem_noc_addr =
-    //     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
-    // noc_semaphore_inc(out_ready_sem_noc_addr, 1);
     noc_async_write_barrier();
 }

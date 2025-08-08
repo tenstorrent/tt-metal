@@ -11,7 +11,6 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include <cstdint>
 #include <utility>
-#include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
 
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,

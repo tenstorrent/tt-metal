@@ -23,11 +23,6 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
-    DPRINT << "Kernel = worker_reader" << ENDL();
-    DPRINT << "my_chip_id: " << my_chip_id << ENDL();
-    DPRINT << "cb0_id: " << cb0_id << ENDL();
-    DPRINT << "tensor0_page_size: " << tensor0_page_size << ENDL();
-    DPRINT << ENDL();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -45,17 +40,6 @@ void kernel_main() {
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    DPRINT << "tensor_address0: " << tensor_address0 << ENDL();
-    DPRINT << "num_tiles_per_core: " << num_tiles_per_core << ENDL();
-    DPRINT << "num_tiles_to_read: " << num_tiles_to_read << ENDL();
-    DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << ENDL();
-    DPRINT << "intermediate_first_core_tile_start_offset: " << intermediate_first_core_tile_start_offset << ENDL();
-    DPRINT << "num_cores: " << num_cores << ENDL();
-    DPRINT << "ring_index: " << ring_index << ENDL();
-    DPRINT << "out_ready_sem_bank_addr: " << static_cast<uint32_t>(out_ready_sem_bank_addr) << ENDL();
-    DPRINT << "out_ready_sem_noc0_x: " << static_cast<uint32_t>(out_ready_sem_noc0_x) << ENDL();
-    DPRINT << "out_ready_sem_noc0_y: " << static_cast<uint32_t>(out_ready_sem_noc0_y) << ENDL();
-    DPRINT << ENDL();
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
