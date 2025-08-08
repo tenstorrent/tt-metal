@@ -23,19 +23,25 @@ void kernel_main() {
     constexpr uint32_t cb_id_mapping = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_input = get_compile_time_arg_val(4);
     constexpr uint32_t cb_id_working = get_compile_time_arg_val(5);  // scratch
-    constexpr auto output_args = TensorAccessorArgs<6>();
+    constexpr bool is_bfp8 = get_compile_time_arg_val(6);
+    constexpr auto output_args = TensorAccessorArgs<7>();
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr, Tile_size_bytes);
 
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
+    constexpr uint32_t faceline_size = 256;
+    constexpr uint32_t faceline_row = 16;
+    constexpr uint32_t exponents_size = 64;
     cb_reserve_back(cb_id_working, 1);
     const uint32_t working_write_addr = get_write_ptr(cb_id_working);
     for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
+        uint8_t exp_buffer[exponents_size] = {0};  // for bfloat8_b exponents
         cb_wait_front(cb_id_mapping, 1);
         const uint32_t map_addr = get_read_ptr(cb_id_mapping);
         auto map_ptr = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(map_addr);
         uint32_t input_base_addr, previous_input_page_idx = std::numeric_limits<uint32_t>::max();
+        uint32_t faceline_ctr = 0;
         for (uint32_t seg_idx = 0; seg_idx < Max_Map_Entries; ++seg_idx) {
             if (map_ptr[seg_idx].num_elements == 0) {
                 if (output_page_idx == end_output_page - 1 && seg_idx == Max_Map_Entries - 1) {
@@ -59,12 +65,38 @@ void kernel_main() {
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
             }
             // TODO (maybe) pre calculate size and offsets in bytes on host
-            const uint32_t output_addr = working_write_addr + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
-            const uint32_t input_addr = input_base_addr + map_ptr[seg_idx].input_page_offset * element_sz_bytes;
+            uint32_t input_page_offset = map_ptr[seg_idx].input_page_offset * element_sz_bytes;
+            uint32_t output_page_offset = map_ptr[seg_idx].output_page_offset * element_sz_bytes;
+
+            const uint32_t output_addr = working_write_addr + output_page_offset;
+            const uint32_t input_addr = input_base_addr + input_page_offset;
             const uint32_t szbytes = map_ptr[seg_idx].num_elements * element_sz_bytes;
-            tt_memmove<false, true, false, Tile_size_bytes>(output_addr, input_addr, szbytes);
+
+            if (is_bfp8) {
+                volatile tt_l1_ptr uint8_t* input_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(input_base_addr);
+                uint32_t subtile_id = input_page_offset / faceline_size;
+                uint32_t row_id = (input_page_offset % faceline_size) / faceline_row;
+                uint32_t output_row_id = (faceline_ctr / 2) % faceline_row;
+                uint32_t output_subtile_id = output_page_offset / faceline_size;
+                exp_buffer[faceline_row * output_subtile_id + output_row_id] =
+                    input_ptr[faceline_row * subtile_id + row_id];  // store first byte for debugging
+                if (seg_idx == 31 &&
+                    map_ptr[seg_idx].num_elements == faceline_row * 2) {  // if reading 2 facelines at a time
+                    exp_buffer[32] = input_ptr[faceline_row * subtile_id + row_id + 1];
+                    faceline_ctr++;
+                }
+                faceline_ctr++;
+            }
+            // skip exponents for bfloat8_b when moving data
+            tt_memmove<false, true, false, Tile_size_bytes>(
+                output_addr + exponents_size * is_bfp8, input_addr + exponents_size * is_bfp8, szbytes);
         }
         noc_async_write_barrier();
+
+        if (is_bfp8) {
+            // copy exponents for bfloat8_b
+            memmove((void*)working_write_addr, (const void*)&exp_buffer[0], exponents_size);
+        }
 
         const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
         enhanced_noc_async_write<Tile_size_bytes, true>(working_write_addr, output_noc_addr, Tile_size_bytes);
