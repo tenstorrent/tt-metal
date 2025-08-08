@@ -23,7 +23,7 @@ DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 def _get_rich_table(
     mesh_device: "ttnn.MeshDevice",
     tensor: "ttnn.Tensor" = None,
-    on_mesh_device: bool = True,
+    storage_type: ttnn.StorageType = ttnn.StorageType.DEVICE,
     style_cell: Optional[Callable] = None,
     annotate_cell: Optional[Callable] = None,
 ):
@@ -36,7 +36,7 @@ def _get_rich_table(
     CELL_SIZE = 30
 
     # Setup rich table
-    if on_mesh_device:
+    if storage_type == ttnn.StorageType.DEVICE:
         try:
             rows, cols = mesh_device.shape
             view = mesh_device.get_view()
@@ -57,7 +57,7 @@ def _get_rich_table(
             rows, cols = 0, 0
 
     if tensor:
-        table_title = f"Tensor(storage: {tensor.storage_type()})"
+        table_title = f"Tensor(storage: {storage_type})"
     else:
         table_title = f"MeshDevice(rows={rows}, cols={cols})"
 
@@ -80,7 +80,7 @@ def _get_rich_table(
         for col_idx in range(cols):
             try:
                 coord = ttnn.MeshCoordinate(row_idx, col_idx)
-                if on_mesh_device:
+                if storage_type == ttnn.StorageType.DEVICE:
                     locality = "Local\n" if view.is_local(coord) else "Remote\n"
                     device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
                     device_id_str = f"Dev. ID: {device_id}\n" if view.is_local(coord) else "Unknown\n"
@@ -108,9 +108,9 @@ def _get_rich_table(
     return table_view
 
 
-def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" = None):
+def visualize_mesh_device(mesh_device: "ttnn.MeshDevice"):
     """
-    Visualize the device mesh and the given tensor (if specified).
+    Visualize the device mesh.
     """
     from rich.console import Console
 
@@ -124,8 +124,6 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
     """
     from rich.console import Console
     from loguru import logger
-
-    mesh_device = tensor.device()
 
     try:
         shards = ttnn.get_device_tensors(tensor)
@@ -145,10 +143,10 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
 
         # Generate the mesh table with shard annotations
         mesh_table = _get_rich_table(
-            mesh_device,
+            tensor.device(),
             tensor,
             annotate_cell=annotate_with_shard_info,
-            on_mesh_device=ttnn.is_tensor_storage_on_device(tensor),
+            storage_type=tensor.storage_type(),
         )
 
         Console().print(mesh_table)
