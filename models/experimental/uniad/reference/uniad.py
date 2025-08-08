@@ -536,7 +536,7 @@ class UniAD(nn.Module):
         if img is None:
             return None
         assert img.dim() == 5
-        img = torch.randn(1, 6, 3, 640, 360)  # added by me
+
         B, N, C, H, W = img.size()
         img = img.reshape(B * N, C, H, W)
         if self.use_grid_mask:
@@ -546,7 +546,7 @@ class UniAD(nn.Module):
             img_feats = list(img_feats.values())
         if True:  # self.with_img_neck:
             img_feats = self.img_neck(img_feats)
-        # img_feats=[torch.randn([6, 256, 80, 45]), torch.randn([6, 256, 40, 23]), torch.randn([6, 256, 20, 12]), torch.randn([6, 256, 10, 6])]
+
         img_feats_reshaped = []
         for img_feat in img_feats:
             _, c, h, w = img_feat.size()

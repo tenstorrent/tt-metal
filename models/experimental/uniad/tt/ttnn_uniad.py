@@ -841,8 +841,6 @@ class TtUniAD:
         if img is None:
             return None
         assert len(img.shape) == 5
-        img = torch.randn(1, 6, 3, 640, 360)  # added by me
-        img = ttnn.from_torch(img, device=self.device, dtype=ttnn.bfloat16)  # added by me
         B, N, C, H, W = img.shape
         img = ttnn.reshape(img, (B * N, C, H, W))
         if self.use_grid_mask:
