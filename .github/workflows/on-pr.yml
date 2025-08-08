@@ -7,9 +7,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: ["main"]
   merge_group:
-    types:
-      - checks_requested
-      - destroyed
 
 permissions:
   checks: write
@@ -29,13 +26,11 @@ concurrency:
 
 jobs:
   pre-commit:
-    if: ${{ github.event.action != 'destroyed' }}
     name: "🔍 Static checks"
     uses: ./.github/workflows/pre-commit.yml
 
   detect-changes:
     name: "🔍 Detect changes"
-    if: ${{ github.event.action != 'destroyed' }}
     runs-on: ubuntu-latest
     needs: pre-commit
     outputs:
@@ -134,7 +129,6 @@ jobs:
 
   build-images:
     name: "🐳️ Docker setup"
-    if: ${{ github.event.action != 'destroyed' }}
     uses: ./.github/workflows/build-images.yml
     needs: pre-commit
     secrets: inherit
@@ -143,10 +137,9 @@ jobs:
     name: "🌀 Perform checks (Wormhole)"
     uses: ./.github/workflows/setup-and-test.yml
     needs: [build-images, detect-changes]
-    if: ${{ (needs.detect-changes.outputs.wormhole == 'true' ||
+    if: ${{ needs.detect-changes.outputs.wormhole == 'true' ||
             needs.detect-changes.outputs.tests == 'true' ||
-            needs.detect-changes.outputs.github == 'true') &&
-            github.event.action != 'destroyed' }}
+            needs.detect-changes.outputs.github == 'true' }}
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-beta-ubuntu-2204-n150-large-stable
@@ -156,10 +149,9 @@ jobs:
     name: "🕳️ Perform checks (Blackhole)"
     uses: ./.github/workflows/setup-and-test.yml
     needs: [build-images, detect-changes]
-    if: ${{ (needs.detect-changes.outputs.blackhole == 'true' ||
+    if: ${{ needs.detect-changes.outputs.blackhole == 'true' ||
             needs.detect-changes.outputs.tests == 'true' ||
-            needs.detect-changes.outputs.github == 'true') &&
-            github.event.action != 'destroyed' }}
+            needs.detect-changes.outputs.github == 'true' }}
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-beta-ubuntu-2204-p150b-large-stable
