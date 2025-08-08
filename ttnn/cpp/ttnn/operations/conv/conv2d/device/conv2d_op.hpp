@@ -76,8 +76,8 @@ struct Conv2dConfig {
     bool full_inner_dim = false;
 
     // Only for height sharding.
-    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true
-    bool enable_split_reader = false;
+    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true, otherwise it will just be ignored
+    bool enable_split_reader = true;
 
     // Re-use input tensor storage when creating output tensor
     bool in_place = false;
@@ -345,7 +345,7 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
     bool full_inner_dim = false,
-    bool enable_split_reader = false);
+    bool enable_split_reader = true);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
