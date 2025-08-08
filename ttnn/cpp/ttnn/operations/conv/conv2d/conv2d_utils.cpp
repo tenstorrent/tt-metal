@@ -388,20 +388,15 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
         if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
             act_block_h_ntiles = act_block_h_override_ntiles;
         } else {
-            uint32_t act_block_h_override_ntiles = act_block_h_override / constants::TILE_HEIGHT;
-            if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
-                act_block_h_ntiles = act_block_h_override_ntiles;
-            } else {
-                act_block_h_ntiles =
-                    find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
-                log_info(
-                    LogOp,
-                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
-                    "instead {} was selected as closest valid option!",
-                    act_block_h_override_ntiles,
-                    padded_output_height_ntiles_per_core,
-                    act_block_h_ntiles);
-            }
+            act_block_h_ntiles =
+                find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
+            log_info(
+                LogOp,
+                "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
+                "instead {} was selected as closest valid option!",
+                act_block_h_override_ntiles,
+                padded_output_height_ntiles_per_core,
+                act_block_h_ntiles);
         }
     }
 
@@ -852,12 +847,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             // Set act_block_h_override to min value to
             // be conservative with L1 memory usage.
             conv_config.act_block_h_override = constants::TILE_HEIGHT;
-            // Split reader is currently only supported for height sharded convs that are not 1d deptwise.
-            if (conv_config.enable_split_reader && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-                !conv_is_1d_deptwise) {
-                // Split reader needs at least 2 tiles in height to work.
-                conv_config.act_block_h_override *= 2;
-            }
         }
 
         const uint32_t input_channels_alignment =
