@@ -60,10 +60,11 @@ class TT_CCL:
             self.reduce_semaphore_handles = [[], []]
 
         for i in range(2):
-            self.barrier_semaphore_handles.append(
-                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
-            )
             for _ in range(self.num_cbs):
+                self.barrier_semaphore_handles.append(
+                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                )
+
                 if self.use_ring_ag_prefill:
                     self.gather_semaphore_handles[i].append(
                         [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)]
@@ -121,7 +122,7 @@ class TT_CCL:
 
     def get_and_cycle_barrier_semaphore_handle(self):
         current_idx = self.barrier_semaphore_idx
-        self.barrier_semaphore_idx = (self.barrier_semaphore_idx + 1) % 2
+        self.barrier_semaphore_idx = (self.barrier_semaphore_idx + 1) % (2 + self.num_cbs)
         return self.barrier_semaphore_handles[current_idx]
 
     def get_all_gather_concat_inter_buffer(self):
