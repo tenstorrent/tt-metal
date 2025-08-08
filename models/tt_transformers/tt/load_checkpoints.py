@@ -13,17 +13,6 @@ from safetensors.torch import load_file as safetensors_load_file
 from tqdm import tqdm
 
 
-def _get_known_prefixes_mapping():
-    return {
-        # Llama Vision
-        "text_model.": "",
-        "vision_model.": "",
-        # Gemma3
-        "model.language_model.": "model.",
-        "model.vision_tower.": "model.",
-    }
-
-
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
 def load_hf_state_dict(ckpt_dir):
     # First check if index file exists
@@ -57,23 +46,21 @@ def standardize_hf_keys(state_dict):
     key_meta = "lm_head.weight"
     key_hf = "model.embed_tokens.weight"
 
-    # Check if the key_meta exists with any known prefix
-    if not any(f"{prefix}{key_meta}" in state_dict for prefix in _get_known_prefixes_mapping().keys()):
-        # Assume tied to the embeddings if not present
-        for prefix in _get_known_prefixes_mapping().keys():
-            if f"{prefix}{key_hf}" in state_dict:
-                state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
-                break
+    if not key_meta in state_dict and key_hf in state_dict:
+        state_dict[key_meta] = state_dict[key_hf]
+        del state_dict[key_hf]
 
     return state_dict
 
 
-def standardize_hf_keys_qwen25_vl(state_dict):
+def standardize_hf_keys_multimodal(state_dict):
     all_keys = tuple(state_dict.keys())
     new_state_dict = {}
     for k in all_keys:
         if "model.visual." in k:
             new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
+        elif "model.vision_tower.vision_model." in k:
+            new_state_dict[k.replace("model.vision_tower.vision_model.", "visual.")] = state_dict[k]
         elif "model.language_model." in k:
             new_state_dict[k.replace("model.language_model.", "model.")] = state_dict[k]
         else:
