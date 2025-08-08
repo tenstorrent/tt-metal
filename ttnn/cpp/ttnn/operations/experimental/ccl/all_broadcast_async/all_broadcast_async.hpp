@@ -18,7 +18,8 @@ struct ExecuteAllBroadcastAsync {
         uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
@@ -29,7 +30,8 @@ struct ExecuteAllBroadcastAsync {
         const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<size_t> num_preferred_links = std::nullopt,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl
