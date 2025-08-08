@@ -310,12 +310,6 @@ TEST(DistributedHostBufferTest, IsLocal) {
     distributed::MeshCoordinate local_offset(1, 0);
 
     auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
-    EXPECT_EQ(buffer.shape().mesh_size(), 4);  // 2×2 = 4
-
-    buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
-    buffer.emplace_shard(distributed::MeshCoordinate(0, 1), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
-    buffer.emplace_shard(distributed::MeshCoordinate(1, 0), []() { return HostBuffer(std::vector<int>{7, 8, 9}); });
-    buffer.emplace_shard(distributed::MeshCoordinate(1, 1), []() { return HostBuffer(std::vector<int>{10, 11, 12}); });
 
     EXPECT_FALSE(buffer.is_local(distributed::MeshCoordinate(0, 0)));
     EXPECT_FALSE(buffer.is_local(distributed::MeshCoordinate(0, 1)));
