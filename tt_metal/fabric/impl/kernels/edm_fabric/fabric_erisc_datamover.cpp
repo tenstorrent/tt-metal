@@ -30,6 +30,9 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include <fabric_host_interface.h>
 
+// Lite fabric components
+// #include "tests/tt_metal/tt_metal/tunneling/lite_fabric_channels.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -300,7 +303,8 @@ template <
     uint8_t RECEIVER_NUM_BUFFERS>
 FORCE_INLINE void send_next_data(
     tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& sender_buffer_channel,
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& sender_worker_interface,
+    tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
+        sender_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
     tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& receiver_buffer_channel) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
@@ -1079,7 +1083,8 @@ template <
     uint8_t RECEIVER_NUM_BUFFERS>
 void run_sender_channel_step_impl(
     tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& local_sender_channel,
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
+    tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
+        local_sender_channel_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
     tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& remote_receiver_channel,
     PacketHeaderRecorder<PACKET_HEADER_TYPE>& packet_header_recorder,
@@ -1619,7 +1624,7 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[0]);
         new (&local_sender_channel_worker_interfaces.template get<0>())
-            tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[0]>(
+            tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[0]>(
                 connection_worker_info_ptr,
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[0]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
@@ -1632,7 +1637,7 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[1]);
         new (&local_sender_channel_worker_interfaces.template get<1>())
-            tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[1]>(
+            tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[1]>(
                 connection_worker_info_ptr,
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[1]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
@@ -1646,7 +1651,7 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[2]);
         new (&local_sender_channel_worker_interfaces.template get<2>())
-            tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[2]>(
+            tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[2]>(
                 connection_worker_info_ptr,
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[2]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
@@ -1659,7 +1664,7 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[3]);
         new (&local_sender_channel_worker_interfaces.template get<3>())
-            tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[3]>(
+            tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[3]>(
                 connection_worker_info_ptr,
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[3]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
@@ -1675,7 +1680,9 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
             auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
                 local_sender_connection_info_addresses[VC1_SENDER_CHANNEL]);
             new (&local_sender_channel_worker_interfaces.template get<VC1_SENDER_CHANNEL>())
-                tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[VC1_SENDER_CHANNEL]>(
+                tt::tt_fabric::EdmChannelWorkerInterface<
+                    tt::tt_fabric::worker_handshake_noc,
+                    SENDER_NUM_BUFFERS_ARRAY[VC1_SENDER_CHANNEL]>(
                     connection_worker_info_ptr,
                     reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(
                         local_sender_flow_control_semaphores[VC1_SENDER_CHANNEL]),
@@ -1730,11 +1737,20 @@ void wait_for_other_local_erisc() {
 FORCE_INLINE void teardown(
     volatile tt_l1_ptr tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status_ptr,
-    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS_ARRAY[0], NUM_TRANSACTION_IDS, 0> receiver_channel_0_trid_tracker,
+    WriteTransactionIdTracker<
+        RECEIVER_NUM_BUFFERS_ARRAY[0],
+        NUM_TRANSACTION_IDS,
+        0,
+        local_chip_noc_equals_downstream_noc,
+        edm_to_downstream_noc,
+        edm_to_local_chip_noc> receiver_channel_0_trid_tracker,
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1],
         NUM_TRANSACTION_IDS,
-        NUM_TRANSACTION_IDS> receiver_channel_1_trid_tracker) {
+        NUM_TRANSACTION_IDS,
+        local_chip_noc_equals_downstream_noc,
+        edm_to_downstream_noc,
+        edm_to_local_chip_noc> receiver_channel_1_trid_tracker) {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
@@ -2116,7 +2132,7 @@ void kernel_main() {
     }
     // create the sender channnel worker interfaces with input array of number of buffers
     auto local_sender_channel_worker_interfaces =
-        tt::tt_fabric::EdmChannelWorkerInterfaces<SENDER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     // TODO: change to TMP.
@@ -2297,11 +2313,21 @@ void kernel_main() {
             local_sender_flow_control_semaphores);
     }
 
-    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS_ARRAY[0], NUM_TRANSACTION_IDS, 0> receiver_channel_0_trid_tracker;
+    WriteTransactionIdTracker<
+        RECEIVER_NUM_BUFFERS_ARRAY[0],
+        NUM_TRANSACTION_IDS,
+        0,
+        local_chip_noc_equals_downstream_noc,
+        edm_to_downstream_noc,
+        edm_to_local_chip_noc>
+        receiver_channel_0_trid_tracker;
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1],
         NUM_TRANSACTION_IDS,
-        NUM_TRANSACTION_IDS>
+        NUM_TRANSACTION_IDS,
+        local_chip_noc_equals_downstream_noc,
+        edm_to_downstream_noc,
+        edm_to_local_chip_noc>
         receiver_channel_1_trid_tracker;
 
 #ifdef ARCH_BLACKHOLE

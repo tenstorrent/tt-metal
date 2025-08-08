@@ -141,13 +141,15 @@ constexpr bool SKIP_CONNECTION_LIVENESS_CHECK = false;
 constexpr bool enable_ring_support = false;
 constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
-namespace tt::tt_fabric {
+namespace lite_fabric {
+
+constexpr uint8_t local_chip_data_cmd_buf = BRISC_WR_CMD_BUF;  // Used
+constexpr uint8_t edm_to_local_chip_noc = 0;
+constexpr uint8_t forward_and_local_write_noc_vc = 2;  // FabricEriscDatamoverConfig::DEFAULT_NOC_VC
 
 constexpr uint8_t worker_handshake_noc = NOC_INDEX;
 constexpr uint8_t edm_to_downstream_noc = 0;                 // Used?
 constexpr bool local_chip_noc_equals_downstream_noc = true;  // Used?
 
-constexpr uint8_t local_chip_data_cmd_buf = BRISC_WR_CMD_BUF;  // Used
-constexpr uint8_t forward_and_local_write_noc_vc = 2;          // FabricEriscDatamoverConfig::DEFAULT_NOC_VC
-}
+}  // namespace lite_fabric
 #endif
