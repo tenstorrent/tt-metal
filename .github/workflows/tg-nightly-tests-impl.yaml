@@ -46,8 +46,8 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
-      - ${{ inputs.topology }}
       - pipeline-functional
+      - ${{ inputs.topology }}
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
