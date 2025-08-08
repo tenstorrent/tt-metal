@@ -155,6 +155,7 @@ def test_div_bf16(device, ttnn_function):
     tt_out = ttnn.to_torch(z_tt_div)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
+    assert torch.equal(z_torch, tt_out)
     assert status
 
 
