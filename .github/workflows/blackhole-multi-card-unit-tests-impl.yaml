@@ -1,4 +1,4 @@
-name: "[internal] Blackhole LLMBox unit tests impl"
+name: "[internal] Blackhole Multi-card unit tests impl"
 
 on:
   workflow_call:
@@ -24,7 +24,7 @@ on:
         type: string
 
 jobs:
-  fabric-tests:
+  multi-card-unit-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
