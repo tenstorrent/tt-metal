@@ -179,9 +179,8 @@ inline void calculate_sfpu_binary(const uint dst_offset) {
             constexpr uint dst_tile_size = 32;
             sfpi::vFloat in0 = sfpi::dst_reg[0];
             sfpi::vFloat in1 = sfpi::dst_reg[dst_offset * dst_tile_size];
-            sfpi::vFloat result = 0.f;
 
-            result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
+            sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
 
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
