@@ -678,15 +678,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     tt::tt_metal::KernelHandle writer_kernel_id;
     if (b.has_value()) {
         std::vector<uint32_t> writer_compile_time_args;
-        if (writer_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::WriterNoBcastNg) {
-            tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
-            writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
-        } else {
-            writer_compile_time_args = {
-                static_cast<uint32_t>(b_is_dram),
-                static_cast<uint32_t>(c_is_dram),
-                static_cast<uint32_t>(has_sharding)};
-        }
+        TT_FATAL(
+            writer_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::WriterNoBcastNg,
+            "Unexpected writer kernel in b-present path");
+        tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
+        writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
         writer_kernel_id = tt_metal::CreateKernel(
             program,
             get_kernel_file_path(writer_kernel, is_sfpu_op),
@@ -694,36 +690,25 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
     } else {
         std::vector<uint32_t> writer_compile_time_args;
-        // Choose compile-time args based on selected writer kernel
         switch (writer_kernel) {
             case CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar:
-                // Only destination tensor TA
                 tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
                 break;
             case CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalarBcast:
-                // Source (A) then destination (C)
                 tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(writer_compile_time_args);
                 tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
                 break;
             case CMAKE_UNIQUE_NAMESPACE::KernelName::WriterNoBcast:
-                // Source (A), destination (C), then has_sharding flag
                 tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(writer_compile_time_args);
                 tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
                 writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
                 break;
             case CMAKE_UNIQUE_NAMESPACE::KernelName::WriterRowBcast:
             case CMAKE_UNIQUE_NAMESPACE::KernelName::WriterColBcast:
-                // Source (A) then destination (C)
                 tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(writer_compile_time_args);
                 tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
                 break;
-            default:
-                // Fallback to previous behavior if an unexpected kernel is selected
-                writer_compile_time_args = {
-                    static_cast<uint32_t>(b_is_dram),
-                    static_cast<uint32_t>(c_is_dram),
-                    static_cast<uint32_t>(has_sharding)};
-                break;
+            default: TT_FATAL(false, "Unexpected writer kernel in no-b path");
         }
         writer_kernel_id = tt_metal::CreateKernel(
             program,
@@ -785,7 +770,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     tt::tt_metal::KernelHandle reader_kernel_id;
     if (b.has_value()) {
         std::vector<uint32_t> reader_compile_time_args;
-        // New NG readers expect TA(A), TA(B), then has_sharding
         tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(reader_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(*b_buffer).append_to(reader_compile_time_args);
         reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
@@ -806,12 +790,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             case CMAKE_UNIQUE_NAMESPACE::KernelName::ReaderScalarBcast:
                 tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(reader_compile_time_args);
                 break;
-            default:
-                reader_compile_time_args = {
-                    static_cast<uint32_t>(a_is_dram),
-                    static_cast<uint32_t>(has_sharding),
-                    static_cast<uint32_t>(b_is_dram)};
-                break;
+            default: TT_FATAL(false, "Unexpected reader kernel in no-b path");
         }
         reader_kernel_id = tt_metal::CreateKernel(
             program,
