@@ -543,11 +543,14 @@ struct PackHasLocal<DownstreamDirections<first, rest...>> {
     static constexpr bool value = (first == my_direction) || PackHasLocal<DownstreamDirections<rest...>>::value;
 };
 
+#if defined(FABRIC_2D)
 // 2D low-latency mode, fetch from the pkt header
 FORCE_INLINE uint32_t get_processing_mask(tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
     return packet_header->route_buffer[packet_header->routing_fields.hop_index];
 }
+#endif
 
+#if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
 // 2D dynamic routing mode, prepare from pkt header
 FORCE_INLINE uint32_t get_processing_mask(
     tt_l1_ptr MeshPacketHeader* packet_header, std::array<uint8_t, num_eth_ports>& port_direction_table) {
@@ -611,7 +614,9 @@ FORCE_INLINE uint32_t get_processing_mask(
 
     return mask;
 }
+#endif
 
+#if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, eth_chan_directions downstream_direction>
 FORCE_INLINE size_t get_downstream_edm_interface_index() {
     size_t downstream_edm_interface_index = downstream_direction;
@@ -632,7 +637,9 @@ FORCE_INLINE size_t get_downstream_edm_interface_index() {
 
     return downstream_edm_interface_index;
 }
+#endif
 
+#if defined(FABRIC_2D)
 // 2D low-latency
 template <eth_chan_directions downstream_direction, bool has_both_axes>
 FORCE_INLINE void update_header_and_cached_routing_fields(
@@ -648,8 +655,9 @@ FORCE_INLINE void update_header_and_cached_routing_fields(
         }
     }
 }
+#endif
 
-// 2D dynamic
+#if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
 template <eth_chan_directions downstream_direction, bool has_both_axes>
 FORCE_INLINE void update_header_and_cached_routing_fields(
     tt_l1_ptr MeshPacketHeader* packet_start, LowLatencyMeshRoutingFields& cached_routing_fields) {
@@ -671,7 +679,9 @@ FORCE_INLINE void update_header_and_cached_routing_fields(
         }
     }
 }
+#endif
 
+#if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS, eth_chan_directions downstream_direction>
 FORCE_INLINE bool check_space_in_downstream_edm(
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
@@ -683,7 +693,9 @@ FORCE_INLINE bool check_space_in_downstream_edm(
         return downstream_edm_interface[idx].edm_has_space_for_packet();
     }
 }
+#endif
 
+#if defined(FABRIC_2D)
 // DIRECTIONS variadic arg is kept last for auto-deduction of type
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS, eth_chan_directions... DIRECTIONS>
 FORCE_INLINE bool check_space_in_downstream_edms(
@@ -693,7 +705,9 @@ FORCE_INLINE bool check_space_in_downstream_edms(
     return (
         check_space_in_downstream_edm<rx_channel_id, SENDER_NUM_BUFFERS, DIRECTIONS>(downstream_edm_interface) && ...);
 }
+#endif
 
+#if defined(FABRIC_2D)
 template <
     uint8_t rx_channel_id,
     uint8_t SENDER_NUM_BUFFERS,
@@ -735,7 +749,9 @@ FORCE_INLINE void forward_to_downstream_edm(
     forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_pointers>(
         packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
 }
+#endif
 
+#if defined(FABRIC_2D)
 // DIRECTIONS variadic arg is kept last for auto-deduction of type
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS, eth_chan_directions... DIRECTIONS>
 FORCE_INLINE void forward_to_downstream_edms(
@@ -757,7 +773,9 @@ FORCE_INLINE void forward_to_downstream_edms(
         execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
     }
 }
+#endif
 
+#if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) bool process_mask_for_checking_space(
     uint32_t mask,
@@ -818,7 +836,9 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool process_mask_for_chec
         default: __builtin_unreachable();
     }
 }
+#endif
 
+#if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forwarding(
     uint32_t mask,
@@ -941,17 +961,18 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
         default: __builtin_unreachable();
     }
 }
+#endif
 
-// 2D low-latency
+#if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE bool can_forward_packet_completely(
-    tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t directions_mask,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_interface) {
     return process_mask_for_checking_space<rx_channel_id, SENDER_NUM_BUFFERS>(
         directions_mask, downstream_edm_interface);
 }
+#endif
 
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
@@ -1256,8 +1277,8 @@ void run_receiver_channel_step_impl(
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             directions_mask = get_processing_mask(packet_header);
 #endif
-            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
-                packet_header, directions_mask, downstream_edm_interface);
+            can_send_to_all_local_chip_receivers =
+                can_forward_packet_completely<receiver_channel>(directions_mask, downstream_edm_interface);
         } else {
             can_send_to_all_local_chip_receivers =
                 can_forward_packet_completely(cached_routing_fields, downstream_edm_interface[receiver_channel]);
