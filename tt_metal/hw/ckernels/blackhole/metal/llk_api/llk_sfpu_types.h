@@ -116,5 +116,6 @@ enum SfpuType {
     hardsigmoid,
     where,
     softsign,
-    celu
+    celu,
+    rpow,
 };

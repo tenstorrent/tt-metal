@@ -110,6 +110,7 @@ enum class UnaryOpType {
     WHERE_TSS,
     SOFTSIGN,
     CELU,
+    RPOW,
 };
 
 enum class VecMode {
