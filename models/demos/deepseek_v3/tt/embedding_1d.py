@@ -45,7 +45,7 @@ class Embedding1D(AbstractModule):
             torch_weight,
             dtype=ttnn.bfloat8_b,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=[-2, -1], mesh_shape=list(mesh_device.shape)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=[None, -1], mesh_shape=list(mesh_device.shape)),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
