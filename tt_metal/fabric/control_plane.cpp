@@ -28,6 +28,7 @@
 #include "core_coord.hpp"
 #include "compressed_routing_table.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include "distributed_context.hpp"
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
@@ -45,6 +46,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
+#include "tt_stl/small_vector.hpp"
 
 namespace tt::tt_fabric {
 
@@ -301,7 +303,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // A nullopt here indicates that the host this ControlPlane is runnning on owns all Meshes in
     // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
     if (mesh_id_str == nullptr && host_rank_str == nullptr) {
-        auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context();
+        auto& ctx = tt::tt_metal::MetalContext::instance().global_distributed_context();
         auto mpi_rank = *ctx.rank();
         std::vector<MeshId> local_mesh_ids;
         for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
@@ -348,35 +350,48 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     return local_mesh_binding;
 }
 
-ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
+void ControlPlane::init_control_plane(
+    const std::string& mesh_graph_desc_file,
+    std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
+        logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+
+    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    std::transform(
+        this->local_mesh_binding_.mesh_ids.begin(),
+        this->local_mesh_binding_.mesh_ids.end(),
+        std::inserter(this->distributed_contexts_, this->distributed_contexts_.end()),
+        [&](const MeshId& mesh_id) { return std::make_pair(mesh_id, global_context); });
+    if (*global_context->size() > 1) {
+        std::array this_host = {*global_context->rank()};
+        this->host_local_context_ =
+            tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->create_sub_context(
+                this_host);
+    } else {
+        this->host_local_context_ = global_context;
+    }
+
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
 
-    // Initialize the control plane routers based on mesh graph
-    const auto& logical_mesh_chip_id_to_physical_chip_id_mapping =
-        this->get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file);
-    this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
-    // Query and generate intermesh ethernet links per physical chip
+    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
+        this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
+    } else {
+        this->load_physical_chip_mapping(get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file));
+    }
     this->initialize_intermesh_eth_links();
     this->generate_local_intermesh_link_table();
+}
 
+ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
+    init_control_plane(mesh_graph_desc_file, std::nullopt);
 }
 
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
-    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
-    // Printing, only enabled with log_debug
-    this->routing_table_generator_->mesh_graph->print_connectivity();
-
-    // Initialize the control plane routers based on mesh graph
-    this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
-    // Query and generate intermesh ethernet links per physical chip
-    this->initialize_intermesh_eth_links();
-    this->generate_local_intermesh_link_table();
+    init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
 }
 
 void ControlPlane::load_physical_chip_mapping(
@@ -922,7 +937,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         }
     }
 
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < inter_mesh_connectivity.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
         if (this->is_local_mesh(mesh_id)) {
@@ -1860,7 +1875,7 @@ void ControlPlane::generate_local_intermesh_link_table() {
     // Populate the local to remote mapping for all intermesh links
     // This cannot be done by UMD, since it has no knowledge of links marked
     // for intermesh routing (these links are hidden from UMD).
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
     intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
@@ -1927,7 +1942,7 @@ void ControlPlane::generate_local_intermesh_link_table() {
 }
 
 void ControlPlane::exchange_intermesh_link_tables() {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     if (*distributed_context.size() == 1) {
         // No need to exchange intermesh link tables when running a single process
         return;
@@ -2112,6 +2127,18 @@ MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scop
 bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
     const auto& local_mesh_ids = local_mesh_binding_.mesh_ids;
     return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+}
+
+const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ControlPlane::get_distributed_context(
+    MeshId mesh_id) const {
+    auto distributed_context = distributed_contexts_.find(mesh_id);
+    TT_FATAL(distributed_context != distributed_contexts_.end(), "Unknown mesh id: {}", mesh_id);
+    return distributed_context->second;
+}
+
+const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ControlPlane::get_host_local_context()
+    const {
+    return host_local_context_;
 }
 
 ControlPlane::~ControlPlane() = default;

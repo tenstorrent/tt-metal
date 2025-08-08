@@ -4,14 +4,15 @@
 
 #pragma once
 
+#if defined(PROFILE_NOC_EVENTS) && \
+    (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)))
+
 #include "tools/profiler/noc_event_profiler.hpp"
 #include "api/tt-metalium/fabric_edm_packet_header.hpp"
 
 namespace kernel_profiler {
 
 void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) {
-#ifdef PROFILE_NOC_EVENTS
-
     // determine routing fields type at compile time
     KernelProfilerNocEventMetadata::FabricPacketType routing_fields_type;
     if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyMeshRoutingFields, ROUTING_FIELDS_TYPE>) {
@@ -96,7 +97,6 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
             break;
         }
     }
-#endif
 }
 }  // namespace kernel_profiler
 
@@ -104,3 +104,10 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
     {                                                              \
         kernel_profiler::record_fabric_header(_fabric_header_ptr); \
     }
+
+#else
+
+// null macros when noc tracing is disabled
+#define RECORD_FABRIC_HEADER(_fabric_header_ptr)
+
+#endif
