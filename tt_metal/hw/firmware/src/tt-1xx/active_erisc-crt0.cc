@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <csetjmp>
 #include <cstring>
-#include "tt_metal/hw/inc/risc_common.h"
 #include "eth_fw_api.h"
 
 void __attribute__((noinline)) Application();
@@ -54,7 +53,7 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
     }
 
     clear_eth_mailbox();
-    invalidate_l1_cache();
+    __asm__ volatile("fence");
 }
 
 static void return_to_base_fw() {
