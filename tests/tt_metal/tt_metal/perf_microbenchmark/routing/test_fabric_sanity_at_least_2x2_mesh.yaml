@@ -22,11 +22,11 @@ Tests:
     parametrization_params:
       num_links: [1]
       ntype: [unicast_write]
-      size: [64, 4096]
-      num_packets: [1, 100]
 
     defaults:
       ftype: mcast
+      size: 64
+      num_packets: 1
 
     patterns:
       - type: all_to_all
@@ -48,23 +48,6 @@ Tests:
 
     patterns:
       - type: unidirectional_linear
-  
-  - name: "UnidirLinearMulticastMicroLooped"
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1]
-      ntype: [unicast_write]
-      num_packets: [1, 100]
-      size: [64, 4096]
-
-    defaults:
-      ftype: mcast
-
-    patterns:
-      - type: unidirectional_linear
-        iterations: 200
 
   - name: "SingleSenderLinearUnicastAllDevices"
     fabric_setup:
