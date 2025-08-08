@@ -195,43 +195,6 @@ struct PreprocessedPyTensor {
     std::size_t py_data_ptr = 0;
 };
 
-template <typename... Args>
-void log_from_cpp(const char* file, int line, const char* func, Args&&... message) {
-    auto logging = pybind11::module_::import("logging");
-    auto logger = logging.attr("getLogger")("py_log_cxx");
-
-    // Convert arguments to Python objects and join with spaces
-    auto builtins = pybind11::module_::import("builtins");
-    auto str_func = builtins.attr("str");
-
-    std::vector<pybind11::object> py_args;
-    auto convert_arg = [&](auto&& arg) { py_args.push_back(str_func(std::forward<decltype(arg)>(arg))); };
-
-    (convert_arg(std::forward<Args>(message)), ...);
-
-    auto join_str = pybind11::str(" ");
-    auto formatted_message = join_str.attr("join")(py_args);
-
-    // Create a LogRecord manually
-    auto log_record = logging.attr("LogRecord")(
-        "py_log_cxx",                          // name
-        logging.attr("DEBUG"),                 // level
-        std::filesystem::path(file).string(),  // pathname
-        line,                                  // lineno
-        formatted_message,                     // msg
-        pybind11::tuple(),                     // args
-        pybind11::none(),                      // exc_info
-        func,                                  // func
-        pybind11::none()                       // stack_info
-    );
-
-    // Handle the record
-    logger.attr("handle")(log_record);
-}
-
-#define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
-// #define py_log(...)
-
 PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<DataType> optional_data_type) {
     const auto py_dtype = py_tensor.attr("dtype");
     if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
