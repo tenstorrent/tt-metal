@@ -247,11 +247,14 @@ def reference_forward_model(
         torch_input_ids = pad_input_ids_for_decode_mode(torch_input_ids, position_ids)
         seq_len = torch_input_ids.shape[1]  # Update seq_len to the new sequence length
 
+    # Create the mask
+    mask = create_mask(bsz, seq_len, position_ids, mode)
+
     position_ids_expanded = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0).repeat(bsz, 1)
 
     out = reference_model.forward(
         input_ids=torch_input_ids,
-        attention_mask=None,
+        attention_mask=mask,
         position_ids=position_ids_expanded,
         use_cache=True,
     )

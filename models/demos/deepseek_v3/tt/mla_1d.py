@@ -24,6 +24,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     even_int_div,
+    get_mesh_coords,
     get_state_dicts,
     save_and_get_path,
     sub_state_dicts,
@@ -922,21 +923,6 @@ class MLA1D(AbstractModule):
         }
 
     @classmethod
-    def get_mesh_coores(cls, mesh_shape: list[int], row: int = None, col: int = None) -> set[ttnn.MeshCoordinate]:
-        """
-        Get the devices in the current row.
-        """
-        if row:
-            assert 0 <= row < mesh_shape[0], "Row index out of bounds"
-        if col:
-            assert 0 <= col < mesh_shape[1], "Column index out of bounds"
-
-        row_select = range(mesh_shape[0]) if row is None else [row]
-        col_select = range(mesh_shape[1]) if col is None else [col]
-        device_coords = {(r, c) for r in row_select for c in col_select}
-        return {ttnn.MeshCoordinate(*coord) for coord in device_coords}
-
-    @classmethod
     def forward_decode(
         cls,
         x: ttnn.Tensor,
@@ -1075,7 +1061,7 @@ class MLA1D(AbstractModule):
             tt_kvpe,
             update_idxs_tensor=position_idxs,
             page_table=page_table,
-            mesh_coords=cls.get_mesh_coores(mesh_shape, row_idx),
+            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
         )
 
         # FlashMLA
@@ -1226,7 +1212,7 @@ class MLA1D(AbstractModule):
             tt_kvpe,
             page_table=page_table,
             batch_idx=local_batch_idx,
-            mesh_coords=cls.get_mesh_coores(mesh_shape, row_idx, col_idx),
+            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
         )
 
         # FlashMLA
