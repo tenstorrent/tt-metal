@@ -6,6 +6,7 @@
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ...utils.check import assert_quality

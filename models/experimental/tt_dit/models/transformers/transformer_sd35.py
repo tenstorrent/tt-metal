@@ -471,7 +471,6 @@ class SD35Transformer2DModel:
                 # num_workers_per_link=3,
                 # num_buffers_per_channel=2,
             )
-
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial = ttnn.experimental.all_gather_async(
                 spatial,
@@ -490,4 +489,24 @@ class SD35Transformer2DModel:
 
         spatial = self.norm_out_norm(spatial) * (1 + scale) + shift
 
-        return self.proj_out(spatial)
+        spatial_out = self.proj_out(spatial)
+
+        # NOTE: While we should be able to gather on sequence after norm and proj,
+        # it leads to terrible outputs for 2x2sp1tp0. Need to debug.
+        # if self.parallel_config.sequence_parallel.factor > 1:
+        #     spatial_out = ttnn.experimental.all_gather_async(
+        #         spatial_out,
+        #         persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+        #             spatial_out.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+        #         ),
+        #         dim=2,
+        #         multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+        #         num_links=self.ccl_manager.num_links,
+        #         topology=self.ccl_manager.topology,
+        #         cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
+        #         # chunks_per_sync=16,
+        #         # num_workers_per_link=3,
+        #         # num_buffers_per_channel=2,
+        #     )
+
+        return spatial_out
