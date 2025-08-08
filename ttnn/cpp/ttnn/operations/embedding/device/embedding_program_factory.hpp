@@ -99,9 +99,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
@@ -390,9 +387,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
@@ -628,9 +622,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
-
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
     uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
