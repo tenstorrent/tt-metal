@@ -255,6 +255,44 @@ jobs:
             fi
           done
           exit $exit_code
+      - name: Terminate spawned workflows on cancellation
+        if: cancelled()
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PARENT_BRANCH_NAME: ${{ env.PARENT_BRANCH_NAME }}
+        run: |
+          echo "🔄 Parent workflow cancelled - cleaning up spawned workflows..."
+          # Workflows spawned by this job
+          SPAWNED_WORKFLOWS=("all-post-commit-workflows.yaml" "blackhole-post-commit.yaml")
+          # Consider both queued and in_progress runs
+          STATUSES=("queued" "in_progress")
+          for workflow in "${SPAWNED_WORKFLOWS[@]}"; do
+            for status in "${STATUSES[@]}"; do
+              echo "🔍 Checking for $status instances of $workflow on branch $PARENT_BRANCH_NAME..."
+              run_ids=$(gh run list \
+                --workflow "$workflow" \
+                --branch "$PARENT_BRANCH_NAME" \
+                --status "$status" \
+                --limit 100 \
+                --json databaseId \
+                --jq '.[].databaseId' \
+                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
+              if [ -n "$run_ids" ]; then
+                for run_id in $run_ids; do
+                  echo "🛑 Cancelling $status spawned workflow run $run_id ($workflow)..."
+                  if gh run cancel "$run_id" --repo "${{ env.METAL_REPO }}"; then
+                    echo "✅ Successfully cancelled run $run_id"
+                  else
+                    echo "⚠️ Failed to cancel run $run_id (may have already completed)"
+                  fi
+                done
+              else
+                echo "ℹ️ No $status instances of $workflow found"
+              fi
+            done
+          done
+          echo "✅ Spawned workflow cleanup completed"
+
   cleanup-and-report:
     needs: setup-and-test
     if: always()
