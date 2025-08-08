@@ -162,7 +162,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     CreateCircularBuffer(program, sender_core_grid, cb_metadata_config);
     CreateCircularBuffer(program, sender_core_grid, client_interface_cb_config);
 
-    const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
+    const uint32_t flat_mesh_idx = common::get_linearized_index(mesh_coordinate, mesh_view);
 
     const std::vector<uint32_t> reader_compile_time_args = {
         mapping_tensor_cb_id,
@@ -182,7 +182,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mapping_is_dram,
         metadata_is_dram,
         operation_attributes.locally_reduced,
-        common::get_linearized_index(mesh_coordinate, mesh_view)};
+    };
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
