@@ -66,6 +66,13 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
         TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
     }
+
+    // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
+    if (!this->use_pack_untilize) {
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::UINT32 && input_tensor_a.dtype() != DataType::INT32,
+            "Pack untilize must be enabled to support uint32/int32 data types");
+    }
 }
 
 std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
