@@ -230,9 +230,9 @@ def non_max_suppression(
         i = i[:max_det]
 
         output[xi] = x[i]
-        # if (time.time() - t) > time_limit:
-        #     logger.warning(f"WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded")
-        #     break
+        if (time.time() - t) > time_limit:
+            logger.warning(f"WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded")
+            break
 
     return output
 
