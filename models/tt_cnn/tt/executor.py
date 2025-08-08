@@ -99,7 +99,7 @@ class TracedModelExecutor(Executor):
         self.input_trace_addr = l1_input_for_trace.buffer_address()
         spec = l1_input_for_trace.spec
 
-        # Force cleanup to ensure correct memory allocation order for persistent tensors
+        # Clean up compilation output tensor if it exists to ensure correct memory allocation order for persistent tensors
         if hasattr(self, "_compilation_output_tensor"):
             self._compilation_output_tensor.deallocate(force=True)
 
@@ -504,7 +504,10 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
         input_trace_addr = l1_input_tensor.buffer_address()
         spec = l1_input_tensor.spec
 
-        # Force cleanup to ensure correct memory allocation order
+        # Force cleanup of the compilation output tensor to ensure that the subsequent allocation
+        # of the persistent L1 input tensor occurs at the expected device memory address. This is
+        # necessary because trace capture relies on the L1 input tensor being allocated at the same
+        # address as during the initial trace.
         self._compilation_output_tensor.deallocate(force=True)
 
         return l1_input_tensor, input_trace_addr, spec

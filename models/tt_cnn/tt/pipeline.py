@@ -86,7 +86,9 @@ def create_pipeline_from_config(
     output_dtype: Optional[ttnn.DataType] = None,
 ):
     if not config.use_trace:
-        raise NotImplementedError("Non-traced executor is not currently supported")
+        raise NotImplementedError(
+            "Non-traced executor is not currently implemented. All executors require trace=True in the current version."
+        )
 
     executor = None
     if config.num_command_queues == 1:

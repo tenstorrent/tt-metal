@@ -102,7 +102,7 @@ EXECUTOR_CONFIGS = [
         num_command_queues=2,
         separate_io_queue=True,
         requires_output_config=True,
-        requires_minimum_inputs=2,  # Separate I/O requires at least 2 inputs for pipelining
+        requires_minimum_inputs=2,  # Separate I/O requires at least 2 inputs to enable overlapping of input transfer with model execution
         expected_executor_type=MultiCQTracedModelWithSeparateIOExecutor,
     ),
 ]
