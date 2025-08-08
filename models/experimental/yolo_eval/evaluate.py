@@ -171,7 +171,7 @@ def evaluation(
     num_iterations = 500
 
     if model_type == "torch_model":
-        if model_name in ["YOLOv10", "YOLOv11n"]:
+        if model_name in ["YOLOv10", "YOLOv11n", "YOLOv8s"]:
             num_iterations = 105
         elif model_name in ["YOLOv9c", "YOLOv7", "YOLOv6l"]:
             num_iterations = 20

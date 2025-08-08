@@ -368,16 +368,9 @@ run_vgg_unet_demo() {
   pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp
 
  # vgg_unet eval
-<<<<<<< HEAD
-  pytest -n auto models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp --timeout 600
-
-}
-
-=======
   pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
 
 }
->>>>>>> 668b02d9e9 (Update run_single_card_demo_tests.sh)
 
 run_yolov12x_demo() {
 
