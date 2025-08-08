@@ -35,8 +35,6 @@
 #include <tt-metalium/tt_align.hpp>
 #include "umd/device/types/xy_pair.h"
 
-namespace tt::tt_metal {
-
 using namespace tt;
 
 namespace unit_tests_common::dram::test_dram {
@@ -400,5 +398,4 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
 
     this->RunProgram(mesh_device, workload);
 }
-}  // namespace tt::tt_metal
 }  // namespace tt::tt_metal
