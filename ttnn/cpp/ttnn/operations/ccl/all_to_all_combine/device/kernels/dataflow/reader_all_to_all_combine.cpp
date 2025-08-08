@@ -53,7 +53,7 @@ void kernel_main() {
     constexpr uint32_t batch_size = get_compile_time_arg_val(5);
     constexpr uint32_t seq_size = get_compile_time_arg_val(6);
     constexpr uint32_t num_mapping_pages= get_compile_time_arg_val(7);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(8);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(8);
     constexpr uint32_t data_size_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(10);
     constexpr uint32_t mapping_page_size_bytes = get_compile_time_arg_val(11);
@@ -62,7 +62,6 @@ void kernel_main() {
     constexpr bool mapping_is_dram = get_compile_time_arg_val(14);
     constexpr bool metadata_is_dram = get_compile_time_arg_val(15);
     constexpr bool locally_reduced = get_compile_time_arg_val(16);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(17);
 
     const auto mapping_tensor_addr = get_arg_val<uint32_t>(0);
     const auto metadata_tensor_addr = get_arg_val<uint32_t>(1);
