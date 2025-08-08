@@ -363,9 +363,14 @@ void ControlPlane::init_control_plane(
         this->local_mesh_binding_.mesh_ids.end(),
         std::inserter(this->distributed_contexts_, this->distributed_contexts_.end()),
         [&](const MeshId& mesh_id) { return std::make_pair(mesh_id, global_context); });
-    std::array this_host = {*global_context->rank()};
-    this->host_local_context_ =
-        tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->create_sub_context(this_host);
+    if (*global_context->size() > 1) {
+        std::array this_host = {*global_context->rank()};
+        this->host_local_context_ =
+            tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->create_sub_context(
+                this_host);
+    } else {
+        this->host_local_context_ = global_context;
+    }
 
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
