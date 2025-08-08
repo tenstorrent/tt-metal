@@ -347,3 +347,33 @@ TEST(Tunneling, LiteFabricUnalignedReads) {
 
     lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
 }
+
+TEST(Tunneling, LiteFabricP300) {
+    CHECK_TEST_REQS();
+    auto rtoptions = tt::llrt::RunTimeOptions();
+    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
+    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+
+    if (cluster->get_board_type(0) != BoardType::P300)  {
+        GTEST_SKIP() << "P300 board type is required";
+    }
+
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+    for (const auto& tunnel : desc.tunnels_from_mmio) {
+        log_info(
+            tt::LogTest,
+            "Tunnel from device {} core {} (virtual={}) to device {} core {} (virtual={})",
+            tunnel.mmio_id,
+            tunnel.mmio_core_logical.str(),
+            tunnel.mmio_cxy_virtual().str(),
+            tunnel.connected_id,
+            tunnel.connected_core_logical.str(),
+            tunnel.connected_cxy_virtual().str());
+    }
+    for (const auto& [device_id, channel_mask] : desc.enabled_eth_channels) {
+        log_info(tt::LogTest, "Device {} enabled eth channel mask {:0b}", device_id, channel_mask);
+    }
+
+    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc);
+    lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
+}

@@ -245,10 +245,10 @@ struct HostToLiteFabricInterface {
                     (uint64_t(virtual_core.y) << (36 + 6)) | (uint64_t(virtual_core.x) << 36);
                 uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)barrier_addr;
                 write(
-                    barrier_value.data(), barrier_value.size() * sizeof(uint32_t), virtual_core_sender, dest_noc_addr);
+                    barrier_value.data(), barrier_value.size() * sizeof(uint32_t), virtual_core_sender, dest_noc_addr, lite_fabric::edm_to_local_chip_noc);
 
                 std::vector<uint32_t> read_barrier(barrier_value.size(), 0);
-                read(read_barrier.data(), barrier_value.size() * sizeof(uint32_t), virtual_core_sender, dest_noc_addr);
+                read(read_barrier.data(), barrier_value.size() * sizeof(uint32_t), virtual_core_sender, dest_noc_addr, lite_fabric::edm_to_local_chip_noc);
                 TT_FATAL(
                     read_barrier == barrier_value,
                     "Chip memory corruption on {} virtual core {}: barrier value mismatch: Read {} but expected {}",
@@ -270,7 +270,7 @@ struct HostToLiteFabricInterface {
         }
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         uint32_t addr = get_next_send_buffer_slot_address(channel_address);
-        if (header.noc_send_type == lite_fabric::NocSendType::NOC_READ) {
+        if (header.get_base_send_type() == lite_fabric::NocSendTypeEnum::NOC_READ) {
             log_debug(
                 tt::LogMetal,
                 "Send {}B read payload header address {:#x} source address {:#x} Host IF on Device {:#x}",
@@ -327,10 +327,10 @@ struct HostToLiteFabricInterface {
     }
 
     // Only up to max buffer size is supported
-    void write(void* mem_ptr, size_t size, tt_cxy_pair sender_core, uint64_t dst_noc_addr) {
+    void write(void* mem_ptr, size_t size, tt_cxy_pair sender_core, uint64_t dst_noc_addr, uint8_t noc_index) {
         LiteFabricHeader header;
         header.to_chip_unicast(1);
-        header.to_noc_unicast_write(lite_fabric::NocUnicastCommandHeader{dst_noc_addr}, size);
+        header.to_noc_unicast_write(lite_fabric::NocUnicastCommandHeader{dst_noc_addr}, size, noc_index);
         // Unaligned address
         header.unaligned_offset = dst_noc_addr & (l1_alignment_bytes - 1);
 
@@ -340,14 +340,15 @@ struct HostToLiteFabricInterface {
         send_payload_flush_non_blocking_from_address(header, sender_core, sender_channel_base);
     }
 
-    void write_any_len(void* mem_ptr, size_t size, tt_cxy_pair sender_core, uint64_t dst_noc_addr) {
+    void write_any_len(void* mem_ptr, size_t size, tt_cxy_pair sender_core, uint64_t dst_noc_addr, uint8_t noc_index = lite_fabric::edm_to_local_chip_noc) {
         size_t num_pages = size / get_max_payload_data_size_bytes();
         for (size_t i = 0; i < num_pages; i++) {
             write(
                 reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mem_ptr) + i * get_max_payload_data_size_bytes()),
                 get_max_payload_data_size_bytes(),
                 sender_core,
-                dst_noc_addr + i * get_max_payload_data_size_bytes());
+                dst_noc_addr + i * get_max_payload_data_size_bytes(),
+                noc_index);
         }
         // Remaining bytes
         size_t remaining_bytes = size % get_max_payload_data_size_bytes();
@@ -357,14 +358,15 @@ struct HostToLiteFabricInterface {
                     reinterpret_cast<uintptr_t>(mem_ptr) + num_pages * get_max_payload_data_size_bytes()),
                 remaining_bytes,
                 sender_core,
-                dst_noc_addr + num_pages * get_max_payload_data_size_bytes());
+                dst_noc_addr + num_pages * get_max_payload_data_size_bytes(),
+                noc_index);
         }
     }
 
-    void read(void* mem_ptr, size_t size, tt_cxy_pair receiver_core, uint64_t src_noc_addr) {
+    void read(void* mem_ptr, size_t size, tt_cxy_pair receiver_core, uint64_t src_noc_addr, uint8_t noc_index = lite_fabric::edm_to_local_chip_noc) {
         LiteFabricHeader header;
         header.to_chip_unicast(1);
-        header.to_noc_read(lite_fabric::NocReadCommandHeader{src_noc_addr, HostToLiteFabricReadEvent::get()}, size);
+        header.to_noc_read(lite_fabric::NocReadCommandHeader{src_noc_addr, HostToLiteFabricReadEvent::get()}, size, noc_index);
         header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
 
         uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
