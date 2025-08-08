@@ -198,8 +198,8 @@ public:
     }
 
     ~Fabric1DFixture() {
-        TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        TearDown();
     }
 };
 
@@ -378,7 +378,11 @@ static std::tuple<std::shared_ptr<Buffer>, std::vector<uint32_t>> build_input_bu
     // Input buffer
     auto local_input_buffer = CreateBuffer(InterleavedBufferConfig{
         first_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
-    tt_metal::detail::WriteToBuffer(local_input_buffer, inputs);
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        tt_metal::detail::WriteToBuffer(local_input_buffer, inputs);
+    } else {
+        tt_metal::EnqueueWriteBuffer(first_device->command_queue(), local_input_buffer, inputs, true);
+    }
     return {local_input_buffer, inputs};
 }
 
@@ -576,7 +580,7 @@ static void generate_fabric_test_kernels(
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_worker_core, receiver_rt_args);
 }
 
-static bool RunLoopbackTest(
+inline bool RunLoopbackTest(
     tt_metal::IDevice* sender_device,
     tt_metal::IDevice* receiver_device,
 
@@ -586,6 +590,7 @@ static bool RunLoopbackTest(
     bool dest_is_dram,
     std::vector<Program>& programs,
     bool scatter_write) {
+    log_info(tt::LogTest, "Running loopback test");
     auto& sender_program = programs.at(0);
     auto& receiver_program = programs.at(1);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
@@ -608,14 +613,17 @@ static bool RunLoopbackTest(
         .output_buffer_type = dest_is_dram ? BufferType::DRAM : BufferType::L1,
         .l1_data_format = tt::DataFormat::Float16_b};
 
+    log_info(tt::LogTest, "Building input buffer");
     auto [local_input_buffer, inputs] = build_input_buffer(sender_device, tensor_size_bytes, test_config);
 
+    log_info(tt::LogTest, "Creating all zeros");
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     // Output buffer is now on the receiver device
+    log_info(tt::LogTest, "Creating output buffer");
     auto output_buffer = CreateBuffer(InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
-
+    log_info(tt::LogTest, "Writing all zeros to output buffer");
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
     } else {
@@ -628,10 +636,10 @@ static bool RunLoopbackTest(
     ////////////////////////////////////////////////////////////////////////////
     // Build Workers
     ////////////////////////////////////////////////////////////////////////////
-    log_trace(tt::LogTest, "Generating local_sender -> remote_receiver workers");
+    log_info(tt::LogTest, "Generating local_sender -> remote_receiver workers");
     const std::size_t pages_per_send = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / page_size;
     const auto& worker_core = worker_cores.at(0);
-    log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
+    log_info(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
     constexpr size_t fabric_connection_routing_plane_index = 0;
     generate_fabric_test_kernels(
@@ -656,7 +664,7 @@ static bool RunLoopbackTest(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
     std::vector<IDevice*> devices = {sender_device, receiver_device};
-    log_trace(tt::LogTest, "{} programs, {} devices", programs.size(), devices.size());
+    log_info(tt::LogTest, "{} programs, {} devices", programs.size(), devices.size());
     run_programs(programs, devices);
     log_info(tt::LogTest, "Reading back outputs");
 
@@ -683,7 +691,9 @@ static bool RunLineFabricTest(
     bool scatter_write) {
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
+    log_info(tt::LogTest, "Running line fabric test");
     const std::size_t edm_buffer_size_no_header = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    log_info(tt::LogTest, "EDM buffer size no header: {}", edm_buffer_size_no_header);
     const size_t local_chip_id = 0;
     const size_t remote_chip_id = 1;
     auto program_ptrs = std::vector<Program*>(devices.size());
@@ -732,9 +742,9 @@ static bool RunLineFabricTest(
     ////////////////////////////////////////////////////////////////////////////
     // Build Workers
     ////////////////////////////////////////////////////////////////////////////
-    log_trace(tt::LogTest, "Generating local_sender -> remote_receiver workers");
+    log_info(tt::LogTest, "Generating local_sender -> remote_receiver workers");
     const auto& worker_core = worker_cores.at(0);
-    log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
+    log_info(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
     const std::size_t pages_per_send = edm_buffer_size_no_header / page_size;
 
@@ -869,7 +879,8 @@ static int TestLoopbackEntrypoint(
         return 0;
     }
 
-    auto test_fixture = Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    auto test_fixture = Fabric1DLineDeviceInitFixture();
+    log_info(tt::LogTest, "creating test fixture");
     auto &mesh_device = *(test_fixture.mesh_device_);
 
     const auto& device_0 = mesh_device.get_device(MeshCoordinate(0, 0));
@@ -881,7 +892,7 @@ static int TestLoopbackEntrypoint(
     IDevice* sender_device = device_0;
     IDevice* receiver_device = device_1;
 
-    log_trace(tt::LogTest, "{} programs ", programs.size());
+    log_info(tt::LogTest, "{} programs ", programs.size());
     bool success = false;
     try {
         success = RunLoopbackTest(
@@ -900,6 +911,7 @@ static int TestLoopbackEntrypoint(
         return -1;
     }
 
+    log_info(tt::LogTest, "{} programs ", programs.size());
     {
         // Run the test twice with a single fabric invocation
 
@@ -923,11 +935,10 @@ static int TestLoopbackEntrypoint(
         // Wait for worker programs to finish
 
         // Teardown the fabric
+        log_info(tt::LogTest, "Calling finish");
         tt_metal::Finish(sender_device->command_queue());
         // tt_metal::Finish(receiver_device->command_queue(), {d1_worker_subdevice});
     }
-
-    test_fixture.TearDown();
 
     return success ? 0 : -1;
 }
