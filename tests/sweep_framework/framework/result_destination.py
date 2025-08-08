@@ -19,6 +19,7 @@ from framework.database import (
 from framework.serialize import serialize, serialize_for_postgres
 from framework.serialize import deserialize, deserialize_for_postgres
 from framework.sweeps_logger import sweeps_logger as logger
+from infra.data_collection.pydantic_models import SweepsResultRecord
 
 
 class ResultDestination(ABC):
@@ -247,49 +248,75 @@ class FileResultDestination(ResultDestination):
         return None
 
     def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
-        """Export results to JSON file"""
+        """Export results to JSON file using Pydantic validation (SweepsResultRecord)."""
         if not results:
             return "success"
 
         module_name = header_info[0]["sweep_name"]
         export_path = self.export_dir / f"{module_name}.json"
 
-        # Add git hash to results
         curr_git_hash = run_context.get("git_hash", "unknown")
-        for result in results:
-            result["git_hash"] = curr_git_hash
 
-        new_data = []
+        validated_records = []
         for i in range(len(results)):
-            result = header_info[i].copy()
-            for elem in results[i].keys():
-                if elem == "device_perf":
-                    # Include device perf as-is (present only when --device-perf is used)
-                    result[elem] = results[i][elem]
-                    continue
-                if elem == "original_vector_data":
-                    # Normalize and then flatten to remove 'type/data' wrappers
-                    normalized = _normalize_original_vector_data(results[i][elem])
-                    result[elem] = _flatten_serialized(normalized)
-                    continue
-                # For everything else, serialize to Postgres-friendly, then flatten for file readability
-                result[elem] = _flatten_serialized(serialize_for_postgres(results[i][elem]))
-            # Ensure device_perf is always present in file output
-            if "device_perf" not in result:
-                result["device_perf"] = None
-            # Always include error signature (None when no exception)
-            exception_text = results[i].get("exception", None)
-            result["error_signature"] = generate_error_signature(exception_text)
-            new_data.append(result)
+            header = header_info[i]
+            raw = results[i]
+
+            exception_text = raw.get("exception", None)
+
+            # Build a validated record via Pydantic
+            record = SweepsResultRecord(
+                sweep_name=header.get("sweep_name"),
+                suite_name=header.get("suite_name"),
+                vector_id=header.get("vector_id"),
+                input_hash=header.get("input_hash"),
+                start_time_ts=raw.get("start_time_ts"),
+                end_time_ts=raw.get("end_time_ts"),
+                status=str(raw.get("status")) if raw.get("status") is not None else None,
+                message=raw.get("message"),
+                exception=exception_text,
+                error_signature=generate_error_signature(exception_text),
+                e2e_perf=raw.get("e2e_perf"),
+                device_perf=raw.get("device_perf"),
+                git_hash=curr_git_hash,
+                host=raw.get("host"),
+                user=raw.get("user"),
+                original_vector_data=_flatten_serialized(
+                    _normalize_original_vector_data(raw.get("original_vector_data"))
+                ),
+            )
+
+            # Convert to JSON-ready dict and deeply flatten any nested types
+            record_dict = record.model_dump(mode="json")
+            record_dict = _flatten_serialized(record_dict)
+            validated_records.append(record_dict)
 
         # Append to existing file or create new one
         if export_path.exists():
-            with open(export_path, "r") as file:
-                old_data = json.load(file)
-            new_data = old_data + new_data
+            try:
+                with open(export_path, "r") as file:
+                    old_data = json.load(file)
+                if isinstance(old_data, list):
+                    validated_records = old_data + validated_records
+                else:
+                    logger.warning(
+                        f"Existing export file {export_path} is not a JSON list. Overwriting with validated records."
+                    )
+            except json.JSONDecodeError:
+                # Corrupt or non-JSON file: back it up and proceed with fresh records
+                try:
+                    backup_path = export_path.with_suffix(export_path.suffix + ".bak")
+                    export_path.rename(backup_path)
+                    logger.warning(
+                        f"Existing export file {export_path} contained invalid JSON. Backed up to {backup_path}."
+                    )
+                except Exception:
+                    logger.warning(
+                        f"Existing export file {export_path} contained invalid JSON and could not be backed up. Overwriting."
+                    )
 
         with open(export_path, "w") as file:
-            json.dump(new_data, file, indent=2)
+            json.dump(validated_records, file, indent=2)
 
         logger.info(f"Successfully exported {len(results)} results to {export_path}")
         return "success"

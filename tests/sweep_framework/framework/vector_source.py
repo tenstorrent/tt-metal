@@ -195,7 +195,19 @@ class VectorExportSource(VectorSource):
     def _find_module_file(self, module_name: str) -> Optional[pathlib.Path]:
         """Find the JSON file for a given module"""
         potential_files = list(self.export_dir.glob(f"{module_name}.json"))
-        return potential_files[0] if potential_files else None
+        if potential_files:
+            return potential_files[0]
+
+        logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
+        try:
+            tail = module_name.split(".")[-1]
+            similar_files = list(self.export_dir.glob(f"*{tail}*.json"))
+            if similar_files:
+                top_names = [f.name for f in similar_files[:5]]
+                logger.info(f"Similar files found: {top_names}")
+        except Exception:
+            pass
+        return None
 
     def load_vectors(
         self, module_name: str, suite_name: Optional[str] = None, vector_id: Optional[str] = None
