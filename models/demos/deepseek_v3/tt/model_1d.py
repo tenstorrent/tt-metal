@@ -1,0 +1,212 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-License-Identifier: Apache-2.0
+
+import math
+from pathlib import Path
+from typing import Any
+
+import torch
+from transformers.configuration_utils import PretrainedConfig
+
+import ttnn
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
+from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dicts
+from models.demos.deepseek_v3.utils.run_config import (
+    ModelDecodeConfig,
+    ModelPrefillConfig,
+    RunDecodeConfig,
+    RunPrefillConfig,
+    WeightConfig,
+)
+from models.tt_transformers.tt.common import PagedAttentionConfig
+
+
+class Model1D(AbstractModule):
+    NUM_MLP_META_LAYERS = 1
+    NUM_MLP_ROWS = 3
+    NUM_MOE_META_LAYERS = 15
+    NUM_MOE_ROWS = 4
+
+    @classmethod
+    def convert_weights(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+        output_path: Path,
+        mesh_device: ttnn.MeshDevice,
+    ) -> WeightConfig:
+        """Convert weights for the 1D model."""
+
+        mesh_shape = list(mesh_device.mesh_shape)
+
+        # Create the state dicts for the MLP decoder block
+        mlp_meta_layer_mapping = cls.create_meta_layer_mapping(
+            hf_config.first_k_dense_replace, mesh_shape[0]
+        )  # [num_meta_layers, num_rows]
+        assert len(mlp_meta_layer_mapping) == cls.NUM_MLP_META_LAYERS, "Unexpected number of meta layers for MLP."
+
+        mlp_decoder_block_state_dicts = [
+            [
+                sub_state_dicts(state_dicts, f"model.layers.{layer_idx}") if layer_idx is not None else None
+                for layer_idx in mapping
+            ]
+            for mapping in mlp_meta_layer_mapping
+        ]
+
+        return {
+            "mlp_decoder_block": [
+                DecoderBlock.convert_weights(
+                    hf_config, mlp_decoder_block_state_dicts[ml], output_path / "mlp_decoder_block", mesh_device
+                )
+                for ml in range(cls.NUM_MLP_META_LAYERS)
+            ]
+        }
+
+    @classmethod
+    def create_meta_layer_mapping(cls, num_layers: int, num_rows: int) -> list[list[int | None]]:
+        """Distribute `num_layers` evenly across `num_rows`, returning a
+        list of rows where each element is either a layer index or None
+        (if padding is needed to fill the structure). The result is
+        transposed such that each inner list corresponds to a layer
+        position across all rows.
+
+        Returns:
+            A list of lists of shape [num_meta_layers][num_rows], where
+            each element is an int (layer index) or None (padding).
+        """
+
+        if num_rows <= 0:
+            raise ValueError("Number of rows must be greater than zero.")
+        if num_layers < 0:
+            raise ValueError("Number of layers cannot be negative.")
+
+        num_meta_layers = math.ceil(num_layers / num_rows)
+        total_slots = num_meta_layers * num_rows
+
+        # Create a flat list of layers, padding with -1
+        padded_layers = list(range(num_layers)) + [-1] * (total_slots - num_layers)
+
+        # Reshape into [num_rows, num_meta_layers]
+        mapping = torch.tensor(padded_layers).reshape(num_rows, num_meta_layers)
+
+        # Transpose to [num_meta_layers, num_rows] and convert to list of lists
+        transposed = mapping.T.tolist()
+
+        # Replace -1s with None
+        return [[layer if layer != -1 else None for layer in row] for row in transposed]
+
+    @classmethod
+    def prefill_model_config(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+    ) -> ModelPrefillConfig:
+        """Create the model configuration for prefill mode."""
+
+        mesh_shape = list(mesh_device.mesh_shape)
+
+        return {
+            "hf_config": hf_config,
+            "mesh_shape": mesh_shape,
+            "mlp_decoder_block": [
+                DecoderBlock.prefill_model_config(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=None,
+                )
+                for _ in range(cls.NUM_MLP_META_LAYERS)
+            ],
+        }
+
+    @classmethod
+    def decode_model_config(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+    ) -> ModelDecodeConfig:
+        """Create the model configuration for decode mode."""
+
+        mesh_shape = list(mesh_device.mesh_shape)
+
+        return {
+            "hf_config": hf_config,
+            "mesh_shape": mesh_shape,
+            "mlp_decoder_block": [
+                DecoderBlock.decode_model_config(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=None,
+                )
+                for _ in range(cls.NUM_MLP_META_LAYERS)
+            ],
+        }
+
+    @classmethod
+    def create_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.MeshDevice,
+        paged_config: PagedAttentionConfig,
+        ccl: CCL1D,
+    ) -> Any:
+        """Create the state for the 1D model."""
+
+        return {
+            "mlp_decoder_block": [
+                DecoderBlock.create_state(hf_config, mesh_device, paged_config, is_padding_layer=None, ccl=ccl)
+                for _ in range(cls.NUM_MLP_META_LAYERS)
+            ]
+        }
+
+    @classmethod
+    def transfer_row(
+        cls,
+        x: ttnn.Tensor,
+        row_idx: int,
+        next_row_idx: int,
+        mesh_shape: tuple[int, ...],
+    ) -> None:
+        """Transfer a row of the tensor to the next row in the mesh."""
+        # This is a placeholder for the actual transfer logic
+        return x
+
+    @classmethod
+    def forward_decode(
+        cls,
+        x: ttnn.Tensor,
+        position_idxs: ttnn.Tensor,
+        rope_tensors: dict,
+        page_table: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+    ) -> ttnn.Tensor:
+        """Forward pass for decode mode."""
+
+        mesh_shape = cfg["mesh_shape"]
+        hf_config = cfg["hf_config"]
+
+        # Stage 1: MLP Decoder Block
+        for row_idx in range(cls.NUM_MLP_ROWS):
+            for meta_layer_idx in range(cls.NUM_MLP_META_LAYERS):
+                x = DecoderBlock.forward_decode(
+                    x,
+                    row_idx,
+                    position_idxs,
+                    rope_tensors,
+                    page_table,
+                    cfg["mlp_decoder_block"][meta_layer_idx],
+                )
+
+            # Transfer rows
+            x = cls.transfer_row(x, row_idx, (row_idx + 1) % cls.NUM_MLP_ROWS, mesh_shape)
+
+        return x
+
+    @classmethod
+    def forward_prefill(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunPrefillConfig,
+    ) -> ttnn.Tensor:
+        return x
