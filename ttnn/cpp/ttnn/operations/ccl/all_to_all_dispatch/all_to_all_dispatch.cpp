@@ -58,7 +58,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         if (metadata_tensor.buffer()->is_l1()) {
             total_size_bytes += metadata_tensor.buffer()->aligned_size_per_bank();
         }
-    } else {
+    } else if (memory_config_.buffer_type() == tt::tt_metal::BufferType::L1) {
         std::array<ttnn::TensorSpec, 2> specs = AllToAllDispatchDeviceOperation::compute_output_specs(
             AllToAllDispatchDeviceOperation::operation_attributes_t{
                 .worker_core_range_set = subdevice_core_range_set,
