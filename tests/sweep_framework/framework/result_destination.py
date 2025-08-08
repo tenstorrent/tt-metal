@@ -13,6 +13,7 @@ from framework.database import (
     map_test_status_to_run_status,
 )
 from framework.serialize import serialize, serialize_for_postgres
+from framework.serialize import deserialize, deserialize_for_postgres
 from framework.sweeps_logger import sweeps_logger as logger
 
 
@@ -114,7 +115,7 @@ class PostgresResultDestination(ResultDestination):
                         result.get("end_time_ts", None),
                         db_status,
                         header_info[i].get("suite_name", None),
-                        json.dumps(result.get("original_vector_data", None)),
+                        json.dumps(_normalize_original_vector_data(result.get("original_vector_data", None))),
                         result.get("message", None),
                         exception_text,
                         result.get("e2e_perf", None),
@@ -259,9 +260,22 @@ class FileResultDestination(ResultDestination):
             result = header_info[i].copy()
             for elem in results[i].keys():
                 if elem == "device_perf":
+                    # Include device perf as-is (present only when --device-perf is used)
                     result[elem] = results[i][elem]
                     continue
-                result[elem] = serialize_for_postgres(results[i][elem])
+                if elem == "original_vector_data":
+                    # Normalize and then flatten to remove 'type/data' wrappers
+                    normalized = _normalize_original_vector_data(results[i][elem])
+                    result[elem] = _flatten_serialized(normalized)
+                    continue
+                # For everything else, serialize to Postgres-friendly, then flatten for file readability
+                result[elem] = _flatten_serialized(serialize_for_postgres(results[i][elem]))
+            # Ensure device_perf is always present in file output
+            if "device_perf" not in result:
+                result["device_perf"] = None
+            # Always include error signature (None when no exception)
+            exception_text = results[i].get("exception", None)
+            result["error_signature"] = generate_error_signature(exception_text)
             new_data.append(result)
 
         # Append to existing file or create new one
@@ -289,6 +303,56 @@ class FileResultDestination(ResultDestination):
         except Exception as e:
             logger.error(f"File destination validation failed: {e}")
             return False
+
+
+def _normalize_original_vector_data(original):
+    """
+    Convert the captured original_vector_data (which may contain pre-serialized
+    values like {'type': '...', 'data': ...} or stringified ttnn enums) into a
+    JSON-friendly dict suitable for JSONB/file storage.
+    """
+    if original is None:
+        return None
+    if not isinstance(original, dict):
+        return original
+
+    normalized = {}
+    for k, v in original.items():
+        obj = v
+        # Try postgres-aware deserialization first, then generic
+        try:
+            obj = deserialize_for_postgres(v)
+        except Exception:
+            try:
+                obj = deserialize(v)
+            except Exception:
+                obj = v
+        # Re-serialize into JSON-friendly shape with enum strings parsed
+        try:
+            normalized[k] = serialize_for_postgres(obj)
+        except Exception:
+            normalized[k] = str(obj)
+    return normalized
+
+
+def _flatten_serialized(value):
+    # For file output: strip {"type": "...", "data": ...} wrappers and keep readable data
+    if isinstance(value, dict):
+        if set(value.keys()) == {"type", "data"}:
+            return _flatten_serialized(value["data"])
+        return {k: _flatten_serialized(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_flatten_serialized(v) for v in value]
+    if isinstance(value, dt.datetime):
+        return value.isoformat()
+    try:
+        from enum import Enum
+
+        if isinstance(value, Enum):
+            return str(value)
+    except Exception:
+        pass
+    return value
 
 
 class ResultDestinationFactory:
