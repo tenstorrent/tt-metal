@@ -376,15 +376,16 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
+    bool is_bfloat8_b = input_tensor.dtype() == DataType::BFLOAT8_B;
     const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
     std::vector<uint32_t> writer_compile_time_args = {
         input_tile_size_bytes,
         max_map_entries,
-        tt::datum_size(output_cb_data_format),
+        is_bfloat8_b ? 1 : tt::datum_size(output_cb_data_format),
         mapping_cb_idx,
         input_cb_idx,
-        output_cb_idx};
+        output_cb_idx,
+        is_bfloat8_b};
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
