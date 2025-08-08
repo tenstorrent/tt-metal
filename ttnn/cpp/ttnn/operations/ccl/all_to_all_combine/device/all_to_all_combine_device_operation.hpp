@@ -42,6 +42,10 @@ struct AllToAllCombineDeviceOperation {
         const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
+    using spec_return_value_t = ttnn::TensorSpec;
+
+    using tensor_return_value_t = ttnn::Tensor;
+
     struct AllToAllCombineFromSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
@@ -70,10 +74,6 @@ struct AllToAllCombineDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
-
-    using spec_return_value_t = ttnn::TensorSpec;
-
-    using tensor_return_value_t = ttnn::Tensor;
 
     using program_factory_t = std::variant<AllToAllCombineFromSparse>;
 
