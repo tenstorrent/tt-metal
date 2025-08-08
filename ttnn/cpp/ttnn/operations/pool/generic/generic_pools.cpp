@@ -11,6 +11,11 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -170,7 +175,37 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
 
-    // Call the halo uop
+    // create the index tensor if needed
+    Tensor indices_tensor_sharded;
+    if (return_indices) {
+        Shape spatial_shape({1, input_h, input_w, 1});
+
+        printf("input_h: %u, input_w: %u, batch_size: %u, channels: %u\n", input_h, input_w, batch_size, channels);
+
+        // Create indices tensor with UINT32 since repeat operation requires it
+        Tensor indices_hw = ttnn::index_all<uint32_t>(
+            spatial_shape,
+            spatial_shape,  // No padding needed for spatial-only shape
+            DataType::UINT32);
+        Shape repeat_shape({batch_size, 1, 1, channels});
+        Tensor indices_full = ttnn::repeat(indices_hw.to_device(input_tensor.device()), repeat_shape);
+
+        // Convert to TILE layout for typecast operation
+        Tensor indices_full_tiled = ttnn::to_layout(indices_full, ttnn::TILE_LAYOUT);
+
+        // Convert to UINT16
+        Tensor indices_full_uint16_tiled = ttnn::typecast(indices_full_tiled, DataType::UINT16);
+
+        // Convert back to ROW_MAJOR layout
+        Tensor indices_full_uint16 = ttnn::to_layout(indices_full_uint16_tiled, ttnn::ROW_MAJOR_LAYOUT);
+
+        TT_FATAL(
+            input_tensor_sharded.memory_config().is_sharded(), "Input tensor must be sharded to shard indices tensor.");
+        indices_tensor_sharded =
+            ttnn::to_memory_config(indices_full_uint16, input_tensor_sharded.memory_config(), std::nullopt);
+    }
+
+    // call the halo uop
     Tensor haloed_tensor = ttnn::halo(
         queue_id,
         input_tensor_sharded,
@@ -185,6 +220,7 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
     const uint32_t pre_allocate_size =
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
+    // call the pool2d uop
     std::vector<Tensor> output_tensors = ttnn::prim::pool2d(
         queue_id,
         haloed_tensor,
@@ -196,6 +232,7 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         divisor_override,
         pre_allocate_size);
 
+    // format and return the result
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
         for (int i = 0; i < output_tensors.size(); i++) {
             output_tensors[i] = ttnn::to_memory_config(output_tensors[i], memory_config.value(), std::nullopt);
