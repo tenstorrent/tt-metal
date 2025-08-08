@@ -203,7 +203,7 @@ def test_uniad_reference(device, reset_seeds):
     rescale = True
 
     img = []
-    img.append(torch.randn(1, 6, 3, 928, 1600))
+    img.append(torch.randn(1, 6, 3, 640, 360))
     timestamp = [torch.tensor([1.5332e09], dtype=torch.float64)]
     l2g_r_mat = torch.tensor([[[-0.4814, -0.8765, -0.0070], [0.8749, -0.4801, -0.0631], [0.0519, -0.0365, 0.9980]]])
     l2g_t = torch.tensor([[601.0081, 1646.9954, 1.8233]])
@@ -255,7 +255,7 @@ def test_uniad_reference(device, reset_seeds):
                     "./data/nuscenes/samples/CAM_BACK_RIGHT/n008-2018-08-01-15-16-36-0400__CAM_BACK_RIGHT__1533151603528113.jpg",
                 ],
                 "ori_shape": [(900, 1600, 3)] * 6,
-                "img_shape": [(928, 1600, 3)] * 6,
+                "img_shape": [(640, 360, 3)] * 6,
                 "lidar2img": [
                     np.array(
                         [
@@ -306,7 +306,7 @@ def test_uniad_reference(device, reset_seeds):
                         ]
                     ),
                 ],
-                "pad_shape": [(928, 1600, 3)] * 6,
+                "pad_shape": [(640, 360, 3)] * 6,
                 "scale_factor": 1.0,
                 "flip": False,
                 "pcd_horizontal_flip": False,
@@ -351,7 +351,7 @@ def test_uniad_reference(device, reset_seeds):
     ]
 
     ttnn_rescale = True
-    ttnn_img = [ttnn.from_torch(img[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
+    ttnn_img = [ttnn.from_torch(img[0], device=device, dtype=ttnn.bfloat16)]
     ttnn_timestamp = [ttnn.from_torch(timestamp[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
     ttnn_l2g_r_mat = [ttnn.from_torch(l2g_r_mat, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
     ttnn_l2g_t = [ttnn.from_torch(l2g_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
