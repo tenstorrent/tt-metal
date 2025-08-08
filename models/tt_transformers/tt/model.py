@@ -297,7 +297,7 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
-    def _update_decode_inputs_device(self, current_pos, rot_mat_idxs, tokens, tokens_out):
+    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         current_pos_tiled = ttnn.to_layout(current_pos, layout=ttnn.TILE_LAYOUT)
         # Update only active positions (current_pos != -1)
         predicate = ttnn.ne(current_pos_tiled, -1)
@@ -319,9 +319,6 @@ class Transformer(LightweightModule):
         )
         result = ttnn.typecast(result, ttnn.uint32)
         ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), rot_mat_idxs)
-
-        # Update input tokens with sampled tokens for the next iteration
-        ttnn.copy(tokens_out.reshape(tokens.shape), tokens)
 
     def ttnn_decode_forward(
         self,
@@ -367,7 +364,10 @@ class Transformer(LightweightModule):
             tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
 
             # Update device tensors for the next iteration
-            self._update_decode_inputs_device(current_pos, rot_mat_idxs, x, tt_logits)
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+
+            # Update input tokens with sampled tokens for the next iteration
+            ttnn.copy(tt_logits.reshape(x.shape), x)
         elif not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
