@@ -409,7 +409,7 @@ const auto& get_device_configs() {
 
 ### Practice
 Reserve `std::optional<T>` for cases where “value not supplied” must be **distinct** from “value supplied but empty/zero.”
-If an *in‑band* representation already conveys “nothing,” pass the type directly and default‑construct it instead of wrapping it in `optional`.
+If an *in‑band* representation already conveys “nothing” pass the type directly and default‑construct it instead of wrapping it in `optional`.
 
 ### Explanation
 `std::optional<T>` adds one byte (the engaged flag), an extra branch, and additional cognitive load.
