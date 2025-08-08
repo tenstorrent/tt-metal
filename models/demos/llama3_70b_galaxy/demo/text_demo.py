@@ -63,12 +63,13 @@ def load_inputs(user_input, len_per_batch, instruct):
     batch = len(len_per_batch)
     user_input = user_input * batch
     in_prompt = []
+    all_prompts = []
     cache_dir = Path("models/tt_transformers/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
     # It clips the excerpt to the max length provided to allow testing different long context lengthts
-    for i in range(batch):
+    for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
             # TODO This might override the expected input size give in the prompt file
@@ -86,12 +87,10 @@ def load_inputs(user_input, len_per_batch, instruct):
                 )  # Add the markdown block to the context to comply with the prompt
             else:
                 prompt = context_text
-        in_prompt.append(prompt)
 
-    # Also return all the prompts taken from the input file
-    all_prompts = []
-    for i in user_input:
-        all_prompts.append(i["prompt"])
+        all_prompts.append(prompt)  # return all the prompts taken from the input file to be used when repeat_batch > 1
+        if i in range(batch):
+            in_prompt.append(prompt)
 
     return in_prompt, all_prompts
 
@@ -589,7 +588,7 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    input_prompts, full_prompts = load_inputs(
+    input_prompts, all_prompts = load_inputs(
         input_prompts,
         input_lengths,
         instruct,
@@ -638,7 +637,7 @@ def test_demo_text(
     repeat_batch_prompts = []
     for i in range(repeat_batches):
         repeat_batch_prompts.append(
-            [full_prompts[(j + i) % len(full_prompts)] for j in range(len(full_prompts))][:batch_size]
+            [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
         )
 
     model_args, model, page_table, tt_kv_cache = create_tt_model(
