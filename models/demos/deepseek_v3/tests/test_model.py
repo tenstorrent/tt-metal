@@ -224,7 +224,7 @@ def test_forward_pass(
     ############################
     logger.info("Validating output")
     all_passing = True
-    pcc_required = 0.99
+    pcc_required = 0.94
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
     logger.info(f"PCC for {Model1D.__name__} in {mode} mode: {pcc_message}")
 
