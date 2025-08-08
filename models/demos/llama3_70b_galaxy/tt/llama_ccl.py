@@ -53,11 +53,16 @@ class TT_CCL:
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
+        self.barrier_semaphore_handles = []
         if mode == "prefill":
             self.from_semaphore_handles = [[], []]
             self.to_semaphore_handles = [[], []]
             self.reduce_semaphore_handles = [[], []]
+
         for i in range(2):
+            self.barrier_semaphore_handles.append(
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+            )
             for _ in range(self.num_cbs):
                 if self.use_ring_ag_prefill:
                     self.gather_semaphore_handles[i].append(
@@ -86,6 +91,7 @@ class TT_CCL:
 
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
+        self.barrier_semaphore_idx = 0
         self.persistent_buffers = {}
         self.all_gather_buffers = {}
         if mode == "decode":
@@ -96,8 +102,8 @@ class TT_CCL:
         if mode == "prefill":
             self.support_seqlens = [8192, 4096, 1024, 2048, 128]
             # self.support_seqlens = [256, 128]
-            # self.support_seqlens = []
-            # self.support_seqlens = [128, 256, 512, 1024, 2048, 4096]
+            self.support_seqlens = []
+            # self.support_seqlens = [128, 256, 384, 512, 640, 768, 896, 1024, 1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048, 2176, 2304, 2432, 2560, 2688, 2816, 2944, 3072, 3200, 3328, 3456, 3584]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -113,6 +119,12 @@ class TT_CCL:
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
+        self.barrier_semaphore_idx = 0
+
+    def get_and_cycle_barrier_semaphore_handle(self):
+        current_idx = self.barrier_semaphore_idx
+        self.barrier_semaphore_idx = (self.barrier_semaphore_idx + 1) % 2
+        return self.barrier_semaphore_handles[current_idx]
 
     def get_all_gather_concat_inter_buffer(self):
         intermediate_core_range_set = ttnn.CoreRangeSet(
@@ -889,6 +901,8 @@ class TT_CCL:
             persistent_output_buffers=persistent_buffers_list,
             dim=dim,
             multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            # Miguel
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(),
             num_links=num_links,
             memory_config=memory_config,
             topology=ttnn.Topology.Ring,
@@ -996,6 +1010,8 @@ class TT_CCL:
             dim=dim,
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_links=num_links,
+            # Miguel
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(),
             memory_config=memory_config,
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
