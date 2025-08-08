@@ -48,7 +48,7 @@ def _get_rich_table(
         try:
             host_buffer = tensor.host_buffer()
             rows, cols = host_buffer.shape()
-            fully_local = all(host_buffer.is_local_at(coord) for coord in ttnn.MeshCoordinateRange(host_buffer.shape()))
+            fully_local = all(host_buffer.is_local(coord) for coord in ttnn.MeshCoordinateRange(host_buffer.shape()))
         except AttributeError as e:
             logger.error("Error getting host buffer shape: {}.", e)
             rows, cols = 0, 0
@@ -82,7 +82,7 @@ def _get_rich_table(
                     device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
                     device_id_str = f"Dev. ID: {device_id}\n" if view.is_local(coord) else "Unknown\n"
                 else:
-                    locality = "Local\n" if host_buffer.is_local_at(coord) else "Remote\n"
+                    locality = "Local\n" if host_buffer.is_local(coord) else "Remote\n"
                     device_id = row_idx * cols + col_idx
                     device_id_str = ""
 
@@ -227,7 +227,7 @@ def create_system_mesh_table():
                     cell_content = Text(f"{device_id}\n{coords}", justify="center")
                     cell_style = Style(bgcolor="dark_green")
                 else:
-                    is_local = system_mesh_desc.is_local_at(coord)
+                    is_local = system_mesh_desc.is_local(coord)
                     locality = "Local\n" if is_local else "Remote\n"
                     device_id = f"Dev. ID: {system_mesh_desc.get_device_id(coord)}\n" if is_local else "Unknown\n"
                     cell_content = Text(f"{locality}{device_id}{coords}", justify="center")

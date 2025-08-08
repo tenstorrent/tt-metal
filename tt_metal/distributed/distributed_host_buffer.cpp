@@ -104,9 +104,7 @@ void DistributedHostBuffer::emplace_shard(
     }
 }
 
-bool DistributedHostBuffer::is_local_at(const distributed::MeshCoordinate& coord) const {
-    return shards_.is_local_at(coord);
-}
+bool DistributedHostBuffer::is_local(const distributed::MeshCoordinate& coord) const { return shards_.is_local(coord); }
 
 DistributedHostBuffer DistributedHostBuffer::transform(
     const TransformFn& fn, ProcessShardExecutionPolicy policy) const {

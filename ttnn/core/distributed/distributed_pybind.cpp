@@ -58,7 +58,7 @@ public:
         return device_ids_.at(coord).value();
     }
 
-    bool is_local_at(const MeshCoordinate& coord) const { return device_ids_.at(coord).is_local(); }
+    bool is_local(const MeshCoordinate& coord) const { return device_ids_.at(coord).is_local(); }
 
     bool all_local() const { return global_shape_ == local_shape_; }
 };
@@ -196,7 +196,7 @@ void py_module(py::module& module) {
         .def("shape", &SystemMeshDescriptor::shape)
         .def("local_shape", &SystemMeshDescriptor::local_shape)
         .def("get_device_id", &SystemMeshDescriptor::get_device_id)
-        .def("is_local_at", &SystemMeshDescriptor::is_local_at)
+        .def("is_local", &SystemMeshDescriptor::is_local)
         .def("all_local", &SystemMeshDescriptor::all_local);
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
@@ -555,7 +555,7 @@ void py_module(py::module& module) {
 
     auto py_distributed_host_buffer =
         static_cast<py::class_<DistributedHostBuffer>>(module.attr("DistributedHostBuffer"));
-    py_distributed_host_buffer.def("is_local_at", &DistributedHostBuffer::is_local_at, py::arg("coord"))
+    py_distributed_host_buffer.def("is_local", &DistributedHostBuffer::is_local, py::arg("coord"))
         .def("shape", &DistributedHostBuffer::shape, py::return_value_policy::reference_internal);
 
     module.def(
