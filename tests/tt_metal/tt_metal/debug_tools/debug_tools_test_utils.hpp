@@ -21,17 +21,17 @@ inline bool OpenFile(std::string &file_name, std::fstream &file_stream, std::ios
 
 // Helper function to dump a file
 inline void DumpFile(std::string file_name) {
-    std::fstream log_file;
-    if (!OpenFile(file_name, log_file, std::fstream::in)) {
-        log_info(tt::LogTest, "File \'{}\' does not exist!", file_name);
-        return;
-    }
+    // std::fstream log_file;
+    // if (!OpenFile(file_name, log_file, std::fstream::in)) {
+    //     log_info(tt::LogTest, "File \'{}\' does not exist!", file_name);
+    //     return;
+    // }
 
-    log_info(tt::LogTest, "File \'{}\' contains:", file_name);
-    std::string line;
-    while (getline(log_file, line)) {
-        log_info(tt::LogTest, "{}", line);
-    }
+    // log_info(tt::LogTest, "File \'{}\' contains:", file_name);
+    // std::string line;
+    // while (getline(log_file, line)) {
+    //     log_info(tt::LogTest, "{}", line);
+    // }
 }
 
 std::string_view::size_type FloatingGlobEndsAt(std::string_view haystack, std::string_view needle, unsigned globs);
