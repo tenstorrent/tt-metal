@@ -17,7 +17,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
     [
         {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D},
         {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
     ],
+    ids=["fabric_2d", "fabric_1d_line", "fabric_1d_ring"],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
@@ -86,7 +88,7 @@ def test_all_to_all_combine_no_trace(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 500000,
         }
     ],
