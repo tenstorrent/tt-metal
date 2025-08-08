@@ -60,9 +60,11 @@ def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignm
     return tt_weight, tt_bias
 
 
-def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device):
+def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device, extra_torch_entries=[0]):
     """Reshape and permute TTNN output to match PyTorch format."""
+    current_entries_count = device.num_program_cache_entries()
     tt_output = ttnn.to_torch(tt_output, device=device, dtype=torch.float32)
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
     tt_output = tt_output.reshape(N, D_out, H_out, W_out, out_channels)
     return tt_output.permute(0, 4, 1, 2, 3)
 
@@ -185,7 +187,9 @@ def run_conv3d_test(
     )
 
     # Reshape output and verify results
-    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+    tt_output = reshape_output(
+        tt_output, N, D_out, H_out, W_out, out_channels, device, extra_torch_entries=extra_torch_entries
+    )
 
     print(f"gt output shape = {gt_output.shape}")
     print(f"tt output shape = {tt_output.shape}")
