@@ -130,6 +130,13 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     if (output_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_FATAL(output_buffer_type == BufferType::L1, "We don't support DRAM block sharding");
     }
+
+    // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
+    if (!this->use_pack_untilize) {
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::UINT32 && input_tensor_a.dtype() != DataType::INT32,
+            "Pack untilize must be enabled to support uint32/int32 data types");
+    }
 }
 
 std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
