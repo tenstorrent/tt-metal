@@ -663,6 +663,18 @@ FORCE_INLINE void noc_async_read_with_state(
     WAYPOINT("NAVD");
 }
 
+// clang-format off
+/**
+ * Increments the number of issued reads counter. This is used to manually increment the number of issued reads counter.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                            | Type     | Valid Range         | Required |
+ * |----------------------------|----------------------------------------|----------|---------------------|----------|
+ * | num_issued_reads_inc       | Number of reads to increment by        | uint32_t | Any uint32_t number | True     |
+ * | noc                        | Which NOC's counters to increment      | uint8_t  | 0 or 1              | False    |
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t noc = noc_index) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -1193,6 +1205,22 @@ FORCE_INLINE void noc_async_write_page(
         id, addrgen, src_local_l1_addr, write_size_bytes, offset, noc);
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous read of a shard from a source noc address into a local L1 address.
+ * The size of the transaction and the source address are determined by the TensorAccessor object.
+ * This function only works for sharded tensors.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                      | Type           | Valid Range                                              | Required |
+ * |----------------------------|--------------------------------------------------|----------------|----------------------------------------------------------|----------|
+ * | shard_id                   | Row-major index of a shard in the sharded tensor | uint32_t       | Any uint32_t number                                      | True     |
+ * | s                          | TensorAccessor object                            | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
+ * | dst_local_l1_addr          | Destination address in local L1 memory           | uint32_t       | 0..1MB                                                   | True     |
+ * | noc                        | Which NOC to use for the transaction             | uint8_t        | 0 or 1                                                   | False    |
+ */
+// clang-format on
 template <typename DSpec>
 FORCE_INLINE void noc_async_read_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
@@ -1200,6 +1228,22 @@ FORCE_INLINE void noc_async_read_shard(
     noc_async_read(s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write of a shard from a local L1 address to a destination noc address.
+ * The size of the transaction and the destination address are determined by the TensorAccessor object.
+ * This function only works for sharded tensors.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                      | Type           | Valid Range                                              | Required |
+ * |----------------------------|--------------------------------------------------|----------------|----------------------------------------------------------|----------|
+ * | shard_id                   | Row-major index of a shard in the sharded tensor | uint32_t       | Any uint32_t number                                      | True     |
+ * | s                          | TensorAccessor object                            | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
+ * | src_local_l1_addr          | Source address in local L1 memory                | uint32_t       | 0..1MB                                                   | True     |
+ * | noc                        | Which NOC to use for the transaction             | uint8_t        | 0 or 1                                                   | False    |
+ */
+// clang-format on
 template <typename DSpec>
 FORCE_INLINE void noc_async_write_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
@@ -1207,11 +1251,39 @@ FORCE_INLINE void noc_async_write_shard(
     noc_async_write(src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
 }
 
+// clang-format off
+/**
+ * Returns the local address of the semaphore with the given id.
+ *
+ * Return value: Local address of the semaphore (uint32_t)
+ *
+ * | Argument                  | Description                | Type                     | Valid Range              | Required |
+ * |---------------------------|----------------------------|--------------------------|--------------------------|----------|
+ * | semaphore_id              | Semaphore id               | uint32_t                 | 0..2^20-1                | True     |
+ * | type (template parameter) | Type of the core           | ProgrammableCoreType     | Any ProgrammableCoreType | False    |
+ */
+// clang-format on
 template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
 FORCE_INLINE uint32_t get_semaphore(uint32_t semaphore_id) {
     return (uint32_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to a single destination node.
+ * The size of data that is sent is 4 Bytes. This is usually used to set a
+ * semaphore value at the destination node, as a way of synchronization.
+ *
+ * Return value: None
+ *
+ * | Argument               | Description                          | Type     | Valid Range                     | Required |
+ * |------------------------|--------------------------------------|----------|---------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory    | uint32_t | 0..1MB                          | True     |
+ * | dst_noc_addr           | Destination NOC address              | uint64_t | Results of \a get_noc_addr call | True     |
+ * | noc                    | Which NOC to use for the transaction | uint8_t  | 0 or 1                          | False    |
+ */
+// clang-format on
 inline void noc_semaphore_set_remote(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, uint8_t noc = noc_index) {
     WAYPOINT("NSSW");
@@ -1329,6 +1401,25 @@ inline void noc_semaphore_set_multicast_loopback_src(
     WAYPOINT("NSLD");
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to a rectangular destination grid.
+ * This API is the same as *noc_async_write_multicast* but with the multicast
+ * sender being part of the multicast destinations. Refer to *noc_async_write_multicast* for more details.
+ *
+ * Return value: None
+ *
+ * | Argument                          | Description                                                              | Type     | Valid Range                                | Required |
+ * |-----------------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | src_local_l1_addr                 | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
+ * | dst_noc_addr_multicast            | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | size                              | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                     | True     |
+ * | num_dests                         | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores -1)                    | True     |
+ * | linked                            | Whether the transaction is linked                                        | bool     | true or false                              | False    |
+ * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
+ */
+// clang-format on
 inline void noc_async_write_multicast_loopback_src(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr_multicast,
@@ -1367,7 +1458,7 @@ inline void noc_async_write_multicast_loopback_src(
  *
  * | Argument | Description                          | Type     | Valid Range | Required |
  * |----------|--------------------------------------|----------|-------------|----------|
- * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START);
@@ -1396,7 +1487,7 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
  *
  * | Argument | Description                          | Type     | Valid Range | Required |
  * |----------|--------------------------------------|----------|-------------|----------|
- * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
@@ -1420,6 +1511,12 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
  * This blocking call waits for all outstanding enqueued *noc_async_write*
  * calls issued on the current Tensix core to depart, but will not wait
  * for them to complete
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_writes_flushed(uint8_t noc = noc_index) {
@@ -1441,6 +1538,12 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
  * This blocking call waits for all outstanding enqueued posted *noc_async_write*
  * calls issued on the current Tensix core to depart, but will not wait
  * for them to complete
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
@@ -1457,12 +1560,16 @@ void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
 }
 
 /**
- * This blocking call waits for all the outstanding enqueued *noc_async_write*
- * calls issued on the current Tensix core to complete. After returning from
- * this call the *noc_async_write* queue will be empty for the current Tensix
- * core.
+ * This blocking call waits for all the outstanding enqueued atomic
+ * transactions issued on the current Tensix core to complete. After returning
+ * from this call the atomic transaction queue will be empty for the current
+ * Tensix core.
  *
  * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc_idx  | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
@@ -1844,6 +1951,24 @@ void noc_async_read_tile_dram_sharded_with_state(
     WAYPOINT("NRTD");
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
+ * This is similar to \a noc_async_read_tile_dram_sharded_with_state, except that this is used when the transaction
+ * id is set.
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                    | Data type | Valid range   | required |
+ * |-------------------------------------|------------------------------------------------|-----------|---------------|----------|
+ * | src_base_addr                       | Base address of source location                | uint32_t  | 0..1MB        | True     |
+ * | src_addr                            | Address in local L1 memory on source core      | uint32_t  | 0..1MB        | True     |
+ * | dest_addr                           | Address in local L1 memory on destination core | uint32_t  | 0..1MB        | True     |
+ * | trid                                | Transaction id for the transaction             | uint32_t  | 0x0 - 0xF     | False    |
+ * | noc                                 | Which NOC to use for the transaction           | uint8_t   | 0 or 1        | False    |
+ * | skip_ptr_update (template argument) | Whether to skip updating counters              | bool      | true or false | False    |
+ */
+// clang-format on
 template <bool skip_ptr_update = false>
 FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
@@ -1855,6 +1980,18 @@ FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     WAYPOINT("NRDD");
 }
 
+// clang-format off
+/**
+ * Sets the transaction id for a noc read.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | False    |
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | False    |
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
@@ -1864,6 +2001,21 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
     WAYPOINT("NSTD");
 }
 
+// clang-format off
+/**
+ * This blocking call waits for all the outstanding enqueued read transactions
+ * issued on the current Tensix core with the given transaction id to complete.
+ * After returning from this call there will be no outstanding read transactions
+ * with the given transaction id.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | trid     | Transaction id for the transaction   | uint32_t | 0x0 - 0xF   | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
@@ -2000,6 +2152,21 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     WAYPOINT("NWPD");
 }
 
+// clang-format off
+/**
+ * This blocking call waits for all the outstanding enqueued write transactions
+ * issued on the current Tensix core with the given transaction id to complete.
+ * After returning from this call there will be no outstanding write transactions
+ * with the given transaction id.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | trid     | Transaction id for the transaction   | uint32_t | 0x0 - 0xF   | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
