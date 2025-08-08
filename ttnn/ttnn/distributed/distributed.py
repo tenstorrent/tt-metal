@@ -42,7 +42,7 @@ def _get_rich_table(
             view = mesh_device.get_view()
             fully_local = all(view.is_local(coord) for coord in ttnn.MeshCoordinateRange(view.shape()))
         except AttributeError as e:
-            logger.error("Error with mesh device setup: {}.", e)
+            logger.error("Error getting mesh device info: {}.", e)
             rows, cols = 0, 0
     else:
         try:
@@ -50,7 +50,7 @@ def _get_rich_table(
             rows, cols = host_buffer.shape()
             fully_local = all(host_buffer.is_local(coord) for coord in ttnn.MeshCoordinateRange(host_buffer.shape()))
         except AttributeError as e:
-            logger.error("Error getting host buffer shape: {}.", e)
+            logger.error("Error getting host buffer info: {}.", e)
             rows, cols = 0, 0
 
     if tensor:
