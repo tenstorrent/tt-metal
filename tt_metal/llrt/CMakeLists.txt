@@ -15,7 +15,7 @@ set(LLRT_SRC
 add_library(llrt OBJECT ${LLRT_SRC})
 add_library(Metalium::Metal::LLRT ALIAS llrt)
 
-add_subdirectory(hal_1xx)
+add_subdirectory(hal/tt-1xx)
 
 target_link_libraries(
     llrt
