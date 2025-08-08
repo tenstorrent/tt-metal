@@ -70,7 +70,10 @@ def galaxy_type():
 def is_galaxy():
     import ttnn
 
-    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+    return (
+        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+        or ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
+    )
 
 
 # TODO: Remove this when TG clusters are deprecated.
@@ -78,7 +81,7 @@ def is_6u():
     import ttnn
 
     # 6U has 32 PCIe devices
-    return is_galaxy() and ttnn.GetNumPCIeDevices() == SIX_U_NUM_PCIE_DEVICES
+    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
 
 
 # TODO: Remove this when TG clusters are deprecated.
