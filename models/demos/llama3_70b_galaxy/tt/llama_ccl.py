@@ -100,10 +100,8 @@ class TT_CCL:
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
-            self.support_seqlens = [8192, 4096, 1024, 2048, 128]
-            # self.support_seqlens = [256, 128]
-            self.support_seqlens = []
-            # self.support_seqlens = [128, 256, 384, 512, 640, 768, 896, 1024, 1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048, 2176, 2304, 2432, 2560, 2688, 2816, 2944, 3072, 3200, 3328, 3456, 3584]
+            # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
+            self.support_seqlens = [8192, 4096, 2048, 1024, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -901,7 +899,6 @@ class TT_CCL:
             persistent_output_buffers=persistent_buffers_list,
             dim=dim,
             multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-            # Miguel
             barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(),
             num_links=num_links,
             memory_config=memory_config,
@@ -1010,7 +1007,6 @@ class TT_CCL:
             dim=dim,
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_links=num_links,
-            # Miguel
             barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(),
             memory_config=memory_config,
             topology=ttnn.Topology.Ring,
