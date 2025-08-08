@@ -2605,6 +2605,7 @@ def determine_device_name(mesh_device):
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
             4: "P150x4",
+            8: "P150x8",
         }
     elif is_wormhole_b0():
         dict_device_names = {

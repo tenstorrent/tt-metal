@@ -945,8 +945,16 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
+    supported_models = [
+        "Llama-3.2-1B",
+        "Llama-3.2-3B",
+        "Llama-3.1-8B",
+        "Llama-3.2-11B",
+        "Llama-3.1-70B",
+        "Llama-3.3-70B",
+        "Mistral-7B",
+    ]
+    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
@@ -981,6 +989,9 @@ def test_demo_text(
             "P300_Llama-3.1-8B": 38,
             "T3K_Llama-3.1-8B": 45,
             "TG_Llama-3.1-8B": 45,  # TODO Update target
+            "P150x2_Llama-3.1-8B": 40,  # TODO Update target
+            "P150x4_Llama-3.1-8B": 45,  # TODO Update target
+            "P150x8_Llama-3.1-8B": 45,  # TODO Update target
             #
             "N150_Llama-3.2-11B": 23,
             "N300_Llama-3.2-11B": 38,  # TODO Update target
@@ -989,6 +1000,11 @@ def test_demo_text(
             #
             "T3K_Llama-3.1-70B": 20,  # TODO Update target
             "TG_Llama-3.1-70B": 20,  # TODO Update target
+            "P150x8_Llama-3.1-70B": 68,  # TODO Update target
+            #
+            "T3K_Llama-3.3-70B": 20,  # TODO Update target
+            "TG_Llama-3.3-70B": 20,  # TODO Update target
+            "P150x8_Llama-3.3-70B": 68,  # TODO Update target
             #
             "N150_Mistral-7B": 23,
             "N300_Mistral-7B": 38,  # TODO Update target
@@ -1075,6 +1091,9 @@ def test_demo_text(
                 # "T3K_Qwen2.5-Coder-32B": 180,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
+                "P150x2_Llama-3.1-8B": 56,  # TODO Update target
+                "P150x4_Llama-3.1-8B": 45,  # TODO Update target
+                "P150x8_Llama-3.1-8B": 24,  # TODO Update target
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1089,6 +1108,9 @@ def test_demo_text(
                 # "T3K_Qwen2.5-72B": 13, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
                 "T3K_Qwen2.5-Coder-32B": 21,
                 # "T3K_Qwen3-32B": 20, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
+                "P150x2_Llama-3.1-8B": 40,  # TODO Update target
+                "P150x4_Llama-3.1-8B": 45,  # TODO Update target
+                "P150x8_Llama-3.1-8B": 150,  # TODO Update target
             }
 
             # Only call verify_perf if the model_device_key exists in the targets
