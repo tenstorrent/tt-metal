@@ -134,9 +134,9 @@ ParallelConfig determine_parallel_config(
     uint32_t act_block_h_override) {
     // Currently, convolution requires multiples of the tile size for both shard height and width,
     // while pooling can accept any height and either a tile multiple or half a tile for width.
-    // This approach needs to be modified when other shard dimensions are supported.
     uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
-    uint32_t effective_tile_width = is_shard_width_tile_multiple ? tt::constants::TILE_WIDTH : 16;
+    uint32_t effective_tile_width =
+        is_shard_width_tile_multiple ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2;
     uint32_t out_nhw_ntiles = tt::div_up(batch_size * output_height * output_width, effective_tile_height);
 
     uint32_t out_channels_ntiles = tt::div_up(output_channels, effective_tile_width);
