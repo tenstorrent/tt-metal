@@ -63,7 +63,7 @@ void MAIN {
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
-    binary_op_init_common(cb_in, cb_in, cb_xmm2);
+    binary_op_init_common(cb_scaler, cb_in, cb_xmm2);
 #endif
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
@@ -122,11 +122,11 @@ void MAIN {
          */
         ACQ();
         cb_reserve_back(cb_ex, onetile);
-        reduce_init(cb_x, cb_scaler, cb_ex);
+        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_DTYPE>(cb_x, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile(cb_x, cb_scaler, wt + j, scaler0, dst0);
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_DTYPE>(cb_x, cb_scaler, wt + j, scaler0, dst0);
             }
             // we don't pop cb_x until we compute Ex
         }
@@ -193,16 +193,15 @@ void MAIN {
             reconfig_data_format(cb_xmm2, cb_scaler);
         }
         cb_reserve_back(cb_ex2, 1);
-        reduce_init(cb_xmm2, cb_scaler, cb_ex2);
+        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_DTYPE>(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // reduce
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                reduce_tile(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_DTYPE>(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
             }
-            // reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
         }
         cb_pop_front(cb_xmm2, Wt);
         pack_tile(dst0, cb_ex2);
