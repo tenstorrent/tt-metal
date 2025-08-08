@@ -36,6 +36,7 @@ import ttnn
         ttnn.logical_and,
         ttnn.add,
         ttnn.sub,
+        ttnn.squared_difference,
     ],
 )
 def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, device):
@@ -102,6 +103,7 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, devic
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
+        ttnn.squared_difference,
     ],
 )
 def test_binary_int32_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn_op, device):
@@ -174,7 +176,9 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         block_sharded_memory_config,
     ],
 )
-@pytest.mark.parametrize("ttnn_fn", ("logical_or", "logical_xor", "logical_and", "add", "sub", "mul"))
+@pytest.mark.parametrize(
+    "ttnn_fn", ("logical_or", "logical_xor", "logical_and", "add", "sub", "mul", "squared_difference")
+)
 def test_binary_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device):
     ttnn_op = getattr(ttnn, ttnn_fn)
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
