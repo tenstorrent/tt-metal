@@ -264,6 +264,9 @@ struct HostToLiteFabricInterface {
 
     void send_payload_flush_non_blocking_from_address(
         LiteFabricHeader& header, tt_cxy_pair virtual_core_sender, uint32_t channel_address) {
+        if (!header.get_payload_size_excluding_header()) {
+            return;
+        }
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         uint32_t addr = get_next_send_buffer_slot_address(channel_address);
         if (header.noc_send_type == lite_fabric::NocSendType::NOC_READ) {
@@ -296,6 +299,9 @@ struct HostToLiteFabricInterface {
 
     void send_payload_without_header_non_blocking_from_address(
         void* data, size_t size, tt_cxy_pair virtual_core_sender, uint32_t channel_address) {
+        if (!size) {
+            return;
+        }
         if (size > CHANNEL_BUFFER_SIZE - sizeof(LiteFabricHeader)) {
             throw std::runtime_error("Payload size exceeds channel buffer size");
         }
@@ -324,6 +330,7 @@ struct HostToLiteFabricInterface {
         LiteFabricHeader header;
         header.to_chip_unicast(1);
         header.to_noc_unicast_write(lite_fabric::NocUnicastCommandHeader{dst_noc_addr}, size);
+        // Unaligned address
         header.unaligned_offset = dst_noc_addr & (l1_alignment_bytes - 1);
 
         wait_for_empty_write_slot(sender_core);

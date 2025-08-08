@@ -240,41 +240,30 @@ TEST(Tunneling, LiteFabricSmallWrites) {
 
     auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
 
-    uint32_t payload_size = sizeof(uint32_t);
+    CoreCoord logical_worker{0, 0};
+    CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
     uint32_t l1_base = devices[1]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> test_data_per_worker;
+    uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+    uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
 
-    for (int worker_x = 0; worker_x < devices[1]->compute_with_storage_grid_size().x; ++worker_x) {
-        for (int worker_y = 0; worker_y < devices[1]->compute_with_storage_grid_size().y; ++worker_y) {
-            CoreCoord logical_worker{worker_x, worker_y};
-            log_info(tt::LogMetal, "Writing to worker {}", logical_worker.str());
-            CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
-            const uint64_t dest_noc_upper =
-                (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
-            uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
-
-            test_data_per_worker[logical_worker] = std::vector<uint32_t>{rand()};
-            host_interface.write(
-                test_data_per_worker[logical_worker].data(),
-                sizeof(uint32_t) * test_data_per_worker[logical_worker].size(),
-                tunnel.mmio_cxy_virtual(),
-                dest_noc_addr);
-        }
+    // due to unaligned, the read will be only 1B of the original data. mask off the irrelevant bits
+    // ensure they did not overwrite each other
+    constexpr uint32_t num_writes = 64;
+    std::vector<uint32_t> write_data = create_random_vector_of_bfloat16(
+        num_writes * sizeof(uint32_t), 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
+    for (int i = 1; i < num_writes; ++i) {
+        host_interface.write_any_len(&write_data[i], 1, tunnel.mmio_cxy_virtual(), dest_noc_addr + i);
+        write_data[i] = write_data[i] & 0xff;
     }
-
     host_interface.barrier(tunnel.mmio_cxy_virtual());
 
-    for (int worker_x = 0; worker_x < devices[1]->compute_with_storage_grid_size().x; ++worker_x) {
-        for (int worker_y = 0; worker_y < devices[1]->compute_with_storage_grid_size().y; ++worker_y) {
-            CoreCoord logical_worker{worker_x, worker_y};
-            CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
-            std::vector<uint32_t> read_data(payload_size / sizeof(uint32_t));
-
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                read_data.data(), payload_size, tt_cxy_pair{1, virtual_worker}, l1_base);
-            ASSERT_EQ(read_data, test_data_per_worker[logical_worker])
-                << fmt::format("Data mismatch for worker {}", logical_worker.str());
-        }
+    for (int i = 1; i < num_writes; ++i) {
+        std::vector<uint32_t> read_data(1);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            read_data.data(), 1, tt_cxy_pair{1, virtual_worker}, l1_base + i);
+        log_info(
+            tt::LogMetal, "Read data {} from {:#x} {:#x} expecting {:#x}", i, l1_base + i, read_data[0], write_data[i]);
+        ASSERT_EQ(read_data[0], write_data[i]);
     }
 
     lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
@@ -294,18 +283,18 @@ TEST(Tunneling, LiteFabricUnalignedWrites) {
 
     auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
 
+    CoreCoord logical_worker{0, 0};
+    CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
     uint32_t l1_base = devices[1]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+
     // Make destination not aligned by various amounts
     for (int aligned_offset = 0; aligned_offset < 16; ++aligned_offset) {
         uint32_t addr = l1_base + aligned_offset;
-        log_info(tt::LogMetal, "Testing unaligned write to {:#x}", addr);
-        CoreCoord logical_worker{0, 0};
-        CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
-        std::vector<uint32_t> test_data = create_random_vector_of_bfloat16(
-            4096, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
-
         uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
         uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)addr;
+        log_info(tt::LogMetal, "Testing unaligned write to {:#x}", addr);
+        std::vector<uint32_t> test_data = create_random_vector_of_bfloat16(
+            4096, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
 
         host_interface.write_any_len(
             test_data.data(), test_data.size() * sizeof(uint32_t), tunnel.mmio_cxy_virtual(), dest_noc_addr);
