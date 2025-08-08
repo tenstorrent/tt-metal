@@ -94,6 +94,9 @@ while [[ "$found" = "false" ]]; do
    ./build_metal.sh --build-tests > /dev/null || build_rc=$?
    echo "::endgroup::"
 
+   echo "ls -lhtR"
+   ls -lhtR
+
    if [[ $build_rc -ne 0 ]]; then
       echo "Build failed; skipping this commit"
       git bisect skip
