@@ -5,6 +5,7 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
+#include "assert.hpp"
 #include "dev_msgs.h"
 #include <cstdint>
 #include <device_pool.hpp>
@@ -971,6 +972,15 @@ IDevice* CreateDevice(
             "devices for dispatch.");
     }
 
+    // This API may not be used to create single remote device or multi chip clusters
+    // CreateDevices should be used instead to ensure proper init/teardown
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
+        "CreateDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
+        "must use "
+        "CreateDevices().",
+        device_id);
+
     tt::DevicePool::initialize(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
@@ -990,6 +1000,16 @@ IDevice* CreateDeviceMinimal(
 bool CloseDevice(IDevice* device) {
     ZoneScoped;
     auto device_id = device->id();
+
+    // This API may not be used to close single remote device or multi chip clusters
+    // CloseDevices should be used instead to ensure proper init/teardown
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
+        "CloseDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
+        "must use "
+        "CloseDevices().",
+        device_id);
+
     return tt::DevicePool::instance().close_device(device_id);
 }
 
