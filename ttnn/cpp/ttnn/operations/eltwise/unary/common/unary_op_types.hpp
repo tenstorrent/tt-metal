@@ -103,6 +103,7 @@ enum class UnaryOpType {
     MAXIMUM,
     MINIMUM,
     TANHSHRINK,
+    SOFTSHRINK,
     HARDSHRINK,
     HARDTANH,
     HARDSIGMOID,
