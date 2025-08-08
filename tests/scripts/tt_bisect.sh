@@ -150,6 +150,11 @@ bisect_loop() {
 }
 
 # Run the bisect loop with a global timeout
-timeout "$timeout_duration_global" bash -c "$(declare -f bisect_loop); bisect_loop"
+export -f bisect_loop
+timeout "$timeout_duration_global" bash -c bisect_loop || {
+    echo "Bisecting timed out after $timeout_duration_global"
+    git bisect reset
+    exit 1
+}
 
 git bisect reset
