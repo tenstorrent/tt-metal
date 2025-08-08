@@ -92,7 +92,7 @@ install(
     TARGETS
         ttnn_op_experimental_ccl
     FILE_SET
-    kernels
+    headers
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl
         COMPONENT ttnn-runtime
 )
