@@ -189,6 +189,7 @@ def run_all_to_all_dispatch_test(
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     cluster_axis=1,
+    use_optional_output_tensors=True,
 ):
     torch.manual_seed(2005)
     mesh_device.enable_program_cache()
@@ -331,8 +332,8 @@ def run_all_to_all_dispatch_test(
         tt_metadata_list = []
 
         for i in range(n_iters):
-            buffer_index = 0 if trace_mode else i
-            ttnn.all_to_all_dispatch(
+            buffer_index = i
+            output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
                 expert_mapping_tensors[buffer_index],
@@ -343,11 +344,13 @@ def run_all_to_all_dispatch_test(
                 global_semaphore=ccl_semaphore_handles[buffer_index],
                 init_semaphore=init_semaphore_handles[buffer_index],
                 subdevice_id=worker_sub_device_id,
-                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]],
+                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
+                if use_optional_output_tensors
+                else None,
             )
 
-            tt_out_tensor = output_tensors[buffer_index]
-            tt_metadata = metadata_tensors[buffer_index]
+            tt_out_tensor = output_tensors[buffer_index] if use_optional_output_tensors else output_tensor
+            tt_metadata = metadata_tensors[buffer_index] if use_optional_output_tensors else metadata_tensor
 
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -375,7 +378,7 @@ def run_all_to_all_dispatch_test(
 
         logger.info("Capturing Trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_out_tensor_list, tt_metadata_list = run_op(num_iters, store_all_results=False)
+        tt_out_tensor_list, tt_metadata_list = run_op(num_iters, store_all_results=True)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
 
@@ -844,7 +847,7 @@ def test_prefill_perf(
 @pytest.mark.parametrize(
     "batches_per_device, seq_len, num_iters, warmup_iters",
     [
-        (16, 7, 2, 1),
+        (16, 7, 10, 5),
     ],
     ids=["b16s2"],
 )
@@ -901,6 +904,7 @@ def test_all_to_all_dispatch_ring_trace(
         dtype=dtype,
         cluster_axis=cluster_axis,
         topology=topology,
+        use_optional_output_tensors=False,
     )
 
 
