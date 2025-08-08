@@ -10,8 +10,8 @@ from queue import Empty
 from framework.statuses import VectorValidity, TestStatus
 import framework.tt_smi_util as tt_smi_util
 from framework.sweeps_logger import sweeps_logger as logger
-from framework.vector_source import VectorSource, VectorSourceFactory
-from framework.serialize import deserialize_for_postgres, deserialize
+from framework.vector_source import VectorSourceFactory
+from framework.serialize import deserialize
 import subprocess
 from dataclasses import dataclass
 from typing import Optional

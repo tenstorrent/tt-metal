@@ -7,7 +7,7 @@ Definition of the pydantic models used for data production.
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from enum import Enum
 from pydantic import BaseModel, Field, model_validator
@@ -373,3 +373,85 @@ class CompleteBenchmarkRun(BaseModel):
     )
     training: Optional[bool] = Field(None, description="ML model benchmarks for training or inference.")
     measurements: List[BenchmarkMeasurement] = Field(description="List of benchmark measurements.")
+
+
+class SweepsResultRecord(BaseModel):
+    """
+    One flattened record for a sweeps test vector execution result.
+
+    This schema is designed to validate the JSON produced by the sweeps runner's
+    file/JSON export and is intentionally decoupled from CI JUnit-based Test.
+    """
+
+    # Identifiers and headers
+    sweep_name: str = Field(description="Name of the sweeps module (e.g., eltwise.unary.relu.relu).")
+    suite_name: Optional[str] = Field(None, description="Suite name within the sweeps module, if applicable.")
+    vector_id: Optional[str] = Field(None, description="Identifier of the specific test vector within the suite.")
+    input_hash: Optional[str] = Field(None, description="Hash of the input vector for deduplication and traceability.")
+
+    # Timing
+    start_time_ts: datetime = Field(description="Timestamp with timezone when the vector execution started.")
+    end_time_ts: datetime = Field(description="Timestamp with timezone when the vector execution ended.")
+
+    # Status & messaging
+    status: Optional[str] = Field(
+        None,
+        description=(
+            "Execution status for this vector. Typical values include: pass, fail_assert_exception, "
+            "fail_l1_out_of_mem, fail_watcher, fail_crash_hang, fail_unsupported_device_perf, skipped, error."
+        ),
+    )
+    message: Optional[str] = Field(None, description="Optional informational message about the execution outcome.")
+    exception: Optional[str] = Field(None, description="Exception text when a failure occurred, if any.")
+    error_signature: Optional[str] = Field(None, description="Derived error signature from the exception, if any.")
+
+    # Performance metrics (optional)
+    e2e_perf: Optional[float] = Field(
+        None, description="End-to-end performance metric for the test (units depend on the specific test)."
+    )
+    device_perf: Optional[Dict[str, Any]] = Field(
+        None, description="Device-level performance measurements, when device profiling is enabled."
+    )
+
+    # Environment and traceability
+    git_hash: Optional[str] = Field(None, description="Short git commit hash recorded at execution time.")
+    host: Optional[str] = Field(None, description="Hostname where the vector executed.")
+    user: Optional[str] = Field(None, description="Username associated with the execution environment.")
+
+    # Original vector contents (sanitized/normalized for JSON)
+    original_vector_data: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Original test vector contents captured for traceability, normalized for JSON compatibility.",
+    )
+
+
+class SweepsRunMetadata(BaseModel):
+    """
+    High-level metadata describing a sweeps run session (spanning many vectors).
+    Mirrors the metadata constructed in the sweeps runner before exporting results.
+    """
+
+    initiated_by: str = Field(description="User or CI pipeline that initiated the run.")
+    host: Optional[str] = Field(None, description="Hostname of the machine executing the run.")
+    device: Optional[str] = Field(None, description="Target device/architecture identifier, if available.")
+    run_contents: Optional[str] = Field(
+        None, description="Human-readable description of run contents (e.g., module/suite selection)."
+    )
+
+    git_author: Optional[str] = Field(None, description="Git author configured in the environment.")
+    git_branch_name: Optional[str] = Field(None, description="Current git branch name.")
+    git_commit_hash: Optional[str] = Field(None, description="Short git commit hash for the run.")
+
+    start_time_ts: datetime = Field(description="Timestamp with timezone when the sweeps run started.")
+    end_time_ts: Optional[datetime] = Field(None, description="Timestamp with timezone when the sweeps run ended.")
+    status: Optional[str] = Field(None, description="Overall run status aggregated from testcases.")
+
+
+class SweepsRun(BaseModel):
+    """
+    Container for a sweeps run including run-level metadata and the list of
+    per-vector execution results.
+    """
+
+    metadata: SweepsRunMetadata = Field(description="Run-level metadata for the sweeps session.")
+    results: List[SweepsResultRecord] = Field(description="List of per-vector sweeps execution results.")
