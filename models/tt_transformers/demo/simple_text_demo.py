@@ -952,7 +952,7 @@ def test_demo_text(
         "Llama-3.2-11B",
         "Llama-3.1-70B",
         "Llama-3.3-70B",
-        "Mistral-7B",
+        "Qwen3-32B" "Mistral-7B",
     ]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
 
@@ -1005,6 +1005,7 @@ def test_demo_text(
             "T3K_Llama-3.3-70B": 20,  # TODO Update target
             "TG_Llama-3.3-70B": 20,  # TODO Update target
             "P150x8_Llama-3.3-70B": 68,  # TODO Update target
+            "P150x8_Qwen3-32B": 40,
             #
             "N150_Mistral-7B": 23,
             "N300_Mistral-7B": 38,  # TODO Update target
@@ -1094,6 +1095,7 @@ def test_demo_text(
                 "P150x2_Llama-3.1-8B": 56,  # TODO Update target
                 "P150x4_Llama-3.1-8B": 45,  # TODO Update target
                 "P150x8_Llama-3.1-8B": 24,  # TODO Update target
+                "P150x8_Qwen3-32B": 66,  # TODO Update target
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1111,6 +1113,7 @@ def test_demo_text(
                 "P150x2_Llama-3.1-8B": 40,  # TODO Update target
                 "P150x4_Llama-3.1-8B": 45,  # TODO Update target
                 "P150x8_Llama-3.1-8B": 150,  # TODO Update target
+                "P150x8_Qwen3-32B": 40,  # TODO Update target
             }
 
             # Only call verify_perf if the model_device_key exists in the targets
