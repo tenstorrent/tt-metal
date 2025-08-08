@@ -21,25 +21,25 @@ const std::string& get_reports_dir();
 float get_timeout_seconds_for_operations();
 
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
-// Ensures no blocking on future destruction because the task checks a cancellation signal
-template <typename Func, typename OnTimeout, typename... Args>
-auto timeout_function(Func&& func, float timeout_seconds, OnTimeout&& on_timeout, Args&&... args)
-    -> decltype(func(std::forward<Args>(args)...)) {
-    auto future = std::async(
-        std::launch::async, [func = std::forward<Func>(func), ... args = std::forward<Args>(args)]() mutable {
-            return func(std::forward<decltype(args)>(args)...);
-        });
+template <typename FuncBody, typename FuncWait, typename OnTimeout, typename... Args>
+auto timeout_function(
+    FuncBody&& func_body, FuncWait&& wait_condition, OnTimeout&& on_timeout, float timeout_seconds, Args&&... args) {
+    auto start_time = std::chrono::high_resolution_clock::now();
 
-    if (timeout_seconds > 0.0f) {
-        auto status = future.wait_for(std::chrono::duration<float>(timeout_seconds));
-        if (status == std::future_status::timeout) {
-            on_timeout();
+    do {
+        func_body(std::forward<Args>(args)...);
+        asm("pause");  // Busy wait
+
+        if (timeout_seconds > 0.0f) {
+            auto current_time = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration<float>(current_time - start_time).count();
+
+            if (elapsed >= timeout_seconds) {
+                on_timeout();
+                break;
+            }
         }
-    } else {
-        future.wait();
-    }
-
-    return future.get();
+    } while (wait_condition(std::forward<Args>(args)...));
 }
 
 // Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
