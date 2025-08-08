@@ -349,8 +349,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     // output of reduce == writer to write
-    // output rows in RM
-    // after reduction
+    // output rows in RM after reduction
     const uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, outputs[0].shard_spec().value().shape[1]) *
                                      params.nbytes;  // there is just one row of channels after each reduction (or 1
                                                      // block of c if its greater than 8 tiles)
@@ -358,6 +357,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, outputs[0].buffer());
+    if (return_indices) {
+        TT_FATAL(
+            outputs.size() == 2,
+            "When return_indices is true, there should be two outputs, but got {}",
+            outputs.size());
+        tt::DataFormat idx_data_format = datatype_to_dataformat_converter(DataType::UINT16);
+        const auto [out_idx_cb_id, cb_out_idx] = tt::tt_metal::create_cb(
+            next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, idx_data_format, outputs[1].buffer());
+    }
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
     for (int i = 0; i < outputs.size(); ++i) {
