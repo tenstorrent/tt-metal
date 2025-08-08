@@ -128,10 +128,10 @@ def test_benchmark_from_torch(
 @pytest.mark.parametrize(
     "size_multiplier",
     [
-        # 1,
-        # 2,
-        # 4,
-        # 8,
+        1,
+        2,
+        4,
+        8,
         16,
     ],
 )
