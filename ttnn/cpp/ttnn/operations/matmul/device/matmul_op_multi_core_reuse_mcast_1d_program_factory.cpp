@@ -1954,13 +1954,6 @@ process_gather_in0_program_and_create_override_variables(
     TT_FATAL(
         out_block_num_subblocks == 1 || !untilize_out,
         "untilize_out is not supported for cases that out_block_num_subblocks > 1");
-    log_info(tt::LogOp, "in0_block_w: {}", in0_block_w);
-    log_info(tt::LogOp, "in0_num_subblocks: {}", in0_num_subblocks);
-    log_info(tt::LogOp, "in0_block_num_tiles: {}", in0_block_num_tiles);
-    log_info(tt::LogOp, "in0_subblock_num_tiles: {}", in0_subblock_num_tiles);
-    log_info(tt::LogOp, "in1_num_subblocks: {}", in1_num_subblocks);
-    log_info(tt::LogOp, "in1_block_num_tiles: {}", in1_block_num_tiles);
-    log_info(tt::LogOp, "in1_block_size_bytes: {}", in1_block_size_bytes);
     std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
