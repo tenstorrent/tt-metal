@@ -338,7 +338,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("full_inner_dim") = false,
-        py::arg("enable_split_reader") = false,
+        py::arg("enable_split_reader") = true,
         py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = false,
         py::arg("enable_activation_reuse") = false);
@@ -434,6 +434,7 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader, R"doc(
             This uses both the reader & writer cores to carry out the activation reader operation.
             This is useful when the input tensor is large, and the activation reader is a bottleneck.
+            It is enabled by default and will be disabled if act_block_h_override is less than 64.
             This is only supported for Height Sharded Conv2D.
         )doc");
     py_conv_config.def_readwrite("in_place", &Conv2dConfig::in_place, R"doc(

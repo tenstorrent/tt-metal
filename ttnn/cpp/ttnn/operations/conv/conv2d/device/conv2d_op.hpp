@@ -81,8 +81,8 @@ struct Conv2dConfig {
     bool full_inner_dim = false;
 
     // Only for height sharding.
-    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true
-    bool enable_split_reader = false;
+    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true, otherwise it will just be ignored
+    bool enable_split_reader = true;
 
     // Re-use input tensor storage when creating output tensor
     bool in_place = false;
