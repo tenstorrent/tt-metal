@@ -304,9 +304,6 @@ def run_llama_all_gather_matmul_impl(
     )
     logger.info(f"Input shape: {in0_shape[2:]}, Padded shape: {[M, K_per_device_per_shard * input_num_cores]}")
     in0_tensor = torch.randn(in0_shape)
-    # in0_tensor = torch.ones(in0_shape)*2
-    # in0_tensor = gen_input_tensor_per_device(cluster_shape, in0_shape, default_value=1, increment=1)
-    # breakpoint()
     tt_input_tensor = ttnn.from_torch(
         in0_tensor,
         device=mesh_device,
