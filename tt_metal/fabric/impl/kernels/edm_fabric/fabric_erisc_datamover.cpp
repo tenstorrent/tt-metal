@@ -647,8 +647,10 @@ FORCE_INLINE void update_header_and_cached_routing_fields(
     // for low-latency mode, need to update only when packet traverse on both axes
     // for other cases, the header gets updated via update_packet_header_for_next_hop()
     if constexpr (has_both_axes) {
-        cached_routing_fields.value++;
-        if constexpr (downstream_direction == eth_chan_directions::EAST) {
+        if constexpr (
+            downstream_direction == eth_chan_directions::NORTH || downstream_direction == eth_chan_directions::SOUTH) {
+            cached_routing_fields.value++;
+        } else if constexpr (downstream_direction == eth_chan_directions::EAST) {
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
         } else if constexpr (downstream_direction == eth_chan_directions::WEST) {
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
@@ -716,7 +718,7 @@ template <
 FORCE_INLINE void forward_to_downstream_edm(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     uint16_t payload_size_bytes,
-    ROUTING_FIELDS_TYPE cached_routing_fields,
+    ROUTING_FIELDS_TYPE& cached_routing_fields,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     uint8_t transaction_id) {
     if constexpr (my_direction == downstream_direction) {
