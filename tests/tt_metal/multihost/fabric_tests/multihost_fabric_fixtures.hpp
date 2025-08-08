@@ -34,7 +34,7 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
         tt::tt_metal::MetalContext::instance().get_control_plane().system_has_intermesh_links(),
         "Multi-Host Routing tests require ethernet links to a remote host.");
     TT_FATAL(
-        *(tt::tt_metal::MetalContext::instance().get_distributed_context().size()) > 1,
+        *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) > 1,
         "Multi-Host Routing tests require multiple hosts in the system");
 }
 
@@ -121,7 +121,8 @@ public:
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
-        return *(tt::tt_metal::MetalContext::instance().get_distributed_context().size()) == eth_coord_mapping.size() &&
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+                   eth_coord_mapping.size() &&
                cluster.user_exposed_chip_ids().size() == eth_coord_mapping[0].size();
     }
 };
@@ -149,7 +150,8 @@ public:
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
-        return *(tt::tt_metal::MetalContext::instance().get_distributed_context().size()) == eth_coord_mapping.size() &&
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+                   eth_coord_mapping.size() &&
                cluster.user_exposed_chip_ids().size() == eth_coord_mapping[0].size();
     }
 };

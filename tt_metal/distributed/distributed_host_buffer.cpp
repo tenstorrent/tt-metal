@@ -7,24 +7,31 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/control_plane.hpp>
 
 #include <vector>
 #include <functional>
 #include <taskflow/taskflow.hpp>
 #include <taskflow/algorithm/for_each.hpp>
 #include "common/executor.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
 
 namespace tt::tt_metal {
 
 DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape& shape) {
-    return DistributedHostBuffer::create(shape, shape, distributed::MeshCoordinate::zero_coordinate(shape.dims()));
+    return DistributedHostBuffer::create(
+        shape,
+        shape,
+        distributed::MeshCoordinate::zero_coordinate(shape.dims()),
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_host_local_context());
 }
 
 DistributedHostBuffer DistributedHostBuffer::create(
     const distributed::MeshShape& global_shape,
     const distributed::MeshShape& local_shape,
-    const distributed::MeshCoordinate& local_offset) {
+    const distributed::MeshCoordinate& local_offset,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& context) {
     DistributedCoordinateTranslator translator(global_shape, local_shape, local_offset);
     std::vector<distributed::MaybeRemote<Shard>> shards(
         global_shape.mesh_size(), distributed::MaybeRemote<Shard>::remote());
@@ -38,12 +45,17 @@ DistributedHostBuffer DistributedHostBuffer::create(
     }
 
     return DistributedHostBuffer(
-        distributed::DistributedMeshContainer<Shard>(global_shape, std::move(shards)), /*populated_shards=*/{});
+        distributed::DistributedMeshContainer<Shard>(global_shape, std::move(shards)),
+        /*populated_shards=*/{},
+        context);
 }
 
 DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshDeviceView& mesh_device_view) {
     std::vector<distributed::MaybeRemote<Shard>> shards(
         mesh_device_view.shape().mesh_size(), distributed::MaybeRemote<Shard>::remote());
+
+    auto distributed_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(mesh_device_view.mesh_id());
 
     int shard_index = 0;
     for (auto maybe_device : mesh_device_view) {
@@ -55,7 +67,8 @@ DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshDevic
 
     return DistributedHostBuffer(
         distributed::DistributedMeshContainer<Shard>(mesh_device_view.shape(), std::move(shards)),
-        /*populated_shards=*/std::set<distributed::MeshCoordinate>{});
+        /*populated_shards=*/std::set<distributed::MeshCoordinate>{},
+        std::move(distributed_context));
 }
 
 std::vector<size_t> DistributedHostBuffer::get_populated_shard_indices() const {
@@ -111,7 +124,9 @@ DistributedHostBuffer DistributedHostBuffer::transform(
         detail::GetExecutor().run(taskflow).wait();
     }
     return DistributedHostBuffer(
-        distributed::DistributedMeshContainer<Shard>(shards_.shape(), std::move(transformed_shards)), shard_coords_);
+        distributed::DistributedMeshContainer<Shard>(shards_.shape(), std::move(transformed_shards)),
+        shard_coords_,
+        context_);
 }
 
 void DistributedHostBuffer::apply(const ApplyFn& fn, ProcessShardExecutionPolicy policy) const {
@@ -131,5 +146,9 @@ void DistributedHostBuffer::apply(const ApplyFn& fn, ProcessShardExecutionPolicy
 const distributed::MeshShape& DistributedHostBuffer::shape() const { return shards_.shape(); }
 
 const std::set<distributed::MeshCoordinate>& DistributedHostBuffer::shard_coords() const { return shard_coords_; }
+
+const std::shared_ptr<distributed::multihost::DistributedContext>& DistributedHostBuffer::context() const {
+    return context_;
+}
 
 }  // namespace tt::tt_metal
