@@ -151,7 +151,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     uint32_t num_downstream_edms = get_downstream_edm_count(topology);
     // Global
     size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry()) {
+
+    // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
+    // memory for the telemetry buffer in Blackhole
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry() || tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
         next_l1_addr += 32;
     }
@@ -276,15 +280,27 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         ring_buffer_slot_options_dateline_upstream_adjcent = {
             {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}, {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}};
 
-    auto get_num_buffer_slots = [](Topology topology) -> const std::vector<std::pair<size_t, size_t>>& {
-        static tt::stl::Indestructible<std::vector<std::pair<size_t, size_t>>> mesh_slots(
-            std::vector<std::pair<size_t, size_t>>{{4, 8}});
-        static tt::stl::Indestructible<std::vector<std::pair<size_t, size_t>>> other_slots(
-            std::vector<std::pair<size_t, size_t>>{{8, 16}});
+    auto get_num_buffer_slots = [](Topology topology,
+                                   size_t arch_index) -> const std::vector<std::pair<size_t, size_t>>& {
+        // Architecture-specific buffer slot configurations
+        static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {
+            {{7, 11}, {4, 8}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
+            {{8, 16}, {4, 8}}   // BLACKHOLE: {sender_slots, receiver_slots}
+        };
+        static const std::vector<std::vector<std::pair<size_t, size_t>>> other_buffer_slot_options = {
+            {{8, 16}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
+            {{8, 16}}   // BLACKHOLE: {sender_slots, receiver_slots}
+        };
+
+        static tt::stl::Indestructible<std::vector<std::vector<std::pair<size_t, size_t>>>> mesh_slots(
+            mesh_buffer_slot_options);
+        static tt::stl::Indestructible<std::vector<std::vector<std::pair<size_t, size_t>>>> other_slots(
+            other_buffer_slot_options);
+
         if (topology == Topology::Mesh) {
-            return mesh_slots.get();
+            return mesh_slots.get()[arch_index];
         } else {
-            return other_slots.get();
+            return other_slots.get()[arch_index];
         }
     };
 
@@ -491,7 +507,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            get_num_buffer_slots(topology),
+            get_num_buffer_slots(topology, arch_index),
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
