@@ -363,9 +363,7 @@ from ttnn.operations.reduction import (
 )
 
 from ttnn.operations.ccl import (
-    Topology,
-    teardown_edm_fabric,
-    initialize_edm_fabric,
+    Topology
 )
 
 from ttnn.operations.conv2d import (
