@@ -784,11 +784,16 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     // READER KERNEL
     tt::tt_metal::KernelHandle reader_kernel_id;
     if (b.has_value()) {
+        std::vector<uint32_t> reader_compile_time_args;
+        // New NG readers expect TA(A), TA(B), then has_sharding
+        tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(*b_buffer).append_to(reader_compile_time_args);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
             all_device_cores,
-            tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding, b_is_dram}, std::move(reader_defines)));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
     } else {
         std::vector<uint32_t> reader_compile_time_args;
         switch (kernel_config.reader_kernel) {
