@@ -3,10 +3,31 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, WS, BS
+from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import (
+    run_conv,
+    torch_tensor_map,
+    HS,
+    WS,
+    BS,
+    run_conv_with_split,
+)
 import ttnn
 import torch
 from models.utility_functions import skip_for_blackhole
+
+try:
+    from tracy import signpost
+except ModuleNotFoundError:
+
+    def signpost(*args, **kwargs):
+        pass
+
+
+def check_grid_shape(device):
+    compute_grid = device.compute_with_storage_grid_size()
+    print(f"compute_grid: {compute_grid.x}x{compute_grid.y}")
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -196,46 +217,46 @@ def test_conv_dram(
 
 
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, has_bias",
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, has_bias, multipler",
     [
-        (1, 1024, 2048, 32, 64, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 1024, 256, 32, 64, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 1024, 512, 32, 64, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 128, 128, 128, 256, 3, 3, 1, 1, 1, 1, 1, False),
-        (1, 128, 128, 128, 256, 3, 3, 2, 2, 1, 1, 1, False),
-        (1, 128, 256, 128, 256, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 128, 32, 128, 256, 3, 3, 1, 1, 1, 1, 1, False),
-        (1, 128, 64, 128, 256, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 128, 128, 64, 128, 3, 3, 1, 1, 1, 1, 1, False),
-        (1, 128, 512, 64, 128, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 1280, 256, 32, 64, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 160, 128, 128, 256, 3, 3, 1, 1, 1, 1, 1, False),
-        (1, 2048, 256, 1, 1, 1, 1, 1, 1, 0, 0, 1, True),
-        (1, 2048, 256, 32, 64, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 2048, 512, 32, 64, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 256, 128, 128, 256, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 256, 19, 128, 256, 1, 1, 1, 1, 0, 0, 1, True),
-        (1, 256, 32, 128, 256, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 256, 64, 128, 256, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 256, 1024, 32, 64, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 256, 256, 32, 64, 3, 3, 1, 1, 1, 1, 1, False),
-        (1, 256, 256, 64, 128, 3, 3, 2, 2, 1, 1, 1, False),
-        (1, 256, 256, 64, 128, 3, 3, 1, 1, 1, 1, 1, False),
-        (1, 3, 64, 512, 1024, 3, 3, 2, 2, 1, 1, 1, False),
-        (1, 32, 1, 128, 256, 1, 1, 1, 1, 0, 0, 1, True),
-        (1, 32, 2, 128, 256, 1, 1, 1, 1, 0, 0, 1, True),
-        (1, 320, 128, 64, 128, 3, 3, 1, 1, 1, 1, 1, False),
-        (1, 320, 256, 64, 128, 3, 3, 1, 1, 1, 1, 1, False),
-        (1, 512, 2048, 32, 64, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 512, 512, 32, 64, 3, 3, 1, 1, 2, 2, 1, False),
-        (1, 512, 512, 32, 64, 3, 3, 1, 1, 4, 4, 1, False),
-        (1, 512, 512, 32, 64, 3, 3, 1, 1, 8, 8, 1, False),
-        (1, 512, 1024, 64, 128, 1, 1, 2, 2, 0, 0, 1, False),
-        (1, 512, 128, 64, 128, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 512, 256, 64, 128, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 512, 64, 64, 128, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 64, 256, 128, 256, 1, 1, 1, 1, 0, 0, 1, False),
-        (1, 64, 64, 128, 256, 3, 3, 1, 1, 1, 1, 1, False),
+        (1, 1024, 2048, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 1),
+        (1, 1024, 256, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 5),
+        (1, 1024, 512, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 1),
+        (1, 128, 128, 128, 256, 3, 3, 1, 1, 1, 1, 1, False, 3),
+        (1, 128, 128, 128, 256, 3, 3, 2, 2, 1, 1, 1, False, 1),
+        (1, 128, 256, 128, 256, 1, 1, 1, 1, 0, 0, 1, False, 1),
+        (1, 128, 32, 128, 256, 3, 3, 1, 1, 1, 1, 1, False, 2),
+        (1, 128, 64, 128, 256, 1, 1, 1, 1, 0, 0, 1, False, 1),
+        (1, 128, 128, 64, 128, 3, 3, 1, 1, 1, 1, 1, False, 4),
+        (1, 128, 512, 64, 128, 1, 1, 1, 1, 0, 0, 1, False, 4),
+        (1, 1280, 256, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 2),
+        (1, 160, 128, 128, 256, 3, 3, 1, 1, 1, 1, 1, False, 1),
+        (1, 2048, 256, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 2),
+        (1, 2048, 256, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 2),
+        (1, 2048, 512, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 2),
+        (1, 256, 128, 128, 256, 1, 1, 1, 1, 0, 0, 1, False, 1),
+        (1, 256, 19, 128, 256, 1, 1, 1, 1, 0, 0, 1, True, 1),
+        (1, 256, 32, 128, 256, 1, 1, 1, 1, 0, 0, 1, False, 2),
+        (1, 256, 64, 128, 256, 1, 1, 1, 1, 0, 0, 1, False, 2),
+        (1, 256, 1024, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 6),
+        (1, 256, 256, 32, 64, 3, 3, 1, 1, 1, 1, 1, False, 5),
+        (1, 256, 256, 64, 128, 3, 3, 2, 2, 1, 1, 1, False, 1),
+        (1, 256, 256, 64, 128, 3, 3, 1, 1, 1, 1, 1, False, 1),
+        (1, 3, 64, 512, 1024, 3, 3, 2, 2, 1, 1, 1, False, 1),
+        (1, 32, 1, 128, 256, 1, 1, 1, 1, 0, 0, 1, True, 1),
+        (1, 32, 2, 128, 256, 1, 1, 1, 1, 0, 0, 1, True, 1),
+        (1, 320, 128, 64, 128, 3, 3, 1, 1, 1, 1, 1, False, 1),
+        (1, 320, 256, 64, 128, 3, 3, 1, 1, 1, 1, 1, False, 1),
+        (1, 512, 2048, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 3),
+        (1, 512, 512, 32, 64, 3, 3, 1, 1, 2, 2, 1, False, 1),
+        (1, 512, 512, 32, 64, 3, 3, 1, 1, 4, 4, 1, False, 1),
+        (1, 512, 512, 32, 64, 3, 3, 1, 1, 8, 8, 1, False, 1),
+        (1, 512, 1024, 64, 128, 1, 1, 2, 2, 0, 0, 1, False, 1),
+        (1, 512, 128, 64, 128, 1, 1, 1, 1, 0, 0, 1, False, 3),
+        (1, 512, 256, 64, 128, 1, 1, 1, 1, 0, 0, 1, False, 1),
+        (1, 512, 64, 64, 128, 1, 1, 1, 1, 0, 0, 1, False, 2),
+        (1, 64, 256, 128, 256, 1, 1, 1, 1, 0, 0, 1, False, 3),
+        (1, 64, 64, 128, 256, 3, 3, 1, 1, 1, 1, 1, False, 3),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -255,12 +276,11 @@ def test_conv2d_panoptic(
     groups,
     torch_tensor_map,
     has_bias,
+    multipler,
 ):
-    compute_grid = device.compute_with_storage_grid_size()
-    print(f"compute_grid: {compute_grid.x}x{compute_grid.y}")
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    check_grid_shape(device)
 
+    signpost(header=f"conv2d_{input_channels}_{output_channels}_{input_height}_{input_width}; multipler={multipler}")
     run_conv(
         device=device,
         config_override=None,
@@ -281,6 +301,7 @@ def test_conv2d_panoptic(
         groups=groups,
         has_bias=has_bias,
     )
+    signpost(header="conv2d_end.")
 
 
 # @skip_for_blackhole("Not fully tested on Blackhole")
@@ -288,27 +309,24 @@ def test_conv2d_panoptic(
     "input_layout, dtype",
     [
         [ttnn.TILE_LAYOUT, ttnn.bfloat8_b],
-    ],  # , [ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16]],
+    ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
+    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity, multipler",
     # fmt: off
     (
-        (1, 2048, 256,  32,    64,   SliceHeight,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (12, 12), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ), # Panoptic
-        # (1, 2048, 256,  32,    64,   SliceHeight,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (18, 18), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ), # Panoptic OOM for SliceHeight(2,4,8,16,32 slices), hangs for SliceWidth
-        (1, 2048, 256,  32,    64,   SliceWidth,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (6, 6), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ), # Panoptic OOM for SliceHeight (2,4,8,16,32 slices)
-        (1, 256, 256,  128,    256,   SliceHeight,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ), # Panoptic
-        (1, 256, 512,  128,    256,   SliceHeight,   4,  ttnn.bfloat8_b,  (1, 1), (2, 2), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ), # Panoptic
-        (1, 288, 256,  128,    256,   SliceHeight,   4,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ), # Panoptic
-        (1, 64, 128,  256,    512,   SliceHeight,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ), # Panoptic
-        (1, 64, 64,  256,    512,   SliceHeight,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ), # Panoptic
+        (1, 256, 256,  128,    256,   SliceHeight,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4, 3), # Panoptic
+        (1, 256, 512,  128,    256,   SliceHeight,   4,  ttnn.bfloat8_b,  (1, 1), (2, 2), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4, 1), # Panoptic
+        (1, 288, 256,  128,    256,   SliceHeight,   4,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4, 1), # Panoptic
+        (1,  64, 128,  256,    512,   SliceHeight,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4, 1), # Panoptic
+        (1,  64,  64,  256,    512,   SliceHeight,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4, 1), # Panoptic
     )
     # fmt: on
 )
 @pytest.mark.parametrize(
     "has_bias, fp32_accum, packer_l1_acc",
-    [[True, True, False]],
+    [[False, False, False]],
 )
 def test_conv_dram_panoptic(
     device,
@@ -332,13 +350,17 @@ def test_conv_dram_panoptic(
     fp32_accum,
     input_layout,
     packer_l1_acc,
+    multipler,
 ):
-    if device.core_grid.y == 7:
-        pytest.skip("Tests have been configured for N150.")
+    check_grid_shape(device)
+
     config = {
         "act_block_h": act_block_h_override,
     }
 
+    signpost(
+        header=f"dram_slice_conv_{slice_type}_{num_slices}_slices_{input_channels}_{output_channels}_{input_height}_{input_width}; multipler={multipler}"
+    )
     run_conv(
         device,
         torch_tensor_map,
@@ -356,16 +378,177 @@ def test_conv_dram_panoptic(
         stride[1],
         padding,
         config,
+        deallocate_activation=True,
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         input_dtype=dtype,
         input_layout=input_layout,
         output_layout=input_layout,
-        run_twice=True,
-        fast_compare=True,
+        run_twice=False,
+        fast_compare=False,
         slice_config=ttnn.Conv2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,
         ),
     )
+    signpost(header=f"dram_slice_conv_{slice_type}_{num_slices}_slices_end.")
+
+
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_input_channels_factor, split_output_channels_factor, act_db, w_db, multipler",
+    (
+        (
+            1,
+            2048,
+            256,
+            32,
+            64,
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            1,
+            (3, 3),
+            (1, 1),
+            (12, 12),
+            (1, 1),
+            None,
+            0,
+            1,
+            False,
+            ttnn.MathFidelity.LoFi,
+            False,
+            False,
+            False,
+            2,
+            1,
+            False,
+            False,
+            2,
+        ),  # Panoptic
+        (
+            1,
+            2048,
+            256,
+            32,
+            64,
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            1,
+            (3, 3),
+            (1, 1),
+            (18, 18),
+            (1, 1),
+            None,
+            0,
+            1,
+            False,
+            ttnn.MathFidelity.LoFi,
+            False,
+            False,
+            False,
+            2,
+            1,
+            False,
+            False,
+            2,
+        ),  # Panoptic
+        (
+            1,
+            2048,
+            256,
+            32,
+            64,
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            1,
+            (3, 3),
+            (1, 1),
+            (6, 6),
+            (1, 1),
+            None,
+            0,
+            1,
+            False,
+            ttnn.MathFidelity.LoFi,
+            False,
+            False,
+            False,
+            2,
+            1,
+            False,
+            False,
+            2,
+        ),  # Panoptic
+    ),
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+def test_conv2d_ch_split_dram(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    output_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    shard_layout,
+    act_block_h_override,
+    act_block_w_div,
+    deallocate_activation,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    enable_split_reader,
+    split_input_channels_factor,
+    split_output_channels_factor,
+    act_db,
+    w_db,
+    multipler,
+):
+    check_grid_shape(device)
+
+    config_override = {}
+    config_override["act_block_h"] = act_block_h_override
+    config_override["act_block_w_div"] = act_block_w_div
+
+    signpost(
+        header=f"ch_slice_conv_{split_input_channels_factor}_{split_output_channels_factor}_x_{input_channels}_{output_channels}_{input_height}_{input_width}; multipler={multipler}"
+    )
+
+    if split_input_channels_factor > 1 or split_output_channels_factor > 1:
+        run_conv_with_split(
+            device,
+            torch_tensor_map,
+            math_fidelity,
+            output_dtype,
+            weights_dtype,
+            batch,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            kernel[0],
+            kernel[1],
+            stride[0],
+            stride[1],
+            padding,
+            config_override,
+            shard_layout=shard_layout,
+            split_input_channels_factor=split_input_channels_factor,
+            split_output_channels_factor=split_output_channels_factor,
+            fp32_accum=fp32_accum,
+            packer_l1_acc=packer_l1_acc,
+            auto_shard=True if shard_layout is None else False,
+            input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
+            enable_act_double_buffer=act_db,
+            enable_weights_double_buffer=w_db,
+        )
+    else:
+        pytest.skip("Not a split conv test, skipping.")
+    signpost(header=f"ch_slice_conv_{split_input_channels_factor}_{split_output_channels_factor}_end.")
