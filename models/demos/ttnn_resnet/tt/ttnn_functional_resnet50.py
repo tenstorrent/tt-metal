@@ -165,7 +165,7 @@ class resnet50Bottleneck:
         height_sharding=None,
         packer_l1_accum_enabled=True if not is_grayskull() else False,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
+        enable_split_reader=True,
     ):
         if self.downsample:
             logger.debug(f"Running downsample")
@@ -253,7 +253,7 @@ class resnet50Bottleneck:
         eltwise_binary_out_in_place=True,
         packer_l1_acc=True if not is_grayskull() else False,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
+        enable_split_reader=True,
         ops_parallel_config=None,
         layer_module=None,
     ):
@@ -1123,7 +1123,7 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
+            enable_split_reader=True,
         )
 
         if is_first_run:
@@ -1144,7 +1144,7 @@ class resnet50:
             x_height,
             x_width,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
+            enable_split_reader=True,
         )
 
         logger.debug(f"==== Running layer 3 module 3")
@@ -1155,7 +1155,7 @@ class resnet50:
             x_height,
             x_width,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
+            enable_split_reader=True,
             layer_module="layer3_module3",
         )
 
@@ -1167,7 +1167,7 @@ class resnet50:
             x_height,
             x_width,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
+            enable_split_reader=True,
             layer_module="layer3_module4",
         )
 
@@ -1179,7 +1179,7 @@ class resnet50:
             x_height,
             x_width,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
+            enable_split_reader=True,
             layer_module="layer3_module5",
         )
 
@@ -1192,7 +1192,7 @@ class resnet50:
             x_width,
             eltwise_binary_out_in_place=True,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
+            enable_split_reader=True,
         )
 
         reshard = is_grayskull() or (is_blackhole() and self.batch_size == 20)
@@ -1239,7 +1239,7 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
+            enable_split_reader=True,
             ops_parallel_config=ops_parallel_config,
             layer_module="layer4_module1",
         )
@@ -1252,7 +1252,7 @@ class resnet50:
             x_height,
             x_width,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
+            enable_split_reader=True,
             layer_module="layer4_module2",
         )
 
@@ -1264,7 +1264,7 @@ class resnet50:
             x_height,
             x_width,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
+            enable_split_reader=True,
             layer_module="layer4_module3",
         )
 

@@ -45,7 +45,7 @@ def run_conv_transpose2d(
     shard_layout=None,
     auto_shard=False,
     mirror_kernel=True,
-    enable_split_reader=False,
+    enable_split_reader=True,
     enable_act_double_buffer=False,
     preprocess_weights_bias=False,
 ):
