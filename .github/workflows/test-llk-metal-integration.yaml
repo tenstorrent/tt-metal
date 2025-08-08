@@ -186,7 +186,7 @@ jobs:
                     echo "🎯 $workflow_name passed: $run_url"
                     return 0
                   else
-                    echo "💥 $workflow_name failed (attempt $((retries + 1))): $run_url"
+                    echo "🛑 $workflow_name failed (attempt $((retries + 1))): $run_url"
                     break
                   fi
                 fi
@@ -208,7 +208,7 @@ jobs:
                   sleep 30
                   elapsed=0  # Reset timer for retry
                 else
-                  echo "💥 Failed to trigger retry for $workflow_name"
+                  echo "🛑 Failed to trigger retry for $workflow_name"
                   break
                 fi
               fi
@@ -239,7 +239,7 @@ jobs:
                 monitor_workflow "$run_id" "$workflow" &
                 pids["$workflow"]=$!
               else
-                echo "💥 Failed to get run ID for $workflow after 60 seconds"
+                echo "🛑 Failed to get run ID for $workflow after 60 seconds"
                 exit 1
               fi
             fi
@@ -250,7 +250,7 @@ jobs:
             if wait "${pids[$workflow]}"; then
               echo "🎯 $workflow completed successfully"
             else
-              echo "💥 $workflow failed"
+              echo "🛑 $workflow failed"
               exit_code=1
             fi
           done
@@ -297,7 +297,7 @@ jobs:
             elif [ "${{ needs.setup-and-test.result }}" = "skipped" ]; then
               echo "ℹ️ **Test Execution:** No tests were selected to run" >> $GITHUB_STEP_SUMMARY
             else
-              echo "💥 **Test Execution:** Some tests failed" >> $GITHUB_STEP_SUMMARY
+              echo "🛑 **Test Execution:** Some tests failed" >> $GITHUB_STEP_SUMMARY
             fi
           else
             echo "❌ **Branch Setup:** Mirrored branch '${{ inputs.mirrored_branch }}' does not exist" >> $GITHUB_STEP_SUMMARY
