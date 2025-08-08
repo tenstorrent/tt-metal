@@ -12,8 +12,10 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
 from models.demos.deepseek_v3.tt.embedding_1d import Embedding1D
+from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_dataclass import PointToPointConfig, ReshardConfig
+from models.demos.deepseek_v3.utils.config_helpers import get_mesh_coords, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -66,6 +68,9 @@ class Model1D(AbstractModule):
                 )
                 for ml in range(cls.NUM_MLP_META_LAYERS)
             ],
+            "norm": DistributedRMSNorm.convert_weights(
+                hf_config, [sub_state_dict(state_dict, "norm.")] * mesh_shape[0], output_path / "norm", mesh_device
+            ),
         }
 
     @classmethod
@@ -123,6 +128,10 @@ class Model1D(AbstractModule):
                 )
                 for _ in range(cls.NUM_MLP_META_LAYERS)
             ],
+            "transfer_row": PointToPointConfig(
+                topology=ttnn.Topology.Linear,
+            ),
+            "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
         }
 
     @classmethod
@@ -134,6 +143,8 @@ class Model1D(AbstractModule):
         """Create the model configuration for decode mode."""
 
         mesh_shape = list(mesh_device.shape)
+
+        norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
 
         return {
             "hf_config": hf_config,
@@ -147,6 +158,11 @@ class Model1D(AbstractModule):
                 )
                 for _ in range(cls.NUM_MLP_META_LAYERS)
             ],
+            "transfer_row": PointToPointConfig(
+                topology=ttnn.Topology.Linear,
+            ),
+            "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config_decode"]),
+            "norm": norm_config,
         }
 
     @classmethod
@@ -165,18 +181,44 @@ class Model1D(AbstractModule):
                 DecoderBlock.create_state(hf_config, mesh_device, paged_config, is_padding_layer=None, ccl=ccl)
                 for _ in range(cls.NUM_MLP_META_LAYERS)
             ],
+            "transfer_row": {
+                "semaphore": ccl.get_gather_sem(0),
+            },
+            "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
         }
 
     @classmethod
     def transfer_row(
         cls,
         x: ttnn.Tensor,
-        row_idx: int,
-        next_row_idx: int,
-        mesh_shape: tuple[int, ...],
-    ) -> None:
-        """Transfer a row of the tensor to the next row in the mesh."""
-        # This is a placeholder for the actual transfer logic
+        src_row_idx: int,
+        dst_row_ix: int,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+    ) -> ttnn.Tensor:
+        """Transfer a row of data from one row to another in the mesh.
+        Args:
+            x: Input tensor to transfer
+            src_row_idx: Source row index
+            dst_row_ix: Destination row index
+            cfg: Run configuration containing mesh shape and other parameters
+        Returns:
+            The tensor after transferring the row
+        """
+
+        mesh_shape = cfg["mesh_shape"]
+
+        src_row = get_mesh_coords(mesh_shape, src_row_idx)
+        dst_row = get_mesh_coords(mesh_shape, dst_row_ix)
+
+        for src_coord, dst_coord in zip(src_row, dst_row):
+            ttnn.point_to_point(
+                x,
+                dst_coord,
+                src_coord,
+                optional_output_tensor=x,
+                **cfg["transfer_row"],
+            )
+
         return x
 
     @classmethod
@@ -190,14 +232,10 @@ class Model1D(AbstractModule):
     ) -> ttnn.Tensor:
         """Forward pass for decode mode."""
 
-        mesh_shape = cfg["mesh_shape"]
-        hf_config = cfg["hf_config"]
-
         x = Embedding1D.forward_decode(x, cfg["embedding"])
 
         # Stage 1: MLP Decoder Block
-        for row_idx in range(1):
-            # for row_idx in range(cls.NUM_MLP_ROWS):
+        for row_idx in range(cls.NUM_MLP_ROWS):
             for meta_layer_idx in range(cls.NUM_MLP_META_LAYERS):
                 x = DecoderBlock.forward_decode(
                     x,
@@ -209,7 +247,10 @@ class Model1D(AbstractModule):
                 )
 
             # Transfer rows
-            x = cls.transfer_row(x, row_idx, (row_idx + 1) % cls.NUM_MLP_ROWS, mesh_shape)
+            x = cls.transfer_row(x, row_idx, (row_idx + 1) % cls.NUM_MLP_ROWS, cfg)
+
+        x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
+        x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
 
         return x
 
