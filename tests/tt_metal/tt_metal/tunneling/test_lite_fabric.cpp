@@ -229,4 +229,96 @@ TEST(Tunneling, LiteFabricBarrier) {
     tt::tt_metal::detail::CloseDevices(devices);
 }
 
-TEST(Tunneling, LiteFabricReadsAndWrites) {}
+TEST(Tunneling, LiteFabricSmallWrites) {
+    CHECK_TEST_REQS();
+
+    auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+
+    auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+
+    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+
+    uint32_t payload_size = sizeof(uint32_t);
+    uint32_t l1_base = devices[1]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> test_data_per_worker;
+
+    for (int worker_x = 0; worker_x < devices[1]->compute_with_storage_grid_size().x; ++worker_x) {
+        for (int worker_y = 0; worker_y < devices[1]->compute_with_storage_grid_size().y; ++worker_y) {
+            CoreCoord logical_worker{worker_x, worker_y};
+            log_info(tt::LogMetal, "Writing to worker {}", logical_worker.str());
+            CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
+            const uint64_t dest_noc_upper =
+                (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+            uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
+
+            test_data_per_worker[logical_worker] = std::vector<uint32_t>{rand()};
+            host_interface.write(
+                test_data_per_worker[logical_worker].data(),
+                sizeof(uint32_t) * test_data_per_worker[logical_worker].size(),
+                tunnel.mmio_cxy_virtual(),
+                dest_noc_addr);
+        }
+    }
+
+    host_interface.barrier(tunnel.mmio_cxy_virtual());
+
+    for (int worker_x = 0; worker_x < devices[1]->compute_with_storage_grid_size().x; ++worker_x) {
+        for (int worker_y = 0; worker_y < devices[1]->compute_with_storage_grid_size().y; ++worker_y) {
+            CoreCoord logical_worker{worker_x, worker_y};
+            CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
+            std::vector<uint32_t> read_data(payload_size / sizeof(uint32_t));
+
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                read_data.data(), payload_size, tt_cxy_pair{1, virtual_worker}, l1_base);
+            ASSERT_EQ(read_data, test_data_per_worker[logical_worker])
+                << fmt::format("Data mismatch for worker {}", logical_worker.str());
+        }
+    }
+
+    lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
+    tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
+
+    tt::tt_metal::detail::CloseDevices(devices);
+}
+
+TEST(Tunneling, LiteFabricUnalignedWrites) {
+    CHECK_TEST_REQS();
+
+    auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+
+    auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+
+    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+
+    uint32_t l1_base = devices[1]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    // Make destination not aligned by various amounts
+    for (int aligned_offset = 0; aligned_offset < 16; ++aligned_offset) {
+        uint32_t addr = l1_base + aligned_offset;
+        log_info(tt::LogMetal, "Testing unaligned write to {:#x}", addr);
+        CoreCoord logical_worker{0, 0};
+        CoreCoord virtual_worker = devices[1]->virtual_core_from_logical_core(logical_worker, CoreType::WORKER);
+        std::vector<uint32_t> test_data = create_random_vector_of_bfloat16(
+            4096, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
+
+        uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+        uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)addr;
+
+        host_interface.write_any_len(
+            test_data.data(), test_data.size() * sizeof(uint32_t), tunnel.mmio_cxy_virtual(), dest_noc_addr);
+        host_interface.barrier(tunnel.mmio_cxy_virtual());
+
+        std::vector<uint32_t> read_data(test_data.size());
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            read_data.data(), test_data.size() * sizeof(uint32_t), tt_cxy_pair{1, virtual_worker}, addr);
+        ASSERT_EQ(read_data, test_data);
+    }
+
+    lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
+    tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
+
+    tt::tt_metal::detail::CloseDevices(devices);
+}

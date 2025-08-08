@@ -97,6 +97,10 @@ FORCE_INLINE void send_next_data(
 
     volatile auto* pkt_header = reinterpret_cast<volatile lite_fabric::LiteFabricHeader*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
+    // Actual payload may be offset by an unaligned offset. Ensure we include this in the payload size
+    // Buffer slots have 16B padding at the end which is unused.
+    payload_size_bytes += pkt_header->unaligned_offset;
+    payload_size_bytes = (payload_size_bytes + 15) & ~15;
     uint32_t dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
     DPRINT << "S: Forward Buffer 0x" << HEX() << src_addr << " " << DEC() << (uint32_t)payload_size_bytes << "B to 0x"
            << HEX() << dest_addr << DEC() << ENDL();
@@ -164,7 +168,6 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
     bool on_mmio_chip) {
     invalidate_l1_cache();
     const auto& header = *packet_start;
-    uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(lite_fabric::LiteFabricHeader);
 
     lite_fabric::NocSendType noc_send_type = header.noc_send_type;
     if (noc_send_type > lite_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
@@ -172,6 +175,9 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
     }
     switch (noc_send_type) {
         case lite_fabric::NocSendType::NOC_UNICAST_WRITE: {
+            const uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) +
+                                                   sizeof(lite_fabric::LiteFabricHeader) + header.unaligned_offset;
+
             const auto dest_address = header.command_fields.noc_unicast.noc_address;
             DPRINT << "R: NOC_UNICAST_WRITE Source Address: " << HEX() << payload_start_address
                    << " Destination Address: " << HEX() << dest_address << " Size: " << DEC()
@@ -194,7 +200,8 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 // This assumes nobody else is using the sender channel on device 1 because
                 // the tunnel depth is only 1 at the moment
                 uint32_t dst_address = sender_buffer_channel.get_cached_next_buffer_slot_addr();
-                uint32_t payload_dst_address = dst_address + sizeof(lite_fabric::LiteFabricHeader);
+                uint32_t payload_dst_address =
+                    dst_address + sizeof(lite_fabric::LiteFabricHeader) + header.unaligned_offset;
 
                 DPRINT << "R: NOC_READ src_address: " << HEX() << src_address << " dst_address: " << dst_address
                        << DEC() << " event: " << header.command_fields.noc_read.event << ENDL();
