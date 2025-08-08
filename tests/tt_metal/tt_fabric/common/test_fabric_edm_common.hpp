@@ -174,7 +174,7 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-
+        tt::tt_metal::MetalContext::instance().get_control_plane();
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(cluster_shape));
         device_open = true;
     }
@@ -198,8 +198,8 @@ public:
     }
 
     ~Fabric1DFixture() {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
         TearDown();
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
 };
 
@@ -589,7 +589,6 @@ inline bool RunLoopbackTest(
     bool dest_is_dram,
     std::vector<Program>& programs,
     bool scatter_write) {
-    log_info(tt::LogTest, "Running loopback test");
     auto& sender_program = programs.at(0);
     auto& receiver_program = programs.at(1);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
@@ -612,17 +611,13 @@ inline bool RunLoopbackTest(
         .output_buffer_type = dest_is_dram ? BufferType::DRAM : BufferType::L1,
         .l1_data_format = tt::DataFormat::Float16_b};
 
-    log_info(tt::LogTest, "Building input buffer");
     auto [local_input_buffer, inputs] = build_input_buffer(sender_device, tensor_size_bytes, test_config);
 
-    log_info(tt::LogTest, "Creating all zeros");
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     // Output buffer is now on the receiver device
-    log_info(tt::LogTest, "Creating output buffer");
     auto output_buffer = CreateBuffer(InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
-    log_info(tt::LogTest, "Writing all zeros to output buffer");
     write_to_buffer(receiver_device, output_buffer, all_zeros);
 
     auto local_input_buffer_address = local_input_buffer->address();
@@ -659,7 +654,7 @@ inline bool RunLoopbackTest(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
     std::vector<IDevice*> devices = {sender_device, receiver_device};
-    log_info(tt::LogTest, "{} programs, {} devices", programs.size(), devices.size());
+    log_trace(tt::LogTest, "{} programs, {} devices", programs.size(), devices.size());
     run_programs(programs, devices);
     log_info(tt::LogTest, "Reading back outputs");
 
@@ -1567,6 +1562,8 @@ void Run1DFabricPacketSendTest(
             line_size,
             worker_devices.size());
     }
+
+    log_info(tt::LogTest, "{} programs, {} devices", programs_per_fabric.size(), devices_.size());
 
     std::vector<std::vector<KernelHandle>> worker_kernel_ids_per_fabric(fabrics_under_test_devices.size());
     std::vector<std::vector<size_t>> per_fabric_per_device_global_sem_addr_rt_arg(fabrics_under_test_devices.size());
