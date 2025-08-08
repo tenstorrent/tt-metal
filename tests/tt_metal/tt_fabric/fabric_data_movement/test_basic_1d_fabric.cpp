@@ -1770,7 +1770,8 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
     }
 }
 
-void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, uint8_t num_send_dirs = 1) {
+void FabricUnicastCommon(
+    BaseFabricFixture* fixture, NocSendType noc_send_type, uint8_t num_send_dirs = 1, bool with_state = false) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     struct {
@@ -1836,22 +1837,23 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
     // Get memory layout using proper memory mapping
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
+    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
+        worker_mem_map.packet_payload_size_bytes = 4;
+    }
+
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
+        worker_mem_map.packet_payload_size_bytes,
         noc_send_type,
         num_send_dirs,
+        with_state,
         0};
-
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
-        worker_mem_map.packet_payload_size_bytes = 4;
-    }
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
-        worker_mem_map.packet_payload_size_bytes,
         num_packets,
         time_seed,
         receiver_virtual_core.x,
@@ -1893,7 +1895,6 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
             .compile_args = compile_time_args});
 
     std::vector<uint32_t> receiver_runtime_args = {
-        worker_mem_map.packet_payload_size_bytes,
         num_packets,
         time_seed,
     };
@@ -1939,7 +1940,8 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
     EXPECT_EQ(sender_bytes, receiver_bytes);
 }
 
-void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, uint8_t num_send_dirs = 1) {
+void FabricMulticastCommon(
+    BaseFabricFixture* fixture, NocSendType noc_send_type, uint8_t num_send_dirs = 1, bool with_state = false) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     struct {
@@ -2039,16 +2041,19 @@ void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    // common compile time args for sender and receiver
-    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
-    // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
+    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
+        worker_mem_map.packet_payload_size_bytes = 4;
+    }
+
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
+        worker_mem_map.packet_payload_size_bytes,
         noc_send_type,
         num_send_dirs,
+        with_state,
         1};  // is_chip_multicast
 
     // Create the sender program
@@ -2064,13 +2069,8 @@ void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = compile_time_args});
 
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
-        worker_mem_map.packet_payload_size_bytes = 4;
-    }
-
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
-        worker_mem_map.packet_payload_size_bytes,
         num_packets,
         time_seed,
         receiver_virtual_core.x,
@@ -2096,7 +2096,7 @@ void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
-    std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
+    std::vector<uint32_t> receiver_runtime_args = {num_packets, time_seed};
 
     // Create and launch the receiver program for validation on all mcast receiver devices
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
@@ -2194,12 +2194,18 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1D) {
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1DMultiDir) {
     FabricUnicastCommon(this, NOC_UNICAST_WRITE, 2);
 }
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1DWithState) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE, 2, true);
+}
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocAtomicInc1D) {
     FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC);
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocAtomicInc1DMultiDir) {
     FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, 2);
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocAtomicInc1DWithState) {
+    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, 2, true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) {
@@ -2208,12 +2214,18 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) {
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWrite1DMultiDir) {
     FabricUnicastCommon(this, NOC_UNICAST_SCATTER_WRITE, 2);
 }
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWrite1DWithState) {
+    FabricUnicastCommon(this, NOC_UNICAST_SCATTER_WRITE, 2, true);
+}
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocInlineWrite1D) {
     FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE);
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocInlineWrite1DMultiDir) {
     FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, 2);
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocInlineWrite1DWithState) {
+    FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, 2, true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1D) {
@@ -2222,12 +2234,18 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1D) {
 TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1DMultiDir) {
     FabricUnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, 2);
 }
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1DWithState) {
+    FabricUnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, 2, true);
+}
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1D) {
     FabricMulticastCommon(this, NOC_UNICAST_WRITE);
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1DMultiDir) {
     FabricMulticastCommon(this, NOC_UNICAST_WRITE, 2);
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1DWithState) {
+    FabricMulticastCommon(this, NOC_UNICAST_WRITE, 2, true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) {
@@ -2236,12 +2254,18 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) {
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicInc1DMultiDir) {
     FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, 2);
 }
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicInc1DWithState) {
+    FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, 2, true);
+}
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocScatterWrite1D) {
     FabricMulticastCommon(this, NOC_UNICAST_SCATTER_WRITE);
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocScatterWrite1DMultiDir) {
     FabricMulticastCommon(this, NOC_UNICAST_SCATTER_WRITE, 2);
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocScatterWrite1DWithState) {
+    FabricMulticastCommon(this, NOC_UNICAST_SCATTER_WRITE, 2, true);
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) {
@@ -2250,12 +2274,18 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) {
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWrite1DMultiDir) {
     FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, 2);
 }
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWrite1DWithState) {
+    FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, 2, true);
+}
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) {
     FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1DMultiDir) {
     FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, 2);
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1DWithState) {
+    FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, 2, true);
 }
 
 }  // namespace fabric_router_tests
