@@ -184,7 +184,6 @@ void MetalContext::initialize(
         std::atexit([]() { MetalContext::instance().teardown(); });
         teardown_registered_ = true;
     }
-
 }
 
 void MetalContext::teardown() {
@@ -418,10 +417,12 @@ void MetalContext::set_fabric_config(
     const tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes) {
-    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
+    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
+    // config, not through this function exposed in the detail API.
     force_reinit_ = true;
 
-    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED || fabric_config == tt_fabric::FabricConfig::DISABLED) {
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
+        fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
     } else {
@@ -485,14 +486,13 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->fabric_reliability_mode_);
 }
 
-tt_fabric::FabricConfig MetalContext::get_fabric_config() const {
-    return fabric_config_;
-}
+tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
+        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+            mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
     }
@@ -511,38 +511,24 @@ void MetalContext::initialize_control_plane() {
         return;
     }
 
-    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
-    // descriptors
-    std::string mesh_graph_descriptor;
     auto cluster_type = cluster_->get_cluster_type();
-    switch (cluster_type) {
-        case tt::tt_metal::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::tt_metal::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
-        case tt::tt_metal::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
-        case tt::tt_metal::ClusterType::GALAXY:
-            if (tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type) ==
-                tt::tt_fabric::FabricType::TORUS_XY) {
-                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
-            } else {
-                mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
-            }
-            break;
-        case tt::tt_metal::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
-        case tt::tt_metal::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
-        case tt::tt_metal::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::tt_metal::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
-        case tt::tt_metal::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
-        case tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0:
-            mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml";
-            break;
-        case tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE:
-            mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml";
-            break;
-        case tt::tt_metal::ClusterType::N300_2x2: mesh_graph_descriptor = "n300_2x2_mesh_graph_descriptor.yaml"; break;
-        case tt::tt_metal::ClusterType::INVALID: TT_THROW("Unknown cluster type");
+    auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type);
+    std::filesystem::path mesh_graph_desc_path =
+        tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()));
+
+    // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY && fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+        mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
+                               "tt_metal/fabric/mesh_graph_descriptors" /
+                               "single_galaxy_torus_xy_graph_descriptor.yaml";
     }
-    const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
-                                                       "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+
+    TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
+    TT_FATAL(
+        std::filesystem::exists(mesh_graph_desc_path),
+        "Mesh graph descriptor file not found: {}",
+        mesh_graph_desc_path.string());
 
     this->construct_control_plane(mesh_graph_desc_path);
 }
