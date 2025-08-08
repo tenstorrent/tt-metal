@@ -2101,7 +2101,7 @@ void py_module(py::module& module) {
         R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
     detail::bind_binary_operation(
         module,
@@ -2436,13 +2436,13 @@ void py_module(py::module& module) {
         ttnn::squared_difference_,
         R"doc(Performs squared_difference in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::divide_,
         R"doc(Performs division in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
-        R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc");
+        R"doc(\verb|divide|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc");
 
     detail::bind_inplace_operation(
         module,

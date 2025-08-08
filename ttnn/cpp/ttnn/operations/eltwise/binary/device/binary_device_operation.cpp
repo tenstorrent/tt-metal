@@ -31,11 +31,11 @@ namespace utils {
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
-        case BinaryOpType::SQUARED_DIFFERENCE:
         case BinaryOpType::BIAS_GELU: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
+        case BinaryOpType::SQUARED_DIFFERENCE:
         case BinaryOpType::GT:
         case BinaryOpType::LT:
         case BinaryOpType::GE:
