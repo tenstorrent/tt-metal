@@ -119,7 +119,7 @@ def create_unet_model_parameters(
 
     parameters.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 3 * 32}
     parameters.c7["use_activation_double_buffer"] = True
-    parameters.c7["use_split_reader"] = False
+    parameters.c7["use_split_reader"] = True
     parameters.c7_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c7_2["use_split_reader"] = True
     parameters.c7_2["use_activation_double_buffer"] = True
@@ -131,7 +131,7 @@ def create_unet_model_parameters(
 
     parameters.c8["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 4 * 32}
     parameters.c8["use_activation_double_buffer"] = True
-    parameters.c8["use_split_reader"] = False
+    parameters.c8["use_split_reader"] = True
     parameters.c8_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
     parameters.c8_2["use_activation_double_buffer"] = True
     parameters.c8_2["use_split_reader"] = True

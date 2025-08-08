@@ -952,7 +952,7 @@ def test_conv_ws(
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
-        enable_split_reader=False,
+        enable_split_reader=True,
         reshard_if_not_optimal=True,
         act_block_w_div=act_block_w_div if not auto_shard else 1,
         act_block_h_override=32,
