@@ -15,6 +15,7 @@ namespace fs = std::filesystem;
 
 namespace tt {
 namespace utils {
+static float timeout_seconds = -1.f;
 bool run_command(const std::string& cmd, const std::string& log_file, const bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
@@ -57,9 +58,12 @@ const std::string& get_reports_dir() {
 }
 
 float get_timeout_seconds_for_operations() {
-    const char* env_value = std::getenv("TT_METAL_OPERATION_TIMEOUT");
-    // If is not configured, is infinite
-    float timeout_seconds = env_value ? std::stof(env_value) : 0.f;
+    if (timeout_seconds == -1.f) {
+        const char* env_value = std::getenv("TT_METAL_OPERATION_TIMEOUT");
+        // If is not configured, is infinite
+        timeout_seconds = env_value ? std::stof(env_value) : 0.f;
+    }
+
     return timeout_seconds;
 }
 }  // namespace utils
