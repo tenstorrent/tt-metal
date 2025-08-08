@@ -127,7 +127,7 @@ TEST(BigMeshDualRankTest2x4, SystemMeshShape) {
     EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(1, 3)).chip_id, 7);
 }
 
-TEST(BigMeshDualRankTest2x4Fixture, DistributedHostBuffer) {
+TEST(BigMeshDualRankTest2x4, DistributedHostBuffer) {
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 

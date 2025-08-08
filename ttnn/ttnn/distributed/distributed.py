@@ -154,7 +154,7 @@ def create_system_mesh_table():
     CELL_SIZE = 30
 
     try:
-        system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+        system_mesh_desc = SystemMeshDescriptor()
 
         # TODO: Remove shape indexing workaround after exposing subscripts in pybind11
         global_shape = tuple(system_mesh_desc.shape())
