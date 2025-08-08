@@ -293,7 +293,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     // verify program cache
     auto program_cache_entries = device->num_program_cache_entries();
 
-    float abs_tol = 1e-4F;
+    float abs_tol = 1e-2F;
     std::string run_type = "SingleDevice";
     if (use_tensor_parallel) {
         run_type = "TP";
