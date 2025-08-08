@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include "hal_types.hpp"
 #include "lite_fabric_constants.hpp"
 #include "lite_fabric_header.hpp"
 
@@ -156,6 +157,7 @@ struct HostToLiteFabricInterface {
     uint32_t receiver_channel_base = 0;
     uint32_t eth_barrier_addr = 0;
     uint32_t tensix_barrier_addr = 0;
+    uint32_t l1_alignment_bytes = 0;  // Assumed to be 16B
 
     inline void init() volatile {
         h2d.sender_host_write_index = 0;
@@ -165,7 +167,8 @@ struct HostToLiteFabricInterface {
     }
 
     constexpr uint32_t get_max_payload_data_size_bytes() const {
-        return CHANNEL_BUFFER_SIZE - sizeof(LiteFabricHeader);
+        // Additional 16B to be used only for unaligned reads/writes
+        return CHANNEL_BUFFER_SIZE - sizeof(LiteFabricHeader) - 16;
     }
 
     // Host Only Methods below
@@ -321,12 +324,11 @@ struct HostToLiteFabricInterface {
         LiteFabricHeader header;
         header.to_chip_unicast(1);
         header.to_noc_unicast_write(lite_fabric::NocUnicastCommandHeader{dst_noc_addr}, size);
-
-        uint32_t header_address = get_next_send_buffer_slot_address(sender_channel_base);
-        uint32_t data_address = header_address + sizeof(lite_fabric::LiteFabricHeader);
+        header.unaligned_offset = dst_noc_addr & (l1_alignment_bytes - 1);
 
         wait_for_empty_write_slot(sender_core);
-        send_payload_without_header_non_blocking_from_address(mem_ptr, size, sender_core, sender_channel_base);
+        send_payload_without_header_non_blocking_from_address(
+            mem_ptr, size, sender_core, sender_channel_base + header.unaligned_offset);
         send_payload_flush_non_blocking_from_address(header, sender_core, sender_channel_base);
     }
 
@@ -355,10 +357,11 @@ struct HostToLiteFabricInterface {
         LiteFabricHeader header;
         header.to_chip_unicast(1);
         header.to_noc_read(lite_fabric::NocReadCommandHeader{src_noc_addr, HostToLiteFabricReadEvent::get()}, size);
+        header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
 
         uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
         log_info(tt::LogMetal, "Reading data from {} {:#x}", receiver_core.str(), receiver_header_address);
-        uint32_t receiver_data_address = receiver_header_address + sizeof(LiteFabricHeader);
+        uint32_t receiver_data_address = receiver_header_address + sizeof(LiteFabricHeader) + header.unaligned_offset;
 
         wait_for_empty_write_slot(receiver_core);
         send_payload_flush_non_blocking_from_address(header, receiver_core, sender_channel_base);
@@ -402,6 +405,8 @@ struct LiteFabricMemoryMap {
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_BARRIER);
         host_interface.tensix_barrier_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_BARRIER);
+        host_interface.l1_alignment_bytes =
+            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
         host_interface.init();
         return host_interface;
     }

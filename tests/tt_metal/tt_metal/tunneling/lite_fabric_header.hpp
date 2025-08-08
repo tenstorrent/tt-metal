@@ -23,6 +23,7 @@ union LiteFabricCommandFields {
     NocUnicastCommandHeader noc_unicast;
     NocReadCommandHeader noc_read;
 };
+static_assert(sizeof(LiteFabricCommandFields) == 16, "CommandFields size is not 24 bytes");
 
 struct LiteFabricRoutingFields {
     static constexpr uint32_t FIELD_WIDTH = 2;
@@ -44,14 +45,15 @@ enum class NocSendType : uint8_t {
 };
 
 struct LiteFabricHeader {
-    lite_fabric::NocSendType noc_send_type;
-    uint16_t payload_size_bytes;
     LiteFabricCommandFields command_fields;
-    LiteFabricRoutingFields routing_fields;
+    uint8_t unaligned_offset;
+    uint16_t payload_size_bytes;
+    lite_fabric::NocSendType noc_send_type;
     // Used only by the EDM sender and receiver channels. Populated by EDM sender channel to
     // indicate to the receiver channel what channel was the source of this packet. Reserved
     // otherwise.
     uint8_t src_ch_id;
+    LiteFabricRoutingFields routing_fields;
 
     lite_fabric::NocSendType get_noc_send_type() volatile const { return this->noc_send_type; }
     uint16_t get_payload_size_bytes() volatile const { return this->payload_size_bytes; }
