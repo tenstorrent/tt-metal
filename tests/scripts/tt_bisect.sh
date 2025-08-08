@@ -94,7 +94,7 @@ while [[ "$found" = "false" ]]; do
    fi
    git submodule update --recursive
    build_rc=0
-   ./build_metal.sh --build-tests > /dev/null || build_rc=$?
+   ./build_metal.sh --build-dir build --build-type Release --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake --build-all --enable-ccache --configure-only > /dev/null || build_rc=$?
    echo "::endgroup::"
 
    if [[ $build_rc -ne 0 ]]; then
