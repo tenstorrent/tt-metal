@@ -145,6 +145,7 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     uint64_t launch_addr = base_addr + offsetof(launch_msg_t, kernel_config);
     // TODO: Get this from the hal. Need to modify the write_launch_msg_to_core API to get the LM and Go signal addr from the hal.
     uint64_t go_addr = base_addr + sizeof(launch_msg_t) * launch_msg_buffer_num_entries;
+    log_info(tt::LogMetal, "Writing launch msg to core {} {:#x} go msg {:#x}", core.str(), base_addr, go_addr);
 
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         (void*)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
@@ -478,6 +479,7 @@ void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_cor
     const auto run_flag_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
     std::vector<uint32_t> en = {enable};
     write_hex_vec_to_core(device_id, virtual_core, en, run_flag_addr);
+    log_info(tt::LogMetal, "Setting metal eth fw run flag to {} on core {}", enable, virtual_core.str());
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 }
 

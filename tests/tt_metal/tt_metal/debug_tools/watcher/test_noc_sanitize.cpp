@@ -175,7 +175,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     bool bad_linked_transaction = false;
     switch(feature) {
         case SanitizeAddress:
-            output_buf_noc_xy.x = 95;
+            output_buf_noc_xy.x = 31;
             output_buf_noc_xy.y = 31;
             break;
         case SanitizeAlignmentL1Write:
