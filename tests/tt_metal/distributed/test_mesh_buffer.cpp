@@ -40,7 +40,6 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <cstring>
-#include <optional>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
