@@ -122,37 +122,38 @@ def run_all_gather_impl(
     tt_all_gather_out_tensor_list = []
 
     def run_op(i):
-        input_tensor = ttnn.to_layout(input_tensor_mesh_list[i], layout=ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor_shape = list(input_tensor_mesh_list[i].shape)
+        if (dim == 2 or dim == 3) and input_tensor_shape[dim] % 32 != 0:
+            input_tensor = ttnn.to_layout(input_tensor_mesh_list[i], layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
-        tt_out_tensors = ttnn.experimental.all_broadcast_async(
-            input_tensor,
-            multi_device_global_semaphore=ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0),
-            num_links=num_links,
-            memory_config=mem_config_ag,
-            topology=all_gather_topology,
-            subdevice_id=worker_sub_device_id,
-        )
-        ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            tt_out_tensors = ttnn.experimental.all_broadcast_async(
+                input_tensor,
+                multi_device_global_semaphore=ccl_semaphore_handles[i][0],
+                num_links=num_links,
+                memory_config=mem_config_ag,
+                topology=ttnn.Topology.Linear,
+                subdevice_id=worker_sub_device_id,
+            )
 
-        gathered = ttnn.concat(tt_out_tensors, dim=3)
-        tt_all_gather_out_tensor = ttnn.to_layout(gathered, ttnn.TILE_LAYOUT)
+            tt_all_gather_out_tensor = ttnn.concat(tt_out_tensors, dim=dim)
 
-        # tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
-        #     input_tensor_mesh_list[i],
-        #     persistent_output_buffer=None if use_barrier else persistent_output_buffers[i],
-        #     dim=dim,
-        #     multi_device_global_semaphore=ccl_semaphore_handles[i],
-        #     num_links=num_links,
-        #     memory_config=mem_config_ag,
-        #     topology=all_gather_topology,
-        #     subdevice_id=worker_sub_device_id,
-        #     barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
-        #     cluster_axis=cluster_axis,
-        #     chunks_per_sync=chunks_per_sync,
-        #     num_workers_per_link=num_workers_per_link,
-        #     num_buffers_per_channel=num_buffers_per_channel,
-        # )
+            tt_all_gather_out_tensor = ttnn.to_layout(tt_all_gather_out_tensor, ttnn.TILE_LAYOUT)
+        else:
+            tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
+                input_tensor_mesh_list[i],
+                persistent_output_buffer=None if use_barrier else persistent_output_buffers[i],
+                dim=dim,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                num_links=num_links,
+                memory_config=mem_config_ag,
+                topology=all_gather_topology,
+                subdevice_id=worker_sub_device_id,
+                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                cluster_axis=cluster_axis,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+            )
 
         return tt_all_gather_out_tensor
 
@@ -206,13 +207,18 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [
-        (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # (8, [1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # (8, [1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # (8, [1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # (8, [1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 1, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 16, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 8, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 64, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 256, 16], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     # ids=[
     #     "sd35_spatial",
@@ -244,10 +250,10 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "use_barrier",
     [
-        # True,
+        True,
         False,
     ],
-    # ids=["barrier_active", "barrier_inactive"],
+    ids=["barrier_active", "barrier_inactive"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -256,7 +262,7 @@ def run_all_gather_impl(
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    # ids=["fabric_ring", "fabric_linear"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_async(
     t3k_mesh_device,
