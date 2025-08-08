@@ -24,6 +24,11 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_message);
     go_message_ptr->signal = RUN_MSG_DONE;
 
+#if (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1)
+    volatile tt_l1_ptr subordinate_sync_msg_t* subordinate_erisc_run = GET_MAILBOX_ADDRESS_DEV(subordinate_sync);
+    subordinate_erisc_run->dm1 = RUN_SYNC_MSG_DONE;
+#endif
+
     // This exits to base FW
     internal_::disable_erisc_app();
     // Subordinates do not have an erisc exit
