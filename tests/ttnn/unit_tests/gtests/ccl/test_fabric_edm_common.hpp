@@ -273,16 +273,6 @@ public:
     }
 };
 
-// class Fabric1DLineDeviceInitFixture : public Fabric1DFixture {
-// public:
-//     Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D) {}
-// };
-
-// class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
-// public:
-//     Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {}
-// };
-
 class Fabric1DRingStrictDeviceInitFixture : public Fabric1DDeviceInitFixture {
 public:
     Fabric1DRingStrictDeviceInitFixture() :
