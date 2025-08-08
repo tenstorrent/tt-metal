@@ -63,7 +63,6 @@ void do_signaling(uint32_t& rt_args_idx) {
 }
 
 void kernel_main() {
-    DPRINT << "in1 reader start" << ENDL();
     // Compile time args
     constexpr const bool in1_is_dram_interleaved = get_compile_time_arg_val(0);
     constexpr const bool in1_is_dram_sharded = get_compile_time_arg_val(1);
@@ -104,31 +103,7 @@ void kernel_main() {
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(14);
     constexpr auto src_args = TensorAccessorArgs<15>();
 
-    DPRINT << "compile time args: " << ENDL();
-    DPRINT << "in1_is_dram_interleaved: " << static_cast<uint32_t>(in1_is_dram_interleaved) << ENDL();
-    DPRINT << "in1_is_dram_sharded: " << static_cast<uint32_t>(in1_is_dram_sharded) << ENDL();
-    DPRINT << "in1_block_height_in_tiles: " << static_cast<uint32_t>(in1_block_height_in_tiles) << ENDL();
-    DPRINT << "in1_block_width_in_tiles: " << static_cast<uint32_t>(in1_block_width_in_tiles) << ENDL();
-    DPRINT << "in1_tensor_width_in_tiles: " << static_cast<uint32_t>(in1_tensor_width_in_tiles) << ENDL();
-    DPRINT << "num_blocks: " << static_cast<uint32_t>(num_blocks) << ENDL();
-    DPRINT << "batch: " << static_cast<uint32_t>(batch) << ENDL();
-    DPRINT << "in1_block_page_size: " << static_cast<uint32_t>(in1_block_page_size) << ENDL();
-    DPRINT << "in1_block_page_size_last: " << static_cast<uint32_t>(in1_block_page_size_last) << ENDL();
-    DPRINT << "in1_block_width_num_pages: " << static_cast<uint32_t>(in1_block_width_num_pages) << ENDL();
-    DPRINT << "in1_shard_width_in_dram: " << static_cast<uint32_t>(in1_shard_width_in_dram) << ENDL();
-    DPRINT << "cb_id_in1: " << static_cast<uint32_t>(cb_id_in1) << ENDL();
-    DPRINT << "sync_cb: " << static_cast<uint32_t>(sync_cb) << ENDL();
-    DPRINT << "sync_cb2: " << static_cast<uint32_t>(sync_cb2) << ENDL();
-    DPRINT << "remote_cb_id: " << static_cast<uint32_t>(remote_cb_id) << ENDL();
-    DPRINT << "core_type: " << static_cast<uint32_t>(core_type) << ENDL();
-
-    DPRINT << ENDL();
-    DPRINT << "run time args: " << ENDL();
-    DPRINT << "in1_tensor_addr: " << static_cast<uint32_t>(in1_tensor_addr) << ENDL();
-    DPRINT << "ring_idx: " << ring_idx << ENDL();
-
     const uint32_t in1_block_num_tiles = in1_block_height_in_tiles * in1_block_width_in_tiles;
-    DPRINT << "in1_block_num_tiles: " << static_cast<uint32_t>(in1_block_num_tiles) << ENDL();
 
     // Address setup
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);

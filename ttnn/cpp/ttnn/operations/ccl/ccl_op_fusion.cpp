@@ -229,8 +229,6 @@ void MatmulFusedOpSignaler::init_fused_op(
             }
         },
         core_range_to_signal);
-    log_info(tt::LogOp, "LLONG FUSION: fused_op_receiver_cores_noc: {}", this->fused_op_receiver_cores_noc);
-    log_info(tt::LogOp, "LLONG FUSION: fused_op_type: {}", this->fused_op_type);
     // Create the semaphores
     if (fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER) {
         for (uint32_t i = 0; i < ring_size; i++) {
@@ -239,13 +237,6 @@ void MatmulFusedOpSignaler::init_fused_op(
     } else {
         this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
         this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
-    }
-
-    for (uint32_t i = 0; i < ring_size; i++) {
-        log_info(
-            tt::LogOp,
-            "LLONG FUSION: fused_op_receiver_signal_semaphores: {}",
-            this->fused_op_receiver_signal_semaphores[i]);
     }
 
     // Set the number of fused op cores to signal

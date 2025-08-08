@@ -336,80 +336,16 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
     Tensor intermediate_tensor = output_tensors[0].value();
-    log_info(tt::LogOp, "LLONG intermediate_tensor: {}", intermediate_tensor.padded_shape());
-    /*
-    if (input_tensors.size() > 1) {
-        const auto& intermediate_tensor = input_tensors[2];
-
-        TT_FATAL(
-            intermediate_tensor.storage_type() == StorageType::DEVICE,
-            "Operands to all_gather_replicate need to be on device!");
-        TT_FATAL(
-            intermediate_tensor.layout() == layout,
-            "Error, intermediate tensor layout should be same as input tensor layout but has {}",
-            intermediate_tensor.layout());
-        TT_FATAL(
-            intermediate_tensor.dtype() == dtype,
-            "Error, intermediate tensor dtype should be same as input tensor dtype but has {}",
-            intermediate_tensor.dtype());
-        TT_FATAL(
-            intermediate_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
-            "Error, intermediate tensor page config should be same as input tensor page config but has {}",
-            intermediate_tensor.tensor_spec().page_config());
-
-        // check the intermediate tensor size
-        auto intermediate_shape = intermediate_tensor.padded_shape();
-        auto input_shape = input_tensor.padded_shape();
-        TT_FATAL(
-            intermediate_shape.size() == input_shape.size(),
-            "Error, intermediate tensor shape should have same number of dimensions as input tensor but has {}",
-            intermediate_shape.size());
-        for (size_t i = 0; i < input_shape.size(); ++i) {
-            if (i == this->all_gather_replicate_async_struct.dim) {
-                TT_FATAL(
-                    intermediate_shape[i] <= input_shape[i] * this->all_gather_replicate_async_struct.ring_size,
-                    "Error, intermediate tensor shape at dimension {} should be {} but has {}",
-                    i,
-                    input_shape[i] * this->all_gather_replicate_async_struct.ring_size,
-                    intermediate_shape[i]);
-            } else {
-                TT_FATAL(
-                    intermediate_shape[i] == input_shape[i],
-                    "Error, intermediate tensor shape at dimension {} should be {} but has {}",
-                    i,
-                    input_shape[i],
-                    intermediate_shape[i]);
-            }
-        }
-
-        // check memory layout
-        TT_FATAL(
-            intermediate_tensor.memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
-            "Error, intermediate tensor memory layout should be same as input tensor memory layout but has {}",
-            intermediate_tensor.memory_config().memory_layout());
-    }
-    */
-
-    // TODO: Add validation for output_mem_config
 }
 
 std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    // Create aggregated tensor spec based on intermediate tensor
-    // const auto& intermediate_tensor = input_tensors[2];
-    // auto intermediate_shape = intermediate_tensor.padded_shape();
-    // auto intermediate_shard_shape = intermediate_tensor.memory_config().shard_spec()->shape;
-
     const auto& input_tensor0 = input_tensors[0];
     const auto& input_tensor1 = input_tensors[1];
 
     auto intermediate_shape = input_tensor0.padded_shape();
     intermediate_shape[-1] = intermediate_shape[-1] * this->all_gather_replicate_async_struct.ring_size;
     auto intermediate_shard_shape = this->all_gather_replicate_async_struct.output_mem_config.shard_spec()->shape;
-    std::cout << "LLONG DEBUG: intermediate_shape: " << intermediate_shape[0] << " " << intermediate_shape[1] << " "
-              << intermediate_shape[2] << " " << intermediate_shape[3] << std::endl;
-    std::cout << "LLONG DEBUG: intermediate_shard_shape: " << intermediate_shard_shape[0] << " "
-              << intermediate_shard_shape[1] << " " << std::endl;
 
     // Calculate aggregated tensor shape and shard specs
     auto aggregated_shape = intermediate_shape;
@@ -417,12 +353,6 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
 
     auto aggregated_shard_shape = intermediate_shard_shape;
     aggregated_shard_shape[1] = intermediate_shard_shape[1] * this->all_gather_replicate_async_struct.ring_size;
-    std::cout << "LLONG DEBUG: this->all_gather_replicate_async_struct.ring_size: "
-              << this->all_gather_replicate_async_struct.ring_size << std::endl;
-    std::cout << "LLONG DEBUG: aggregated_shape: " << aggregated_shape[0] << " " << aggregated_shape[1] << " "
-              << aggregated_shape[2] << " " << aggregated_shape[3] << std::endl;
-    std::cout << "LLONG DEBUG: aggregated_shard_shape: " << aggregated_shard_shape[0] << " "
-              << aggregated_shard_shape[1] << " " << std::endl;
 
     // Create aggregated tensor memory config
     MemoryConfig aggregated_mem_config = MemoryConfig(
@@ -440,7 +370,6 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     // Matmul output spec - using aggregated tensor as input to matmul
     ttnn::TensorSpec matmul_output_specs =
         this->matmul_struct.compute_output_specs({input_tensors[0], input_tensors[1]}, {})[0];
-    log_info(tt::LogOp, "LLONG matmul_output_specs: {}", matmul_output_specs);
 
     return {aggregated_tensor_spec, matmul_output_specs};
 }
@@ -646,19 +575,6 @@ Tensor llama_all_gather_matmul_async_impl(
     optional_input_tensors.push_back(std::nullopt);
     std::vector<std::optional<Tensor>> optional_output_tensors = {};
     optional_output_tensors.push_back(intermediate_tensor);
-    // return tt::tt_metal::operation::run(
-    //            ttnn::AllGatherReplicateAsync{
-    //                {},
-    //                gather_dim,
-    //                num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-    //                num_devices,
-    //                memory_config.value_or(input_tensor.memory_config()),
-    //                topology,
-    //                multi_device_global_semaphore,
-    //                sub_device_id,
-    //                cluster_axis},
-    //            {input_tensor, intermediate_tensor, aggregated_tensor})
-    //     .at(0);
 
     ttnn::AllGatherReplicateAsync all_gather_struct = ttnn::AllGatherReplicateAsync{
         {},

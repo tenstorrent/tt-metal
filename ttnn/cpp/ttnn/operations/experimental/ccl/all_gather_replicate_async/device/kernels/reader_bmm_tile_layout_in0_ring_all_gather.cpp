@@ -10,7 +10,6 @@
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 void kernel_main() {
-    DPRINT << "reader_bmm_tile_layout_in0_ring_all_gather" << ENDL();
     std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_addr = {
         get_semaphore(get_compile_time_arg_val(7)),
         get_semaphore(get_compile_time_arg_val(8)),
@@ -32,11 +31,6 @@ void kernel_main() {
     // Multicast specific
     constexpr uint32_t num_multicast_steps = get_compile_time_arg_val(3);  // Always 4
     uint32_t signal_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
-    DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
-    DPRINT << "fused_op_receiver_signal_semaphore_addr[0]: " << fused_op_receiver_signal_semaphore_addr[0] << ENDL();
-    DPRINT << "fused_op_receiver_signal_semaphore_addr[1]: " << fused_op_receiver_signal_semaphore_addr[1] << ENDL();
-    DPRINT << "fused_op_receiver_signal_semaphore_addr[2]: " << fused_op_receiver_signal_semaphore_addr[2] << ENDL();
-    DPRINT << "fused_op_receiver_signal_semaphore_addr[3]: " << fused_op_receiver_signal_semaphore_addr[3] << ENDL();
 
     // Runtime args
     uint32_t rt_args_idx = 0;
@@ -62,7 +56,6 @@ void kernel_main() {
     constexpr uint32_t multicast_chunk_size_in_tiles = multicast_chunk_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t multicast_chunk_size_bytes = multicast_chunk_size_in_tiles * in0_single_tile_size_bytes;
 
-    DPRINT << "core_type: " << static_cast<uint32_t>(core_type) << ENDL();
     cb_reserve_back(cb_id_in0, multicast_chunk_size_in_tiles * num_multicast_steps);
     for (uint32_t istep = 0; istep < num_multicast_steps; istep++) {
         volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =

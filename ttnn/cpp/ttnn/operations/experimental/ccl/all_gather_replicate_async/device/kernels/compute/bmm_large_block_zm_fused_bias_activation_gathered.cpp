@@ -182,44 +182,6 @@ void MAIN {
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
-    // section for DPRINT:
-    PACK(DPRINT << "mm kernel start" << ENDL());
-    PACK(DPRINT << "in0_block_w: " << in0_block_w << ENDL());
-    PACK(DPRINT << "in0_num_subblocks: " << in0_num_subblocks << ENDL());
-    PACK(DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL());
-    PACK(DPRINT << "in0_subblock_num_tiles: " << in0_subblock_num_tiles << ENDL());
-    PACK(DPRINT << "in1_num_subblocks: " << in1_num_subblocks << ENDL());
-    PACK(DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL());
-    PACK(DPRINT << "in1_block_size_bytes: " << in1_block_size_bytes << ENDL());
-    PACK(DPRINT << "in1_tensor_size_bytes: " << in1_tensor_size_bytes << ENDL());
-    PACK(DPRINT << "in1_per_core_w: " << in1_per_core_w << ENDL());
-    PACK(DPRINT << "num_blocks: " << num_blocks << ENDL());
-    PACK(DPRINT << "out_subblock_h: " << out_subblock_h << ENDL());
-    PACK(DPRINT << "out_subblock_w: " << out_subblock_w << ENDL());
-    PACK(DPRINT << "out_subblock_num_tiles: " << out_subblock_num_tiles << ENDL());
-    PACK(DPRINT << "batch: " << batch << ENDL());
-    PACK(DPRINT << "out_block_num_tiles: " << out_block_num_tiles << ENDL());
-    // PACK( DPRINT << "untilize_out: " << untilize_out << ENDL() );
-    // PACK( DPRINT << "in1_is_dram_interleaved: " << in1_is_dram_interleaved << ENDL() );
-    // PACK( DPRINT << "in1_is_dram_sharded: " << in1_is_dram_sharded << ENDL() );
-    PACK(DPRINT << "in0_cb_id: " << in0_cb_id << ENDL());
-    PACK(DPRINT << "in1_cb_id: " << in1_cb_id << ENDL());
-    PACK(DPRINT << "in2_cb_id: " << in2_cb_id << ENDL());
-    PACK(DPRINT << "sync_cb: " << sync_cb << ENDL());
-    PACK(DPRINT << "sync_cb2: " << sync_cb2 << ENDL());
-    // PACK( DPRINT << "mm_out_cb_ids: " << mm_out_cb_ids << ENDL() );
-    // PACK( DPRINT << "mm_partials_cb_ids: " << mm_partials_cb_ids << ENDL() );
-    PACK(DPRINT << "ring_size: " << ring_size << ENDL());
-    PACK(DPRINT << "ring_idx: " << ring_idx << ENDL());
-    // PACK( DPRINT << "in1_is_dram: " << in1_is_dram << ENDL() );
-    // PACK( DPRINT << "in1_transpose_tile: " << in1_transpose_tile << ENDL() );
-    // PACK( DPRINT << "spill: " << spill << ENDL() );
-    // PACK( DPRINT << "unpadded_in0_shard_widths_in_tiles: " << unpadded_in0_shard_widths_in_tiles << ENDL() );
-    // PACK( DPRINT << "unpadded_in0_shard_widths_in_tiles[0]: " << unpadded_in0_shard_widths_in_tiles[0] << ENDL() );
-    // PACK( DPRINT << "unpadded_in0_shard_widths_in_tiles[1]: " << unpadded_in0_shard_widths_in_tiles[1] << ENDL() );
-    // PACK( DPRINT << "unpadded_in0_shard_widths_in_tiles[2]: " << unpadded_in0_shard_widths_in_tiles[2] << ENDL() );
-    // PACK( DPRINT << "unpadded_in0_shard_widths_in_tiles[3]: " << unpadded_in0_shard_widths_in_tiles[3] << ENDL() );
-
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
