@@ -190,8 +190,13 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         Shape repeat_shape({batch_size, 1, 1, channels});
         Tensor index_full = ttnn::repeat(indices_hw.to_device(input_tensor.device()), repeat_shape);
 
+        // Reshape from [batch_size, input_h, input_w, channels] to [1, 1, batch_size * input_h * input_w, channels]
+        uint32_t nhw = batch_size * input_h * input_w;
+        Shape flattened_shape({1, 1, nhw, channels});
+        Tensor index_full_reshaped = ttnn::reshape(index_full, flattened_shape);
+
         // Convert to TILE layout for typecast operation
-        Tensor index_full_tiled = ttnn::to_layout(index_full, ttnn::TILE_LAYOUT);
+        Tensor index_full_tiled = ttnn::to_layout(index_full_reshaped, ttnn::TILE_LAYOUT);
 
         // Convert to UINT16
         Tensor index_full_uint16_tiled = ttnn::typecast(index_full_tiled, DataType::UINT16);
