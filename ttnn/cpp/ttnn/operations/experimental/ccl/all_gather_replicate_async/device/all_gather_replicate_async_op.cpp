@@ -380,7 +380,7 @@ std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
     const auto& intermediate_tensor = input_tensors[2];
 
     auto specs = compute_output_specs(input_tensors);
-    auto aggregated_tensor_spec = specs[0];
+    const auto& aggregated_tensor_spec = specs[0];
 
     ttnn::Tensor aggregated_tensor = create_device_tensor(aggregated_tensor_spec, intermediate_tensor.device());
 
