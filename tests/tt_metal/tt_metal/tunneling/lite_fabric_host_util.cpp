@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "lite_fabric_host_util.hpp"
+#include <enchantum/entries.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "blackhole/dev_mem_map.h"
 #include "build.hpp"
@@ -71,9 +72,9 @@ SystemDescriptor GetSystemDescriptor2Devices(chip_id_t mmio_device_id, chip_id_t
 uint32_t GetLocalInitAddr(std::shared_ptr<tt::tt_metal::Kernel> kernel) {
     auto erisc_core_dx = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
         kernel->get_kernel_programmable_core_type());
-    auto processor_class_idx = magic_enum::enum_integer(tt::tt_metal::HalProcessorClassType::DM);
+    auto processor_class_idx = enchantum::to_underlying(tt::tt_metal::HalProcessorClassType::DM);
     auto processor_type_idx =
-        magic_enum::enum_integer(std::get<tt::tt_metal::EthernetConfig>(kernel->config()).processor);
+        enchantum::to_underlying(std::get<tt::tt_metal::EthernetConfig>(kernel->config()).processor);
 
     return tt::tt_metal::MetalContext::instance()
         .hal()
