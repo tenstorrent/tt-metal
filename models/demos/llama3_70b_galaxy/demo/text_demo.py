@@ -234,12 +234,12 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_longer.json",  # input_prompts
             True,  # instruct mode
             32,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            128,  # max_generated_tokens
+            2048,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
@@ -251,12 +251,12 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_longer.json",  # input_prompts
             True,  # instruct mode
             32,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            128,  # max_generated_tokens
+            2048,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
