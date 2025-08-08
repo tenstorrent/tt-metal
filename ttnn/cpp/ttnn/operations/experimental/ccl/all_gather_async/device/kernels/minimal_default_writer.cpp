@@ -14,7 +14,6 @@
 #include "minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
-#include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;

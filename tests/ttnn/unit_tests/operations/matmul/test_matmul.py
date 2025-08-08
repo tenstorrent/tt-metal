@@ -1681,7 +1681,6 @@ def test_sharded_matmul(
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
-    ttnn.DumpDeviceProfiler(device)
 
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 

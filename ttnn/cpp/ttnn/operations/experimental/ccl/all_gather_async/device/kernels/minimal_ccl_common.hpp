@@ -21,6 +21,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint32_t payload_size_bytes) {
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
+
     pkt_hdr_forward->to_noc_unicast_write(
         tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
     pkt_hdr_backward->to_noc_unicast_write(
@@ -29,7 +30,6 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        RECORD_FABRIC_HEADER(pkt_hdr_forward);
         fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
@@ -38,7 +38,6 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
 
     if (fabric_connection.has_backward_connection()) {
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        RECORD_FABRIC_HEADER(pkt_hdr_backward);
         fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
@@ -104,7 +103,6 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
                 noc0_dest_noc_addr, semaphore_noc_addr, val, wrap, flush},
             payload_size_bytes);
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        RECORD_FABRIC_HEADER(pkt_hdr_forward);
         fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
@@ -117,7 +115,6 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
                 noc0_dest_noc_addr, semaphore_noc_addr, val, wrap, flush},
             payload_size_bytes);
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        RECORD_FABRIC_HEADER(pkt_hdr_backward);
         fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
