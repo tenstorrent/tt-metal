@@ -141,8 +141,8 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -376,7 +376,6 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src_is_dram,
         num_writes,
         padding_val_packed,
         (uint32_t)needs_padding,
@@ -386,6 +385,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         accumulated_outer_dims,
         tile_shape[1],
         tile_shape[0]};
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

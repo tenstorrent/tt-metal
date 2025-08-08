@@ -9,6 +9,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 #include <functional>
 #include <vector>
@@ -34,7 +35,8 @@ public:
     static DistributedHostBuffer create(
         const distributed::MeshShape& global_shape,
         const distributed::MeshShape& local_shape,
-        const distributed::MeshCoordinate& local_offset);
+        const distributed::MeshCoordinate& local_offset,
+        const std::shared_ptr<distributed::multihost::DistributedContext>& context);
 
     // Creates a multi-host distributed buffer that matches shape and multi-host distribution of the mesh device view.
     static DistributedHostBuffer create(const distributed::MeshDeviceView& mesh_device_view);
@@ -73,6 +75,9 @@ public:
     // Returns the coordinates of populated shards in the buffer.
     const std::set<distributed::MeshCoordinate>& shard_coords() const;
 
+    // Returns the distributed context for the buffer.
+    const std::shared_ptr<distributed::multihost::DistributedContext>& context() const;
+
 private:
     // Converts a global coordinate to a local coordinate.
     // Returns `std::nullopt` if the coordinate is out of local bounds.
@@ -87,8 +92,10 @@ private:
     };
 
     DistributedHostBuffer(
-        distributed::DistributedMeshContainer<Shard> shards, std::set<distributed::MeshCoordinate> populated_shards) :
-        shards_(std::move(shards)), shard_coords_(std::move(populated_shards)) {}
+        distributed::DistributedMeshContainer<Shard> shards,
+        std::set<distributed::MeshCoordinate> populated_shards,
+        std::shared_ptr<distributed::multihost::DistributedContext> context) :
+        shards_(std::move(shards)), shard_coords_(std::move(populated_shards)), context_(std::move(context)) {}
 
     // The shards of the buffer.
     // Remote shards are never materialized, but not all of the local shards are necessarily populated.
@@ -96,6 +103,9 @@ private:
 
     // Keeps track of global shards that were attempted to be written to.
     std::set<distributed::MeshCoordinate> shard_coords_;
+
+    // The distributed context for the buffer.
+    std::shared_ptr<distributed::multihost::DistributedContext> context_;
 };
 
 }  // namespace tt::tt_metal

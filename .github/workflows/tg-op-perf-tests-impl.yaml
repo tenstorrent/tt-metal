@@ -16,6 +16,10 @@ on:
         required: false
         type: string
         default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "config-tg"
 
 jobs:
   tg-op-perf-tests:
@@ -28,8 +32,7 @@ jobs:
             arch: wormhole_b0,
             cmd: 'pytest -k TG tests/ttnn/multidevice_perf_tests/',
             timeout: 5,
-            tracy: true,
-            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            tracy: true
           },
         ]
     name: ${{ matrix.test-group.name }}
@@ -37,7 +40,12 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       PYTHONPATH: ${{ github.workspace }}
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on:
+      - arch-wormhole_b0
+      - bare-metal
+      - pipeline-perf
+      - ${{ inputs.extra-tag }}
+      - ${{ inputs.topology }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4

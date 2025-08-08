@@ -5,6 +5,7 @@
 #include "where_device_operation.hpp"
 #include "where_utils.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <cmath>
 
@@ -268,56 +269,47 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         num_tiles_per_cb,
         output_data_format);  // output
 
-    auto predicate_is_dram =
-        static_cast<uint32_t>(predicate_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-
-    // Handle DRAM flags based on variant and tensor availability
-    uint32_t value_true_is_dram = 0, value_false_is_dram = 0;
-    if (variant == WhereVariant::TTS) {
-        value_true_is_dram =
-            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    } else if (variant == WhereVariant::TST) {
-        value_false_is_dram =
-            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    } else {
-        value_true_is_dram =
-            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-        value_false_is_dram =
-            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    }
-
-    auto output_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-
     // READER KERNEL - Use kernel path from utils
     tt_metal::ReaderDataMovementConfig reader_config;
     if (variant == WhereVariant::TTS) {
         // TTS: c_0 = predicate, c_1 = value_true tensor
-        reader_config = tt_metal::ReaderDataMovementConfig(
-            {predicate_is_dram, predicate_tensor_cb, value_true_is_dram, value_true_tensor_cb});
+        std::vector<uint32_t> reader_compile_time_args = {
+            (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
+        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
+        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
+
     } else if (variant == WhereVariant::TST) {
         // TST: c_0 = predicate, c_1 = value_false tensor
-        reader_config = tt_metal::ReaderDataMovementConfig(
-            {predicate_is_dram, predicate_tensor_cb, value_false_is_dram, value_false_tensor_cb});
+        std::vector<uint32_t> reader_compile_time_args = {
+            (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_false_tensor_cb};
+        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
+        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
+
     } else {
         // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
-        reader_config = tt_metal::ReaderDataMovementConfig(
-            {predicate_is_dram,
-             predicate_tensor_cb,
-             value_true_is_dram,
-             value_true_tensor_cb,
-             value_false_is_dram,
-             value_false_tensor_cb});
+        std::vector<uint32_t> reader_compile_time_args = {
+            (std::uint32_t)predicate_tensor_cb,
+            (std::uint32_t)value_true_tensor_cb,
+            (std::uint32_t)value_false_tensor_cb};
+        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
+        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
     }
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program, get_kernel_file_path(kernel_config.reader_kernel), all_device_cores, reader_config);
 
     // WRITER KERNEL - Use kernel path from utils
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
+    tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.writer_kernel),
         all_device_cores,
-        tt_metal::WriterDataMovementConfig({output_tensor_cb, output_is_dram}));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // COMPUTE KERNEL - Use kernel path from utils
     bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||

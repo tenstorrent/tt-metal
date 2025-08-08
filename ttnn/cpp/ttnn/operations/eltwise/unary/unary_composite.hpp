@@ -184,9 +184,6 @@ constexpr auto std_hw = ttnn::register_operation<
 constexpr auto normalize_hw = ttnn::register_operation<
     "ttnn::normalize_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>();
-constexpr auto hardtanh = ttnn::register_operation<
-    "ttnn::hardtanh",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
 constexpr auto clip = ttnn::register_operation<"ttnn::clip", operations::unary::ExecuteUnaryCompositeClip>();
 constexpr auto clamp = ttnn::register_operation<"ttnn::clamp", operations::unary::ExecuteUnaryCompositeClamp>();
 constexpr auto selu = ttnn::register_operation<
@@ -209,9 +206,6 @@ constexpr auto swiglu = ttnn::register_operation<
 constexpr auto logical_not_ = ttnn::register_operation<
     "ttnn::logical_not_",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>();
-constexpr auto softshrink = ttnn::register_operation<
-    "ttnn::softshrink",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::SOFTSHRINK>>();
 constexpr auto logit = ttnn::register_operation<
     "ttnn::logit",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>();

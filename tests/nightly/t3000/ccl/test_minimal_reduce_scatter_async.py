@@ -106,6 +106,10 @@ def run_reduce_scatter_impl(
     ##### All gather input setup #####
     logger.info(f"Reduce scatter shape: {rs_input_shape}")
     logger.info(f"Reduce scatter dim: {dim}")
+    logger.info(f"input mem config: {mem_config_input}")
+    logger.info(f"Reduce input mem config: {mem_config_rs}")
+    logger.info(f"intermediate mem config: {mem_config_intermediate}")
+    logger.info(f"topology: {rs_topology}")
 
     tt_input_tensor_mesh_list = []
     torch_input_tensor_list = []
@@ -149,7 +153,9 @@ def run_reduce_scatter_impl(
     def run_op(i):
         tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tt_input_tensor_mesh_list[i],
-            persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]],
+            persistent_output_buffers=None
+            if use_barrier
+            else [persistent_intermediate_buffers[i], persistent_output_buffers[i]],
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
             barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
@@ -189,7 +195,10 @@ def run_reduce_scatter_impl(
     else:
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
-            tt_reduce_scatter_output_list.append(tt_reduce_scatter_output_tensor)
+            tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
+            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
+            tt_reduce_scatter_output_tensor.deallocate(True)
+            tt_reduce_scatter_output_list.append(tt_rs_out)
 
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
@@ -198,13 +207,10 @@ def run_reduce_scatter_impl(
             logger.info(f"Done iteration {i}")
 
     for i in range(num_iters):
-        tt_rs_out_tensor = tt_reduce_scatter_output_list[i]
+        tt_rs_out = tt_reduce_scatter_output_list[i]
         torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
 
         torch_rs_out = torch.cat(torch_rs_out_tensor, 3)
-
-        tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
-        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
 
         if ones_tensor:
             eq, output = comp_equal(tt_rs_out, torch_rs_out)
@@ -223,6 +229,8 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
+        (8, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
@@ -231,6 +239,8 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
     ],
     ids=[
+        "padded_dim_2_test_one",
+        "padded_dim_2_test_two",
         "batch_8",
         "batch_4",
         "batch_1_sd35_spatial",
@@ -297,9 +307,6 @@ def test_reduce_scatter_async(
     use_barrier,
     rs_topology,
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
-        pytest.skip("Not T3K!")
-
     run_reduce_scatter_impl(
         t3k_mesh_device,
         num_devices,
@@ -426,9 +433,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
     use_barrier,
     rs_topology,
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
-        pytest.skip("Not T3K!")
-
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
     if rs_topology == ttnn.Topology.Linear:
         adjusted_intermediate_shard_shape[0] *= 2
@@ -562,9 +566,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     use_barrier,
     rs_topology,
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
-        pytest.skip("Not T3K!")
-
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
     if rs_topology == ttnn.Topology.Linear:
         adjusted_intermediate_shard_shape[0] *= 2
@@ -682,9 +683,6 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     use_barrier,
     rs_topology,
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
-        pytest.skip("Not T3K!")
-
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,

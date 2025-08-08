@@ -22,6 +22,8 @@
 
 #include "tt_memory.h"
 
+#include <tt_stl/overloaded.hpp>
+
 enum class CoreType;
 enum class AddressableCoreType : uint8_t;
 
@@ -246,6 +248,9 @@ public:
     const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
+
+    const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
+    const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
     uint32_t get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
@@ -294,45 +299,37 @@ public:
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
 
     uint32_t valid_reg_addr(uint32_t addr) const { return valid_reg_addr_func_(addr); }
-
-    const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
-    const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
 
 inline uint32_t Hal::get_processor_classes_count(
     std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const {
-    return std::visit(
-        [&](auto&& core_type_specifier) -> uint32_t {
-            using T = std::decay_t<decltype(core_type_specifier)>;
-            uint32_t index = this->core_info_.size();
-            if constexpr (std::is_same_v<T, HalProgrammableCoreType>) {
-                index = utils::underlying_type<HalProgrammableCoreType>(core_type_specifier);
-            } else if constexpr (std::is_same_v<T, uint32_t>) {
-                index = core_type_specifier;
-            }
-            TT_ASSERT(index < this->core_info_.size());
-            return this->core_info_[index].get_processor_classes_count();
+    // TODO extract as reusable function like `to_index(programmable_core_type)`
+    uint32_t index = std::visit(
+        ttsl::overloaded{
+            [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
+                return utils::underlying_type(core_type_specifier);
+            },
+            [](uint32_t core_type_specifier) { return core_type_specifier; },
         },
         programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].get_processor_classes_count();
 }
 
 inline uint32_t Hal::get_processor_types_count(
     std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const {
-    return std::visit(
-        [&](auto&& core_type_specifier) -> uint32_t {
-            using T = std::decay_t<decltype(core_type_specifier)>;
-            uint32_t index = this->core_info_.size();
-            if constexpr (std::is_same_v<T, HalProgrammableCoreType>) {
-                index = utils::underlying_type<HalProgrammableCoreType>(core_type_specifier);
-            } else if constexpr (std::is_same_v<T, uint32_t>) {
-                index = core_type_specifier;
-            }
-            TT_ASSERT(index < this->core_info_.size());
-            return this->core_info_[index].get_processor_types_count(processor_class_idx);
+    uint32_t index = std::visit(
+        ttsl::overloaded{
+            [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
+                return utils::underlying_type(core_type_specifier);
+            },
+            [](uint32_t core_type_specifier) { return core_type_specifier; },
         },
         programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].get_processor_types_count(processor_class_idx);
 }
 
 inline HalProgrammableCoreType Hal::get_programmable_core_type(uint32_t core_type_index) const {
@@ -458,16 +455,16 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
 }  // namespace tt_metal
 }  // namespace tt
 
-#define HAL_MEM_L1_BASE                                               \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr(      \
+#define HAL_MEM_L1_BASE                                          \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
         ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE                                               \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size(      \
+#define HAL_MEM_L1_SIZE                                          \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
         ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
 
-#define HAL_MEM_ETH_BASE                                              \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr(      \
+#define HAL_MEM_ETH_BASE                                         \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
         ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_ETH_SIZE                                              \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size(      \
+#define HAL_MEM_ETH_SIZE                                         \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
         ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)

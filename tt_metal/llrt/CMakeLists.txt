@@ -34,6 +34,7 @@ target_link_libraries(
         hw
         fmt::fmt-header-only
         umd::device
+        TT::STL
         tt-logger::tt-logger
 )
 
@@ -62,6 +63,7 @@ target_link_libraries(
         hw
         fmt::fmt-header-only
         umd::device
+        TT::STL
         tt-logger::tt-logger
 )
 

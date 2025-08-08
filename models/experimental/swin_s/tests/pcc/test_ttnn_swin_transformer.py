@@ -22,7 +22,7 @@ from models.experimental.swin_s.tests.pcc.test_ttnn_swin_transformer_block impor
 from models.experimental.swin_s.tests.pcc.test_ttnn_patchmerging import (
     create_custom_preprocessor as create_custom_preprocessor_patch_merging,
 )
-from models.experimental.swin_s.common import load_torch_model
+from models.experimental.swin_s.common import load_torch_model, SWIN_S_L1_SMALL_SIZE
 
 
 def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):
@@ -118,7 +118,7 @@ def create_custom_preprocessor(device):
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_S_L1_SMALL_SIZE}], indirect=True, ids=["0"])
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
@@ -179,5 +179,5 @@ def test_swin_s_transformer(device, use_pretrained_weight, reset_seeds, model_lo
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(
-        torch_output_tensor, output_tensor, pcc=0.96 if use_pretrained_weight else 0.99  # pcc=0.9614840639526093
+        torch_output_tensor, output_tensor, pcc=0.96 if use_pretrained_weight else 0.99  # pcc=0.9611514804078299
     )  # The drop starts as we use shard MM in patch_mergig & mlp sub_module sub_module

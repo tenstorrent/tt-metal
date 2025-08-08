@@ -361,16 +361,6 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
         output_memory_config);
 }
 
-// hardtanh
-Tensor _hardtanh(
-    const Tensor& a,
-    float low /* = -1.0f */,
-    float high /* = +1.0f */,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    return ExecuteUnaryCompositeClamp::invoke(a, low, high, output_memory_config);
-}
-
 // Theano defines this differently...
 /**
  *
@@ -559,21 +549,6 @@ Tensor ExecuteRdiv::invoke(
     }
     return ttnn::where(
         ttnn::eqz(queue_id, input_tensor, memory_config), t_inf, result, memory_config, optional_output_tensor);
-}
-
-// Function: softshrink
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
-Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(param >= 0);
-    Tensor t_a_plus_param = ttnn::add(a, param, std::nullopt, output_mem_config);
-    Tensor t1 =
-        ttnn::multiply(ttnn::ltz(t_a_plus_param, output_mem_config), t_a_plus_param, std::nullopt, output_mem_config);
-    t_a_plus_param.deallocate();
-    Tensor t_a_minus_param = ttnn::subtract(a, param, std::nullopt, output_mem_config);
-    Tensor t2 =
-        ttnn::multiply(ttnn::gtz(t_a_minus_param, output_mem_config), t_a_minus_param, std::nullopt, output_mem_config);
-    t_a_minus_param.deallocate();
-    return ttnn::add(t1, t2, std::nullopt, output_mem_config);
 }
 
 // logit(input, eps)=log(input / 1 - input)

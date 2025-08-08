@@ -58,13 +58,11 @@ ResultWithOptions result_to_result_with_options(
     return std::get<0>(result);
 }
 
-// GCC refuses to create a symbol for this function if it is defined in the source file, leading to linker errors.
-template <typename T>
 ResultWithOptions conv2d(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -144,12 +142,11 @@ ResultWithOptions conv2d(
 // The Conv2dSliceConfig is used to determine the slicing configuration. The dimension along which it is sliced, and the
 // number of such slices.
 // Conv2dConfig does not control the final output, but rather the conv2d_L1 function that is called internally.
-template <typename T>
 Result conv2d_DRAM(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -466,12 +463,11 @@ Result conv2d_DRAM(
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
-template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor_,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -600,6 +596,7 @@ Result conv2d_L1(
         bias_tensor.has_value(),
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
+        conv_config.full_inner_dim,
         kernel_size,
         orig_stride,
         padding_n4);
@@ -787,30 +784,6 @@ Result conv2d_L1(
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 }
-
-template ResultWithOptions conv2d<MeshDevice>(
-    QueueId queue_id,
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    MeshDevice* device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    const std::optional<const DataType>& dtype,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
-    bool return_output_dim,
-    bool return_weights_and_bias);
 
 ResultWithOptions Conv2dOperation::invoke(
     QueueId queue_id,

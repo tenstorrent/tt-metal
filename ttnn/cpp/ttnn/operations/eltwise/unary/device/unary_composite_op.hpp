@@ -23,7 +23,6 @@ enum class UnaryCompositeOpType {
     VAR_HW,
     STD_HW,
     NORMALIZE_HW,
-    HARDTANH,
     SELU,
     GLU,
     REGLU,
@@ -33,7 +32,6 @@ enum class UnaryCompositeOpType {
     TRIL,
     TRIU,
     POLYGAMMA,
-    SOFTSHRINK,
     LOGIT,
     LOGICAL_NOT_,
     RPOW,
@@ -54,8 +52,6 @@ Tensor _std(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std_overload(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _hardtanh(
-    const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _selu(
     const Tensor&,
     float scale = 1.0507,
@@ -68,8 +64,6 @@ Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
-Tensor _softshrink(
-    const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logical_not_(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _rpow(const Tensor& a, float param, const std::optional<MemoryConfig>&);
@@ -146,13 +140,6 @@ struct OpHandler<UnaryCompositeOpType::NORMALIZE_HW> {
 };
 
 template <>
-struct OpHandler<UnaryCompositeOpType::HARDTANH> {
-    static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg) {
-        return _hardtanh(t1, low, high, mem_cfg);
-    }
-};
-
-template <>
 struct OpHandler<UnaryCompositeOpType::SELU> {
     static Tensor handle(const Tensor& t1, float scale, float alpha, const std::optional<MemoryConfig>& mem_cfg) {
         return _selu(t1, scale, alpha, mem_cfg);
@@ -206,13 +193,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::SWIGLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg) {
         return _swiglu(t1, dim, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::SOFTSHRINK> {
-    static Tensor handle(const Tensor& t1, float lambd, const std::optional<MemoryConfig>& mem_cfg) {
-        return _softshrink(t1, lambd, mem_cfg);
     }
 };
 

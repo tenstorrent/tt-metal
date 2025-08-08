@@ -111,7 +111,6 @@ from ttnn._ttnn.multi_device import (
     create_mesh_composer,
     aggregate_tensor,
     distribute_tensor,
-    get_t3k_physical_device_ids_ring,
 )
 
 from ttnn._ttnn.events import (
@@ -190,6 +189,7 @@ from ttnn.types import (
     StorageType,
     DEVICE_STORAGE_TYPE,
     CoreGrid,
+    CoreType,
     CoreRange,
     Shape,
     TensorSpec,

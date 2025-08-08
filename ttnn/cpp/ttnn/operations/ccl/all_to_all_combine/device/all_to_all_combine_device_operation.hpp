@@ -25,7 +25,7 @@ struct AllToAllCombineDeviceOperation {
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        const tt::tt_metal::GlobalSemaphore cross_device_semaphore;
+        const std::optional<tt::tt_metal::GlobalSemaphore> cross_device_semaphore;
         const bool locally_reduced;
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         static constexpr auto attribute_names = std::forward_as_tuple(
@@ -42,16 +42,12 @@ struct AllToAllCombineDeviceOperation {
         const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
-
-    using tensor_return_value_t = ttnn::Tensor;
-
     struct AllToAllCombineFromSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle ternary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            CoreCoord core;
+            tt::tt_metal::KernelHandle ternary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            std::vector<CoreCoord> cores;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -74,6 +70,10 @@ struct AllToAllCombineDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
+
+    using spec_return_value_t = ttnn::TensorSpec;
+
+    using tensor_return_value_t = ttnn::Tensor;
 
     using program_factory_t = std::variant<AllToAllCombineFromSparse>;
 
@@ -101,11 +101,11 @@ struct AllToAllCombineDeviceOperation {
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
-        const GlobalSemaphore& global_semaphore,
+        const std::optional<GlobalSemaphore>& global_semaphore,
         const std::optional<uint32_t>& axis,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
-        bool locally_reduced=false);
+        bool locally_reduced = false);
 };
 }  // namespace ttnn::operations::ccl
 
