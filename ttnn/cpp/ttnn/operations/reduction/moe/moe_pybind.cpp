@@ -21,10 +21,6 @@ void bind_reduction_moe_operation(py::module& module) {
         R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
 
             Returns the weight of the zero-th MoE expert.
-            :attr:`input_tensor` must have BFLOAT16 data type and TILE_LAYOUT layout.
-            :attr:`expert_mask_tensor` and :attr:`topk_mask_tensor` must have BFLOAT16 data type and TILE_LAYOUT layout.
-
-            Output value tensor will have the same data type as :attr:`input_tensor` and :attr:`output_tensor`.
 
             Equivalent PyTorch code:
 
@@ -43,15 +39,40 @@ void bind_reduction_moe_operation(py::module& module) {
                 * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensors
                 * :attr:`queue_id` (Optional[uint8]): command queue id
 
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                The :attr:`input_tensor`, :attr:`expert_mask_tensor`, and :attr:`topk_mask_tensor` must match the following data type and layout:
+
+                    .. list-table::
+                        :header-rows: 1
+
+                        * - dtype
+                            - layout
+                        * - BFLOAT16
+                            - TILE
+
+                The output tensor will match the data type and layout of the input tensor.
+
+            Limitations:
+                - Tensors must be 4D.
+                - For the :attr:`input_tensor`, N*C*H must be a multiple of 32. The last dimension must be a power of two and ≥64.
+                - :attr:`k` must be exactly 32.
+                - For the :attr:`topk_mask_tensor`, H must be 32 and W must match :attr:`k` (i.e. 32).
+                - For the :attr:`expert_mask_tensor`, H must be 32 and W must match W of the :attr:`input_tensor`.
+                - All of the shape validations are performed on padded shapes.
+
             Example:
                 N, C, H, W = 1, 1, 32, 64
                 k = 32
 
-                input_tensor = ttnn.rand([N, C, H, W], device=device)
-                expert_mask = ttnn.zeros([N, C, 1, W], device=device)
-                topE_mask = ttnn.zeros([N, C, 1, k],  device=device)
+                input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                expert_mask = ttnn.zeros([N, C, 1, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                topE_mask = ttnn.zeros([N, C, 1, k], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-                ttnn.moe(input_tensor, expert_mask, topE_mask, k)
+                ttnn_output = ttnn.moe(input_tensor, expert_mask, topE_mask, k)
+
         )doc";
 
     using OperationType = decltype(ttnn::moe);

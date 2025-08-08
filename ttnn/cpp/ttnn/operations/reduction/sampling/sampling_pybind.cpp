@@ -33,52 +33,81 @@ void bind_reduction_sampling_operation(py::module& module) {
 
             Currently, this operation supports inputs and outputs with specific memory layout and data type constraints.
 
-            Constraints:
-                - `input_values_tensor`:
-                    - Must have `BFLOAT16` data type.
-                    - Must have `TILE` layout.
-                    - Must have `INTERLEAVED` memory layout.
-                    - Must be padded to a multiple of 32 on the last dim
-                - `input_indices_tensor`:
-                    - Must have `UINT32` or `INT32` data type.
-                    - Must have `ROW_MAJOR` layout.
-                    - Must have the same shape as `input_values_tensor`.
-                - `k`:
-                    - Must have `UINT32` data type.
-                    - Must have `ROW_MAJOR` layout.
-                    - Must have `INTERLEAVED` memory layout.
-                    - Must contain 32 elements.
-                - `p`:
-                    - Must have `BFLOAT16` data type.
-                    - Must have `ROW_MAJOR` layout.
-                    - Must have `INTERLEAVED` memory layout.
-                    - Must contain 32 elements.
-                - `temp`:
-                    - Must have `BFLOAT16` data type.
-                    - Must have `ROW_MAJOR` layout.
-                    - Must have `INTERLEAVED` memory layout.
-                    - Must contain 32 elements.
-                - The input tensors must represent exactly `32 users` (based on their shape).
-                - `k`: All values in the list must be >0 and ≤ 32.
-                - `p`, `temp`: All values in the list must be in the range `[0.0, 1.0]`.
-                - Output tensor (if provided):
-                    - Must have `UINT32` or `INT32` data type.
-                    - Must have `INTERLEAVED` memory layout.
-
             Equivalent PyTorch code:
+                .. code-block:: python
 
-            .. code-block:: python
+                    return torch.sampling(
+                        input_values_tensor,
+                        input_indices_tensor,
+                        k=k,
+                        p=p,
+                        temp=temp,
+                        seed=seed,
+                        optional_output_tensor=optional_output_tensor,
+                        queue_id=queue_id
+                    )
 
-                return torch.sampling(
-                    input_values_tensor,
-                    input_indices_tensor,
-                    k=k,
-                    p=p,
-                    temp=temp,
-                    seed=seed,
-                    optional_output_tensor=optional_output_tensor,
-                    queue_id=queue_id
-                )
+            Note:
+                This operations only supports inputs and outputs according to the following data types and layout:
+
+                .. list-table:: input_values_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT16
+                        - TILE
+
+
+                .. list-table:: input_indices_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - UINT32, INT32
+                        - ROW_MAJOR
+
+                .. list-table:: k
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - UINT32
+                        - ROW_MAJOR
+
+                .. list-table:: p, temp
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT16
+                        - ROW_MAJOR
+
+                If no :attr:`output_tensor` is provided, the return tensor will be as follows:
+                .. list-table:: output_tensor (default)
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - UINT32
+                        - ROW_MAJOR
+
+                If :attr:`output_tensor` is provided, the supported data types and layout are:
+                .. list-table:: output_tensor (if provided)
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - INT32, UINT32
+                        - ROW_MAJOR
+                Limitations:
+                - The input tensors must represent exactly `32 users` based on their shape (i.e. N*C*H = 32).
+                - The last dimension of:attr:`input_values_tensor` must be padded to a multiple of 32
+                - The overall shape of :attr:`input_values_tensor` must match that of :attr:`input_indices_tensor`.
+                - :attr:`k`: Must contain 32 values, in the range  '(0,32]'.
+                - :attr:`p`, :attr:`temp`: Must contain 32 values in the range `[0.0, 1.0]`.
+                - :attr:`sub_core_grids` (if provided): number of cores must equal the number of users (which is constrained to 32).
+                - All tensors use an INTERLEAVED memory layout.
 
             Args:
                 input_values_tensor (ttnn.Tensor): The input tensor containing values to sample from.
@@ -87,6 +116,7 @@ void bind_reduction_sampling_operation(py::module& module) {
                 p (ttnn.Tensor): Top-p (nucleus) probabilities for sampling.
                 temp (ttnn.Tensor): Temperature tensor for scaling (1/T).
                 seed (int, optional): Seed for sampling randomness. Defaults to `0`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Core range set for multicore execution. Defaults to `None`.
                 optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 queue_id (int, optional): Command queue ID for execution. Defaults to `0`.
 

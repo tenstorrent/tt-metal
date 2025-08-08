@@ -22,11 +22,9 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
             Computes the product of all elements on specified :attr:`dim` of the :attr:`input_tensor` tensor.
 
             If no :attr:`dim` is provided (or :attr:`dim` is set to `None`), it will compute the full product of every element in the :attr:`input_tensor` tensor.
-            When using this full-product mode, the input tensor must be bfloat16.
 
             If :attr:`keepdim` is `True`, the resulting tensor will have the same rank as the :attr:`input_tensor` tensor, but with the specified :attr:`dim` reduced to 1.
             Otherwise, the target :attr:`dim` will be squeezed, resulting in an output tensor with one less dimension than the :attr:`input_tensor` tensor.
-            Setting :attr:`keepdim` to `True` is not supported when computing the full product, as this operation results in a scalar.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -38,6 +36,30 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
+
+            Note:
+                The :attr:`input_tensor` supports the following data type and layout:
+
+                .. list-table:: input_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT16
+                        - TILE, ROW_MAJOR
+
+                The :attr:`output_tensor` will be in the following data type and layout:
+
+                .. list-table:: output_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT16
+                        - TILE
+
+            Limitations:
+                - When :attr:`dim` is not specified (i.e. full product), the :attr:`input_tensor` must be bfloat16, and keepdim=True is not supported  (as this operation results in a scalar).
 
             Example::
                 tensor = ttnn.rand((1,2), device=device)

@@ -27,7 +27,6 @@ void bind_reduction_cumsum_operation(py::module& module) {
         .. math::
             \mathrm{{output}}_i = \mathrm{{input}}_1 + \mathrm{{input}}_2 + \cdots + \mathrm{{input}}_i
 
-
         Args:
             input (ttnn.Tensor): input tensor
             dim (int): dimension along which to compute cumulative sum
@@ -39,7 +38,6 @@ void bind_reduction_cumsum_operation(py::module& module) {
 
         Returns:
             ttnn.Tensor: the output tensor.
-
 
 
         Note:

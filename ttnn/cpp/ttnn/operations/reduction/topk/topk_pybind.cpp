@@ -22,10 +22,6 @@ void bind_reduction_topk_operation(py::module& module) {
 
             The boolean option :attr:`sorted` if True, will make sure that the returned :attr:`k` elements are sorted.
 
-            :attr:`input_tensor` must have BFLOAT8 or BFLOAT16 data type and TILE_LAYOUT layout.
-
-            :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
-
             Equivalent PyTorch code:
 
             .. code-block:: python
@@ -48,6 +44,25 @@ void bind_reduction_topk_operation(py::module& module) {
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
+
+            Note:
+                The :attr:`input_tensor` supports the following data type and layout:
+
+                .. list-table:: input_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT8, BFLOAT16
+                        - TILE
+
+                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
+
+            Limitations:
+                - :attr:`input_tensor` must be 4D
+                - For :attr:`input_tensor`, N*C*H must be a multiple of 32 and W must be ≥64.
+                - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
+                - All shape validations are performed on padded shapes.
 
             Example:
                 input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.TILE_LAYOUT)

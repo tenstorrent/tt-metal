@@ -35,6 +35,27 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
             Returns:
                 ttnn.Tensor: the output tensor.
 
+            Note:
+                The input tensor supports the following data types and layouts:
+
+                .. list-table:: Input Tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - FLOAT32
+                        - ROW_MAJOR, TILE
+                    * - BFLOAT16
+                        - ROW_MAJOR, TILE
+                    * - BFLOAT8_B
+                        - ROW_MAJOR, TILE
+                    * - INT32
+                        - ROW_MAJOR, TILE
+                    * - UINT32
+                        - ROW_MAJOR, TILE
+
+                The output tensor will match the data type and layout of the input tensor.
+
             Example:
 
                 input_a = ttnn.rand(1, 2), dtype=torch.bfloat16, device=device)
