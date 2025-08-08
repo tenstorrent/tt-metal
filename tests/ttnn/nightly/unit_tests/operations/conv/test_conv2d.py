@@ -4065,9 +4065,11 @@ def test_conv_sharded_rm_input(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, deallocate_activation, math_fidelity, enable_split_reader, act_db, w_db",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, deallocate_activation, math_fidelity, enable_split_reader, act_db, w_db, act_block_h_override",
     (
-        (1, 3, 64, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (7, 7), (2, 2), (0, 0), (1, 1), True, ttnn.MathFidelity.LoFi, True, True, True),
+        (1, 3, 64, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (7, 7), (2, 2), (0, 0), (1, 1), True, ttnn.MathFidelity.LoFi, True, True, True, 32*7), # optimum
+        # (1, 3, 64, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (7, 7), (2, 2), (0, 0), (1, 1), True, ttnn.MathFidelity.LoFi, True, True, True, 128),
+        # (1, 3, 64, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (7, 7), (2, 2), (0, 0), (1, 1), True, ttnn.MathFidelity.LoFi, True, True, True, 64),
     ),
 )
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
@@ -4093,17 +4095,27 @@ def test_resnet50_1kX1k(
     enable_split_reader,
     act_db,
     w_db,
+    act_block_h_override,
     input_layout,
     output_layout,
 ):
 
-    if device.core_grid.y != 8 and is_wormhole_b0():
-        pytest.skip("Needs 8x8 grid for wormhole_b0")
+    config_override = {}
+    sharded_cfg = None
+    config_override["act_block_h"] = act_block_h_override
+    # core_x = core_y = 8
+    # sharded_cfg = ttnn.create_sharded_memory_config(
+    #     shape=(1, 1, batch * input_height * input_width, input_channels),
+    #     core_grid=ttnn.CoreGrid(x=core_x,y=core_y),
+    #     strategy=ttnn.ShardStrategy.HEIGHT,
+    #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    # )
 
-    slice_config = ttnn.Conv2dSliceConfig(
-        slice_type=SliceHeight,
-        num_slices=3,
-    )
+    # slice_config = ttnn.Conv2dSliceConfig(
+    #     slice_type=SliceHeight,
+    #     num_slices=3,
+    # )
+
     run_conv(
         device=device,
         torch_tensor_map=torch_tensor_map,
@@ -4120,15 +4132,15 @@ def test_resnet50_1kX1k(
         stride_h=stride[0],
         stride_w=stride[1],
         padding=padding,
-        config_override={},
+        config_override=config_override,
         dilation_h=dilation[0],
         dilation_w=dilation[1],
         output_layout=output_layout,
         deallocate_activation=deallocate_activation,
         groups=groups,
         has_bias=True,
-        shard_layout=None,
-        auto_shard=True,
+        shard_layout=HS,
+        auto_shard=False,
         memory_config=None,
         input_mesh_mapper=None,
         weight_mesh_mapper=None,
@@ -4137,5 +4149,6 @@ def test_resnet50_1kX1k(
         input_layout=input_layout,
         enable_act_double_buffer=act_db,
         enable_weights_double_buffer=w_db,
-        slice_config=slice_config,
+        sharded_cfg=sharded_cfg,
+        # slice_config=slice_config,
     )
