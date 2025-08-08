@@ -71,9 +71,9 @@ class VAEParallelConfig:
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
                 )
                 for _ in range(self.buffer_count)
-            ]  # double buffer
+            ]  # double buffer , depending on buffer_count
 
-    def vae_all_gather(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def vae_all_gather(self, x: ttnn.Tensor, cluster_axis: int = 1) -> ttnn.Tensor:
         semaphores = self.new_gather_handles[self.ping_pong_idx * 2 : (self.ping_pong_idx + 1) * 2]
 
         # reshape to b,1,h*w,c. This was tested to be faster. Need to verify overhead. TODO: Cleanup
@@ -85,7 +85,7 @@ class VAEParallelConfig:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)  # All gather requires tile layout
 
         gather_shape = list(x.shape)
-        gather_shape[3] *= self.device.get_num_devices()
+        gather_shape[3] *= self.device.shape[cluster_axis]  # get_num_devices()
 
         x_g = ttnn.experimental.all_gather_async(
             input_tensor=x,
@@ -95,7 +95,7 @@ class VAEParallelConfig:
             ],
             multi_device_global_semaphore=semaphores,
             topology=ttnn.Topology.Linear,
-            cluster_axis=1,
+            cluster_axis=cluster_axis,
             num_links=self.num_links,
             num_workers_per_link=4,
             chunks_per_sync=80,

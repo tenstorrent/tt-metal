@@ -102,12 +102,31 @@ def test_vae_decoder(
     torch_model.eval()
 
     vae_device = parallel_manager.submesh_devices[0]
-
+    # breakpoint()
+    """
     if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
         cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
         assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
         print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
         vae_device.reshape(ttnn.MeshShape(1, 4))
+    """
+    # HACK: reshape submesh device 0 from 2D to 1D
+    encoder_device = parallel_manager.submesh_devices[0]
+
+    if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
+        # If reshaping, vae_device must be on submesh 0. That means T5 can't fit, so disable it.
+        vae_device = parallel_manager.submesh_devices[0]
+        enable_t5_text_encoder = False
+
+        cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
+        assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
+        print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP")
+        encoder_device.reshape(ttnn.MeshShape(1, 4))
+    else:
+        # vae_device can only be on submesh 1 if submesh is not getting reshaped.
+        vae_device = parallel_manager.submesh_devices[1]
+        enable_t5_text_encoder = True
+
     vae_parallel_config = create_vae_parallel_config(vae_device, parallel_manager)
 
     parameters = TtVaeDecoderParameters.from_torch(

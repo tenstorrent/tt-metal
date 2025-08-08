@@ -542,8 +542,6 @@ class TtStableDiffusion3Pipeline:
                 logger.info("decoding image...")
 
             with timer.time_section("vae_decoding") if timer else nullcontext():
-                image_decoding_start_time = time.time()
-
                 # All gather replacement
                 tt_latents = ttnn.experimental.all_gather_async(
                     input_tensor=tt_latents_step_list[0],
@@ -551,7 +549,7 @@ class TtStableDiffusion3Pipeline:
                     multi_device_global_semaphore=self.latents_gather_semaphore,
                     topology=ttnn.Topology.Linear,
                     mesh_device=self.vae_parallel_manager.device,
-                    cluster_axis=0,
+                    cluster_axis=self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis,
                     num_links=1,
                 )
 
