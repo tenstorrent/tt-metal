@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr ProgrammableCoreType eth_core_type = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(0));
@@ -27,6 +28,8 @@ void kernel_main() {
 
     uint64_t dst_addr = get_noc_addr_helper(other_noc_xy, (uint32_t)other_sem_addr);
     noc_semaphore_inc(dst_addr, 1);
+
+    DPRINT << "Semaphore: " << HEX() << *my_sem_addr << " rtargs base = " << get_arg_addr(0) << ENDL();
 
     // Spin until other core updates the local semaphore confirming the addresses are correct
     while (*my_sem_addr == sem_init_value) {
