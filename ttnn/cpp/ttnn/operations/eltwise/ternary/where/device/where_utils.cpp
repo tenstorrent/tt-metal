@@ -92,32 +92,8 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype) {
     return std::bit_cast<uint32_t>(scalar);
 }
 
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype) {
-    std::map<std::string, std::string> defines;
-
-    if (dtype == DataType::FLOAT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
-    } else if (dtype == DataType::INT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
-    } else if (dtype == DataType::UINT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
-    } else {
-        // BFLOAT16 and other types
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
-    }
-
-    return defines;
-}
-
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const DataType b_dtype) {
+std::map<std::string, std::string> make_dataflow_defines(
+    const DataType dtype, const DataType b_dtype, const DataType c_dtype) {
     std::map<std::string, std::string> defines;
     // Exact copy of binary_ng make_dataflow_defines for compatibility
     if (dtype == DataType::FLOAT32) {
@@ -142,6 +118,7 @@ std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, c
         defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
     }
 
+    // Add defines for second tensor (true tensor)
     if (b_dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
@@ -164,18 +141,18 @@ std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, c
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     }
 
-    // Add defines for third tensor (false tensor) - using same data type as b_dtype for now
-    if (b_dtype == DataType::FLOAT32) {
+    // Add defines for third tensor (false tensor)
+    if (c_dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<float>";
         defines["FILL_WITH_VALUE_FLOAT_C"] = "fill_with_val<1024, float>";
-    } else if (b_dtype == DataType::INT32) {
+    } else if (c_dtype == DataType::INT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<int32_t>";
         defines["FILL_WITH_VALUE_C"] = "fill_with_val<1024, int32_t>";
-    } else if (b_dtype == DataType::UINT32) {
+    } else if (c_dtype == DataType::UINT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<uint32_t>";
@@ -199,15 +176,19 @@ WhereBroadcastType get_broadcast_type(
     auto true_shape = value_true_shape;
     auto false_shape = value_false_shape;
 
-    // All shapes must have same rank and same dimensions except possibly the last one
-    if (pred_shape.rank() != true_shape.rank() || pred_shape.rank() != false_shape.rank()) {
+    if ((predicate_shape == value_true_shape) && (predicate_shape == value_false_shape)) {
         return WhereBroadcastType::NONE;
+    }
+
+    // All shapes must have same rank and same dimensions except the last one for COL_BCAST
+    if (pred_shape.rank() != true_shape.rank() || pred_shape.rank() != false_shape.rank()) {
+        return WhereBroadcastType::INVALID_BCAST;
     }
 
     // Check if all dimensions except last are the same
     for (int i = 0; i < static_cast<int>(pred_shape.rank()) - 1; ++i) {
         if (pred_shape[i] != true_shape[i] || pred_shape[i] != false_shape[i]) {
-            return WhereBroadcastType::NONE;
+            return WhereBroadcastType::INVALID_BCAST;
         }
     }
 
@@ -230,7 +211,7 @@ WhereBroadcastType get_broadcast_type(
         return WhereBroadcastType::COL_BCAST;
     }
 
-    return WhereBroadcastType::NONE;
+    return WhereBroadcastType::INVALID_BCAST;
 }
 
 }  // namespace ttnn::operations::ternary
