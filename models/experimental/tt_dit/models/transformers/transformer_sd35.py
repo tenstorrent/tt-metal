@@ -25,7 +25,7 @@ class SD35TransformerBlock:
         parallel_config=None,
         init=False,
     ):
-        assert not use_dual_attention, "Expecting dual attention"
+        assert not use_dual_attention, "Expecting not dual attention"
 
         self.dim = dim
         self.num_heads = num_heads
