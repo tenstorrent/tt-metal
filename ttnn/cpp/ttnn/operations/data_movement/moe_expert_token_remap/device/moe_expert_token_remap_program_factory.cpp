@@ -194,7 +194,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
 
     const auto [core_page_increments, all_cores] =
-        split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
+        tt::tt_metal::split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
 
     const auto mapping_tensor_addr = mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
     const auto metadata_tensor_addr = metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
@@ -207,7 +207,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     uint32_t page_idx_start = 0, page_idx_end = 0;
     constexpr auto num_reader_rt_args = 5, num_writer_rt_args = 5;
     std::vector<CoreCoord> utilized_cores = corerange_to_cores(all_cores, std::nullopt);
-    TT_ASSERT(utilized_cores.size() == core_page_increments.size());
+    TT_FATAL(utilized_cores.size() == core_page_increments.size(), "Internal error");
 
     auto cit = utilized_cores.begin();
     for (auto increment : core_page_increments) {
