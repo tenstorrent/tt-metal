@@ -256,6 +256,7 @@ void __attribute__((noinline)) Application() {
             }
 
             wait_subordinate_eriscs();
+            launch_msg_address->kernel_config.enables = 0;
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
