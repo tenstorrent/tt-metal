@@ -49,7 +49,7 @@ void kernel_main() {
 
     auto route_id = PacketHeaderPool::allocate_header_n(num_send_dir);
     tt::tt_fabric::WorkerToFabricEdmSender connections[num_send_dir] = {};
-    open_connections(connections, num_send_dir, rt_arg_idx);
+    open_connections(connections, rt_arg_idx);
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
@@ -126,7 +126,7 @@ void kernel_main() {
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-    close_connections(connections, num_send_dir);
+    close_connections(connections);
 
     noc_async_write_barrier();
 

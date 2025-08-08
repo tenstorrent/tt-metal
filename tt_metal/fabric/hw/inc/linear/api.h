@@ -13,17 +13,19 @@
 
 namespace tt::tt_fabric::linear::experimental {
 
+template <size_t num_send_dir>
 FORCE_INLINE void open_connections(
-    tt::tt_fabric::WorkerToFabricEdmSender* client_interfaces, uint8_t num_send_dir, size_t& rt_arg_idx) {
-    for (uint8_t i = 0; i < num_send_dir; i++) {
+    tt::tt_fabric::WorkerToFabricEdmSender (&client_interfaces)[num_send_dir], size_t& rt_arg_idx) {
+    for (size_t i = 0; i < num_send_dir; i++) {
         client_interfaces[i] =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_arg_idx);
         client_interfaces[i].open();
     }
 }
 
-FORCE_INLINE void close_connections(tt::tt_fabric::WorkerToFabricEdmSender* client_interfaces, uint8_t num_send_dir) {
-    for (uint8_t i = 0; i < num_send_dir; i++) {
+template <size_t num_send_dir>
+FORCE_INLINE void close_connections(tt::tt_fabric::WorkerToFabricEdmSender (&client_interfaces)[num_send_dir]) {
+    for (size_t i = 0; i < num_send_dir; i++) {
         client_interfaces[i].close();
     }
 }
