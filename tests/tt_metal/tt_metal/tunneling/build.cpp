@@ -50,7 +50,7 @@ std::string GetCommonOptions() {
 namespace lite_fabric {
 
 int CompileLiteFabric(
-    std::shared_ptr<tt::Cluster> cluster,
+    tt::Cluster& cluster,
     const std::filesystem::path& root_dir,
     const std::filesystem::path& out_dir,
     const std::vector<std::string>& extra_defines) {
@@ -90,7 +90,7 @@ int CompileLiteFabric(
         "NUM_DRAM_BANKS=8 -DNUM_L1_BANKS=130",
         "TENSIX_FIRMWARE",
         "LOCAL_MEM_EN=0",
-        "COMPILE_FOR_ERISC",
+        "COMPILE_FOR_ERISC",  // This is needed to enable the ethernet APIs
         "ERISC",
         "RISC_B0_HW",
         "FW_BUILD",
@@ -102,7 +102,7 @@ int CompileLiteFabric(
     };
 
     // This assumes both chips are the same
-    auto soc_d = cluster->get_soc_desc(0);
+    auto soc_d = cluster.get_soc_desc(0);
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
 
@@ -143,7 +143,7 @@ int LinkLiteFabric(
     oss << "riscv32-tt-elf-g++ ";
     oss << GetCommonOptions() << " ";
     oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
-    oss << fmt::format("-T{}/runtime/hw/toolchain/blackhole/firmware_aerisc.ld ", root_dir.string());
+    oss << fmt::format("-T{}/runtime/hw/toolchain/blackhole/firmware_lite_fabric.ld ", root_dir.string());
     oss << fmt::format("-Wl,-Map={}/lite_fabric.map ", out_dir.string());
     oss << fmt::format("-save-temps {}/lite_fabric.o ", out_dir.string());
     oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0.o ", root_dir.string());

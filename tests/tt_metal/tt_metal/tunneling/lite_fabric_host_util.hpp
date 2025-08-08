@@ -67,9 +67,9 @@ void SetPC(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uin
 
 void SetPC(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t pc_addr, uint32_t pc_val);
 
-void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state);
+void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, lite_fabric::InitState state);
 
-void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, lite_fabric::InitState state);
+void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, lite_fabric::InitState state);
 
 std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
     std::map<chip_id_t, tt::tt_metal::IDevice*>& devices, const SystemDescriptor& desc);
@@ -80,6 +80,9 @@ void LaunchLiteFabric(
     const SystemDescriptor& desc,
     const std::filesystem::path& elf_path);
 
+void LaunchLiteFabric(tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc);
+
+void TerminateLiteFabricWithMetal(tt::Cluster& cluster, const SystemDescriptor& desc);
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
 
 }  // namespace lite_fabric
