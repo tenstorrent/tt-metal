@@ -41,6 +41,18 @@ target_sources(
             reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
             reshape_view/device/device/rm_reshape_interleaved.cpp
             reshape_view/device/hostdevcommon/common.hpp
+            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
+            untilize/device/kernels/dataflow/reader_unary_start_id.cpp
+            untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
+            untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+            untilize/device/kernels/compute/common.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+            tilize/device/kernels/compute/tilize_wh.cpp
+            untilize/device/kernels/compute/pack_untilize.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
+            untilize/device/kernels/compute/pack_untilize_wh.cpp
     PRIVATE
         bcast/bcast.cpp
         bcast/bcast_types.cpp
@@ -177,30 +189,3 @@ install(
 )
 
 install(TARGETS ttnn_op_data_movement LIBRARY COMPONENT tar)
-
-# List of specific JIT kernel files to be installed for runtime access.
-set(TTNN_OP_DATA_MOVEMENT_JIT_FILES
-    tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
-    untilize/device/kernels/dataflow/reader_unary_start_id.cpp
-    untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
-    untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
-    tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
-    tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
-    untilize/device/kernels/compute/common.cpp
-    untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
-    tilize/device/kernels/compute/tilize_wh.cpp
-    untilize/device/kernels/compute/pack_untilize.cpp
-    untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
-    untilize/device/kernels/compute/pack_untilize_wh.cpp
-)
-
-# Install each file individually to preserve its directory structure.
-foreach(JIT_FILE ${TTNN_OP_DATA_MOVEMENT_JIT_FILES})
-    get_filename_component(JIT_FILE_PATH ${JIT_FILE} DIRECTORY)
-    install(
-        FILES
-            ${CMAKE_CURRENT_SOURCE_DIR}/${JIT_FILE}
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/data_movement/${JIT_FILE_PATH}
-        COMPONENT ttnn-runtime
-    )
-endforeach()
