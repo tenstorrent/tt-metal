@@ -1,6 +1,7 @@
 name: Multi-Host Deployment (Physical)
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches:
       - main
   workflow_dispatch:
