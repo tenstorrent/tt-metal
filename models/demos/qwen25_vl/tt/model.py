@@ -18,7 +18,7 @@ from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
-    standardize_hf_keys_qwen25_vl,
+    standardize_hf_keys_multimodal,
 )
 from models.tt_transformers.tt.model import Transformer as TTTransformer
 from models.utility_functions import comp_pcc
@@ -181,7 +181,7 @@ class DropInVisionTransformer(torch.nn.Module):
         self.model_args = model_args
         self.debug = debug
 
-        state_dict = standardize_hf_keys_qwen25_vl(reference_model.state_dict())
+        state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
         state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
         state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
         state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}

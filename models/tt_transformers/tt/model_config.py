@@ -31,7 +31,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
-    standardize_hf_keys_qwen25_vl,
+    standardize_hf_keys_multimodal,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
@@ -452,6 +452,8 @@ class ModelArgs:
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 
+        self.rms_norm_add_unit_offset = False
+
         assert not os.getenv(
             "FAKE_DEVICE"
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
@@ -507,7 +509,7 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CKPT_DIR.lower():
+        if any(keyword in self.CKPT_DIR.lower() for keyword in ("instruct", "it")):
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
@@ -1392,7 +1394,9 @@ class ModelArgs:
 
     def _set_model_specific_params(self):
         # Gemma3 specific params
-        self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
+        is_gemma3 = "gemma-3" in self.base_model_name.lower()
+        if is_gemma3:
+            self.rms_norm_add_unit_offset = True
 
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
@@ -1499,6 +1503,7 @@ class ModelArgs:
         self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
+        self.is_multimodal = "vision_config" in config or self.is_vision()
 
         self._set_model_specific_params()
 
@@ -1688,8 +1693,8 @@ class ModelArgs:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
-            if "Qwen2.5-VL" in self.model_name:
-                state_dict = standardize_hf_keys_qwen25_vl(state_dict)
+            if self.is_multimodal:
+                state_dict = standardize_hf_keys_multimodal(state_dict)
             else:
                 state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
