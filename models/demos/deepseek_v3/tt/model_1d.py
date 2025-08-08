@@ -11,8 +11,9 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
+from models.demos.deepseek_v3.tt.embedding_1d import Embedding1D
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dicts
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -33,13 +34,13 @@ class Model1D(AbstractModule):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+        state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
     ) -> WeightConfig:
         """Convert weights for the 1D model."""
 
-        mesh_shape = list(mesh_device.mesh_shape)
+        mesh_shape = list(mesh_device.shape)
 
         # Create the state dicts for the MLP decoder block
         mlp_meta_layer_mapping = cls.create_meta_layer_mapping(
@@ -49,19 +50,22 @@ class Model1D(AbstractModule):
 
         mlp_decoder_block_state_dicts = [
             [
-                sub_state_dicts(state_dicts, f"model.layers.{layer_idx}") if layer_idx is not None else None
+                sub_state_dict(state_dict, f"layers.{layer_idx}.") if layer_idx is not None else None
                 for layer_idx in mapping
             ]
             for mapping in mlp_meta_layer_mapping
         ]
 
         return {
+            "embedding": Embedding1D.convert_weights(
+                hf_config, sub_state_dict(state_dict, "embed_tokens."), output_path / "embedding", mesh_device
+            ),
             "mlp_decoder_block": [
                 DecoderBlock.convert_weights(
                     hf_config, mlp_decoder_block_state_dicts[ml], output_path / "mlp_decoder_block", mesh_device
                 )
                 for ml in range(cls.NUM_MLP_META_LAYERS)
-            ]
+            ],
         }
 
     @classmethod
@@ -105,11 +109,12 @@ class Model1D(AbstractModule):
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
 
-        mesh_shape = list(mesh_device.mesh_shape)
+        mesh_shape = list(mesh_device.shape)
 
         return {
             "hf_config": hf_config,
             "mesh_shape": mesh_shape,
+            "embedding": Embedding1D.prefill_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock.prefill_model_config(
                     hf_config,
@@ -128,11 +133,12 @@ class Model1D(AbstractModule):
     ) -> ModelDecodeConfig:
         """Create the model configuration for decode mode."""
 
-        mesh_shape = list(mesh_device.mesh_shape)
+        mesh_shape = list(mesh_device.shape)
 
         return {
             "hf_config": hf_config,
             "mesh_shape": mesh_shape,
+            "embedding": Embedding1D.decode_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock.decode_model_config(
                     hf_config,
@@ -154,10 +160,11 @@ class Model1D(AbstractModule):
         """Create the state for the 1D model."""
 
         return {
+            "embedding": Embedding1D.create_state(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock.create_state(hf_config, mesh_device, paged_config, is_padding_layer=None, ccl=ccl)
                 for _ in range(cls.NUM_MLP_META_LAYERS)
-            ]
+            ],
         }
 
     @classmethod
@@ -186,8 +193,11 @@ class Model1D(AbstractModule):
         mesh_shape = cfg["mesh_shape"]
         hf_config = cfg["hf_config"]
 
+        x = Embedding1D.forward_decode(x, cfg["embedding"])
+
         # Stage 1: MLP Decoder Block
-        for row_idx in range(cls.NUM_MLP_ROWS):
+        for row_idx in range(1):
+            # for row_idx in range(cls.NUM_MLP_ROWS):
             for meta_layer_idx in range(cls.NUM_MLP_META_LAYERS):
                 x = DecoderBlock.forward_decode(
                     x,
