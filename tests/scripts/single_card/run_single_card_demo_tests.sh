@@ -294,11 +294,11 @@ run_vanilla_unet_demo() {
  pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
 }
 
-# commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
-# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+# commenting out the test from CI due to HF issue. TODO demo will be enabled with CIv2 dataset .
+# Created a PR to enable demo with CIv2 dataset soon- https://github.com/tenstorrent/tt-metal/pull/26236
 # run_swin_v2_demo() {
 
-#   pytest -n auto models/demos/swin_v2/demo/demo.py::test_swin_v2 --timeout 600
+#   pytest models/demos/swin_v2/demo/demo.py::test_swin_v2
 
 # }
 
