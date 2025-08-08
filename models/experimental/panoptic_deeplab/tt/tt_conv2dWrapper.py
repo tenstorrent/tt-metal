@@ -172,7 +172,17 @@ class TtConv2d:
         memory_config: ttnn.MemoryConfig | None = None,
     ) -> ttnn.Tensor:
         x, shape = self.call_without_reshape(x, memory_config=memory_config)
-        return x.reshape(shape)
+
+        # workaround
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+
+        # kernel designed for rank 3 tensors error when reshaping 4D tiled tensors????
+        x = ttnn.squeeze(x, dim=0)
+        shape = [shape[1], shape[2], shape[3]]
+        x = ttnn.reshape(x, shape)
+        x = ttnn.unsqueeze(x, dim=0)
+
+        return x
 
     @property
     def in_channels(self) -> int:
