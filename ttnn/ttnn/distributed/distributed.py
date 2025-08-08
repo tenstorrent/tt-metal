@@ -46,14 +46,11 @@ def _get_rich_table(
             rows, cols = 0, 0
     else:
         try:
-            distributed_host_buffer = tensor.get_distributed_host_buffer()
-            rows, cols = distributed_host_buffer.shape()
-            fully_local = all(
-                distributed_host_buffer.is_local_at(coord)
-                for coord in ttnn.MeshCoordinateRange(distributed_host_buffer.shape())
-            )
+            host_buffer = tensor.host_buffer()
+            rows, cols = host_buffer.shape()
+            fully_local = all(host_buffer.is_local_at(coord) for coord in ttnn.MeshCoordinateRange(host_buffer.shape()))
         except AttributeError as e:
-            logger.error("Error getting distributed host buffer shape: {}.", e)
+            logger.error("Error getting host buffer shape: {}.", e)
             rows, cols = 0, 0
 
     if tensor:
@@ -85,7 +82,7 @@ def _get_rich_table(
                     device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
                     device_id_str = f"Dev. ID: {device_id}\n" if view.is_local(coord) else "Unknown\n"
                 else:
-                    locality = "Local\n" if distributed_host_buffer.is_local_at(coord) else "Remote\n"
+                    locality = "Local\n" if host_buffer.is_local_at(coord) else "Remote\n"
                     device_id = row_idx * cols + col_idx
                     device_id_str = ""
 
