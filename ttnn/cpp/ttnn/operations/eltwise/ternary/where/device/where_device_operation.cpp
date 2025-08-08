@@ -20,7 +20,7 @@ WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_fac
 
 tt::stl::hash::hash_t WhereDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
-        where_variant, memory_config, get_dtype(), compute_kernel_config);
+        where_variant, broadcast_type, memory_config, get_dtype(), compute_kernel_config);
 }
 
 void WhereDeviceOperation::validate_on_program_cache_hit(

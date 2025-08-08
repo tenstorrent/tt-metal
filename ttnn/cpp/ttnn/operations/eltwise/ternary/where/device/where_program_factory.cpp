@@ -43,6 +43,7 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
+    constexpr size_t num_reader_args = 27;
     constexpr size_t num_writer_args = 3;
     constexpr size_t num_kernel_args = 1;
 
@@ -58,13 +59,14 @@ void set_or_update_runtime_arguments(
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // Handle cores with zero tiles - need to determine correct array size based on variant
-            if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
-                std::array<uint32_t, 27> zero_reader_args{};
-                handle_args(program, reader_kernel_id, core, zero_reader_args);
-            } else {
-                std::array<uint32_t, 5> zero_reader_args{};
-                handle_args(program, reader_kernel_id, core, zero_reader_args);
-            }
+            // if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+            //     std::array<uint32_t, 27> zero_reader_args{};
+            //     handle_args(program, reader_kernel_id, core, zero_reader_args);
+            // } else {
+            //     std::array<uint32_t, 5> zero_reader_args{};
+            //     handle_args(program, reader_kernel_id, core, zero_reader_args);
+            // }
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, num_reader_args>{0});
             handle_args(program, writer_kernel_id, core, std::array<uint32_t, num_writer_args>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, num_kernel_args>{0});
             continue;
@@ -146,22 +148,66 @@ void set_or_update_runtime_arguments(
         // Set reader runtime arguments based on variant (use appropriate array sizes)
         if (variant == WhereVariant::TTS) {
             // TTS: predicate (arg 0) + value_true tensor (arg 1) - only 5 args needed
-            std::array<uint32_t, 5> reader_runtime_args = {
+            std::array<uint32_t, 27> reader_runtime_args = {
                 predicate_tensor.buffer()->address(),           // 0: predicate address
                 value_true_tensor.value().buffer()->address(),  // 1: true tensor address
-                0,                                              // 2: unused (but expected by kernel)
+                0u,                                             // 2: unused (but expected by kernel)
                 num_tiles_per_core,                             // 3: num_tiles_per_core
-                start_tile_id                                   // 4: start_tile_id
+                start_tile_id,                                  // 4: start_tile_id
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,  // 5-14: zeros
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,  // 15-24: zeros
+                0u,
+                0u  // 25-26: zeros
             };
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else if (variant == WhereVariant::TST) {
             // TST: predicate (arg 0) + value_false tensor (arg 1, maps to c_1) - only 5 args needed
-            std::array<uint32_t, 5> reader_runtime_args = {
+            std::array<uint32_t, 27> reader_runtime_args = {
                 predicate_tensor.buffer()->address(),            // 0: predicate address
                 value_false_tensor.value().buffer()->address(),  // 1: false tensor address (goes to c_1)
-                0,                                               // 2: unused (but expected by kernel)
+                0u,                                              // 2: unused (but expected by kernel)
                 num_tiles_per_core,                              // 3: num_tiles_per_core
-                start_tile_id                                    // 4: start_tile_id
+                start_tile_id,                                   // 4: start_tile_id
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,  // 5-14: zeros
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,  // 15-24: zeros
+                0u,
+                0u  // 25-26: zeros
             };
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
