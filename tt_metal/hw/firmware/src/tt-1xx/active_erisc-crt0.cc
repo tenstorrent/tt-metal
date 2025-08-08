@@ -38,10 +38,6 @@ inline void clear_eth_mailbox() {
 }
 
 extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
-    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
-    for (int i = 0; i < 32; i++) {
-        debug_dump_addr[i] = 0xdeadbeef;
-    }
     extern uint32_t __ldm_bss_start[];
     extern uint32_t __ldm_bss_end[];
     wzerorange(__ldm_bss_start, __ldm_bss_end);
@@ -63,27 +59,6 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
         Application();
         clear_eth_mailbox();
     }
-
-    // Dump values to debug buffer
-    // NOLINTNEXTLINE(hicpp-no-assembler)
-    __asm__ volatile(
-        "sw ra, 0 * 4(%0)\n\t"
-        "sw s0, 1 * 4(%0)\n\t"
-        "sw s1, 2 * 4(%0)\n\t"
-        "sw s2, 3 * 4(%0)\n\t"
-        "sw s3, 4 * 4(%0)\n\t"
-        "sw s4, 5 * 4(%0)\n\t"
-        "sw s5, 6 * 4(%0)\n\t"
-        "sw s6, 7 * 4(%0)\n\t"
-        "sw s7, 8 * 4(%0)\n\t"
-        "sw s8, 9 * 4(%0)\n\t"
-        "sw s9, 10 * 4(%0)\n\t"
-        "sw s10, 11 * 4(%0)\n\t"
-        "sw s11, 12 * 4(%0)\n\t"
-        "nop"
-        : /* no output */
-        : "r"(debug_dump_addr)
-        : "memory");
 
     invalidate_l1_cache();
 }

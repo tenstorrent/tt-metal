@@ -123,8 +123,6 @@ void __attribute__((noinline)) Application() {
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
-    *((volatile uint32_t*)RISCV_DEBUG_REG_DEST_CG_CTRL) = 0;
-
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
@@ -133,16 +131,6 @@ void __attribute__((noinline)) Application() {
 
     // Stall for the host to set this flag to 1 otherwise we could exit
     // to base firmware while the host is still initializing
-    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
-    volatile uint32_t* const debug_run_count = reinterpret_cast<volatile uint32_t*>(0x3680);
-    volatile uint32_t* mailbox_pointer = reinterpret_cast<volatile uint32_t*>(0x7D000);
-    debug_run_count[0]++;
-
-    debug_dump_addr[0] = 0x22222222;
-    debug_dump_addr[2] = mailbox_pointer[0];
-    debug_dump_addr[3] = mailbox_pointer[1];
-    debug_dump_addr[4] = mailbox_pointer[2];
-
     // do {
     //     __asm__ volatile("fence");
     // } while (gEnableFwFlag[0] != 1);
@@ -186,19 +174,16 @@ void __attribute__((noinline)) Application() {
 
         uint8_t go_message_signal = RUN_MSG_DONE;
         while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
-            debug_dump_addr[0] = 0x5b5b5b5b;
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (!ignore_disable_until_first_go && gEnableFwFlag[0] != 1) {
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 // Track if we could not return back to _start
-                debug_dump_addr[0] = 0xefefefef;
                 return;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
                 // Set the rd_ptr on workers to specified value
-                debug_dump_addr[0] = 0xbe12be12;
                 mailboxes->launch_msg_rd_ptr = 0;
                 if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                     uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
@@ -228,7 +213,6 @@ void __attribute__((noinline)) Application() {
             gEnableFwFlag[0] = 1;
             __asm__ volatile("fence");
         }
-        debug_dump_addr[0] = 0xcccccccc;
 
         {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
