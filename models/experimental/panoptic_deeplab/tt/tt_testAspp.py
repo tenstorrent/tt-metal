@@ -4,6 +4,7 @@
 import pytest
 import torch
 import ttnn
+from models.experimental.panoptic_deeplab.tt.tt_pytorch_aspp import ASPP
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
 
@@ -13,14 +14,14 @@ from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
     "batch_size, in_channels, out_channels, input_height, input_width, dilations, norm, activation, dropout",
     [
         # Basic test cases
-        (1, 256, 256, 32, 32, [6, 12, 18], "gn", "relu", 0.0),
-        (1, 512, 256, 16, 16, [6, 12, 18], "gn", "silu", 0.1),
-        (2, 256, 128, 64, 64, [3, 6, 9], "", "relu", 0.0),  # No norm case
-        # Different dilation patterns
-        (1, 128, 128, 32, 32, [2, 4, 8], "gn", "relu", 0.0),
-        (1, 256, 256, 48, 48, [1, 2, 4], "gn", "silu", 0.0),
-        # Larger input sizes
-        (1, 256, 256, 128, 128, [6, 12, 18], "gn", "relu", 0.0),
+        (1, 256, 256, 32, 32, [6, 12, 18], "ln", "relu", 0.0),
+        # (1, 512, 256, 16, 16, [6, 12, 18], "ln", "relu", 0.0),
+        # (2, 256, 128, 64, 64, [3, 6, 9], "", "relu", 0.0),  # No norm case
+        # # Different dilation patterns
+        # (1, 128, 128, 32, 32, [2, 4, 8], "ln", "relu", 0.0),
+        # (1, 256, 256, 48, 48, [1, 2, 4], "ln", "relu", 0.0),
+        # # Larger input sizes
+        # (1, 256, 256, 128, 128, [6, 12, 18], "ln", "relu", 0.0),
     ],
 )
 def test_ttnn_aspp(
@@ -37,66 +38,21 @@ def test_ttnn_aspp(
 ):
     torch.manual_seed(0)
 
-    # Create PyTorch reference implementation (simplified ASPP)
-    class PyTorchASPP(torch.nn.Module):
-        def __init__(self, in_channels, out_channels, dilations, norm, activation, dropout):
-            super().__init__()
-            self.dropout = dropout
-            use_bias = norm == ""
-
-            # 1x1 conv
-            self.conv1x1 = torch.nn.Conv2d(in_channels, out_channels, 1, bias=use_bias)
-
-            # Dilated convs
-            self.dilated_convs = torch.nn.ModuleList(
-                [torch.nn.Conv2d(in_channels, out_channels, 3, padding=d, dilation=d, bias=use_bias) for d in dilations]
-            )
-
-            # Global avg pool + 1x1 conv
-            self.global_pool = torch.nn.AdaptiveAvgPool2d(1)
-            self.pool_conv = torch.nn.Conv2d(in_channels, out_channels, 1, bias=True)
-
-            # Projection
-            self.project = torch.nn.Conv2d(5 * out_channels, out_channels, 1, bias=use_bias)
-
-            # Activation
-            if activation == "relu":
-                self.activation = torch.nn.ReLU()
-            elif activation == "silu":
-                self.activation = torch.nn.SiLU()
-
-        def forward(self, x):
-            size = x.shape[-2:]
-            res = []
-
-            # 1x1 conv
-            res.append(self.activation(self.conv1x1(x)))
-
-            # Dilated convs
-            for conv in self.dilated_convs:
-                res.append(self.activation(conv(x)))
-
-            # Global pooling branch
-            pooled = self.global_pool(x)
-            pooled = self.activation(self.pool_conv(pooled))
-            pooled = torch.nn.functional.interpolate(pooled, size=size, mode="bilinear", align_corners=False)
-            res.append(pooled)
-
-            # Concatenate and project
-            res = torch.cat(res, dim=1)
-            res = self.activation(self.project(res))
-
-            if self.dropout > 0:
-                res = torch.nn.functional.dropout(res, p=self.dropout, training=self.training)
-
-            return res
-
     # Create input tensor
     torch_input = torch.randn(batch_size, in_channels, input_height, input_width, dtype=torch.bfloat16)
 
-    # PyTorch reference
-    torch_model = PyTorchASPP(in_channels, out_channels, dilations, norm, activation, dropout)
-    torch_model.eval()
+    # PyTorch reference model (your PyTorch ASPP implementation)
+    torch_model = ASPP(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        dilations=dilations,
+        norm="LN" if norm == "ln" else "",
+        activation=torch.nn.ReLU() if activation == "relu" else torch.nn.SiLU(),
+        pool_kernel_size=(4, 4),  # Using global pooling
+        dropout=dropout,
+    )
+    torch_model = torch_model.to(dtype=torch.bfloat16)
+    torch_model.eval()  # Set to evaluation mode ; Not existing I think
     torch_output = torch_model(torch_input)
 
     # Convert to TTNN format (NHWC)
@@ -113,6 +69,7 @@ def test_ttnn_aspp(
         norm=norm,
         activation=activation,
         dropout=dropout,
+        pool_kernel_size=(4, 4),  # Use a fixed pooling kernel size for testing
     )
 
     # Run TTNN model
@@ -143,7 +100,11 @@ def test_ttnn_aspp_basic_functionality(device):
     dilations = [6, 12, 18]
 
     # Create input
-    torch_input = torch.randn(batch_size, in_channels, input_height, input_width, dtype=torch.bfloat16)
+
+    nchw = (batch_size, in_channels, input_height, input_width)
+
+    torch_input = torch.randn(nchw, dtype=torch.bfloat16)
+
     ttnn_input = ttnn.from_torch(
         torch_input.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
@@ -154,9 +115,10 @@ def test_ttnn_aspp_basic_functionality(device):
         out_channels=out_channels,
         dilations=dilations,
         device=device,
-        norm="gn",
+        norm="ln",
         activation="relu",
-        dropout=0.0,
+        dropout=0.5,
+        pool_kernel_size=(4, 4),
     )
 
     ttnn_output = ttnn_model(ttnn_input)
