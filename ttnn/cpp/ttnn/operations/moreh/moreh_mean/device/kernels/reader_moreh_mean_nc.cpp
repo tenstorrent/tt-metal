@@ -12,7 +12,6 @@ void kernel_main() {
     const auto num_output_tiles = get_arg_val<uint32_t>(i++);
     const auto input_tile_stride = get_arg_val<uint32_t>(i++);
     const auto start_id = get_arg_val<uint32_t>(i++);
-    // removed input_is_dram runtime flag; TensorAccessorArgs encodes location
     const auto HtWt = get_arg_val<uint32_t>(i++);
     const auto inner_size = get_arg_val<uint32_t>(i++);
 
