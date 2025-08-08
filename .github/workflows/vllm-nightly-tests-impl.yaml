@@ -54,7 +54,7 @@ jobs:
             benchmark-timeout: 10,
             runner-label: config-tg,
             mesh-device: P150x8,
-            tt-llama-text-ver: llama3_70b_galaxy,
+            tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 8}",
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
