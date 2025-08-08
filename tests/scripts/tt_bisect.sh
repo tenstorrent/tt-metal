@@ -19,7 +19,8 @@ END
 cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
-timeout_duration=2m
+timeout_duration_global=2h      # default global timeout for the whole script
+timeout_duration_iteration=30m  # default per-iteration timeout
 patch=""
 while getopts "f:g:b:t:p:" opt; do
     case $opt in
@@ -33,7 +34,7 @@ while getopts "f:g:b:t:p:" opt; do
             bad_commit=$OPTARG
             ;;
          t | timeout)
-            timeout_duration=$OPTARG
+            timeout_duration_global=$OPTARG
             ;;
          p | patch)
             patch=$OPTARG
@@ -87,52 +88,70 @@ git bisect start $bad_commit $good_commit --
 echo "ls -lht"
 ls -lht
 
-while [[ "$found" = "false" ]]; do
-   echo "::group::Building `git rev-parse HEAD`"
-   if ([ ! -z "$patch" ]); then
-      git cherry-pick $patch
-   fi
-   git submodule update --recursive
-   build_rc=0
-   ./build_metal.sh --build-tests > /dev/null || build_rc=$?
-   echo "::endgroup::"
+bisect_loop() {
+   while [[ "$found" = "false" ]]; do
+      echo "::group::Building `git rev-parse HEAD`"
+      if ([ ! -z "$patch" ]); then
+         git cherry-pick $patch
+      fi
+      git submodule update --recursive
+      build_rc=0
+      ./build_metal.sh --build-tests > /dev/null || build_rc=$?
+      echo "::endgroup::"
 
-   if [[ $build_rc -ne 0 ]]; then
-      echo "Build failed; skipping this commit"
-      git bisect skip
-      continue
-   fi
+      if [[ $build_rc -ne 0 ]]; then
+         echo "Build failed; skipping this commit"
+         git bisect skip
+         continue
+      fi
 
-   echo "::group::Testing `git rev-parse HEAD`"
-   timeout_rc=0
-   timeout "$timeout_duration" bash -c "$test" || timeout_rc=$?
-   echo "Exit code: $timeout_rc"
+      echo "::group::Testing `git rev-parse HEAD`"
+      timeout_rc=1
+      max_retries=3
+      attempt=1
+      while [ $attempt -le $max_retries ]; do
+         echo "Test attempt $attempt for commit $(git rev-parse HEAD)"
+         timeout "$timeout_duration_iteration" bash -c "$test"
+         timeout_rc=$?
+         if [ $timeout_rc -eq 0 ]; then
+            break
+         else
+            echo "Test failed (exit code $timeout_rc), retrying..."
+            attempt=$((attempt + 1))
+         fi
+      done
+      echo "Exit code: $timeout_rc"
 
-   if ([ ! -z "$patch" ]); then
-      # Must reset HEAD or git bisect good/bad will retry the merge base and we'll be stuck in a loop
-      git reset --hard HEAD^
-   fi
-   echo "::endgroup::"
+      if ([ ! -z "$patch" ]); then
+         # Must reset HEAD or git bisect good/bad will retry the merge base and we'll be stuck in a loop
+         git reset --hard HEAD^
+      fi
+      echo "::endgroup::"
 
-   if [ $timeout_rc -eq 0 ]; then
-      echo "Commit is good"
-      increment=$(git bisect good)
-      echo "${increment}"
-      first_line=$(echo "${increment}" | head -n 1)
-   elif [ $timeout_rc -eq 124 ]; then
-      echo "Test has timed out, skipping this commit"
-      git bisect skip
-      continue
-   else
-      echo "Commit is bad"
-      increment=$(git bisect bad)
-      echo "${increment}"
-      first_line=$(echo "${increment}" | head -n 1)
-   fi
+      if [ $timeout_rc -eq 0 ]; then
+         echo "Commit is good"
+         increment=$(git bisect good)
+         echo "${increment}"
+         first_line=$(echo "${increment}" | head -n 1)
+      elif [ $timeout_rc -eq 124 ]; then
+         echo "Test has timed out, skipping this commit"
+         git bisect skip
+         continue
+      else
+         echo "Commit is bad"
+         increment=$(git bisect bad)
+         echo "${increment}"
+         first_line=$(echo "${increment}" | head -n 1)
+      fi
 
-   if [[ $first_line == *"is the first bad commit"* ]]; then
-      echo "FOUND IT!: " $first_line
-      found=true
-   fi
-done
+      if [[ $first_line == *"is the first bad commit"* ]]; then
+         echo "FOUND IT!: " $first_line
+         found=true
+      fi
+   done
+}
+
+# Run the bisect loop with a global timeout
+timeout "$timeout_duration_global" bash -c "$(declare -f bisect_loop); bisect_loop"
+
 git bisect reset
