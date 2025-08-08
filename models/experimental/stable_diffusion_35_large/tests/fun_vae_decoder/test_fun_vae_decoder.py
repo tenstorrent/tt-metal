@@ -139,7 +139,7 @@ def test_vae_decoder(
     for i in range(num_itr):
         start_time = time.time()
         tt_out = sd_vae_decode(tt_inp, parameters)
-        # ttnn.synchronize_device(vae_device)
+        ttnn.synchronize_device(vae_device)
         end_time = time.time()
         duration += end_time - start_time
         logger.info(f"vae_decode {i} time: {end_time-start_time}")

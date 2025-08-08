@@ -10,7 +10,7 @@ from loguru import logger
 from ...tt.fun_vae_decoder.fun_conv2d import vae_conv2d, TtConv2dParameters
 from ...tt.utils import assert_quality, to_torch
 from models.utility_functions import comp_pcc
-from ...tt.parallel_config import StableDiffusionParallelManager
+from ...tt.parallel_config import StableDiffusionParallelManager, create_vae_parallel_config
 import time
 
 
@@ -22,21 +22,6 @@ def print_stats(label, data: torch.Tensor, device=None):
     return (
         f"{label}: mean:{data_.mean()} , std:{data_.std()} , range:[{data_.min()}, {data_.max()}, shape:{data_.shape}]"
     )
-
-
-# TODO: Move to parallel manager
-def gn_all_gather(x, parallel_config):
-    x_g = ttnn.experimental.all_gather_async(
-        input_tensor=x,
-        dim=3,
-        multi_device_global_semaphore=parallel_config.new_gather_handles,
-        topology=ttnn.Topology.Linear,
-        mesh_device=parallel_config.device,
-        cluster_axis=1,
-        num_links=1,
-    )
-    ttnn.synchronize_device(parallel_config.device)
-    return x_g
 
 
 @pytest.mark.parametrize(
@@ -56,8 +41,6 @@ def gn_all_gather(x, parallel_config):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 20000000}],
     indirect=True,
 )
-
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}])
 @pytest.mark.parametrize(
     (
         "batch",
@@ -65,34 +48,23 @@ def gn_all_gather(x, parallel_config):
         "width",
         "in_channels",
         "out_channels",
-        "mesh_sharded_output",
         "mesh_sharded_input",
+        "mesh_sharded_output",
         "kernel",
         "padding",
         "stride",
     ),
     [
-        (1, 128, 128, 16, 512, False, False, 3, 1, 1),
-        (1, 128, 128, 512, 512, False, False, 3, 1, 1),
-        (1, 256, 256, 512, 512, False, False, 3, 1, 1),
-        (1, 512, 512, 512, 512, False, False, 3, 1, 1),
-        (1, 512, 512, 512, 256, False, False, 3, 1, 1),
-        (1, 512, 512, 256, 256, False, False, 3, 1, 1),
-        (
-            1,
-            1024,
-            1024,
-            256,
-            256,
-            False,
-            False,
-            3,
-            1,
-            1,
-        ),  # 16 Need to try height activation override. Data will be significant to move
-        (1, 1024, 1024, 256, 128, False, False, 3, 1, 1),
-        (1, 1024, 1024, 128, 128, False, False, 3, 1, 1),
-        (1, 1024, 1024, 128, 3, True, False, 3, 1, 1),  # (8) 16
+        (1, 128, 128, 16, 512, False, True, 3, 1, 1),
+        (1, 128, 128, 512, 512, True, True, 3, 1, 1),
+        (1, 256, 256, 512, 512, True, True, 3, 1, 1),
+        (1, 512, 512, 512, 512, True, True, 3, 1, 1),
+        (1, 512, 512, 512, 256, True, True, 3, 1, 1),
+        (1, 512, 512, 256, 256, True, True, 3, 1, 1),
+        (1, 1024, 1024, 256, 256, True, True, 3, 1, 1),
+        (1, 1024, 1024, 256, 128, True, True, 3, 1, 1),
+        (1, 1024, 1024, 128, 128, True, True, 3, 1, 1),
+        (1, 1024, 1024, 128, 3, False, False, 3, 1, 1),
     ],
 )
 def test_fun_conv2d(
@@ -134,19 +106,15 @@ def test_fun_conv2d(
     torch_dtype = torch.bfloat16
     ttnn_dtype = ttnn.bfloat16
     torch.manual_seed(0)
-    device = parallel_manager.vae_parallel_config.device  # mesh_device
-    logger.info(f"Device: {device}, {device.core_grid} , ids:[{list(device.get_device_ids())}]")
 
-    # mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    vae_device = parallel_manager.submesh_devices[0]
 
-    # Construct test tensor of data; 8 chunks of 32x32
-    """
-    compute_grid_size = device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    ccl_semaphore_handles = ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0)
-    """
+    if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
+        cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
+        assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
+        print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
+        vae_device.reshape(ttnn.MeshShape(1, 4))
+    vae_parallel_config = create_vae_parallel_config(vae_device, parallel_manager)
 
     torch_model = torch.nn.Conv2d(
         in_channels=in_channels, out_channels=out_channels, kernel_size=kernel, padding=padding, stride=stride
@@ -156,7 +124,7 @@ def test_fun_conv2d(
     parameters = TtConv2dParameters.from_torch(
         torch_conv=torch_model,
         dtype=ttnn_dtype,
-        parallel_config=parallel_manager.vae_parallel_config,
+        parallel_config=vae_parallel_config,
         mesh_sharded_output=mesh_sharded_output,
         mesh_sharded_input=mesh_sharded_input,
     )
@@ -168,23 +136,18 @@ def test_fun_conv2d(
     tt_inp = ttnn.from_torch(
         torch_input_padded,
         dtype=ttnn_dtype,
-        device=device,
+        device=vae_device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1) if mesh_sharded_input else None,
+        mesh_mapper=ttnn.ShardTensorToMesh(vae_device, dim=-1) if mesh_sharded_input else None,
     )
-    # print(f" Shard spec {tt_inp.shard_spec().value().grid}")
 
-    logger.info(print_stats("torch_input", inp))
-    logger.info(print_stats("tt_input", tt_inp, device=device))
-
-    logger.info(f" input shape TT: {tt_inp.shape}, Torch: {inp.shape}")
     with torch.no_grad():
         out = torch_model(inp)
 
     tt_out = vae_conv2d(tt_inp, parameters)
 
     if mesh_sharded_output:
-        tt_out = gn_all_gather(tt_out, parallel_manager.vae_parallel_config)
+        tt_out = vae_parallel_config.vae_all_gather(tt_out)
 
     tt_final_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
     result, output = comp_pcc(out, tt_final_out_torch)
@@ -198,9 +161,9 @@ def test_fun_conv2d(
         tt_inp = ttnn.from_torch(
             torch_input_padded.clone().detach(),
             dtype=ttnn_dtype,
-            device=device,
+            device=vae_device,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1) if mesh_sharded_input else None,
+            mesh_mapper=ttnn.ShardTensorToMesh(vae_device, dim=-1) if mesh_sharded_input else None,
         )
         # tt_inp = ttnn.from_torch(torch_input_padded.clone().detach(), dtype=ttnn_dtype, device=device)
         start_time = time.time()
