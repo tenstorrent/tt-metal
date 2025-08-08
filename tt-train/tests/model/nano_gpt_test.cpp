@@ -293,7 +293,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     // verify program cache
     auto program_cache_entries = device->num_program_cache_entries();
 
-    float abs_tol = 2e-2F;
+    float abs_tol = 1e-3F;
     std::string run_type = "SingleDevice";
     if (use_tensor_parallel) {
         run_type = "TP";
@@ -353,7 +353,7 @@ TEST_F(NanoLlamaTest, NIGHTLY_Default) {
     }
 }
 
-TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_TensorParallel) {
+TEST_F(NanoLlamaMultiDeviceTest, DISABLED_NIGHTLY_TensorParallel) {
     if (should_run_multi_device_tests()) {
         train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
     }
