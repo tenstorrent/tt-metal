@@ -119,16 +119,16 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 
 void matmul_tile(
     tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
     const MatmulTileConfig& cfg,
     vector<uint32_t> activations,
     vector<uint32_t> weights,
     vector<bfloat16> tensor_vals) {
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt_metal::distributed::MeshWorkload workload;
+    auto zero_coord = tt_metal::distributed::MeshCoordinate(0, 0);
+    auto device_range = tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    tt_metal::distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};
 
@@ -144,20 +144,20 @@ void matmul_tile(
     const size_t dram_buffer_size_bfp16b = num_tiles * single_tile_size_bfp16b;
     const size_t dram_buffer_size_out0 = num_tiles * single_tile_size_out0;
 
-    distributed::DeviceLocalBufferConfig input_buffer_config = {
+    tt_metal::distributed::DeviceLocalBufferConfig input_buffer_config = {
         .page_size = dram_buffer_size_bfp16b, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig input_replicated_buffer_config = {.size = dram_buffer_size_bfp16b};
+    tt_metal::distributed::ReplicatedBufferConfig input_replicated_buffer_config = {.size = dram_buffer_size_bfp16b};
 
-    distributed::DeviceLocalBufferConfig output_buffer_config = {
+    tt_metal::distributed::DeviceLocalBufferConfig output_buffer_config = {
         .page_size = dram_buffer_size_out0, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig output_replicated_buffer_config = {.size = dram_buffer_size_out0};
+    tt_metal::distributed::ReplicatedBufferConfig output_replicated_buffer_config = {.size = dram_buffer_size_out0};
 
-    auto src0_dram_buffer =
-        distributed::MeshBuffer::create(input_replicated_buffer_config, input_buffer_config, mesh_device.get());
-    auto src1_dram_buffer =
-        distributed::MeshBuffer::create(input_replicated_buffer_config, input_buffer_config, mesh_device.get());
-    auto dst_dram_buffer =
-        distributed::MeshBuffer::create(output_replicated_buffer_config, output_buffer_config, mesh_device.get());
+    auto src0_dram_buffer = tt_metal::distributed::MeshBuffer::create(
+        input_replicated_buffer_config, input_buffer_config, mesh_device.get());
+    auto src1_dram_buffer = tt_metal::distributed::MeshBuffer::create(
+        input_replicated_buffer_config, input_buffer_config, mesh_device.get());
+    auto dst_dram_buffer = tt_metal::distributed::MeshBuffer::create(
+        output_replicated_buffer_config, output_buffer_config, mesh_device.get());
 
     uint32_t num_input_tiles = 2 * M;
 
@@ -175,14 +175,15 @@ void matmul_tile(
             .set_page_size(src1_cb_index, single_tile_size_bfp16b);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
 
-    std::shared_ptr<distributed::MeshBuffer> src2_dram_buffer;
-    std::shared_ptr<distributed::MeshBuffer> dst1_dram_buffer;
+    std::shared_ptr<tt_metal::distributed::MeshBuffer> src2_dram_buffer;
+    std::shared_ptr<tt_metal::distributed::MeshBuffer> dst1_dram_buffer;
     if (cfg.with_bias) {  // with_bias only when M, N, or K > 1
-        distributed::DeviceLocalBufferConfig bias_buffer_config = {
+        tt_metal::distributed::DeviceLocalBufferConfig bias_buffer_config = {
             .page_size = single_tile_size_bfp16b * N, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-        distributed::ReplicatedBufferConfig bias_replicated_buffer_config = {.size = single_tile_size_bfp16b * N};
-        src2_dram_buffer =
-            distributed::MeshBuffer::create(bias_replicated_buffer_config, bias_buffer_config, mesh_device.get());
+        tt_metal::distributed::ReplicatedBufferConfig bias_replicated_buffer_config = {
+            .size = single_tile_size_bfp16b * N};
+        src2_dram_buffer = tt_metal::distributed::MeshBuffer::create(
+            bias_replicated_buffer_config, bias_buffer_config, mesh_device.get());
 
         uint32_t src2_cb_index = 2;
         tt_metal::CircularBufferConfig cb_src2_config =
@@ -194,16 +195,17 @@ void matmul_tile(
         uint32_t in2_id = 2;
         uint32_t out1_id = 17;
 
-        distributed::DeviceLocalBufferConfig dummy_buffer_config = {
+        tt_metal::distributed::DeviceLocalBufferConfig dummy_buffer_config = {
             .page_size = single_tile_size_bfp16b * N, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-        distributed::ReplicatedBufferConfig dummy_replicated_buffer_config = {.size = single_tile_size_bfp16b * N};
+        tt_metal::distributed::ReplicatedBufferConfig dummy_replicated_buffer_config = {
+            .size = single_tile_size_bfp16b * N};
         // This will be srcB in uint16_t
-        src2_dram_buffer =
-            distributed::MeshBuffer::create(dummy_replicated_buffer_config, dummy_buffer_config, mesh_device.get());
+        src2_dram_buffer = tt_metal::distributed::MeshBuffer::create(
+            dummy_replicated_buffer_config, dummy_buffer_config, mesh_device.get());
 
         // This will be dummy output in uint16_t
-        dst1_dram_buffer =
-            distributed::MeshBuffer::create(dummy_replicated_buffer_config, dummy_buffer_config, mesh_device.get());
+        dst1_dram_buffer = tt_metal::distributed::MeshBuffer::create(
+            dummy_replicated_buffer_config, dummy_buffer_config, mesh_device.get());
 
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(
