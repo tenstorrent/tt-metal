@@ -44,6 +44,8 @@ DataflowBufferConfig& DataflowBufferConfig::set_access_pattern(const AccessPatte
     return *this;
 }
 
+uint8_t DataflowBufferConfig::buffer_index() const { return buffer_index_; }
+
 uint32_t DataflowBufferConfig::total_size() const { return total_size_; }
 
 tt::DataFormat DataflowBufferConfig::data_format() const { return data_format_; }
@@ -52,12 +54,16 @@ uint32_t DataflowBufferConfig::page_size() const { return page_size_; }
 
 const DataflowBufferConfig::AccessPattern& DataflowBufferConfig::access_pattern() const { return access_patterns_; }
 
-DataflowBufferConfig::Builder DataflowBufferConfig::Builder::LocalBuilder(DataflowBufferConfig& parent) {
-    auto builder = Builder(parent);
+DataflowBufferConfig::Builder DataflowBufferConfig::Builder::LocalBuilder(
+    DataflowBufferConfig& parent, uint8_t buffer_index) {
+    auto builder = Builder(parent, buffer_index);
     return builder;
 }
 
-DataflowBufferConfig::Builder::Builder(DataflowBufferConfig& parent) : parent_(parent) {}
+DataflowBufferConfig::Builder::Builder(DataflowBufferConfig& parent, uint8_t buffer_index) :
+    parent_(parent), buffer_index_(buffer_index) {
+    parent_.buffer_index_ = buffer_index;
+}
 
 const DataflowBufferConfig::Builder& DataflowBufferConfig::Builder::set_data_format(tt::DataFormat data_format) const {
     parent_.data_format_ = data_format;
@@ -80,7 +86,9 @@ const DataflowBufferConfig::Builder& DataflowBufferConfig::Builder::set_access_p
     return *this;
 }
 
-DataflowBufferConfig::Builder DataflowBufferConfig::builder() { return Builder::LocalBuilder(*this); }
+DataflowBufferConfig::Builder DataflowBufferConfig::index(uint8_t buffer_index) {
+    return Builder::LocalBuilder(*this, buffer_index);
+}
 
 bool operator==(const DataflowBufferConfig::AccessPattern& lhs, const DataflowBufferConfig::AccessPattern& rhs) {
     return lhs.write_pattern == rhs.write_pattern && lhs.read_pattern == rhs.read_pattern &&
@@ -99,14 +107,14 @@ bool operator==(const DataflowBufferConfig& lhs, const DataflowBufferConfig& rhs
 bool operator!=(const DataflowBufferConfig& lhs, const DataflowBufferConfig& rhs) { return !(lhs == rhs); }
 
 // this needs to return different logical space for the GlobalDFBs
-uint8_t CreateDataflowBuffer(
+void CreateDataflowBuffer(
     const DataflowBufferConfig& config, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec) {
+    uint8_t buffer_index = config.buffer_index();
+    // this needs to be a better check
     // This needs to be per core but for now (local DFB testing)leave this
-    static uint8_t logical_dfb_index = 0;
-    if (logical_dfb_index == 64) {
+    if (buffer_index >= 64) {
         TT_THROW("Exceeded max number of Dataflow Buffers");
     }
-    uint8_t current_index = logical_dfb_index++;
 
     // Do register allocation
     static uint64_t register_allocator_mask = 0;
@@ -137,11 +145,11 @@ uint8_t CreateDataflowBuffer(
     register_allocator_mask |= mask_to_set;
 
     // Set the logical to physical reg mapping
-    dev::dfb_to_register_allocation[current_index] = mask_to_set;
+    dev::dfb_to_register_allocation[buffer_index] = mask_to_set;
     log_info(
         tt::LogMetal,
         "Logical DFB {}'s register allocation: {:#x} (set bits are the hw register indices)",
-        (uint32_t)current_index,
+        (uint32_t)buffer_index,
         mask_to_set);
 
     // Iterate over all set bits in mask_to_set
@@ -152,13 +160,11 @@ uint8_t CreateDataflowBuffer(
     while (temp_mask) {
         int bit_position = __builtin_ctzll(temp_mask);  // Find lowest set bit
         std::cout << bit_position << " ";
-        dev::overlay_cluster_instances[current_index].set_capacity(capacity);
+        dev::overlay_cluster_instances[buffer_index].set_capacity(capacity);
 
         temp_mask &= (temp_mask - 1);  // Clear the lowest set bit
     }
     std::cout << std::endl;
-
-    return current_index;
 }
 
 }  // namespace tt::tt_metal

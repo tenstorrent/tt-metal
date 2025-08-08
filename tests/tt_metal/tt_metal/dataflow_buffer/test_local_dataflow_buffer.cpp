@@ -156,7 +156,8 @@ TEST_P(DataflowBufferTestSuite, TestLocalDataflowBuffer) {
 
     DataflowBufferConfig config(this->dataflow_buffer_size_bytes);
     // this can be based on logical user index
-    config.builder()
+    uint8_t dfb_index = 0;
+    config.index(dfb_index)
         .set_data_format(tt::DataFormat::Float32)
         .set_page_size(this->page_size_bytes)
         .set_access_pattern(DataflowBufferConfig::AccessPattern{
@@ -165,15 +166,11 @@ TEST_P(DataflowBufferTestSuite, TestLocalDataflowBuffer) {
             .num_writer_threads = (uint8_t)this->params.num_writer_threads,
             .num_reader_threads = (uint8_t)this->params.num_reader_threads});
 
-    auto dfb_index = CreateDataflowBuffer(config, CoreCoord(0, 0));
+    // atm for sim purposes, below api also sets the hw sync registers capacities
+    CreateDataflowBuffer(config, CoreCoord(0, 0));
 
-    // Below local_dfb_interface_twould be done before kernel launch
+    // Below local_dfb_interface_twould be done by FW before kernel launch
     uintptr_t base_addr = reinterpret_cast<uintptr_t>(dfb_data.data());
-
-    uintptr_t src_addr = reinterpret_cast<uintptr_t>(this->data.data());
-    std::cout << "src_addr: 0x" << std::hex << src_addr << std::dec << std::endl;
-    std::cout << "base_addr: 0x" << std::hex << base_addr << std::dec << std::endl;
-
     dev::overlay_cluster_dfb_access_pattern_tracker[dfb_index] = {
         .size = config.total_size(),
         .limit = base_addr + config.total_size(),
@@ -186,40 +183,26 @@ TEST_P(DataflowBufferTestSuite, TestLocalDataflowBuffer) {
     };
     // End local_dfb_interface_t setup
 
-    std::vector<std::thread> threads;
-    for (uint32_t i = 0; i < this->params.num_writer_threads; ++i) {
-        threads.emplace_back([this, i, dfb_index]() { this->run_writer_thread(i, dfb_index); });
-    }
-
-    for (uint32_t i = 0; i < this->params.num_reader_threads; ++i) {
-        threads.emplace_back([this, i, dfb_index]() { this->run_reader_thread(i, dfb_index); });
-    }
-
-    for (auto& t : threads) {
-        t.join();
-    }
-
-    // std::cout << "Printing original data" << std::endl;
-    // for (int i = 0; i < this->data.size(); i++) {
-    //     std::cout << this->data[i] << "\t";
+    // std::vector<std::thread> threads;
+    // for (uint32_t i = 0; i < this->params.num_writer_threads; ++i) {
+    //     threads.emplace_back([this, i, dfb_index]() { this->run_writer_thread(i, dfb_index); });
     // }
-    // std::cout << "\n";
 
-    // std::cout << "Printing dfb data" << std::endl;
-    // for (int i = 0; i < this->dfb_data.size(); i++) {
-    //     std::cout << this->dfb_data[i] << "\t";
+    // for (uint32_t i = 0; i < this->params.num_reader_threads; ++i) {
+    //     threads.emplace_back([this, i, dfb_index]() { this->run_reader_thread(i, dfb_index); });
     // }
-    // std::cout << "\n";
+
+    // for (auto& t : threads) {
+    //     t.join();
+    // }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     DataflowBufferTestSuite,
     DataflowBufferTestSuite,
     ::testing::Values(
-        TestParams{1, 1, 1, DataflowBufferAccessPattern::STRIDED, DataflowBufferAccessPattern::STRIDED, true, false}
-        // TestParams{
-        //     1, 1, 4, DataflowBufferAccessPattern::STRIDED, DataflowBufferAccessPattern::STRIDED, true, false},
-        ));
+        // TestParams{1, 1, 1, DataflowBufferAccessPattern::STRIDED, DataflowBufferAccessPattern::STRIDED, true, false}
+        TestParams{1, 1, 4, DataflowBufferAccessPattern::STRIDED, DataflowBufferAccessPattern::STRIDED, true, false}));
 
 }  // namespace unit_tests::dataflow_buffer
 }  // namespace tt::tt_metal

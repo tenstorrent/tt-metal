@@ -35,6 +35,8 @@ public:
 
     DataflowBufferConfig& set_access_pattern(const AccessPattern& pattern);
 
+    uint8_t buffer_index() const;
+
     uint32_t total_size() const;
 
     tt::DataFormat data_format() const;
@@ -45,7 +47,7 @@ public:
 
     class Builder {
     public:
-        static Builder LocalBuilder(DataflowBufferConfig& parent);
+        static Builder LocalBuilder(DataflowBufferConfig& parent, uint8_t buffer_index);
 
         const Builder& set_data_format(tt::DataFormat data_format) const;
 
@@ -57,12 +59,13 @@ public:
         const Builder& set_access_pattern(const AccessPattern& pattern) const;
 
     private:
-        Builder(DataflowBufferConfig& parent);
+        Builder(DataflowBufferConfig& parent, uint8_t buffer_index);
 
         DataflowBufferConfig& parent_;
+        uint8_t buffer_index_;
     };
 
-    Builder builder();
+    Builder index(uint8_t buffer_index);
 
     friend bool operator==(const DataflowBufferConfig& lhs, const DataflowBufferConfig& rhs);
     friend bool operator!=(const DataflowBufferConfig& lhs, const DataflowBufferConfig& rhs);
@@ -70,6 +73,7 @@ public:
 private:
     void set_config(const tt::DataFormat& data_format);
 
+    uint8_t buffer_index_ = 0;  // need to separate out remote and local buffer indices
     uint32_t total_size_ = 0;
     tt::DataFormat data_format_;
     uint32_t page_size_;
@@ -83,7 +87,7 @@ bool operator==(const DataflowBufferConfig& lhs, const DataflowBufferConfig& rhs
 bool operator!=(const DataflowBufferConfig& lhs, const DataflowBufferConfig& rhs);
 
 // in this sim environment, this will set overlay_cluster_dfb_access_pattern_tracker and dfb_to_register_allocation
-uint8_t CreateDataflowBuffer(
+void CreateDataflowBuffer(
     const DataflowBufferConfig& config, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec);
 
 }  // namespace tt::tt_metal
