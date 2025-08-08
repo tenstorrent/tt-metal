@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
-#include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
+#include "tools/profiler/fabric_event_profiler.hpp"
 
 namespace tt::tt_fabric {
 
