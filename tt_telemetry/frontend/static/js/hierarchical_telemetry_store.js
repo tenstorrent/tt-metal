@@ -44,6 +44,7 @@ export class HierarchicalTelemetryStore {
         const path = this._path_by_id.get(id);
         if (!path) {
             // Invalid telemetry data, does not map to any known path
+            console.log(`Invalid id ${id}, cannot update state`);
             return;
         }
         
@@ -86,13 +87,17 @@ export class HierarchicalTelemetryStore {
             map = map.get(current_part);
         }
 
-        console.log(`[HierarchicalTelemetryStore] Added ${id}:${path}`);
+        console.log(`[HierarchicalTelemetryStore] Added ${id}:${path} (state=${initialState})`);
 
         // Update state
         this.updateState(id, initialState, true);
     }
 
     getChildNames(path) {
+        // Special case: empty path, get first level
+        if (path.length == 0) {
+            return [ ...this._path_children.keys() ];
+        }
         // Navigate through the hierarchy to find the correct map
         const parts = path.split("_");
         let current_map = this._path_children;
@@ -113,6 +118,7 @@ export class HierarchicalTelemetryStore {
             console.error(`Unknown id ${id_or_path}`);
             return false;
         }
+        console.log(`Get state ${path} = ${this._state_by_path.get(path)}`);
         return this._state_by_path.get(path) == true ? true : false;
     }
 }
