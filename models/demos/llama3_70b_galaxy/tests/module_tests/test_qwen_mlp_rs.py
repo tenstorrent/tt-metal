@@ -7,6 +7,16 @@ from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 
 
 @pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [
         (8, 4),
