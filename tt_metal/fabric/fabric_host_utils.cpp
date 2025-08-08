@@ -66,6 +66,7 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         forwarding_channels =
             control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
     } else {
+        // TODO: not going to work for Big Mesh
         const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
         const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
         // for 1D check if each port has an active connection to the dst_chip_id
