@@ -214,11 +214,6 @@ class Generator:
         ), "Currently only supporting greedy decoding (temperature=0) on device"
         argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
 
-        reset_inputs = not argmax_on_device
-        if self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item():
-            reset_inputs = True
-            self.prev_page_table = page_table
-
         B = tokens.shape[0]
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
@@ -232,7 +227,7 @@ class Generator:
             "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
+            tt_logits = self._easy_trace_text(**decode_kwargs)
         else:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -329,19 +324,6 @@ class Generator:
         logger.info("Done Capturing Decode Trace")
         return trace_ids, tt_out_trace, *device_inputs
 
-    def _decode_forward_trace_text(
-        self,
-        trace_ids,
-        tt_out_trace,
-    ):
-        """
-        Executes the trace for the decode_forward method but does not read back outputs.
-        """
-        for i, trace_id in trace_ids.items():
-            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-
-        return tt_out_trace
-
     def _easy_trace_text(
         self,
         tokens,
@@ -349,7 +331,6 @@ class Generator:
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
-        reset_inputs=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
@@ -362,6 +343,13 @@ class Generator:
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
 
+        reset_inputs = not argmax_on_device
+        if self.prev_page_table is None or any(
+            not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
+        ):
+            reset_inputs = True
+            self.prev_page_table = page_table
+
         if reset_inputs:
             for i in range(self.data_parallel):
                 user_page_table = page_table[i] if page_table is not None else None
@@ -372,12 +360,10 @@ class Generator:
                     device_tensors=self.trace_inputs_text[i],
                 )
 
-        trace_logits_rm = self._decode_forward_trace_text(
-            self.trace_ids_text,
-            self.trace_output_text,
-        )
+        for i, trace_id in self.trace_ids_text.items():
+            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
 
-        return trace_logits_rm
+        return self.trace_output_text
 
     def _prefill_forward_single_user(
         self,

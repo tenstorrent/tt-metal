@@ -298,6 +298,7 @@ class Transformer(LightweightModule):
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
+        # ttnn.ne currently requires the input to be in TILE_LAYOUT
         current_pos_tiled = ttnn.to_layout(current_pos, layout=ttnn.TILE_LAYOUT)
         # Update only active positions (current_pos != -1)
         predicate = ttnn.ne(current_pos_tiled, -1)
@@ -308,17 +309,7 @@ class Transformer(LightweightModule):
         )
         ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), current_pos)
 
-        # We need to cast to int32 to avoid issues with cast from float to uint32
-        rot_mat_idxs_signed = ttnn.typecast(ttnn.to_layout(rot_mat_idxs, layout=ttnn.TILE_LAYOUT), ttnn.int32)
-        # Update only active positions (rot_mat_idxs_signed != 0)
-        predicate = ttnn.nez(rot_mat_idxs_signed)
-        result = ttnn.where(
-            predicate,
-            ttnn.add(rot_mat_idxs_signed, 1),
-            rot_mat_idxs_signed,
-        )
-        result = ttnn.typecast(result, ttnn.uint32)
-        ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), rot_mat_idxs)
+        ttnn.plus_one(rot_mat_idxs)
 
     def ttnn_decode_forward(
         self,
