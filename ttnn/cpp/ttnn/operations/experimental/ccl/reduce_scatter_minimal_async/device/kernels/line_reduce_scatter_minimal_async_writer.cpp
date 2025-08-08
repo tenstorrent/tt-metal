@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include <cstdint>
 #include <utility>
 
@@ -264,8 +265,6 @@ void kernel_main() {
                     uint32_t payload_size_bytes = num_pages_to_write * intermediate_page_size;
 
                     uint32_t first_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                    uint64_t remote_noc0_dest_noc_addr =
-                        get_noc_addr(first_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                     pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
@@ -274,14 +273,12 @@ void kernel_main() {
                     }
 
                     if (num_pages_to_write == 1) {
-                        pkt_hdr->to_noc_unicast_write(
-                            tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
+                        tt::tt_fabric::linear::to_noc_unicast_write(
+                            pkt_hdr, first_tile_id, intermediate_addrgen, 0 /*offset*/);
                         tt::tt_fabric::fabric_async_write(
                             *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
                     } else if (num_pages_to_write == 2) {
                         uint32_t second_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                        uint64_t second_remote_noc0_dest_noc_addr =
-                            get_noc_addr(second_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
@@ -289,12 +286,8 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        pkt_hdr->to_noc_unicast_scatter_write(
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                                remote_noc0_dest_noc_addr,
-                                second_remote_noc0_dest_noc_addr,
-                                intermediate_page_size /*single packet size*/},
-                            payload_size_bytes /*total payload size*/);
+                        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
+                            pkt_hdr, first_tile_id, second_tile_id, intermediate_addrgen, 0 /*offset0*/, 0 /*offset1*/);
 
                         tt::tt_fabric::fabric_async_write(
                             *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
