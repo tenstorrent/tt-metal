@@ -72,7 +72,15 @@ public:
         const uint32_t page_size_in = 0) :
         TensorAccessor(tensor_accessor::make_dspec_from_args(args), bank_base_address_in, page_size_in) {}
 
-    constexpr auto& dspec() const {
+    constexpr const auto& dspec() const {
+        if constexpr (DSpec::is_static) {
+            return StaticDspec::instance;
+        } else {
+            return dspec_instance.value;
+        }
+    }
+
+    constexpr auto& dspec() {
         if constexpr (DSpec::is_static) {
             return StaticDspec::instance;
         } else {
