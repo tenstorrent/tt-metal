@@ -77,6 +77,7 @@ constexpr size_t RECEIVER_CHANNEL_BASE_ID = NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_BASE_ID = 0;
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "noc_nonblocking_api.h"
 
@@ -109,15 +110,17 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_3_free_slots_stream_id,
     sender_channel_4_free_slots_stream_id};
 
+// Always using NOC0 and default cmd bufs
+// Used for acks
+constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids = {BRISC_AT_CMD_BUF};
+
+#endif
+
 constexpr bool use_posted_writes_for_connection_open = false;
 
 constexpr bool is_2d_fabric = false;
 
 constexpr uint32_t my_direction = 0;  // No direction for 1D fabric
-
-// Always using NOC0 and default cmd bufs
-// Used for acks
-constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids = {BRISC_AT_CMD_BUF};
 
 // Not using multi txq / 2 erisc
 constexpr uint32_t NUM_ACTIVE_ERISCS = 1;
@@ -141,13 +144,17 @@ constexpr bool SKIP_CONNECTION_LIVENESS_CHECK = false;
 constexpr bool enable_ring_support = false;
 constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
-namespace tt::tt_fabric {
-
+namespace lite_fabric {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+constexpr uint8_t local_chip_data_cmd_buf = BRISC_WR_CMD_BUF;  // Used
 constexpr uint8_t worker_handshake_noc = NOC_INDEX;
+#endif
+
+// Default NoC to use for Reads/Writes
+constexpr uint8_t edm_to_local_chip_noc = 0;
+constexpr uint8_t forward_and_local_write_noc_vc = 2;  // FabricEriscDatamoverConfig::DEFAULT_NOC_VC
+
 constexpr uint8_t edm_to_downstream_noc = 0;                 // Used?
 constexpr bool local_chip_noc_equals_downstream_noc = true;  // Used?
 
-constexpr uint8_t local_chip_data_cmd_buf = BRISC_WR_CMD_BUF;  // Used
-constexpr uint8_t forward_and_local_write_noc_vc = 2;          // FabricEriscDatamoverConfig::DEFAULT_NOC_VC
-}
-#endif
+}  // namespace lite_fabric
