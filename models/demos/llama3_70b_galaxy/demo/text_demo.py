@@ -200,8 +200,7 @@ def create_tt_model(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            # "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -218,12 +217,45 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
-            # "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            True,  # instruct mode
+            32,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+        ),
+        (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            True,  # instruct mode
+            32,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
@@ -409,6 +441,8 @@ def create_tt_model(
     ids=[
         "batch-32",  # throughput
         "batch-1",  # latency
+        "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
+        "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
         "repeat2",  # latency with 2 repeat batches
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
@@ -1161,8 +1195,8 @@ def test_demo_text(
         "decode_t/s": target_decode_tok_s,
         "decode_t/s/u": target_decode_tok_s_u,
     }
-    # TODO Update this target
-    if repeat_batches > 1 and batch_size == 1:
+    # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
+    if repeat_batches == 2 and batch_size == 1:
         target = 54 if galaxy_type == "6U" else 98
         assert (
             avg_time_to_first_token * 1000 < target
