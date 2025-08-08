@@ -214,7 +214,8 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "BinaryNgDeviceOperation_1": {
+
+        "BinaryNgDeviceOperation_0": {
             "op_name": "BinaryDeviceOperation_Indices_Correction",
             "kernel_duration": 3586.875,
             "op_to_op": 729.0,
