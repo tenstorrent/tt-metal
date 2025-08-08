@@ -148,15 +148,10 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
              units_per_core,
              input_tile_stride,
              tile_offset,
-             static_cast<uint32_t>(is_dram(input)),
              HtWt,
              inner_size});
 
-        SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {output.buffer()->address(), units_per_core, tile_offset, static_cast<uint32_t>(is_dram(output))});
+        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), units_per_core, tile_offset});
 
         tile_offset += units_per_core;
     }
