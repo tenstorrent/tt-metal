@@ -528,6 +528,21 @@ struct PackTraits<DownstreamDirections<first, rest...>> {
     static constexpr bool has_both_axes = has_ew && has_ns;
 };
 
+// Pack holder (stores array of directions only as a type) - for checking local packet
+template <typename Pack>
+struct PackHasLocal;
+
+// Specialization for empty directions
+template <>
+struct PackHasLocal<DownstreamDirections<>> {
+    static constexpr bool value = false;
+};
+
+template <eth_chan_directions first, eth_chan_directions... rest>
+struct PackHasLocal<DownstreamDirections<first, rest...>> {
+    static constexpr bool value = (first == my_direction) || PackHasLocal<DownstreamDirections<rest...>>::value;
+};
+
 // 2D low-latency mode, fetch from the pkt header
 FORCE_INLINE uint32_t get_processing_mask(tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
     return packet_header->route_buffer[packet_header->routing_fields.hop_index];
@@ -686,9 +701,15 @@ template <
     eth_chan_directions downstream_direction>
 FORCE_INLINE void forward_to_downstream_edm(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    uint16_t payload_size_bytes,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     uint8_t transaction_id) {
+    if constexpr (my_direction == downstream_direction) {
+        // local packet is handled at the end
+        return;
+    }
+
     // Dimension-order routing contraint: ignore any packets that make a turn from the E/W axis to N/S axis
     // Inter-mesh routers are excluded from this constraint as they can be along any dimension
     if constexpr (!is_intermesh_router) {
@@ -700,27 +721,19 @@ FORCE_INLINE void forward_to_downstream_edm(
         }
     }
 
-    uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+    update_header_and_cached_routing_fields<downstream_direction, has_both_axes>(packet_start, cached_routing_fields);
 
-    // local packet
-    if constexpr (my_direction == downstream_direction) {
-        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-    } else {
-        update_header_and_cached_routing_fields<downstream_direction, has_both_axes>(
-            packet_start, cached_routing_fields);
-
-        size_t idx = get_downstream_edm_interface_index<rx_channel_id, downstream_direction>();
-        // need to determine if we need to increment pointers with an extra inline write
-        // when increment pointers is false, we update via inline write
+    size_t idx = get_downstream_edm_interface_index<rx_channel_id, downstream_direction>();
+    // need to determine if we need to increment pointers with an extra inline write
+    // when increment pointers is false, we update via inline write
 #if defined(DYNAMIC_ROUTING_ENABLED)
-        constexpr bool increment_pointers = !has_both_axes || (downstream_direction == eth_chan_directions::NORTH ||
-                                                               downstream_direction == eth_chan_directions::SOUTH);
+    constexpr bool increment_pointers = !has_both_axes || (downstream_direction == eth_chan_directions::NORTH ||
+                                                           downstream_direction == eth_chan_directions::SOUTH);
 #else
-        constexpr bool increment_pointers = !has_both_axes;
+    constexpr bool increment_pointers = !has_both_axes;
 #endif
-        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_pointers>(
-            packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
-    }
+    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_pointers>(
+        packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
 }
 
 // DIRECTIONS variadic arg is kept last for auto-deduction of type
@@ -732,9 +745,17 @@ FORCE_INLINE void forward_to_downstream_edms(
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     uint8_t transaction_id) {
     constexpr bool has_both_axes = PackTraits<DownstreamDirections<DIRECTIONS...>>::has_both_axes;
+    constexpr bool has_local = PackHasLocal<DownstreamDirections<DIRECTIONS...>>::value;
+    uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+
     (forward_to_downstream_edm<rx_channel_id, SENDER_NUM_BUFFERS, has_both_axes, DIRECTIONS>(
-         packet_start, cached_routing_fields, downstream_edm_interface, transaction_id),
+         packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id),
      ...);
+
+    // handle local if present
+    if constexpr (has_local) {
+        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+    }
 }
 
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
@@ -924,21 +945,10 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
 // 2D low-latency
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE bool can_forward_packet_completely(
-    tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t directions_mask,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_interface) {
-    uint32_t directions_mask = get_processing_mask(packet_header);
-    return process_mask_for_checking_space<rx_channel_id, SENDER_NUM_BUFFERS>(
-        directions_mask, downstream_edm_interface);
-}
-
-// 2D dynamic
-template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
-FORCE_INLINE bool can_forward_packet_completely(
-    tt_l1_ptr MeshPacketHeader* packet_header,
-    std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
-    std::array<uint8_t, num_eth_ports>& port_direction_table) {
-    uint32_t directions_mask = get_processing_mask(packet_header, port_direction_table);
     return process_mask_for_checking_space<rx_channel_id, SENDER_NUM_BUFFERS>(
         directions_mask, downstream_edm_interface);
 }
@@ -1001,26 +1011,11 @@ FORCE_INLINE void receiver_forward_packet(
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void receiver_forward_packet(
-    tt_l1_ptr LowLatencyMeshPacketHeader* packet_start,
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    uint32_t directions_mask,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     uint8_t transaction_id) {
-    uint32_t directions_mask = get_processing_mask(packet_start);
-    process_mask_for_forwarding<rx_channel_id, SENDER_NUM_BUFFERS>(
-        directions_mask, packet_start, cached_routing_fields, downstream_edm_interface, transaction_id);
-}
-#endif
-
-#if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
-// !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
-template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
-FORCE_INLINE void receiver_forward_packet(
-    tt_l1_ptr MeshPacketHeader* packet_start,
-    ROUTING_FIELDS_TYPE cached_routing_fields,
-    std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
-    uint8_t transaction_id,
-    std::array<uint8_t, num_eth_ports>& port_direction_table) {
-    uint32_t directions_mask = get_processing_mask(packet_start, port_direction_table);
     process_mask_for_forwarding<rx_channel_id, SENDER_NUM_BUFFERS>(
         directions_mask, packet_start, cached_routing_fields, downstream_edm_interface, transaction_id);
 }
@@ -1237,6 +1232,7 @@ void run_receiver_channel_step_impl(
 #endif
 
         receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+        uint32_t directions_mask;
         bool can_send_to_all_local_chip_receivers;
         if constexpr (is_2d_fabric) {
             // read in the hop command from route buffer.
@@ -1255,13 +1251,13 @@ void run_receiver_channel_step_impl(
             //  mcast)
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
             // need this ifdef since the 2D dynamic routing packet header contains unique fields
-            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
-                packet_header, downstream_edm_interface, port_direction_table);
+            directions_mask = get_processing_mask(packet_header, port_direction_table);
 #elif defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
-            can_send_to_all_local_chip_receivers =
-                can_forward_packet_completely<receiver_channel>(packet_header, downstream_edm_interface);
+            directions_mask = get_processing_mask(packet_header);
 #endif
+            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
+                packet_header, directions_mask, downstream_edm_interface);
         } else {
             can_send_to_all_local_chip_receivers =
                 can_forward_packet_completely(cached_routing_fields, downstream_edm_interface[receiver_channel]);
@@ -1275,13 +1271,8 @@ void run_receiver_channel_step_impl(
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
-#if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
                 receiver_forward_packet<receiver_channel>(
-                    packet_header, cached_routing_fields, downstream_edm_interface, trid, port_direction_table);
-#elif defined(FABRIC_2D)
-                receiver_forward_packet<receiver_channel>(
-                    packet_header, cached_routing_fields, downstream_edm_interface, trid);
-#endif
+                    packet_header, directions_mask, cached_routing_fields, downstream_edm_interface, trid);
             } else {
                 receiver_forward_packet<receiver_channel>(
                     packet_header, cached_routing_fields, downstream_edm_interface[receiver_channel], trid);

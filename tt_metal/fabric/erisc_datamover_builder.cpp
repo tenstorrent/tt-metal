@@ -1334,7 +1334,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_vcs_semaphore_address[1].value_or(-1),
         this->downstream_edm_vcs_worker_registration_address[1].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[1].value_or(0),
-        this->receiver_channels_local_buffer_index_address[1],  // extend the following 3 for 2D. need 3 each for 2D.
+        this->receiver_channels_local_buffer_index_address[0],  // extend the following 3 for 2D. need 3 each for 2D.
 
         this->downstream_edm_vcs_buffer_base_address[2] != std::nullopt,
         this->downstream_edm_vcs_buffer_base_address[2].value_or(0),
@@ -1343,7 +1343,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_vcs_semaphore_address[2].value_or(-1),
         this->downstream_edm_vcs_worker_registration_address[2].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[2].value_or(0),
-        this->receiver_channels_local_buffer_index_address[2],
+        this->receiver_channels_local_buffer_index_address[1],
         // this is the receiver channel's local sem for flow controlling with downstream fabric sender
         this->receiver_channels_downstream_flow_control_semaphore_id[0].value_or(-1),
         this->receiver_channels_downstream_flow_control_semaphore_id[1].value_or(-1),
