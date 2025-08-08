@@ -307,25 +307,35 @@ jobs:
 
   # LLMBox-only demo tests
   blackhole-llmbox-demo-tests:
-    needs: build-artifact
+    needs: [build-artifact, generate-matrix]
     if: ${{ inputs.enable-llmbox-tests }}
     secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-demo-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
-      runner-label: ${{ inputs.runner-label || 'BH' }}
+      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: pipeline-perf
+      num_devices: 4
 
-  # LLMBox-only fabric tests
-  blackhole-llmbox-fabric-unit-tests:
-    needs: build-artifact
+  # LLMBox-only unit tests
+  blackhole-llmbox-unit-tests:
+    needs: [build-artifact, generate-matrix]
     if: ${{ inputs.enable-llmbox-tests }}
     secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-unit-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
+      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

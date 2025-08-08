@@ -31,7 +31,7 @@ jobs:
   blackhole-multi-card-demo-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-demo-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix:
@@ -58,7 +58,7 @@ jobs:
   blackhole-multi-card-unit-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-unit-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix:
