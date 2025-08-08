@@ -78,7 +78,7 @@ static Tensor pool2d_invoke(
     MemoryConfig out_memory_config = input_tensor.memory_config();
     uint32_t num_cores_nhw = 0;
     uint32_t num_cores_c = 0;
-    auto input_tensor_sharded = input_tensor;
+    Tensor input_tensor_sharded = input_tensor;
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
     if (!out_memory_config.shard_spec().has_value()) {
         // Input is not sharded. Perform sharding.
@@ -118,21 +118,19 @@ static Tensor pool2d_invoke(
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
 
-        uint32_t input_channels_alignment = is_in_tiled ? tt::constants::TILE_WIDTH : 8;
-        if (!is_in_tiled && input_tensor.memory_config().is_sharded() &&
-            shard_layout == TensorMemoryLayout::HEIGHT_SHARDED && input_tensor.layout() == Layout::ROW_MAJOR) {
+        uint32_t input_channels_alignment = is_in_tiled ? tt::constants::TILE_WIDTH : 8U;
+        if (!is_in_tiled && input_tensor.memory_config().is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR) {
             const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
             input_channels_alignment = (shard_width % tt::constants::TILE_WIDTH == 0) ? tt::constants::TILE_WIDTH
                                        : (shard_width % 16 == 0)                      ? 16U
-                                       : (shard_width % 8 == 0)                       ? 16U
-                                                                                      : tt::constants::TILE_WIDTH;
+                                                                                      : 8U;
         }
 
-        auto input_tensor_shape = input_tensor.padded_shape();
+        ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
         uint32_t input_tensor_width_snapped_to_channels_alignment =
             tt::round_up(input_tensor_shape[3], num_cores_c * input_channels_alignment);
 
-        auto input_padded_shape = ttnn::Shape(
+        ttnn::Shape input_padded_shape = ttnn::Shape(
             {input_tensor_shape[0],
              input_tensor_shape[1],
              input_tensor_shape[2],
@@ -167,8 +165,10 @@ static Tensor pool2d_invoke(
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     uint32_t output_c = channels;
-    uint32_t output_c_padded =
-        tt::round_up(output_c, num_cores_c * (input_tensor.dtype() == DataType::BFLOAT8_B ? 32 : 16));
+    uint32_t output_c_padded = tt::round_up(
+        output_c,
+        num_cores_c *
+            (input_tensor.dtype() == DataType::BFLOAT8_B ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2));
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,
