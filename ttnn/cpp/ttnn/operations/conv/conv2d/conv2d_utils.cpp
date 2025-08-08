@@ -864,12 +864,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             // Set act_block_h_override to min value to
             // be conservative with L1 memory usage.
             conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
-            // Split reader is currently only supported for height sharded convs that are not 1d deptwise.
-            if (conv_config.enable_split_reader && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-                !conv_is_1d_deptwise) {
-                // Split reader needs at least 2 tiles in height to work.
-                conv_config.act_block_h_override *= 2;
-            }
         }
 
         const uint32_t input_channels_alignment =
