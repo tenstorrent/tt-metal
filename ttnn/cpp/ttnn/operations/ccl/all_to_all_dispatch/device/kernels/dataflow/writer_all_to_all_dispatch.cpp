@@ -253,8 +253,8 @@ void kernel_main() {
             for (uint32_t d = 0; d < num_devices; d++) {
                 if (d == linearized_mesh_coord) {
                     // dispatch the metadata to the current device and increment the local copy of the semaphore
-                    detail::dispatch_input_local_device_flushed(
-                        token_indices_address, metadata_write_addr, metadata_page_size);
+                    detail::dispatch_metadata_local_device(
+                        token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
                 } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                     // dispatch the metadata to the remote device and increment the remote device's copy of the
                     // semaphore
@@ -347,11 +347,11 @@ void kernel_main() {
                 }
             }
         }
+        // Need to wait for the local flushed metadata write.
+        noc_async_write_barrier();
+        noc_semaphore_inc(global_noc_semaphore_address, 1);
+        noc_async_atomic_barrier();
     }
-    // Need to wait for the local flushed metadata write.
-    noc_async_write_barrier();
-    noc_semaphore_inc(global_noc_semaphore_address, 1);
-    noc_async_atomic_barrier();
 
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
