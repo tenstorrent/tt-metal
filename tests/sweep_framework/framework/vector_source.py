@@ -148,6 +148,9 @@ class FileVectorSource(VectorSource):
                     if vector_id in suite_content:
                         vector = suite_content[vector_id]
                         vector["vector_id"] = vector_id
+                        vector["input_hash"] = vector_id
+                        vector["suite_name"] = suite_key
+                        vector["sweep_name"] = module_name
                         vectors.append(vector)
                         break
             else:
@@ -158,6 +161,9 @@ class FileVectorSource(VectorSource):
 
                     for input_hash, vector_data in suite_content.items():
                         vector_data["vector_id"] = input_hash
+                        vector_data["input_hash"] = input_hash
+                        vector_data["suite_name"] = suite_key
+                        vector_data["sweep_name"] = module_name
                         vectors.append(vector_data)
 
             return vectors
@@ -229,6 +235,9 @@ class VectorExportSource(VectorSource):
                     if vector_id in suite_content:
                         vector = suite_content[vector_id]
                         vector["vector_id"] = vector_id
+                        vector["input_hash"] = vector_id
+                        vector["suite_name"] = suite_key
+                        vector["sweep_name"] = module_name
                         vectors.append(vector)
                         break
             else:
@@ -239,6 +248,9 @@ class VectorExportSource(VectorSource):
 
                     for input_hash, vector_data in suite_content.items():
                         vector_data["vector_id"] = input_hash
+                        vector_data["input_hash"] = input_hash
+                        vector_data["suite_name"] = suite_key
+                        vector_data["sweep_name"] = module_name
                         vectors.append(vector_data)
 
             return vectors
