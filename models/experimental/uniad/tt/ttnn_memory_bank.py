@@ -55,7 +55,11 @@ class TtMemoryBank:
         save_period = ttnn.where(saved_idxes, self.save_period, save_period)
         saved_idxes = ttnn.to_torch((saved_idxes)).to(dtype=torch.bool)
         save_period = ttnn.to_torch(save_period)
-        save_period[saved_idxes] = self.save_period
+        save_period[
+            saved_idxes
+        ] = (
+            self.save_period
+        )  # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/15553>
         track_instances.save_period = save_period
         track_instances.save_period = ttnn.from_torch(
             track_instances.save_period, dtype=ttnn.bfloat16, device=self.device
@@ -72,7 +76,9 @@ class TtMemoryBank:
                 bias=self.params.save_proj.bias,
             )
             saved_embed = ttnn.to_torch(saved_embed)
-            tensor1 = mem_padding_mask[saved_idxes, 1:]
+            tensor1 = mem_padding_mask[
+                saved_idxes, 1:
+            ]  # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/15553>
             tensor1 = ttnn.from_torch(tensor1, dtype=ttnn.bfloat16, device=self.device)
             tensor2 = torch.zeros((len(saved_embed), 1), dtype=torch.bool)
             tensor2 = ttnn.from_torch(tensor2, dtype=ttnn.bfloat16, device=self.device)
