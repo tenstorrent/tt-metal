@@ -22,6 +22,12 @@ test_suite_bh_single_pcie_metal_unit_tests() {
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api --gtest_filter=*SimpleDram*:*SimpleL1* # Executable is dependent on arch (provided through GitHub CI workflow scripts)
 }
 
+# Function test run BH UMD tests, should be any topology
+test_suite_bh_umd_unit_tests() {
+    ./build/test/umd/api/api_tests
+    ./build/test/umd/blackhole/unit_tests
+}
+
 # Function to run BH single PCIe small ML model tests
 test_suite_bh_single_pcie_small_ml_model_tests() {
     echo "[upstream-tests] Running BH upstream small model tests"
@@ -180,6 +186,7 @@ test_suite_bh_single_pcie_small_ml_model_tests
 test_suite_bh_single_pcie_llama_demo_tests" # NOTE: This test MUST be last because of the requirements install currently in the llama tests
 
 hw_topology_test_suites["blackhole_no_models"]="
+test_suite_bh_umd_unit_tests
 test_suite_bh_pcie_didt_tests
 test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests"
