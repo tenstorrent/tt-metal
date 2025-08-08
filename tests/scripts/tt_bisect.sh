@@ -74,7 +74,7 @@ if ([ ! -z "$patch" ]); then
     echo "Cherry-pick commit:" $patch
 fi
 
-found=false
+
 
 echo "Current location: `pwd`"
 echo "Current branch: `git rev-parse --abbrev-ref HEAD`"
@@ -85,9 +85,7 @@ echo `git status`
 echo "git bisect start with good commit $good_commit and bad commit $bad_commit"
 git bisect start $bad_commit $good_commit --
 
-echo "ls -lht"
-ls -lht
-
+found=false
 bisect_loop() {
    while [[ "$found" = "false" ]]; do
       echo "::group::Building `git rev-parse HEAD`"
