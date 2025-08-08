@@ -36,6 +36,7 @@
 #include "umd/device/types/xy_pair.h"
 
 using namespace tt;
+using namespace tt_metal::distributed;
 
 namespace unit_tests_common::dram::test_dram {
 struct DRAMConfig {
