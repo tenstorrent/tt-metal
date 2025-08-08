@@ -18,7 +18,7 @@ def _canonical_mask(
     target_type,
     check_other: bool = True,
 ) -> Optional[Tensor]:
-    if mask is not None:
+    if mask is not None:  #  Condition not satisfied
         _mask_is_float = torch.is_floating_point(mask)
         if not _mask_is_float:
             mask = torch.zeros_like(mask, dtype=target_type)

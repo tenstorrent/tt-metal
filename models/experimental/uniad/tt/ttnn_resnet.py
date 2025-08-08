@@ -17,6 +17,7 @@ from mmcv.utils import ext_loader
 ext_module = ext_loader.load_ext("_ext", ["modulated_deform_conv_forward"])
 
 
+# TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/25526>
 class ModulatedDeformConv2dFunction(Function):
     @staticmethod
     def forward(
