@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+
 import torch
 import pytest
 
@@ -7,13 +12,14 @@ from models.experimental.uniad.tt.ttnn_uniad import TtUniAD
 import numpy as np
 from models.experimental.uniad.reference.utils import LiDARInstance3DBoxes
 from models.experimental.uniad.tt.ttnn_utils import TtLiDARInstance3DBoxes
+import copy
 
 from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_model_parameters_perception_transformer
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_uniad_reference(device, reset_seeds):
-    weights_path = "models/experimental/uniad/model_state_dict.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     reference_model = UniAD(
         True,
         True,
@@ -164,12 +170,34 @@ def test_uniad_reference(device, reset_seeds):
     )
 
     weights = torch.load(weights_path, map_location=torch.device("cpu"))
-    if "criterion.code_weights" in weights:
-        del weights["criterion.code_weights"]
-    else:
-        print("Not Found")
 
-    reference_model.load_state_dict(weights)
+    state_dict = weights.get("state_dict", weights)
+
+    # Your model's expected shape
+    new_bev_h = 50
+    new_bev_w = 50
+    new_bev_size = new_bev_h * new_bev_w
+
+    # 1. Slice row_embed and col_embed from [200, 128] → [50, 128]
+    for key in [
+        "pts_bbox_head.positional_encoding.row_embed.weight",
+        "pts_bbox_head.positional_encoding.col_embed.weight",
+    ]:
+        if key in state_dict:
+            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_h, state_dict[key].shape[1])}")
+            state_dict[key] = state_dict[key][:new_bev_h, :]
+
+    # 2. Slice bev_embedding from [40000, 256] → [2500, 256]
+    for key in ["pts_bbox_head.bev_embedding.weight", "seg_head.bev_embedding.weight"]:
+        if key in state_dict:
+            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_size, state_dict[key].shape[1])}")
+            state_dict[key] = state_dict[key][:new_bev_size, :]
+
+    if "criterion.code_weights" in state_dict:
+        del state_dict["criterion.code_weights"]
+
+    # Load the modified checkpoint
+    reference_model.load_state_dict(state_dict)
     reference_model.eval()
 
     rescale = True
@@ -357,7 +385,6 @@ def test_uniad_reference(device, reset_seeds):
         ttnn.from_torch(sdc_planning_mask[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     ]
     ttnn_command = [ttnn.from_torch(command, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)]
-    import copy
 
     ttnn_img_metas = copy.deepcopy(img_metas)
     ttnn_img_metas[0][0]["box_type_3d"] = TtLiDARInstance3DBoxes
