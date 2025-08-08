@@ -22,7 +22,7 @@ class TtYOLOv7Conv2D:
         dtype=ttnn.bfloat8_b,
         num_cores_nhw=None,
         is_reshape=False,
-        enable_split_reader=False,
+        enable_split_reader=True,
         enable_act_double_buffer=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,

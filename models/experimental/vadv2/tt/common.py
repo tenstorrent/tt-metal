@@ -42,7 +42,7 @@ class TtConv2D:
             shard_layout=shard_layout,
             deallocate_activation=dealloc_act,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_split_reader=True,
             reshard_if_not_optimal=True,
             activation=activation,
         )
