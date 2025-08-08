@@ -49,7 +49,7 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
             ((sizeof(launch_msg_t) * launch_msg_buffer_num_entries) + sizeof(go_msg_t) + 15) & ~0xF;
         static_assert(launch_and_go_msg_size_bytes % 16 == 0, "Launch and go msg size must be multiple of 16 bytes");
         static_assert(
-            offsetof(mailboxes_t, go_message) ==
+            offsetof(mailboxes_t, go_messages) ==
             offsetof(mailboxes_t, launch) + sizeof(launch_msg_t) * launch_msg_buffer_num_entries);
 
         uint32_t go_msg_addr = launch_msg_addr + (sizeof(launch_msg_t) * launch_msg_buffer_num_entries);
