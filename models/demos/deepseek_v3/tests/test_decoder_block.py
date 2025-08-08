@@ -89,6 +89,8 @@ def test_forward_pass(
     logger.info("Setting up reference model")
     if module_path is None:
         reference_model = load_reference_model(hf_config, reference_layer_idx)
+        # This needs to be disabled as deterministic way to quantize weights is not supported
+        torch.use_deterministic_algorithms(False)
         state_dict = add_inv_scale_to_state_dict(
             reference_model.to(torch.bfloat16).state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],
@@ -143,7 +145,9 @@ def test_forward_pass(
     if weights_config_path.exists():
         with open(weights_config_path, "r") as f:
             weight_config = json.load(f)
+        logger.info(f"Loaded weight config from {weights_config_path}")
     else:
+        logger.info(f"Converting weights for {DecoderBlockClass.__name__}")
         weight_config = DecoderBlockClass.convert_weights(hf_config, state_dicts, tensors_cache_path, mesh_device)
         with open(weights_config_path, "w") as f:
             json.dump(weight_config, f)
