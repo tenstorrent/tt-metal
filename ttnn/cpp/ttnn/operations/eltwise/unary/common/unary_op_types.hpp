@@ -112,7 +112,11 @@ enum class UnaryOpType {
     WHERE_TSS,
     SOFTSIGN,
     CELU,
+<<<<<<< HEAD
     CLAMP_TSS,
+=======
+    RPOW,
+>>>>>>> e0efe4cbe9 (Migrate rpow as llk op)
 };
 
 enum class VecMode {

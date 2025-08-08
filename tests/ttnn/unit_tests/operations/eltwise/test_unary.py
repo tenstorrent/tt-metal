@@ -1530,6 +1530,7 @@ def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
     "input_shapes",
     (
         (torch.Size([100])),
+<<<<<<< HEAD
         (torch.Size([64, 32])),
         (torch.Size([3, 128, 32])),
         (torch.Size([1, 3, 320, 384])),
@@ -1607,6 +1608,8 @@ def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     "input_shapes",
     (
         (torch.Size([100])),
+=======
+>>>>>>> e0efe4cbe9 (Migrate rpow as llk op)
         (torch.Size([32, 32])),
         (torch.Size([3, 128, 32])),
         (torch.Size([1, 3, 320, 384])),
@@ -1618,6 +1621,7 @@ def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     [
         (torch.float32, ttnn.float32),
         (torch.bfloat16, ttnn.bfloat16),
+<<<<<<< HEAD
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
@@ -1698,3 +1702,17 @@ def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
         golden_function = ttnn.get_golden_function(ttnn.clamp)
         golden_tensor = golden_function(in_data1, min, max)
         assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+=======
+    ],
+)
+@pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+def test_unary_rpow_ttnn(input_shapes, torch_dtype, ttnn_dtype, exponent, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.rpow(input_tensor1, exponent)
+    golden_function = ttnn.get_golden_function(ttnn.rpow)
+    golden_tensor = golden_function(in_data1, exponent)
+
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.9999)
+>>>>>>> e0efe4cbe9 (Migrate rpow as llk op)

@@ -119,5 +119,9 @@ enum SfpuType {
     where,
     softsign,
     celu,
+<<<<<<< HEAD
     max_pool_with_indices,
+=======
+    rpow,
+>>>>>>> e0efe4cbe9 (Migrate rpow as llk op)
 };
