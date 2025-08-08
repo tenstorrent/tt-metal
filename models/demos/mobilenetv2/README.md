@@ -24,13 +24,13 @@ pytest --disable-warnings models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py
 #### Single Device (BS=10):
 - End-2-end perf is 2470 FPS
 ```bash
-pytest --disable-warnings models/demos/mobilenetv2/tests/perf/test_e2e_performant.py::test_mobilenetv2_e2e
+pytest --disable-warnings models/demos/mobilenetv2/tests/perf/test_perf_e2e_mobilenetv2.py:test_mobilenetv2_e2e
 ```
 
 #### Multi Device (DP=2, n300):
 - End-2-end perf is 4933 FPS
 ```
-pytest --disable-warnings models/demos/mobilenetv2/tests/perf/test_e2e_performant.py::test_mobilenetv2_e2e_dp
+pytest --disable-warnings models/demos/mobilenetv2/tests/perf/test_perf_e2e_mobilenetv2.py::test_mobilenetv2_e2e_dp
 ```
 
 ### Performant Demo with Trace+2CQ
