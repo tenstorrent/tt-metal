@@ -375,29 +375,50 @@ class CompleteBenchmarkRun(BaseModel):
     measurements: List[BenchmarkMeasurement] = Field(description="List of benchmark measurements.")
 
 
-class SweepsResultRecord(BaseModel):
+class DevicePerfMetric(BaseModel):
     """
-    One flattened record for a sweeps test vector execution result.
+    Metric name and its value.
+    """
 
-    This schema is designed to validate the JSON produced by the sweeps runner's
+    metric_name: str = Field(description="Metric name.")
+    metric_value: Optional[float] = Field(description="Metric value.")
+
+
+class OpTestResultRecord(BaseModel):
+    """
+    One flattened record for a op test (sweeps or unit test) testcase/vector execution result.
+
+    This schema is designed to validate the JSON produced by the sweeps and unit test runner's
     file/JSON export and is intentionally decoupled from CI JUnit-based Test.
     """
 
     # Identifiers and headers
-    sweep_name: str = Field(description="Name of the sweeps module (e.g., eltwise.unary.relu.relu).")
-    suite_name: Optional[str] = Field(None, description="Suite name within the sweeps module, if applicable.")
+    test_name: str = Field(description="Name of the test module (e.g., eltwise.unary.relu.relu).")
+    suite_name: Optional[str] = Field(None, description="Suite name within the test module, if applicable.")
     vector_id: Optional[str] = Field(None, description="Identifier of the specific test vector within the suite.")
     input_hash: Optional[str] = Field(None, description="Hash of the input vector for deduplication and traceability.")
 
     # Timing
-    start_time_ts: datetime = Field(description="Timestamp with timezone when the vector execution started.")
-    end_time_ts: datetime = Field(description="Timestamp with timezone when the vector execution ended.")
+    test_start_ts: datetime = Field(description="Timestamp with timezone when the vector execution started.")
+    test_end_ts: datetime = Field(description="Timestamp with timezone when the vector execution ended.")
 
     # Status & messaging
-    status: Optional[str] = Field(
+    class OpTestStatus(str, Enum):
+        """Allowed execution statuses for a op test vector result."""
+
+        pass_ = "pass"  # Test met expected criteria
+        fail_assert_exception = "fail_assert_exception"  # Assertion or unexpected exception
+        fail_l1_out_of_mem = "fail_l1_out_of_mem"  # L1 memory exhaustion
+        fail_watcher = "fail_watcher"  # Watcher exception
+        fail_crash_hang = "fail_crash_hang"  # Timeout or crash/hang
+        fail_unsupported_device_perf = "fail_unsupported_device_perf"  # Device perf requested but unsupported/missing
+        skipped = "skipped"  # Vector not run (invalid/filtered/timeout-skip)
+        error = "error"  # Other error category
+
+    status: Optional[OpTestStatus] = Field(
         None,
         description=(
-            "Execution status for this vector. Typical values include: pass, fail_assert_exception, "
+            "Execution status for this vector. One of: pass, fail_assert_exception, "
             "fail_l1_out_of_mem, fail_watcher, fail_crash_hang, fail_unsupported_device_perf, skipped, error."
         ),
     )
@@ -409,7 +430,7 @@ class SweepsResultRecord(BaseModel):
     e2e_perf: Optional[float] = Field(
         None, description="End-to-end performance metric for the test (units depend on the specific test)."
     )
-    device_perf: Optional[Dict[str, Any]] = Field(
+    device_perf: Optional[set[DevicePerfMetric]] = Field(
         None, description="Device-level performance measurements, when device profiling is enabled."
     )
 
@@ -425,15 +446,16 @@ class SweepsResultRecord(BaseModel):
     )
 
 
-class SweepsRunMetadata(BaseModel):
+class OpTestRun(BaseModel):
     """
-    High-level metadata describing a sweeps run session (spanning many vectors).
-    Mirrors the metadata constructed in the sweeps runner before exporting results.
+    High-level metadata describing a op test run session (spanning many testcases/vectors).
+    Mirrors the metadata constructed in the sweeps and unit test runner before exporting results.
     """
 
     initiated_by: str = Field(description="User or CI pipeline that initiated the run.")
     host: Optional[str] = Field(None, description="Hostname of the machine executing the run.")
     device: Optional[str] = Field(None, description="Target device/architecture identifier, if available.")
+    run_type: str = Field(description="Type of op test run (e.g., sweeps, unit_test).")
     run_contents: Optional[str] = Field(
         None, description="Human-readable description of run contents (e.g., module/suite selection)."
     )
@@ -446,16 +468,7 @@ class SweepsRunMetadata(BaseModel):
         description="Identifier for the GitHub Actions pipeline run (GITHUB_RUN_ID) or analogous CI pipeline id.",
     )
 
-    start_time_ts: datetime = Field(description="Timestamp with timezone when the sweeps run started.")
-    end_time_ts: Optional[datetime] = Field(None, description="Timestamp with timezone when the sweeps run ended.")
+    run_start_ts: datetime = Field(description="Timestamp with timezone when the sweeps run started.")
+    run_end_ts: Optional[datetime] = Field(None, description="Timestamp with timezone when the sweeps run ended.")
     status: Optional[str] = Field(None, description="Overall run status aggregated from testcases.")
-
-
-class SweepsRun(BaseModel):
-    """
-    Container for a sweeps run including run-level metadata and the list of
-    per-vector execution results.
-    """
-
-    metadata: SweepsRunMetadata = Field(description="Run-level metadata for the sweeps session.")
-    results: List[SweepsResultRecord] = Field(description="List of per-vector sweeps execution results.")
+    results: List[OpTestResultRecord] = Field(description="List of per-vector op test execution results.")

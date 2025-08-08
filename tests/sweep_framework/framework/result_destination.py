@@ -19,7 +19,7 @@ from framework.database import (
 from framework.serialize import serialize, serialize_for_postgres
 from framework.serialize import deserialize, deserialize_for_postgres
 from framework.sweeps_logger import sweeps_logger as logger
-from infra.data_collection.pydantic_models import SweepsResultRecord
+from infra.data_collection.pydantic_models import OpTestResultRecord, DevicePerfMetric
 
 
 class ResultDestination(ABC):
@@ -248,7 +248,7 @@ class FileResultDestination(ResultDestination):
         return None
 
     def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
-        """Export results to JSON file using Pydantic validation (SweepsResultRecord)."""
+        """Export results to JSON file using Pydantic validation (OpTestResultRecord)."""
         if not results:
             return "success"
 
@@ -258,6 +258,62 @@ class FileResultDestination(ResultDestination):
         curr_git_hash = run_context.get("git_hash", "unknown")
 
         validated_records = []
+
+        # Map internal TestStatus enum (or strings) to file schema enum values
+        def _map_status(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            try:
+                from framework.statuses import TestStatus
+
+                if isinstance(value, TestStatus):
+                    mapping = {
+                        TestStatus.PASS: "pass",
+                        TestStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
+                        TestStatus.FAIL_CRASH_HANG: "fail_crash_hang",
+                        TestStatus.NOT_RUN: "skipped",
+                        TestStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
+                        TestStatus.FAIL_WATCHER: "fail_watcher",
+                        TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
+                    }
+                    return mapping.get(value, "error")
+            except Exception:
+                pass
+            # If already a string, trust but verify
+            try:
+                s = str(value)
+                # Normalize common forms like "TestStatus.PASS"
+                if s.startswith("TestStatus."):
+                    suffix = s.split(".", 1)[1].lower()
+                    if suffix == "pass":
+                        return "pass"
+                    return suffix
+                return s
+            except Exception:
+                return "error"
+
+        def _coerce_device_perf(device_perf_raw: Any) -> Optional[set[DevicePerfMetric]]:
+            if device_perf_raw is None:
+                return None
+            # If list of dicts, merge or take first
+            if isinstance(device_perf_raw, list):
+                device_perf_raw = next((d for d in device_perf_raw if isinstance(d, dict)), None)
+                if device_perf_raw is None:
+                    return None
+            if not isinstance(device_perf_raw, dict):
+                return None
+            metrics: set[DevicePerfMetric] = set()
+
+            def _to_float(v):
+                try:
+                    return float(v)
+                except Exception:
+                    return None
+
+            for k, v in device_perf_raw.items():
+                metrics.add(DevicePerfMetric(metric_name=str(k), metric_value=_to_float(v)))
+            return metrics if metrics else None
+
         for i in range(len(results)):
             header = header_info[i]
             raw = results[i]
@@ -265,19 +321,19 @@ class FileResultDestination(ResultDestination):
             exception_text = raw.get("exception", None)
 
             # Build a validated record via Pydantic
-            record = SweepsResultRecord(
-                sweep_name=header.get("sweep_name"),
+            record = OpTestResultRecord(
+                test_name=header.get("sweep_name"),
                 suite_name=header.get("suite_name"),
                 vector_id=header.get("vector_id"),
                 input_hash=header.get("input_hash"),
-                start_time_ts=raw.get("start_time_ts"),
-                end_time_ts=raw.get("end_time_ts"),
-                status=str(raw.get("status")) if raw.get("status") is not None else None,
+                test_start_ts=raw.get("start_time_ts"),
+                test_end_ts=raw.get("end_time_ts"),
+                status=_map_status(raw.get("status")),
                 message=raw.get("message"),
                 exception=exception_text,
                 error_signature=generate_error_signature(exception_text),
                 e2e_perf=raw.get("e2e_perf"),
-                device_perf=raw.get("device_perf"),
+                device_perf=_coerce_device_perf(raw.get("device_perf")),
                 git_hash=curr_git_hash,
                 host=raw.get("host"),
                 user=raw.get("user"),
