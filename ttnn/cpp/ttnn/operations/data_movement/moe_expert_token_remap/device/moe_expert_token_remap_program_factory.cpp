@@ -155,8 +155,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         topk_is_dram,
         mapping_is_dram,
         metadata_is_dram,
-        local_reduce,
-        flat_mesh_idx};
+        local_reduce};
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
