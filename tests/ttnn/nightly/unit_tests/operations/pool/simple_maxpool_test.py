@@ -7,6 +7,7 @@ in_n = 1
 in_h = 2
 in_w = 2
 in_c = 32
+shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 tensor_shape = (in_n, in_c, in_h, in_w)  # NCHW format
 torch_input = torch.ones(tensor_shape, dtype=torch.bfloat16)
 
@@ -25,6 +26,7 @@ ttnn_output = ttnn.max_pool2d(
     stride=[1, 1],
     padding=[0, 0],  # ttnn is padding in the order (top, bottom, left, right)
     dilation=[1, 1],
+    applied_shard_scheme=shard_scheme,
 )
 
 print("Output without indices:")
@@ -40,6 +42,7 @@ ttnn_output, indices = ttnn.max_pool2d(
     stride=[1, 1],
     padding=[0, 0],  # ttnn is padding in the order (top, bottom, left, right)
     dilation=[1, 1],
+    applied_shard_scheme=shard_scheme,
     return_indices=True,
 )
 
