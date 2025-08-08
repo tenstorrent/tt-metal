@@ -227,10 +227,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
 
     bool pad_output_row = false;
     log_debug(tt::LogOp, "Input Shape {}, Padded Shape : {}", a.logical_shape(), a.padded_shape());
-    // TT_FATAL(
-    //     a.logical_shape()[3] % num_cores_channels == 0,
-    //     "Input tensor {} should be divisible by number of cores in channel dimension {}",
-    //     a.logical_shape()[3],num_cores_channels);
+
     uint32_t input_row_size_bytes = a.logical_shape()[-1] * a.element_size();
     input_row_size_bytes = input_row_size_bytes / num_cores_channels;
 
