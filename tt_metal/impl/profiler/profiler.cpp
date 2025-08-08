@@ -902,6 +902,51 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
     }
 }
 
+std::map<uint32_t, OperationDetails> postProcessOperationDataPoints(
+    const std::unordered_map<uint32_t, std::vector<OperationDataPoint>>& operation_data_points) {
+    ZoneScoped;
+
+    std::map<uint32_t, OperationDetails> op_details;
+
+    for (const auto& [op_id, op_data_points] : operation_data_points) {
+        uint64_t smallest_fw_timestamp = (1lu << 63);
+        uint64_t largest_fw_timestamp = 0;
+        uint64_t smallest_kernel_timestamp = (1lu << 63);
+        uint64_t largest_kernel_timestamp = 0;
+        for (const OperationDataPoint& op_data_point : op_data_points) {
+            if (op_data_point.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::FW)]) {
+                smallest_fw_timestamp = std::min(smallest_fw_timestamp, op_data_point.timestamp);
+                largest_fw_timestamp = std::max(largest_fw_timestamp, op_data_point.timestamp);
+            }
+            if (op_data_point.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::KERNEL)]) {
+                smallest_kernel_timestamp = std::min(smallest_kernel_timestamp, op_data_point.timestamp);
+                largest_kernel_timestamp = std::max(largest_kernel_timestamp, op_data_point.timestamp);
+            }
+        }
+        log_info(
+            tt::LogMetal,
+            "op_id: {}, smallest_fw_timestamp: {}, largest_fw_timestamp: {}, smallest_kernel_timestamp: {}, "
+            "largest_kernel_timestamp: {}",
+            op_id,
+            smallest_fw_timestamp,
+            largest_fw_timestamp,
+            smallest_kernel_timestamp,
+            largest_kernel_timestamp);
+
+        TT_ASSERT(largest_fw_timestamp >= smallest_fw_timestamp);
+        TT_ASSERT(largest_kernel_timestamp >= smallest_kernel_timestamp);
+
+        op_details[op_id] = {
+            .smallest_fw_timestamp = smallest_fw_timestamp,
+            .largest_fw_timestamp = largest_fw_timestamp,
+            .fw_duration = largest_fw_timestamp - smallest_fw_timestamp,
+            .kernel_duration = largest_kernel_timestamp - smallest_kernel_timestamp,
+        };
+    }
+
+    return op_details;
+}
+
 void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
@@ -1359,6 +1404,9 @@ void DeviceProfiler::readPacketData(
 
         // Reset the command subtype, in case it isn't set during the command.
         this->current_dispatch_meta_data.cmd_subtype = "";
+
+        // std::vector<tracy::TTDeviceEvent>& device_events_for_op = this->operation_device_events[run_host_id];
+        // device_events_for_op.push_back(*ret.first);
     }
 
     if (packet_type == kernel_profiler::TS_DATA) {
@@ -1431,6 +1479,42 @@ void DeviceProfiler::readPacketData(
 
     firstTimestamp(timestamp);
 
+    // if (zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::KERNEL)]) {
+    //     OperationTimestamps& op_timestamps = operation_timestamps[run_host_id];
+    //     if (timestamp < op_timestamps.kernel_start) {
+    //         op_timestamps.kernel_start = timestamp;
+    //     }
+    //     if (timestamp > op_timestamps.kernel_end) {
+    //         op_timestamps.kernel_end = timestamp;
+    //     }
+    // } else if (zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::FW)]) {
+    //     OperationTimestamps& op_timestamps = operation_timestamps[run_host_id];
+    //     if (timestamp < op_timestamps.fw_start) {
+    //         op_timestamps.fw_start = timestamp;
+    //     }
+    //     if (timestamp > op_timestamps.fw_end) {
+    //         op_timestamps.fw_end = timestamp;
+    //     }
+    // }
+
+    // std::vector<tracy::TTDeviceEvent>& device_events_for_op = this->operation_device_events[run_host_id];
+    // device_events_for_op.emplace_back(
+    //     run_host_id,
+    //     device_id,
+    //     core.x,
+    //     core.y,
+    //     risc_num,
+    //     timer_id,
+    //     timestamp,
+    //     zone_details.source_line_num,
+    //     zone_details.source_file,
+    //     zone_details.zone_name,
+    //     zone_phase,
+    //     getDeviceEventColor(risc_num, zone_details.zone_name_keyword_flags));
+    std::vector<OperationDataPoint>& data_points_for_op = this->operation_data_points[run_host_id];
+    data_points_for_op.emplace_back(
+        device_id, core.x, core.y, tracy::riscName[risc_num], timestamp, zone_details.zone_name_keyword_flags);
+
     device_data_points.emplace_back(
         device_id,
         core.x,
@@ -1494,7 +1578,12 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 DeviceProfiler::~DeviceProfiler() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    auto t = std::thread([this]() { dumpDeviceResults(); });
+    auto t = std::thread([this]() {
+        dumpDeviceResults();
+        const std::map<uint32_t, OperationDetails> post_processed_operation_data_points =
+            postProcessOperationDataPoints(operation_data_points);
+        dumpOperationsDetailsToCSV(post_processed_operation_data_points);
+    });
     pushTracyDeviceResults();
     for (auto& tracyCtx : device_tracy_contexts) {
         TracyTTDestroy(tracyCtx.second);
@@ -1632,6 +1721,41 @@ void DeviceProfiler::dumpDeviceResults() const {
 
     if (!noc_trace_data.empty()) {
         dumpJsonNocTraces(noc_trace_data, device_id, noc_trace_data_output_dir);
+    }
+#endif
+}
+
+void DeviceProfiler::dumpOperationsDetailsToCSV(const std::map<uint32_t, OperationDetails>& operation_details) const {
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+
+    // open CSV log file
+    std::ofstream log_file_ofs;
+
+    // append to existing CSV log file if it already exists
+    const std::filesystem::path log_path = output_dir / "ops_perf_results.csv";
+    if (std::filesystem::exists(log_path)) {
+        log_file_ofs.open(log_path, std::ios_base::app);
+    } else {
+        log_file_ofs.open(log_path);
+        log_file_ofs << "GLOBAL CALL COUNT,DEVICE FW START CYCLE,DEVICE FW END CYCLE,DEVICE FW DURATION [ns],DEVICE "
+                        "KERNEL DURATION [ns]"
+                     << std::endl;
+    }
+
+    if (!log_file_ofs) {
+        log_error(tt::LogMetal, "Could not open kernel profiler ops perf results file '{}'", log_path);
+        return;
+    }
+
+    for (const auto& [run_host_id, op_details] : operation_details) {
+        log_file_ofs << fmt::format(
+            "{},{},{},{},{}\n",
+            run_host_id,
+            op_details.smallest_fw_timestamp,
+            op_details.largest_fw_timestamp,
+            op_details.fw_duration,
+            op_details.kernel_duration);
     }
 #endif
 }

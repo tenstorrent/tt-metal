@@ -67,6 +67,8 @@ struct DisptachMetaData {
 
 struct ZoneDetails {
     enum class ZoneNameKeyword : uint16_t {
+        KERNEL,
+        FW,
         BRISC_FW,
         ERISC_FW,
         SYNC_ZONE,
@@ -80,6 +82,8 @@ struct ZoneDetails {
     };
 
     static inline std::unordered_map<std::string, ZoneNameKeyword> zone_name_keywords_map = {
+        {"-KERNEL", ZoneNameKeyword::KERNEL},
+        {"-FW", ZoneNameKeyword::FW},
         {"BRISC-FW", ZoneNameKeyword::BRISC_FW},
         {"ERISC-FW", ZoneNameKeyword::ERISC_FW},
         {"SYNC-ZONE", ZoneNameKeyword::SYNC_ZONE},
@@ -141,6 +145,36 @@ struct FabricEventDataPoints {
     std::optional<DeviceProfilerDataPoint> fabric_mux_datapoint;
 };
 
+// no trace id = -1
+
+// map of maps
+// inner map is op id -> vector of operation timestamps
+// outer map trace id -> map of op ids
+
+// separate non-trace op id maps
+
+// use DeviceEvent for the 4 markers
+// add another field that is a vector of DeviceEvents to store other post-proc info
+
+// vector of DeviceEvents
+// process this vector at the end of the run
+
+struct OperationDataPoint {
+    chip_id_t device_id;
+    int core_x;
+    int core_y;
+    std::string risc_name;
+    uint64_t timestamp;
+    std::array<bool, static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::COUNT)> zone_name_keyword_flags;
+};
+
+struct OperationDetails {
+    uint64_t smallest_fw_timestamp;
+    uint64_t largest_fw_timestamp;
+    uint64_t fw_duration;
+    uint64_t kernel_duration;
+};
+
 class DeviceProfiler {
 private:
     // Device architecture
@@ -194,6 +228,9 @@ private:
 
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
+
+    // Storage for device events for each operation
+    std::unordered_map<uint32_t, std::vector<OperationDataPoint>> operation_data_points;
 
     // Read all control buffers
     void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
@@ -254,6 +291,9 @@ private:
 
     // Dump device results to files
     void dumpDeviceResults() const;
+
+    // Dump operations details to CSV
+    void dumpOperationsDetailsToCSV(const std::map<uint32_t, OperationDetails>& operation_details) const;
 
 public:
     DeviceProfiler(const IDevice* device, bool new_logs);
