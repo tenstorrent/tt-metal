@@ -709,7 +709,6 @@ void py_module(py::module& module) {
             Returns:
                 Tensor: The combined tensor.
             )doc");
-    module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
 }  // namespace ttnn::distributed
