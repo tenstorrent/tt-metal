@@ -12,6 +12,7 @@ static constexpr uint8_t worker_handshake_noc = 0;
 }  // namespace tt::tt_fabric
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channel_worker_interface.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 

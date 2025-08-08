@@ -10,7 +10,7 @@
 #include "tt_metal/hw/inc/dataflow_api_addrgen.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channel_worker_interface.hpp"
 
 namespace tt::tt_fabric {
 
