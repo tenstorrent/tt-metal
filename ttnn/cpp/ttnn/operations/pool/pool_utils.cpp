@@ -138,7 +138,9 @@ FactoryParameters get_factory_parameters(
 
     auto dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
+    tt::DataFormat index_format = datatype_to_dataformat_converter(DataType::UINT16);
     uint32_t nbytes = datum_size(data_format);
+    uint32_t index_nbytes = datum_size(index_format);
 
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
     // for medium kernels with sizes 16 < kernel_size_hw < 32 we tilize an entire tile even if some rows are unused,
@@ -159,7 +161,9 @@ FactoryParameters get_factory_parameters(
         .multi_buffering_factor = multi_buffering_factor,
         .split_reader = split_reader,
         .nbytes = nbytes,
+        .index_nbytes = index_nbytes,
         .data_format = data_format,
+        .index_format = index_format,
         .in_ntiles_c = in_ntiles_c,
         .is_avg_pool = is_avg_pool,
         .max_rows_for_reduction = max_rows_for_reduction,
