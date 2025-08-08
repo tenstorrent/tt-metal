@@ -549,9 +549,9 @@ FORCE_INLINE uint32_t get_processing_mask(
     };
 
     // prepares the mask for mcast and returns if mcast is active or not
-    auto get_mask_for_mcast = [&](uint32_t& mask) -> bool {
+    auto check_mcast_and_prepare_mask = [&](uint32_t& mask) -> bool {
         bool mcast_active = false;
-        // need to consume locally as well
+        // need to consume locally since we have reached the destination chip
         mask |= get_mask_for_direction(static_cast<eth_chan_directions>(my_direction));
         for (uint8_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
             if (packet_header->mcast_params[i]) {
@@ -567,7 +567,7 @@ FORCE_INLINE uint32_t get_processing_mask(
 
     if (packet_header->is_mcast_active) {
         // we dont deactivate the mcast flag once set
-        get_mask_for_mcast(mask);
+        check_mcast_and_prepare_mask(mask);
     } else {
         auto dest_chip_id = packet_header->dst_start_chip_id;
         auto dest_mesh_id = packet_header->dst_start_mesh_id;
@@ -583,7 +583,7 @@ FORCE_INLINE uint32_t get_processing_mask(
             if (dest_chip_id == routing_table->my_device_id) {
                 // Packet has reached its intended chip. Check if this is an mcast or unicast txn.
                 // If mcast, this packet needs to be forwarded to remote and unicasted locally.
-                packet_header->is_mcast_active = get_mask_for_mcast(mask);
+                packet_header->is_mcast_active = check_mcast_and_prepare_mask(mask);
             } else {
                 // Unicast packet needs to be forwarded
                 auto downstream_channel = routing_table->intra_mesh_table.dest_entry[(uint8_t)dest_chip_id];
@@ -623,6 +623,7 @@ template <eth_chan_directions downstream_direction, bool has_both_axes>
 FORCE_INLINE void update_header_and_cached_routing_fields(
     tt_l1_ptr LowLatencyMeshPacketHeader* packet_start, LowLatencyMeshRoutingFields& cached_routing_fields) {
     // for low-latency mode, need to update only when packet traverse on both axes
+    // for other cases, the header gets updated via update_packet_header_for_next_hop()
     if constexpr (has_both_axes) {
         cached_routing_fields.value++;
         if constexpr (downstream_direction == eth_chan_directions::EAST) {
@@ -638,6 +639,7 @@ template <eth_chan_directions downstream_direction, bool has_both_axes>
 FORCE_INLINE void update_header_and_cached_routing_fields(
     tt_l1_ptr MeshPacketHeader* packet_start, LowLatencyMeshRoutingFields& cached_routing_fields) {
     // need to update only when mcast is active
+    // special handling needed when packet is forwarded to E/W from N/S
     if (packet_start->is_mcast_active && packet_start->mcast_params[downstream_direction]) {
         if constexpr (has_both_axes) {
             if constexpr (
@@ -708,6 +710,8 @@ FORCE_INLINE void forward_to_downstream_edm(
             packet_start, cached_routing_fields);
 
         size_t idx = get_downstream_edm_interface_index<rx_channel_id, downstream_direction>();
+        // need to determine if we need to increment pointers with an extra inline write
+        // when increment pointers is false, we update via inline write
 #if defined(DYNAMIC_ROUTING_ENABLED)
         constexpr bool increment_pointers = !has_both_axes || (downstream_direction == eth_chan_directions::NORTH ||
                                                                downstream_direction == eth_chan_directions::SOUTH);

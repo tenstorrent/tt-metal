@@ -300,6 +300,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     static const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>> ring_buffer_slot_options_dateline = {
         {{{8, 16}, {8, 8}}, {{16, 16}, {8, 16}, {8, 8}}}, {{{8, 16}, {8, 8}}, {{16, 16}, {8, 16}, {8, 8}}}};
 
+    // TODO: need to investigate why {{8, 8}, {4, 8}} is not working
     static const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>> torus_buffer_slot_options_dateline = {
         {{{4, 8}, {8, 8}}, {{4, 8}, {8, 8}}}, {{{4, 8}, {8, 8}}, {{4, 8}, {8, 8}}}};
 
