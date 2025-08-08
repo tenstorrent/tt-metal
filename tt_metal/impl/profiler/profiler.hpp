@@ -118,18 +118,18 @@ struct SyncInfo {
 };
 
 struct DeviceProfilerDataPoint {
-    chip_id_t device_id;
-    int core_x;
-    int core_y;
+    chip_id_t device_id{};
+    int core_x{};
+    int core_y{};
     std::string risc_name;
-    uint32_t timer_id;
-    uint64_t timestamp;
-    uint64_t data;
-    uint32_t run_host_id;
+    uint32_t timer_id{};
+    uint64_t timestamp{};
+    uint64_t data{};
+    uint32_t run_host_id{};
     std::string zone_name;
     std::string op_name;
     kernel_profiler::PacketTypes packet_type;
-    uint64_t source_line;
+    uint64_t source_line{};
     std::string source_file;
     nlohmann::json meta_data;
 };

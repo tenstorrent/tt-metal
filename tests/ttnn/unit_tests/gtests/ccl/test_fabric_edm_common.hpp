@@ -2765,7 +2765,7 @@ void read_fabric_telemetry_data(MeshDeviceView* mesh_device) {
                 telemetry_raw_data,
                 CoreType::ETH);
 
-            LowResolutionBandwidthTelemetry telemetry_data;
+            LowResolutionBandwidthTelemetry telemetry_data{};
             std::memcpy(&telemetry_data, telemetry_raw_data.data(), telemetry_struct_size_bytes);
 
             // Calculate bandwidth
