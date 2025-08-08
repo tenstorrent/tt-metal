@@ -43,7 +43,9 @@ struct FactoryParameters {
     uint32_t multi_buffering_factor;
     bool split_reader;
     uint32_t nbytes;
+    uint32_t index_nbytes;
     tt::DataFormat data_format;
+    tt::DataFormat index_format;
     uint32_t in_ntiles_c;
     bool is_avg_pool;
     uint32_t max_rows_for_reduction;

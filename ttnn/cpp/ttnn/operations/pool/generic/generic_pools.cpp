@@ -176,7 +176,7 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
     };
 
     // create the index tensor if needed
-    Tensor indices_tensor_sharded;
+    Tensor index_tensor_sharded;
     if (return_indices) {
         Shape spatial_shape({1, input_h, input_w, 1});
 
@@ -188,21 +188,21 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
             spatial_shape,  // No padding needed for spatial-only shape
             DataType::UINT32);
         Shape repeat_shape({batch_size, 1, 1, channels});
-        Tensor indices_full = ttnn::repeat(indices_hw.to_device(input_tensor.device()), repeat_shape);
+        Tensor index_full = ttnn::repeat(indices_hw.to_device(input_tensor.device()), repeat_shape);
 
         // Convert to TILE layout for typecast operation
-        Tensor indices_full_tiled = ttnn::to_layout(indices_full, ttnn::TILE_LAYOUT);
+        Tensor index_full_tiled = ttnn::to_layout(index_full, ttnn::TILE_LAYOUT);
 
         // Convert to UINT16
-        Tensor indices_full_uint16_tiled = ttnn::typecast(indices_full_tiled, DataType::UINT16);
+        Tensor index_full_uint16_tiled = ttnn::typecast(index_full_tiled, DataType::UINT16);
 
         // Convert back to ROW_MAJOR layout
-        Tensor indices_full_uint16 = ttnn::to_layout(indices_full_uint16_tiled, ttnn::ROW_MAJOR_LAYOUT);
+        Tensor index_full_uint16 = ttnn::to_layout(index_full_uint16_tiled, ttnn::ROW_MAJOR_LAYOUT);
 
         TT_FATAL(
             input_tensor_sharded.memory_config().is_sharded(), "Input tensor must be sharded to shard indices tensor.");
-        indices_tensor_sharded =
-            ttnn::to_memory_config(indices_full_uint16, input_tensor_sharded.memory_config(), std::nullopt);
+        index_tensor_sharded =
+            ttnn::to_memory_config(index_full_uint16, input_tensor_sharded.memory_config(), std::nullopt);
     }
 
     // call the halo uop
@@ -217,6 +217,20 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         is_out_tiled,
         in_place_halo);
 
+    Tensor haloed_index;
+    if (return_indices) {
+        haloed_index = ttnn::halo(
+            queue_id,
+            index_tensor_sharded,
+            sliding_window_config,
+            0,  // pad_val - should never be used as padding should never be the max index
+            false,
+            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+            index_tensor_sharded.memory_config(),
+            is_out_tiled,
+            in_place_halo);
+    }
+
     const uint32_t pre_allocate_size =
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
@@ -224,6 +238,7 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
     std::vector<Tensor> output_tensors = ttnn::prim::pool2d(
         queue_id,
         haloed_tensor,
+        return_indices ? std::make_optional(haloed_index) : std::nullopt,
         sliding_window_config,
         pool_type,
         DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
