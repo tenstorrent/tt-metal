@@ -29,7 +29,6 @@
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 
 #include "umd/device/types/arch.h"
@@ -2601,6 +2600,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     }
 
     std::vector<IDevice*> worker_devices;
+    worker_devices.reserve(num_devices_with_workers);
     for (size_t i = 0; i < num_devices_with_workers; i++) {
         worker_devices.push_back(devices[i]);
     }
