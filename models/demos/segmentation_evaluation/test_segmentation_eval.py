@@ -2,21 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import kagglehub
-import pytest
-import os
-import torch
-import ttnn
 import argparse
-from tqdm import tqdm
-from skimage.io import imsave
-import numpy as np
-import matplotlib.pyplot as plt
-from skimage import io
-import cv2
-from loguru import logger
-from models.utility_functions import disable_persistent_kernel_cache
 import math
+import os
+
+import cv2
+import kagglehub
+import matplotlib.pyplot as plt
+import numpy as np
+import pytest
+import torch
+from loguru import logger
+from skimage import io
+from skimage.io import imsave
+from tqdm import tqdm
+
+import ttnn
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 def iou(y_true, y_pred):
@@ -71,10 +73,11 @@ def evaluation(
     model_location_generator=None,
 ):
     if model_name == "vanilla_unet":
-        from models.demos.vanilla_unet.demo import demo_utils
         from collections import defaultdict
 
-        root_dir = "models/experimental/segmentation_evaluation/imageset"
+        from models.demos.vanilla_unet.demo import demo_utils
+
+        root_dir = "models/demos/segmentation_evaluation/imageset"
         patient_folders = sorted(os.listdir(root_dir))
         if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
             weights_path = "models/demos/vanilla_unet/unet.pt"
@@ -89,8 +92,8 @@ def evaluation(
         for patient_id in patient_folders:
             if sample_count >= max_samples:
                 break
-            patient_path = os.path.join("models/experimental/segmentation_evaluation/imageset", patient_id)
-            patient_output_path = os.path.join("models/experimental/segmentation_evaluation/pred_image_set", patient_id)
+            patient_path = os.path.join("models/demos/segmentation_evaluation/imageset", patient_id)
+            patient_output_path = os.path.join("models/demos/segmentation_evaluation/pred_image_set", patient_id)
             args = argparse.Namespace(
                 device="cpu",
                 batch_size=batch_size,
@@ -279,13 +282,14 @@ def evaluation(
         logger.info(f"Results saved to {output_folder}")
 
     if model_name == "yolov9c":
-        from models.experimental.yolo_eval.utils import LoadImages
-        from models.experimental.yolo_eval.utils import preprocess
-        from models.demos.yolov9c.demo.demo_utils import postprocess, get_consistent_color
-        from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
-        import fiftyone
         import json
         from datetime import datetime
+
+        import fiftyone
+
+        from models.demos.yolo_eval.utils import LoadImages, preprocess
+        from models.demos.yolov9c.demo.demo_utils import get_consistent_color, postprocess
+        from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 
         dataset_name = "coco-2017"
         if model_type == "torch_model":
@@ -400,10 +404,9 @@ def evaluation(
                     ttnn.bfloat8_b,
                     model_task="segment",
                     resolution=(640, 640),
-                    model_location_generator=None,
+                    model_location_generator=model_location_generator,
                     torch_input_tensor=im,
                 )
-                performant_runner._capture_yolov9_trace_2cqs()
 
                 preds = performant_runner.run(torch_input_tensor=im)
                 preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
@@ -485,13 +488,14 @@ def evaluation(
         logger.info(f"F1 Score: {np.mean(f1_list):.2f}%")
 
     if model_name == "segformer":
+        from torch.utils.data import DataLoader
         from transformers import AutoImageProcessor
+
         from models.demos.segformer.demo.demo_for_semantic_segmentation import (
             SemanticSegmentationDataset,
-            shift_gt_indices,
             custom_collate_fn,
+            shift_gt_indices,
         )
-        from torch.utils.data import DataLoader
 
         image_processor = AutoImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
 
@@ -713,8 +717,8 @@ def test_vanilla_unet(device, model_type, res, model_location_generator, reset_s
         model_location_generator=model_location_generator,
     )
 
-    if not os.path.exists("models/experimental/segmentation_evaluation/imageset"):
-        os.system("python models/experimental/segmentation_evaluation/dataset_download.py vanilla_unet")
+    if not os.path.exists("models/demos/segmentation_evaluation/imageset"):
+        os.system("python models/demos/segmentation_evaluation/dataset_download.py vanilla_unet")
 
     model_name = "vanilla_unet"
     input_dtype = ttnn.bfloat16
@@ -787,11 +791,11 @@ def test_yolov9c(
 
 
 def run_segformer_eval(device, model_location_generator, model_type, res, device_batch_size):
+    from models.demos.segformer.common import load_config, load_torch_model
     from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
         SegformerForSemanticSegmentationReference,
     )
     from models.demos.segformer.runner.performant_runner import SegformerTrace2CQ
-    from models.demos.segformer.common import load_config, load_torch_model
 
     config = load_config("configs/segformer_semantic_config.json")
     reference_model = SegformerForSemanticSegmentationReference(config)
@@ -808,7 +812,7 @@ def run_segformer_eval(device, model_location_generator, model_type, res, device
 
     if not os.path.exists("models/demos/segformer/demo/validation_data_ade20k"):
         logger.info("downloading data")
-        os.system("python models/experimental/segmentation_evaluation/dataset_download.py segformer")
+        os.system("python models/demos/segmentation_evaluation/dataset_download.py segformer")
 
     model_name = "segformer"
     input_dtype = ttnn.bfloat16
