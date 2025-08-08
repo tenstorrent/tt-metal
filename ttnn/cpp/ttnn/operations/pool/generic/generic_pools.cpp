@@ -119,7 +119,7 @@ static Tensor pool2d_invoke(
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
 
         uint32_t input_channels_alignment = is_in_tiled ? tt::constants::TILE_WIDTH : 8U;
-        if (!is_in_tiled && input_tensor.memory_config().is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR) {
+        if (input_tensor.memory_config().is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR) {
             const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
             input_channels_alignment = (shard_width % tt::constants::TILE_WIDTH == 0) ? tt::constants::TILE_WIDTH
                                        : (shard_width % 16 == 0)                      ? 16U
