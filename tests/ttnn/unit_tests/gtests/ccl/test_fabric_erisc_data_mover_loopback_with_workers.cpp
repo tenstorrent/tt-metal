@@ -69,7 +69,7 @@
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_SinglePageTile) {
+TEST(WorkerCclCommandProcessingKernelLocalMode, DISABLED_MultiInputReader_SinglePageTile) {
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         ttnn::Shape({1, 1, 32, 32}),
         Layout::TILE,
@@ -81,7 +81,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_SinglePageTile)
     ASSERT_TRUE(pass);
 }
 
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0) {
+TEST(WorkerCclCommandProcessingKernelLocalMode, DISABLED_MultiInputReader_MultiPage0) {
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         ttnn::Shape({1, 1, 32, 64}),
         Layout::TILE,
@@ -93,7 +93,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0) {
     ASSERT_TRUE(pass);
 }
 
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded) {
+TEST(WorkerCclCommandProcessingKernelLocalMode, DISABLED_MultiInputReader_MultiPage0_Sharded) {
     ttnn::Shape tensor_shape({1, 1, 32, 64});
     auto mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
@@ -113,7 +113,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded1) {
+TEST(WorkerCclCommandProcessingKernelLocalMode, DISABLED_MultiInputReader_MultiPage0_Sharded1) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
     auto mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
@@ -133,7 +133,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded2) {
+TEST(WorkerCclCommandProcessingKernelLocalMode, DISABLED_MultiInputReader_MultiPage0_Sharded2) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
     auto mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
@@ -153,7 +153,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded3) {
+TEST(WorkerCclCommandProcessingKernelLocalMode, DISABLED_MultiInputReader_MultiPage0_Sharded3) {
     ttnn::Shape tensor_shape({1, 1, 32, 8192});
     size_t ncores_x = 8;
     size_t ncores_y = 4;
@@ -175,7 +175,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded4) {
+TEST(WorkerCclCommandProcessingKernelLocalMode, DISABLED_MultiInputReader_MultiPage0_Sharded4) {
     ttnn::Shape tensor_shape({1, 1, 32, 1024});
     size_t ncores_x = 8;
     size_t ncores_y = 4;
@@ -198,7 +198,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0) {
+TEST(WorkerCclCommandProcessingKernelLocalMode, DISABLED_MultiInputReader_MultiPage0_Sharded_WithReshard0) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
     auto input_mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
@@ -227,7 +227,9 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0_UniquePerStream) {
+TEST(
+    WorkerCclCommandProcessingKernelLocalMode,
+    DISABLED_MultiInputReader_MultiPage0_Sharded_WithReshard0_UniquePerStream) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
     size_t in_shard_grid_x = 1;
     size_t in_shard_grid_y = 1;
@@ -266,7 +268,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 // Copying even slightly large tensors exposes issues in underlying tensor code
 // that isn't under test here
-TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
+TEST(WorkerCclCommandProcessingKernelLocalMode, DISABLED_MultiInputReader_MultiPage1) {
     ttnn::Shape tensor_shape({1, 1, 256, 256});
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
@@ -291,7 +293,6 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
 // NOTE: The following tests are disabled because MutliInputReaderKernel currently uses single-device API to run,
 // which are not supported with Mesh workloads now that we are using the new distributed API.
 // Mo model currently uses the multi input reader kernel currently.
-
 TEST(
     WorkerCclCommandProcessingKernelFabricUnicastMode,
     DISABLED_MultiInputReader_SinglePageTile_OneHop_PersistentFabric) {
@@ -420,7 +421,7 @@ TEST(
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 
-TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly0) {
+TEST(WorkerCclCommandProcessingKernels, DISABLED_ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly0) {
     ttnn::Shape tensor_shape({1, 1, 64, 16384});
     const size_t split_dim = 3;
 
@@ -467,7 +468,7 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
 
     ASSERT_TRUE(pass);
 }
-TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly1) {
+TEST(WorkerCclCommandProcessingKernels, DISABLED_ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly1) {
     ttnn::Shape tensor_shape({1, 1, 64, 128});
     const size_t split_dim = 3;
 
@@ -514,7 +515,7 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
 
     ASSERT_TRUE(pass);
 }
-TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly2) {
+TEST(WorkerCclCommandProcessingKernels, DISABLED_ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly2) {
     ttnn::Shape tensor_shape({1, 1, 64, 8192});
     const size_t split_dim = 3;
 

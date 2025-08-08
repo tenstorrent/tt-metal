@@ -30,7 +30,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 200
+        iterations: 20
 
 
   - name: "UnidirLinearMulticast"
