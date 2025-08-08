@@ -847,6 +847,7 @@ void MetalContext::initialize_firmware(
         cluster_->l1_barrier(device_id);
     };
 
+    // BH-104
     // Use a different mailbox address each time we initialize firmware to avoid double
     // PCIe write bug. Also in active_erisc firmwarwe we will clear the mailbox before we return,
     // so if any double write was sent during runtime it will be cleared

@@ -109,7 +109,7 @@ inline void initialize_local_memory() {
 }
 
 inline void overwrite_mailbox_to_done() {
-    // https://github.com/tenstorrent/tt-metal/issues/25427
+    // BH-104 / https://github.com/tenstorrent/tt-metal/issues/25427
     for (uint32_t i = 0; i < eth_mailbox_e::NUM_ETH_MAILBOX; i++) {
         invalidate_l1_cache();
         all_eth_mailbox_t* mailbox = reinterpret_cast<all_eth_mailbox_t*>(MEM_SYSENG_ETH_MAILBOX_ADDR);
@@ -148,7 +148,7 @@ void __attribute__((noinline)) Application() {
     // } while (gEnableFwFlag[0] != 1);
     // This flag must be set to 1 before launching this firmware
     gEnableFwFlag[0] = 1;
-    // Workaround: ignore a duplicate host disable (0) from a previous run until
+    // BH-104 Workaround: ignore a duplicate host disable (0) from a previous run until
     // the first GO of this instance, but only for a short grace window so that
     // a legitimate immediate close (without GO) can still succeed.
     bool ignore_disable_until_first_go = true;

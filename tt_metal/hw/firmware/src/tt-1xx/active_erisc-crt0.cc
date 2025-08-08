@@ -47,6 +47,7 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
     wzerorange(__ldm_bss_start, __ldm_bss_end);
     erisc_exit = return_to_base_fw;
 
+    // BH-104
     // as of tt-firmware 18.6.0 there is no one else using the mailbox
     // clear the mailbox to clear any potential duplicate PCIe writes before we
     // return to base firmware
