@@ -5,8 +5,10 @@
 import pytest
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -334,69 +336,325 @@ def test_grid_sample_parametrized_dimensions(device, input_dims, grid_dims):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
-    "input_size, grid_size",
+    "input_shape, grid_shape",
     [
-        # Power of 2 dimensions
-        (8, 4),  # 8x8 input, 4x4 grid
-        (16, 8),  # 16x16 input, 8x8 grid
-        (32, 16),  # 32x32 input, 16x16 grid
-        # Non-power of 2 dimensions
-        (12, 6),  # 12x12 input, 6x6 grid
-        (20, 10),  # 20x20 input, 10x10 grid
-        (24, 12),  # 24x24 input, 12x12 grid
-        # Upsampling cases (grid larger than input)
-        (8, 16),  # 8x8 input, 16x16 grid
-        (16, 32),  # 16x16 input, 32x32 grid
-        # Single dimension cases
-        (16, 1),  # 16x16 input, 1x1 grid
-        (32, 1),  # 32x32 input, 1x1 grid
+        ((1, 32, 32, 224), (1, 1, 1, 2)),
+        # Small test cases for correctness verification
+        # ((1, 4, 4, 8), (1, 2, 2, 2)),      # Small input, small grid
+        # ((1, 8, 8, 16), (1, 4, 4, 2)),     # Medium input, small grid
+        # ((1, 16, 16, 32), (1, 8, 8, 2)),   # Medium input, medium grid
+        # # Different aspect ratios
+        # ((1, 8, 16, 12), (1, 4, 8, 2)),    # Rectangular input, rectangular grid
+        # # Single pixel grids
+        # ((1, 16, 16, 32), (1, 1, 1, 2)),   # Single output pixel
+        # ((1, 32, 32, 64), (1, 1, 5, 2)),   # Single row output
+        # ((1, 32, 32, 64), (1, 5, 1, 2)),   # Single column output
     ],
 )
-def test_grid_sample_square_dimensions(device, input_size, grid_size):
-    """Test TTNN grid_sample with square input and grid dimensions"""
+def test_grid_sample_correctness_with_pcc(device, input_shape, grid_shape):
+    """Test TTNN grid_sample correctness against PyTorch with PCC check"""
 
-    # Fixed batch size and channels for simplicity
-    batch_size = 1
-    channels = 64
+    torch.manual_seed(0)  # For reproducible results
 
-    # Create square tensors
-    input_dims = (batch_size, input_size, input_size, channels)
-    grid_dims = (batch_size, grid_size, grid_size, 2)
+    batch_size, input_h, input_w, channels = input_shape
+    _, grid_h, grid_w, _ = grid_shape
 
     # Create input tensor (NHWC format for TTNN)
-    torch_input = torch.randn(input_dims, dtype=torch.bfloat16)
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
-    # Create identity-like uniform grid
-    torch_grid = torch.zeros(grid_dims, dtype=torch.bfloat16)
+    # Create varied grid coordinates for more comprehensive testing
+    torch_grid = torch.zeros(grid_shape, dtype=torch.bfloat16)
 
-    # Generate uniform grid coordinates from -1 to +1
-    for h in range(grid_size):
-        for w in range(grid_size):
-            if grid_size > 1:
-                x_coord = 2.0 * w / (grid_size - 1) - 1.0
-                y_coord = 2.0 * h / (grid_size - 1) - 1.0
-            else:
-                x_coord = 0.0
-                y_coord = 0.0
+    # torch_grid = torch.randn(grid_shape, dtype=torch.bfloat16)
 
+    torch_grid[:, :, 0, 0] = 0.65
+    torch_grid[:, :, 0, 1] = 0.31
+
+    # torch_grid[:, :, 1, 0] = 0.5
+    # torch_grid[:, :, 1, 1] = 0.5
+
+    # # Generate varied grid coordinates to test interpolation
+    # for h in range(grid_h):
+    #     for w in range(grid_w):
+    #         # Create some variation in coordinates to test interpolation properly
+    #         if grid_w > 1:
+    #             x_coord = 2.0 * w / (grid_w - 1) - 1.0
+    #             # Add some variation to test interpolation between pixels
+    #             x_coord += 0.1 * torch.randn(1).item()
+    #             x_coord = max(-1.0, min(1.0, x_coord))  # Clamp to valid range
+    #         else:
+    #             x_coord = 0.0
+
+    #         if grid_h > 1:
+    #             y_coord = 2.0 * h / (grid_h - 1) - 1.0
+    #             # Add some variation to test interpolation between pixels
+    #             y_coord += 0.1 * torch.randn(1).item()
+    #             y_coord = max(-1.0, min(1.0, y_coord))  # Clamp to valid range
+    #         else:
+    #             y_coord = 0.0
+
+    #         torch_grid[:, h, w, 0] = x_coord  # x coordinate
+    #         torch_grid[:, h, w, 1] = y_coord  # y coordinate
+
+    # Convert to NCHW for PyTorch grid_sample
+    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
+    torch_grid_float = torch_grid.to(torch.float32)
+
+    # Run PyTorch grid_sample (golden reference)
+    torch_output_nchw = F.grid_sample(
+        torch_input_nchw, torch_grid_float, mode="bilinear", padding_mode="zeros", align_corners=False
+    )
+
+    # Convert PyTorch output back to NHWC
+    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+
+    # Run TTNN grid_sample
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    print(torch.min(ttnn_output_torch), torch.max(ttnn_output_torch))
+
+    # Check PCC (Pearson Correlation Coefficient)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
+    logger.info(pcc_message)
+
+    # Additional checks
+    assert (
+        ttnn_output_torch.shape == torch_output_nhwc.shape
+    ), f"Shape mismatch: {ttnn_output_torch.shape} vs {torch_output_nhwc.shape}"
+    assert ttnn_output_torch.dtype == torch.bfloat16
+
+    print(f"✓ PCC test passed for {input_shape} -> {grid_shape}: {pcc_message}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize(
+    "coordinates",
+    [
+        # Test specific coordinate patterns
+        [(-1.0, -1.0), (1.0, 1.0)],  # Corner samples
+        [(-0.5, -0.5), (0.5, 0.5)],  # Center region samples
+        [(0.0, 0.0), (0.0, 0.0)],  # Exact center samples
+        [(-0.25, 0.75), (0.25, -0.75)],  # Mixed quadrant samples
+    ],
+)
+def test_grid_sample_specific_coordinates(device, coordinates):
+    """Test grid_sample with specific coordinate patterns"""
+
+    torch.manual_seed(42)
+
+    # Simple 4x4 input with known pattern
+    input_shape = (1, 4, 4, 8)
+    grid_shape = (1, 2, 1, 2)  # 2x1 grid for testing specific coordinates
+
+    # Create input with recognizable pattern
+    torch_input_nhwc = torch.arange(1, 129, dtype=torch.bfloat16).reshape(input_shape)
+
+    # Create grid with specific coordinates
+    torch_grid = torch.zeros(grid_shape, dtype=torch.bfloat16)
+    torch_grid[0, 0, 0, 0] = coordinates[0][0]  # x1
+    torch_grid[0, 0, 0, 1] = coordinates[0][1]  # y1
+    torch_grid[0, 1, 0, 0] = coordinates[1][0]  # x2
+    torch_grid[0, 1, 0, 1] = coordinates[1][1]  # y2
+
+    # Convert to NCHW for PyTorch
+    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
+    torch_grid_float = torch_grid.to(torch.float32)
+
+    # PyTorch reference
+    torch_output_nchw = F.grid_sample(
+        torch_input_nchw, torch_grid_float, mode="bilinear", padding_mode="zeros", align_corners=False
+    )
+    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+
+    # TTNN implementation
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    # PCC check with high threshold for simple patterns
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.98)
+    logger.info(pcc_message)
+
+    print(f"✓ Coordinates {coordinates}: {pcc_message}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 16, 16, 32),
+        (1, 32, 32, 64),
+        (2, 16, 16, 32),  # Batch size > 1
+    ],
+)
+def test_grid_sample_identity_transform(device, input_shape):
+    """Test grid_sample with identity transformation (should return original image)"""
+
+    torch.manual_seed(123)
+
+    batch_size, height, width, channels = input_shape
+    grid_shape = (batch_size, height, width, 2)
+
+    # Create random input
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # Create identity grid (maps each output pixel to corresponding input pixel)
+    torch_grid = torch.zeros(grid_shape, dtype=torch.bfloat16)
+    for h in range(height):
+        for w in range(width):
+            # Normalize to [-1, 1] range
+            x_coord = 2.0 * w / (width - 1) - 1.0 if width > 1 else 0.0
+            y_coord = 2.0 * h / (height - 1) - 1.0 if height > 1 else 0.0
             torch_grid[:, h, w, 0] = x_coord
             torch_grid[:, h, w, 1] = y_coord
 
-    # Convert to TTNN tensors
-    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    # Convert to NCHW for PyTorch
+    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
+    torch_grid_float = torch_grid.to(torch.float32)
+
+    # PyTorch reference (should be very close to original input)
+    torch_output_nchw = F.grid_sample(
+        torch_input_nchw, torch_grid_float, mode="bilinear", padding_mode="zeros", align_corners=False
+    )
+    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+
+    # TTNN implementation
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    # Call TTNN grid_sample
     ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    # Convert back and verify
-    torch_output = ttnn.to_torch(ttnn_output)
-    expected_shape = (batch_size, grid_size, grid_size, channels)
+    # High PCC threshold since this should be very close to identity
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
+    logger.info(pcc_message)
 
-    assert torch_output.shape == expected_shape
-    assert torch_output.dtype == torch.bfloat16
+    # Also check that PyTorch identity is close to original (sanity check)
+    pcc_identity, identity_message = assert_with_pcc(torch_input_nhwc, torch_output_nhwc, pcc=0.95)
+    logger.info(f"Identity check: {identity_message}")
 
-    print(f"✓ {input_size}x{input_size} input -> {grid_size}x{grid_size} grid: {torch_output.shape}")
+    print(f"✓ Identity transform test for {input_shape}: {pcc_message}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+def test_grid_sample_boundary_conditions(device):
+    """Test grid_sample with boundary coordinates and padding behavior"""
+
+    torch.manual_seed(456)
+
+    input_shape = (1, 8, 8, 16)
+    grid_shape = (1, 3, 3, 2)
+
+    # Create input with distinct values
+    torch_input_nhwc = torch.arange(1, 1025, dtype=torch.bfloat16).reshape(input_shape)
+
+    # Create grid with boundary and out-of-bounds coordinates
+    torch_grid = torch.tensor(
+        [
+            [
+                [[-1.0, -1.0], [0.0, -1.0], [1.0, -1.0]],  # Top row (y = -1.0, out of bounds)
+                [[-1.0, 0.0], [0.0, 0.0], [1.0, 0.0]],  # Middle row (y = 0.0, center)
+                [[-1.0, 1.0], [0.0, 1.0], [1.0, 1.0]],  # Bottom row (y = 1.0, out of bounds)
+            ]
+        ],
+        dtype=torch.bfloat16,
+    )
+
+    # Convert to NCHW for PyTorch
+    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
+    torch_grid_float = torch_grid.to(torch.float32)
+
+    # PyTorch reference with zeros padding
+    torch_output_nchw = F.grid_sample(
+        torch_input_nchw, torch_grid_float, mode="bilinear", padding_mode="zeros", align_corners=False
+    )
+    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+
+    # TTNN implementation
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    # PCC check for boundary behavior
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.95)
+    logger.info(pcc_message)
+
+    # Additional checks for boundary behavior
+    assert ttnn_output_torch.shape == torch_output_nhwc.shape
+
+    print(f"✓ Boundary conditions test: {pcc_message}")
+    print(f"  Grid coordinates tested: {torch_grid.flatten()}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize(
+    "scale_factor",
+    [0.5, 2.0, 1.5],  # Downsampling, upsampling, and mixed scaling
+)
+def test_grid_sample_scaling_patterns(device, scale_factor):
+    """Test grid_sample with different scaling patterns"""
+
+    torch.manual_seed(789)
+
+    input_shape = (1, 16, 16, 24)
+
+    # Calculate output size based on scale factor
+    output_h = int(input_shape[1] * scale_factor)
+    output_w = int(input_shape[2] * scale_factor)
+    grid_shape = (1, output_h, output_w, 2)
+
+    # Create input with smooth gradient pattern
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16) * 0.1
+    # Add smooth gradient
+    for h in range(input_shape[1]):
+        for w in range(input_shape[2]):
+            torch_input_nhwc[0, h, w, :] += h * 0.1 + w * 0.05
+
+    # Create scaling grid
+    torch_grid = torch.zeros(grid_shape, dtype=torch.bfloat16)
+    for h in range(output_h):
+        for w in range(output_w):
+            # Map output coordinates back to input coordinates
+            x_coord = 2.0 * w / (output_w - 1) - 1.0 if output_w > 1 else 0.0
+            y_coord = 2.0 * h / (output_h - 1) - 1.0 if output_h > 1 else 0.0
+            torch_grid[:, h, w, 0] = x_coord
+            torch_grid[:, h, w, 1] = y_coord
+
+    # Convert to NCHW for PyTorch
+    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
+    torch_grid_float = torch_grid.to(torch.float32)
+
+    # PyTorch reference
+    torch_output_nchw = F.grid_sample(
+        torch_input_nchw, torch_grid_float, mode="bilinear", padding_mode="zeros", align_corners=False
+    )
+    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+
+    # TTNN implementation
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    # PCC check for scaling
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.90)
+    logger.info(pcc_message)
+
+    print(f"✓ Scaling {scale_factor}x test ({input_shape[1:3]} -> {(output_h, output_w)}): {pcc_message}")
+
+
+# ================================
+# Additional PyTorch reference tests (for debugging/validation)
+# ================================
 
 
 @pytest.mark.parametrize(
@@ -433,30 +691,4 @@ def test_pytorch_grid_sample_comprehensive(input_shape, padding_mode, align_corn
         input_tensor, grid, mode="bilinear", padding_mode=padding_mode, align_corners=align_corners
     )
 
-    print(input_tensor)
-    print()
-    print(output)
-
-    # # Verify output shape
-    # expected_shape = (N, C, 3, 3)  # (N, C, H_out, W_out)
-    # assert output.shape == expected_shape
-    # assert output.dtype == torch.float32
-
-    # # For input of all ones, verify expected behavior based on padding mode
-    # if padding_mode == "zeros":
-    #     # Border samples should be zero (outside [-1,1] range)
-    #     # Center and some edge samples should be 1.0
-    #     center_value = output[0, 0, 1, 1].item()  # Sample at (0, 0) coordinate
-    #     assert abs(center_value - 1.0) < 1e-6, f"Center should be 1.0, got {center_value}"
-    # elif padding_mode in ["border", "reflection"]:
-    #     # All samples should be 1.0 since input is all ones
-    #     assert torch.all(output == 1.0), f"All values should be 1.0 for {padding_mode} padding"
-
-    # print(f"Shape: {input_shape}, Padding: {padding_mode}, Align corners: {align_corners}")
-    # print(f"Output shape: {output.shape}")
-    # print(f"Grid coordinates used:")
-    # for i in range(3):
-    #     for j in range(3):
-    #         x, y = grid[0, i, j, 0].item(), grid[0, i, j, 1].item()
-    #         print(f"  [{i},{j}]: ({x:+.1f}, {y:+.1f}) -> {output[0, 0, i, j].item():.3f}")
-    # print("PyTorch comprehensive grid_sample test passed!")
+    print(f"PyTorch reference test passed for shape {input_shape}")

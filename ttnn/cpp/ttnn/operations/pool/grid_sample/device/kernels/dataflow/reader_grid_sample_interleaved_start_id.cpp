@@ -41,8 +41,6 @@ void kernel_main() {
     constexpr uint32_t input_height = get_compile_time_arg_val(11);
     constexpr uint32_t input_width = get_compile_time_arg_val(12);
 
-    constexpr uint32_t num_input_sticks_per_output = 4;
-
     // constexpr uint32_t output_cb_index = get_compile_time_arg_val(13);
     // constexpr bool dst_is_dram = get_compile_time_arg_val(14) == 1;
     // constexpr uint32_t dst_stick_nbytes = get_compile_time_arg_val(15);
@@ -82,8 +80,6 @@ void kernel_main() {
         float h_coord_rel = bfloat16_to_float(h_coord_raw);
         float w_coord_rel = bfloat16_to_float(w_coord_raw);
 
-        int32_t h0, h1, w0, w1;
-
         float h_coord_image = h_coord_rel * height_scale + height_offset;
         float w_coord_image = w_coord_rel * width_scale + width_offset;
 
@@ -97,7 +93,7 @@ void kernel_main() {
 
         uint32_t curr_batch = i / (input_height * input_width);
 
-        cb_reserve_back(input_cb_index, num_input_sticks_per_output);
+        cb_reserve_back(input_cb_index, 1);
 
         uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
@@ -161,6 +157,11 @@ void kernel_main() {
         wei2 = weight_h0 - wei1;
         wei3 = weight_h1 - wei4;
 
+        DPRINT << "Coordinates: " << h_coord_rel << " " << w_coord_rel << "\n";
+        DPRINT << "Integer coordinates: " << h0 << " " << h1 << " " << w0 << " " << w1 << "\n";
+        DPRINT << "Weights: " << wei1 << " " << wei2 << " " << wei3 << " " << wei4 << "\n";
+        // DPRINT << wei1 << " " << wei2 << " " << wei3 << " " << wei4 << std::endl;
+
         // Fill the scalar CB with the weights
         cb_reserve_back(scalar_cb_index, 1);  // razmisliti gde staviti ovo
 
@@ -176,6 +177,6 @@ void kernel_main() {
         // Ensure all reads are complete before proceeding
         noc_async_read_barrier();
 
-        cb_push_back(input_cb_index, num_input_sticks_per_output);
+        cb_push_back(input_cb_index, 1);
     }
 }

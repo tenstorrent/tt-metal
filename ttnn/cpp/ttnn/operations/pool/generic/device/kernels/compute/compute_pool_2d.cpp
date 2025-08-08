@@ -37,6 +37,8 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
+    constexpr uint32_t num_of_output_pages_to_reserve = get_compile_time_arg_val(13);
+
     constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -85,6 +87,9 @@ void MAIN {
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
+        }
+        if constexpr (num_of_output_pages_to_reserve > 0) {
+            cb_reserve_back(out_cb_id, num_of_output_pages_to_reserve);
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
