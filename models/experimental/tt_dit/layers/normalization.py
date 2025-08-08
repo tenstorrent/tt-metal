@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-from loguru import logger
 
 from ..utils.tensor import bf16_tensor
 
@@ -106,9 +105,10 @@ class DistributedLayerNorm:
         self.TILE_SIZE = 32
         if init or not (norm_elementwise_affine and bias):
             if not (norm_elementwise_affine and bias):
-                logger.debug(
-                    "DistributedLayerNorm initialized with norm_elementwise_affine=False. Creating gamma and beta tensors to meet op requirements."
-                )
+                pass  # TODO: make logging less noisy
+                # logger.debug(
+                #     "DistributedLayerNorm initialized with norm_elementwise_affine=False. Creating gamma and beta tensors to meet op requirements."
+                # )
             weight = torch.ones(1, embedding_dim)
             weight = weight.reshape([-1, self.TILE_SIZE * self.mesh_width])
             bias = torch.zeros(1, embedding_dim)

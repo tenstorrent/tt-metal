@@ -197,7 +197,8 @@ def test_sd35_transformer2d_model(
 ) -> None:
     """Test the full SD35Transformer2DModel against the reference implementation."""
     torch.manual_seed(0)
-    torch_dtype = torch.bfloat16
+    torch_dtype = torch.float32
+    ttnn_dtype = ttnn.bfloat16
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
@@ -311,35 +312,13 @@ def test_sd35_transformer2d_model(
 
     # Run TT model
     tt_output = tt_model(tt_spatial, tt_prompt, tt_pooled, tt_timestep, N, L)
+    logger.info(f"TT output shape: {tt_output.shape}")
 
-    # Convert output back to torch and compare
-    # Output should be replicated
-    output_shard_dims = [None]
-    output_shard_dims[sp_axis] = 0  # Sequence dimension
-    output_shard_dims[tp_axis] = 1  # Feature dimension
-
-    # tt_output_torch = ttnn.to_torch(
-    #     tt_output,
-    #     mesh_composer=ttnn.ConcatMesh2dToTensor(
-    #         mesh_device, dims=output_shard_dims, mesh_shape=tuple(mesh_device.shape)
-    #     ),
-    # )
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
-
-    # Remove the batch dimension added by TT model and reshape to match torch output
-    # TT output shape: (1, B, N, patch_size*patch_size*out_channels)
-    # Torch output shape: (B, H//patch_size, W//patch_size, patch_size*patch_size*out_channels)
-    tt_output_torch = tt_output_torch.squeeze(0)  # Remove first dimension
-
-    # # Reshape to match torch output format
-    # patches_h = H // patch_size
-    # patches_w = W // patch_size
-    # patch_embed_dim = patch_size * patch_size * out_channels
-
-    # tt_output_reshaped = tt_output_torch.view(B, patches_h, patches_w, patch_embed_dim)
 
     # Compare outputs
     for i in range(len(tt_output_tensors)):
+        logger.info(f"Checking output tensor {i}")
         tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
         assert_quality(torch_output, tt_output_torch, pcc=0.990_000)  # Lower PCC due to full model complexity
     # assert_quality(torch_output, tt_output_reshaped, pcc=0.990_000)  # Lower PCC due to full model complexity
