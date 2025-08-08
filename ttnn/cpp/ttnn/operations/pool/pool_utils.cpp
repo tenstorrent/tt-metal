@@ -130,7 +130,12 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
 }
 
 FactoryParameters get_factory_parameters(
-    uint32_t num_shards_c, const Tensor& input, uint32_t kernel_h, uint32_t kernel_w, Pool2DType pool_type) {
+    uint32_t num_shards_c,
+    const Tensor& input,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    Pool2DType pool_type,
+    bool return_indices) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
 
@@ -154,7 +159,7 @@ FactoryParameters get_factory_parameters(
     const uint32_t max_rows_for_reduction =
         !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
-    const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 2 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     return FactoryParameters{
@@ -202,7 +207,8 @@ uint32_t calculate_L1_usage(
         num_shards_c = grid_size.x;
     }
 
-    FactoryParameters params = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, pool_type);
+    FactoryParameters params =
+        get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, pool_type, return_indices);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
