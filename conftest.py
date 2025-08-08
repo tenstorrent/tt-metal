@@ -544,10 +544,10 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
 
 @pytest.fixture(scope="function")
-def p150x4_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+def p150_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
     import ttnn
 
-    if ttnn.get_num_devices() != 4:
+    if ttnn.get_num_devices() not in [1, 2, 4, 8]:
         pytest.skip()
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
@@ -555,11 +555,16 @@ def p150x4_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, devic
     fabric_config = updated_device_params.pop("fabric_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config)
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(4, 1),
-        **updated_device_params,
-    )
-
+    if ttnn.get_num_devices() == 8:
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(4, 2),
+            **updated_device_params,
+        )
+    else:
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
+            **updated_device_params,
+        )
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 

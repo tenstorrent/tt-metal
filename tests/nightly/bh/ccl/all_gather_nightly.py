@@ -61,7 +61,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_nightly(
-    p150x4_mesh_device,
+    p150_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -77,7 +77,7 @@ def test_all_gather_nightly(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    submesh_device = p150x4_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_all_gather_impl(
         submesh_device,
