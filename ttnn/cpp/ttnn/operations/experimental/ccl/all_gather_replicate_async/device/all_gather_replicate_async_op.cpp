@@ -552,7 +552,7 @@ Tensor llama_all_gather_matmul_async_impl(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType> dtype,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "all-gather-replicate invoked with cluster_axis API on >2D mesh, which is currently unsupported");
