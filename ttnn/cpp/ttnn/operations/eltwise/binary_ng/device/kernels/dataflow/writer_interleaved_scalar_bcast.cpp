@@ -34,7 +34,7 @@ void kernel_main() {
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
     const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
 
