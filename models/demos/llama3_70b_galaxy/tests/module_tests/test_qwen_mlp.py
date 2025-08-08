@@ -130,11 +130,9 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
             else ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
+
         logger.info("Run Qwen_MLP")
         tt_output = tt_model(tt_input, mode)
-        logger.info(f"tt_output shape: {tt_output.shape}")
-
-        breakpoint()
 
         tt_output_torch = ttnn.to_torch(
             tt_output,
