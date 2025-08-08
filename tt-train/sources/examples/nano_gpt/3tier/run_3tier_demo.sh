@@ -105,6 +105,11 @@ for host in "${HOSTS[@]:1}"; do
     scp ${SCP_OPTS} "${BIN_DIR}/${bin}" "${SSH_USER}@${host}:${BIN_DIR}/"
   done
   scp ${SCP_OPTS} "${CFG_DIR}/${CONFIG}" "${SSH_USER}@${host}:${CFG_DIR}/"
+
+    # Copy all .so files from METAL_HOME/build recursively
+  echo "    Copying shared libraries (*.so) from ${METAL_HOME}/build..."
+  rsync -av --include '*/' --include '*.so' --exclude '*' \
+    "${METAL_HOME}/build/" "${SSH_USER}@${host}:${METAL_HOME}/build/"
 done
 echo "✔ Remote copy complete."
 
