@@ -15,7 +15,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE
+from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE, dequantize
 from models.utility_functions import comp_pcc
 
 # Constant for testing
@@ -64,8 +64,19 @@ def add_inv_scale_to_state_dict(
             output_state_dict[name] = tensor
             continue
 
-        tensor_quant, dequant_scale = quantize_fp8_blockwise(tensor, block_shape)
-        output_state_dict[name] = tensor_quant
+        dequant_scale = torch.randn(
+            (
+                *tensor.shape[: -len(block_shape)],
+                *(
+                    (tensor.shape[-len(block_shape) + idx] + block_dim - 1) // block_dim
+                    for idx, block_dim in enumerate(block_shape)
+                ),
+            ),
+            dtype=torch.float32,
+        )
+
+        tensor_quant = dequantize(tensor.to(torch.float8_e4m3fn), 1.0 / dequant_scale, block_shape)
+        output_state_dict[name] = tensor_quant.to(torch.float8_e4m3fn)
         output_state_dict[name + "_scale_inv"] = dequant_scale
 
     return output_state_dict
