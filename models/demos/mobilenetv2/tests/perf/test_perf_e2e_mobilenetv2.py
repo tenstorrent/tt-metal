@@ -16,6 +16,7 @@ from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_model_parameters,
     get_mesh_mappers,
 )
+from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 from models.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -60,51 +61,31 @@ def run_mobilenetv2_e2e(
         use_height_and_width_as_shard_shape=True,
     )
 
-    input_dram_tensor = ttnn.allocate_tensor_on_device(
-        host_input_tensor.shape, host_input_tensor.dtype, host_input_tensor.layout, device, input_dram_mem_config
+    config = PipelineConfig(use_trace=True, num_command_queues=2, separate_io_queue=False)
+    pipe = create_pipeline_from_config(
+        config,
+        ttnn_model,
+        device,
+        dram_input_memory_config=input_dram_mem_config,
+        l1_input_memory_config=input_l1_mem_config,
+        dram_output_memory_config=None,
+        output_shape=None,
+        output_dtype=None,
     )
 
-    op_event = ttnn.record_event(device, 0)
-
-    logger.info(f"Compiling model")
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config)
-    op_event = ttnn.record_event(device, 0)
-    output_tensor = ttnn_model(input_l1_tensor)
-
-    logger.info(f"Capturing trace of model")
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config)
-    op_event = ttnn.record_event(device, 0)
-    input_trace_addr = input_l1_tensor.buffer_address()
-    output_tensor.deallocate(force=True)
-    tid = ttnn.begin_trace_capture(device, cq_id=0)
-    output_tensor = ttnn_model(input_l1_tensor)
-    input_l1_tensor = ttnn.allocate_tensor_on_device(input_l1_tensor.spec, device)
-    assert input_trace_addr == input_l1_tensor.buffer_address()
-    ttnn.end_trace_capture(device, tid, cq_id=0)
-
-    outputs = []
     iterations = 32
-    logger.info(f"Trace captured - running model benchmarks for {iterations} iterations...")
+    pipe.compile(host_input_tensor)
+    host_inputs = [host_input_tensor] * iterations
+
+    pipe.preallocate_output_tensors_on_host(
+        iterations, [batch_size_per_device, torch_output_tensor.shape[-1]], ttnn.bfloat16, ttnn.TILE_LAYOUT
+    )
+
     start = time.time()
-    for _ in range(iterations):
-        ttnn.wait_for_event(1, op_event)
-        ttnn.copy_host_to_device_tensor(host_input_tensor, input_dram_tensor, cq_id=1)
-        write_event = ttnn.record_event(device, 1)
-        ttnn.wait_for_event(0, write_event)
-        input_l1_tensor = ttnn.reshard(input_dram_tensor, input_l1_mem_config, input_l1_tensor)
-        op_event = ttnn.record_event(device, 0)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        outputs.append(output_tensor.cpu(blocking=False))
-    ttnn.synchronize_device(device)
+    outputs = pipe.enqueue(host_inputs).pop_all()
     end = time.time()
+
+    pipe.cleanup()
 
     inference_time = (end - start) / iterations
     logger.info(f"Average model time={1000.0 * inference_time : .2f} ms")

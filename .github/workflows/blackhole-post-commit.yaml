@@ -330,6 +330,22 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
+  # TT-CNN Unit Tests
+  tt-cnn-unit-tests:
+    needs: [build-artifact, generate-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/tt-cnn-post-commit.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
 
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow
