@@ -32,7 +32,7 @@ struct ConnectedRisc1Interface {
     }
 
     inline static void set_pc(uint32_t pc) {
-        constexpr uint32_t k_ResetPcAddr = SUBORDINATE_AERISC_RESET_PC;
+        constexpr uint32_t k_ResetPcAddr = MEM_LITE_FABRIC_RESET_PC;
         internal_::eth_write_remote_reg(k_Txq, k_ResetPcAddr, pc);
         while (internal_::eth_txq_is_busy(k_Txq)) {
         }

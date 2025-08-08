@@ -21,15 +21,15 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
-#define BEGIN_MAIN_FUNCTION()                                                           \
-    IF_NOT_METAL_LAUNCH(int main())                                                     \
-    IF_METAL_LAUNCH(void kernel_main()) {                                               \
-        IF_NOT_METAL_LAUNCH(configure_csr();)                                           \
-        IF_NOT_METAL_LAUNCH(noc_index = NOC_INDEX;)                                     \
-        IF_NOT_METAL_LAUNCH(do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);) \
-        IF_NOT_METAL_LAUNCH(noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);)       \
-        IF_NOT_METAL_LAUNCH(risc_init();)                                               \
-        IF_NOT_METAL_LAUNCH(noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);)                     \
+#define BEGIN_MAIN_FUNCTION()                                                                \
+    IF_NOT_METAL_LAUNCH(int main())                                                          \
+    IF_METAL_LAUNCH(void kernel_main()) {                                                    \
+        IF_NOT_METAL_LAUNCH(configure_csr();)                                                \
+        IF_NOT_METAL_LAUNCH(noc_index = NOC_INDEX;)                                          \
+        IF_NOT_METAL_LAUNCH(do_crt1((uint32_t*)MEM_LITE_FABRIC_INIT_LOCAL_L1_BASE_SCRATCH);) \
+        IF_NOT_METAL_LAUNCH(noc_bank_table_init(MEM_LITE_FABRIC_BANK_TO_NOC_SCRATCH);)       \
+        IF_NOT_METAL_LAUNCH(risc_init();)                                                    \
+        IF_NOT_METAL_LAUNCH(noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);)                          \
         IF_NOT_METAL_LAUNCH(for (uint32_t n = 0; n < NUM_NOCS; n++) { noc_local_state_init(n); })
 
 // End the main function
@@ -306,7 +306,7 @@ FORCE_INLINE void run_receiver_channel_step(
 BEGIN_MAIN_FUNCTION() {
     invalidate_l1_cache();
 
-    auto structs = reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(MEM_AERISC_FABRIC_LITE_CONFIG);
+    auto structs = reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(MEM_LITE_FABRIC_CONFIG_BASE);
 
     volatile lite_fabric::HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE>& host_interface =
         structs->host_interface;
@@ -376,7 +376,10 @@ BEGIN_MAIN_FUNCTION() {
 
     lite_fabric::routing_init(&structs->config);
 
+    volatile uint32_t* status_addr = (volatile uint32_t*)(0x1c);
+
     while (structs->config.routing_enabled) {
+        status_addr[0]++;
         invalidate_l1_cache();
 
         run_sender_channel_step(
@@ -395,6 +398,8 @@ BEGIN_MAIN_FUNCTION() {
             local_sender_channels.template get<0>(),
             on_mmio_chip);
     }
+
+    status_addr[0] = 0xdeadbeef;
 
     receiver_channel_0_trid_tracker.all_buffer_slot_transactions_acked();
 

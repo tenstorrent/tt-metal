@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include "blackhole/dev_mem_map.h"
 #include "hal_types.hpp"
 #include "lite_fabric_constants.hpp"
 #include "lite_fabric_header.hpp"
@@ -204,7 +205,7 @@ struct HostToLiteFabricInterface {
         volatile LiteFabricHeader header;
         header.command_fields.noc_read.event = 0;
         const auto expectedOrderId = HostToLiteFabricReadEvent::get();
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Waiting for read event {} from {} {:#x}",
             expectedOrderId,
@@ -270,7 +271,7 @@ struct HostToLiteFabricInterface {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         uint32_t addr = get_next_send_buffer_slot_address(channel_address);
         if (header.noc_send_type == lite_fabric::NocSendType::NOC_READ) {
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "Send {}B read payload header address {:#x} source address {:#x} Host IF on Device {:#x}",
                 header.get_payload_size_including_header(),
@@ -278,7 +279,7 @@ struct HostToLiteFabricInterface {
                 header.command_fields.noc_read.noc_address,
                 host_interface_on_device_addr);
         } else {
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "Send {}B write payload header address {:#x} dest address {:#x} Host IF on Device {:#x}",
                 header.get_payload_size_including_header(),
@@ -293,7 +294,7 @@ struct HostToLiteFabricInterface {
         h2d.sender_host_write_index =
             lite_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[0]>(h2d.sender_host_write_index);
 
-        log_info(tt::LogMetal, "Flushing h2d sender_host_write_index to {}", h2d.sender_host_write_index);
+        log_debug(tt::LogMetal, "Flushing h2d sender_host_write_index to {}", h2d.sender_host_write_index);
         flush_h2d(virtual_core_sender);
     }
 
@@ -307,7 +308,7 @@ struct HostToLiteFabricInterface {
         }
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         uint32_t addr = get_next_send_buffer_slot_address(channel_address) + sizeof(LiteFabricHeader);
-        log_info(tt::LogMetal, "Send {}B payload only {:#x}", size, addr);
+        log_debug(tt::LogMetal, "Send {}B payload only {:#x}", size, addr);
         cluster.write_core(data, size, virtual_core_sender, addr);
     }
 
@@ -367,7 +368,7 @@ struct HostToLiteFabricInterface {
         header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
 
         uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Reading data from {} {:#x} unaligned {}",
             receiver_core.str(),
@@ -424,8 +425,7 @@ struct LiteFabricMemoryMap {
     }
 
     static uint32_t get_address() {
-        auto addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_CONFIG);
+        auto addr = MEM_LITE_FABRIC_CONFIG_BASE;
         return addr;
     }
 
