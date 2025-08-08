@@ -55,9 +55,6 @@ public:
     // Returns true if the shard at the specified `coord` is local, false if remote.
     bool is_local_at(const distributed::MeshCoordinate& coord) const;
 
-    // Returns true if all shards in the buffer are local, false otherwise.
-    bool fully_local() { return shards_.fully_local(); }
-
     // Specifies the execution policy for the `transform` and `apply` functions.
     enum class ProcessShardExecutionPolicy {
         SEQUENTIAL,

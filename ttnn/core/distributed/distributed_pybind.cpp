@@ -415,7 +415,6 @@ void py_module(py::module& module) {
     auto py_mesh_device_view = static_cast<py::class_<MeshDeviceView>>(module.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, py::return_value_policy::reference_internal)
         .def("num_devices", &MeshDeviceView::num_devices)
-        .def("fully_local", &MeshDeviceView::fully_local)
         .def("is_local", &MeshDeviceView::is_local, py::arg("coord"));
 
     auto py_tensor_to_mesh =
@@ -557,7 +556,6 @@ void py_module(py::module& module) {
     auto py_distributed_host_buffer =
         static_cast<py::class_<DistributedHostBuffer>>(module.attr("DistributedHostBuffer"));
     py_distributed_host_buffer.def("is_local_at", &DistributedHostBuffer::is_local_at, py::arg("coord"))
-        .def("fully_local", &DistributedHostBuffer::fully_local)
         .def("shape", &DistributedHostBuffer::shape, py::return_value_policy::reference_internal);
 
     module.def(
