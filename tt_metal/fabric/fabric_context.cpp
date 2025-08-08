@@ -144,6 +144,21 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
         tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
         tt::tt_fabric::FabricEriscDatamoverAxis::Long);
 
+    // when initilize fabric context, need to create the tensix_config_ here.
+    // we need the following fields to be set:
+    // uint8_t num_full_size_channels, - based on fabric topology, can get from FabricEriscDatamoverConfig,
+    //                                  ex, num_sender_channels_1d_linear, num_sender_channels_2d_mesh, etc.
+    // uint8_t num_header_only_channels, - set to 0 for now, until we find a use of it.
+    // uint8_t num_buffers_full_size_channel, - get the num buffers from fabric tensix config, this
+    // uint8_t num_buffers_header_only_channel, - 0
+    // size_t buffer_size_bytes_full_size_channel, - this is just num_full_size_channels *
+    // num_buffers_full_size_channel, get  from fabric tensix config size_t base_l1_address, - based on risc type
+    // (BRISC/NCRISC), can get it from tensix config,
+    //                                      brisc start at top unreserved space, ncrisc start at brisc address +
+    //                                      num_full_size_channels * num_buffers_full_size_channel
+    // CoreType core_type - always tensix
+    //
+
     this->num_devices = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
     if (this->num_devices != 4 && num_pcie_devices == 4) {
@@ -206,6 +221,10 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
         default: TT_FATAL(false, "Error, invalid fabric edm type");
     }
 };
+
+// add get fabric tensix config here. we dont need to specify the type and axis for it. need to pass in risc_core_type
+// (brisc/ncrisc) ex, get_fabric_tensix_config(RiscType) - need to figure out if we have something similar to RiscType
+// already in metal.
 
 void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
     TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);

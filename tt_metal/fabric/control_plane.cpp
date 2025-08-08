@@ -1448,6 +1448,14 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
                 break;
             }
 
+            // when fabric tensix config is enabled, instead of writing the fabric router conn info, write mux conn info
+            // instead to l1. from fabric tensix datamover config () [eth chan] -> [core, risc_type], populate the
+            // followling info: sender_channel - is_2d_fabric ? router_direction : 0; noc_x/noc_y, - get_noc_xy(chan id)
+            // edm_direction - router_direction
+            // edm_buffer_base_addr - get_sender_channels_base_address()
+            // num_buffers_per_channel - more getters in fabric tensix datamover config
+            // etc, all getters from fabric tensix datamover config
+
             CoreCoord fabric_router_virtual_core =
                 cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 

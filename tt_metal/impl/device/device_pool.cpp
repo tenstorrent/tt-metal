@@ -854,6 +854,12 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();
         std::vector<uint32_t> termination_signal(1, signal);
 
+        // from fabric context, get terminal signal, all mux cores should get the singal.
+        // loop for all devices,
+        // check the number of configs per core (number of risc used)
+        // WriteToDeviceL1 to those addresses
+        // does a l1_barrier to make sure those signal landed.
+
         for (const auto& dev : this->get_all_active_devices()) {
             if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
                 continue;

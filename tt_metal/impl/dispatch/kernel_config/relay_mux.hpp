@@ -100,6 +100,8 @@ public:
     // and workers that only need the header only channel are specified in the downstream kernels.
     // Throws if not found
     int GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const;
+
+    // need a getter api to get the link index used by dispatch
 };
 
 // Helper function to assemble the dispatch_fabric_mux_client_config args

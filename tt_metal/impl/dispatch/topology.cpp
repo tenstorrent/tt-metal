@@ -1075,6 +1075,14 @@ void build_tt_fabric_program(
                 is_dateline,
                 control_plane.routing_direction_to_eth_direction(direction));
             edm_builders.insert({eth_chan, edm_builder});
+
+            // based on the tensix config, build the fabric tensix builder, return a fabric_tensix_datamover_builder.
+
+            // note, we need to skip the current link index if dispatch uses it.
+            // if we are using relay mux  (need to check how to know whether we use it or not)
+            // then we need to get the link index used by dispatch from relay mux
+
+            // insert it into fabric_tensix_builders.
         }
 
         // Last link may be used by dispatch if there is tunneling
@@ -1112,6 +1120,11 @@ void build_tt_fabric_program(
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
+
+                // if have fabric_tensix_builders, need to get the tensix builder 1/2,
+                // then edm_builder1 connect_to_downstream_edm (tensix builder 2)
+                // edm_builder2 connect_to_downstream_edm (tensix builder 1)
+
                 edm_builder1.connect_to_downstream_edm(edm_builder2);
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
 
@@ -1163,6 +1176,8 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     if (edm_builders.empty()) {
         return nullptr;
     }
+
+    // if have tensix builders, build_and_compile the tensix builders here.
 
     // for now it doesnt matter which channel is the master, so just pick the 1st in the map
     auto master_router_chan = edm_builders.begin()->first;

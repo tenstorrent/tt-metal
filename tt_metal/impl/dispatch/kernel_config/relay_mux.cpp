@@ -128,6 +128,9 @@ void RelayMux::GenerateStaticConfigs() {
         TT_THROW("Unable to find forwarding link from {} to {}", src_fabric_node_id, dst_fabric_node_id);
     };
 
+    // move the get the link index used by dispatch to public api.
+    // to get the link index
+
     auto link_index = get_link_idx(src_fabric_node_id, dst_fabric_node_id);
     log_debug(
         tt::LogMetal,

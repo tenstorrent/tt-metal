@@ -38,6 +38,9 @@ public:
         tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default,
         tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short) const;
 
+    // add get fabric tensix config here. we dont need to specify the type and axis for it.
+    // ex, get_fabric_tensix_config()
+
     void set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers);
     uint32_t get_num_fabric_initialized_routers(chip_id_t chip_id) const;
 
@@ -51,6 +54,8 @@ public:
     std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> get_fabric_router_ready_address_and_signal() const;
 
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
+
+    // from fabric tensix config, get the termination signal address and signal.
 
 private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
@@ -76,6 +81,8 @@ private:
         {};
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2>
         dateline_upstream_adjcent_upstream_router_config_ = {};
+
+    // add tensix_config_ here. ex std::unique_ptr<tt::tt_fabric::FabricTensixDatamoverConfig>.
 
     // Using vectors. Use Device IDs as indices
     size_t num_devices = 0;
