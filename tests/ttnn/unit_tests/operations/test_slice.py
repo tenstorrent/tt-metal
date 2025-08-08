@@ -297,6 +297,8 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
         [[2, 256, 128, 128], 32, 4, 4, ttnn.TILE_LAYOUT],
         [[2, 64, 64, 128], 32, 2, 2, ttnn.TILE_LAYOUT],
         [[2, 64, 64, 512], 32, 3, 5, ttnn.TILE_LAYOUT],
+        [[2, 128, 128, 63], 32, 2, 8, ttnn.TILE_LAYOUT],
+        [[2, 128, 128, 63], 32, 2, 8, ttnn.ROW_MAJOR_LAYOUT],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -1269,10 +1271,10 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 @pytest.mark.parametrize(
     "dims, slice_size, core_x, core_y",
     [
-        # [[2, 64, 64, 256], 32, 4, 4],
-        # [[2, 64, 64, 512], 16, 4, 4],
-        # [[2, 16, 16, 1024], 4, 4, 4],
-        # [[2, 128, 128, 256], 32, 8, 4],
+        [[2, 64, 64, 256], 32, 4, 4],
+        [[2, 64, 64, 512], 16, 4, 4],
+        [[2, 16, 16, 1024], 4, 4, 4],
+        [[2, 128, 128, 256], 32, 8, 4],
         [[2, 128, 128, 63], 32, 8, 2],
     ],
 )
