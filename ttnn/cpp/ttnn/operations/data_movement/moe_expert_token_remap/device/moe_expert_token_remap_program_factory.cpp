@@ -144,6 +144,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         mapping_is_dram,
         metadata_is_dram,
         local_reduce};
+
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp",

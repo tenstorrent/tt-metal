@@ -99,10 +99,6 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
         "Number of links must be greater than 0, got {}",
         operation_attributes.num_links);
     TT_FATAL(
-        (operation_attributes.topology == tt::tt_fabric::Topology::Linear) ||
-            (operation_attributes.topology == tt::tt_fabric::Topology::Mesh),
-        "Topology must be linear or mesh at the moment");
-    TT_FATAL(
         operation_attributes.cross_device_semaphore.has_value(),
         "Cross device semaphore must be specified at the moment");
 }
