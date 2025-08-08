@@ -73,7 +73,7 @@ class TtConv:
         width_shard=False,
         act_blocks=32,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
+        enable_split_reader=True,
         reshard_if_not_optimal=False,
         batch_size=1,
         core_count=None,

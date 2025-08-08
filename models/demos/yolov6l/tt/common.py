@@ -181,7 +181,7 @@ class Yolov6x_Conv_T_2D:
             shard_layout=shard_layout,
             deallocate_activation=False,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_split_reader=True,
             output_layout=ttnn.TILE_LAYOUT,
             reshard_if_not_optimal=True,
         )
