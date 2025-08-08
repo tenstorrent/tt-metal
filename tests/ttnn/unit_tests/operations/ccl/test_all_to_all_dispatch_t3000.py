@@ -319,11 +319,9 @@ def run_all_to_all_dispatch_test(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
-    init_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    # create double buffered global semaphore handles
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    init_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
 
     tt_out_tensor_list = []
 
@@ -341,8 +339,8 @@ def run_all_to_all_dispatch_test(
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
-                global_semaphore=ccl_semaphore_handles[buffer_index],
-                init_semaphore=init_semaphore_handles[buffer_index],
+                global_semaphore=ccl_semaphore_handles[buffer_index % 2],
+                init_semaphore=init_semaphore_handles[buffer_index % 2],
                 subdevice_id=worker_sub_device_id,
                 output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
                 if use_optional_output_tensors

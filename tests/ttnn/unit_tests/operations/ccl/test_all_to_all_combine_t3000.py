@@ -527,10 +527,8 @@ def run_all_to_all_combine_test(
     )
 
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
-    init_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    init_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
 
     tt_out_tensor_list = []
 
@@ -545,10 +543,10 @@ def run_all_to_all_combine_test(
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
-                global_semaphore=ccl_semaphore_handles[i],
+                global_semaphore=ccl_semaphore_handles[i % 2],
                 local_reduce=local_reduce,
                 axis=axis,
-                init_semaphore=init_semaphore_handles[i],
+                init_semaphore=init_semaphore_handles[i % 2],
             )
 
             ttnn.synchronize_device(mesh_device)
