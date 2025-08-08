@@ -26,8 +26,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const std::string& mode,
     const std::string& padding_mode,
     bool align_corners) {
-    std::cout << "Krenuo je program factory" << std::endl;
-
     tt::tt_metal::Program program{};
 
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
