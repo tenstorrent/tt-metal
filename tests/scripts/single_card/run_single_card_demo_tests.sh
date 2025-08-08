@@ -35,7 +35,7 @@ run_qwen25_vl_func() {
   # todo)) Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 600 || fail=1
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
@@ -288,11 +288,10 @@ run_yolov8s_world_perf() {
 
 }
 
-#comment out vanilla unet for now unitl data and weights loading issues are resolved.
+
 run_vanilla_unet_demo() {
-
- pytest -n auto models/experimental/vanilla_unet/demo/demo.py::test_unet_demo_single_image
-
+ # vanilla_unet demo
+ pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
 }
 run_yolov8x_perf() {
 
@@ -336,6 +335,11 @@ run_yolov6l_demo() {
 
 }
 
+run_yolov12x_demo() {
+
+  pytest -n auto --disable-warnings  models/demos/yolov12x/demo/demo.py --timeout 600
+
+}
 
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
