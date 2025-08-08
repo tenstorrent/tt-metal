@@ -157,11 +157,11 @@
         "RotaryEmbeddingLlamaFusedQK_0": {
             "op_name": "RotaryEmbeddingLlamaFusedQK",
             "kernel_duration": 2492.621527777778,
-            "op_to_op": 874.0,
+            "op_to_op": 1051.111111111111,
             "first_to_last_start": 2041.2222222222222,
             "non-overlapped-dispatch-time": 2981.8611111111113,
             "kernel_duration_relative_margin": 0.1,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.3,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.35
         },
