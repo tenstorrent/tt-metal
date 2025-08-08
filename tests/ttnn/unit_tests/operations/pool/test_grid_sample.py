@@ -338,7 +338,7 @@ def test_grid_sample_parametrized_dimensions(device, input_dims, grid_dims):
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
-        ((1, 32, 32, 224), (1, 1, 1, 2)),
+        ((1, 32, 32, 224), (1, 1, 256, 2)),
         # Small test cases for correctness verification
         # ((1, 4, 4, 8), (1, 2, 2, 2)),      # Small input, small grid
         # ((1, 8, 8, 16), (1, 4, 4, 2)),     # Medium input, small grid
@@ -365,10 +365,11 @@ def test_grid_sample_correctness_with_pcc(device, input_shape, grid_shape):
     # Create varied grid coordinates for more comprehensive testing
     torch_grid = torch.zeros(grid_shape, dtype=torch.bfloat16)
 
-    # torch_grid = torch.randn(grid_shape, dtype=torch.bfloat16)
+    torch_grid = torch.randn(grid_shape, dtype=torch.bfloat16)
+    torch_grid = torch.clip(torch_grid, -0.9, 0.9)  # Ensure coordinates are in [-1, 1] range
 
-    torch_grid[:, :, 0, 0] = 0.65
-    torch_grid[:, :, 0, 1] = 0.31
+    # torch_grid[:, :, 0, 0] = 0.27
+    # torch_grid[:, :, 0, 1] = 0.85
 
     # torch_grid[:, :, 1, 0] = 0.5
     # torch_grid[:, :, 1, 1] = 0.5

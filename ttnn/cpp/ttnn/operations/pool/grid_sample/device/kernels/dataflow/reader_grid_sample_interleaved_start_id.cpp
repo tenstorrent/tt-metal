@@ -74,8 +74,8 @@ void kernel_main() {
         // Read the first two bfloat16 values (grid coordinates) from the L1 buffer
 
         volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_grid_addr);
-        uint16_t h_coord_raw = grid_ptr[0];  // First bfloat16 coordinate (x)
-        uint16_t w_coord_raw = grid_ptr[1];  // Second bfloat16 coordinate (y)
+        uint16_t h_coord_raw = grid_ptr[1];  // First bfloat16 coordinate (x)
+        uint16_t w_coord_raw = grid_ptr[0];  // Second bfloat16 coordinate (y)
 
         float h_coord_rel = bfloat16_to_float(h_coord_raw);
         float w_coord_rel = bfloat16_to_float(w_coord_raw);
@@ -157,7 +157,8 @@ void kernel_main() {
         wei2 = weight_h0 - wei1;
         wei3 = weight_h1 - wei4;
 
-        DPRINT << "Coordinates: " << h_coord_rel << " " << w_coord_rel << "\n";
+        DPRINT << "Relative coordinates: " << h_coord_rel << " " << w_coord_rel << "\n";
+        DPRINT << "In image coordinates: " << h_coord_image << " " << w_coord_image << "\n";
         DPRINT << "Integer coordinates: " << h0 << " " << h1 << " " << w0 << " " << w1 << "\n";
         DPRINT << "Weights: " << wei1 << " " << wei2 << " " << wei3 << " " << wei4 << "\n";
         // DPRINT << wei1 << " " << wei2 << " " << wei3 << " " << wei4 << std::endl;
