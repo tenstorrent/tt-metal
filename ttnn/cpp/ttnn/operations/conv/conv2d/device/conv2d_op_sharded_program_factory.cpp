@@ -21,6 +21,29 @@
 namespace ttnn::operations::conv {
 namespace conv2d {
 
+// to enable activation reuse feature, we need to allocate space for input needed for
+// one output image width + extra space for diff we need to add for each following output image width
+// TODO(sjovic): reuse this function
+uint32_t calculate_act_cb_size_with_reuse_op_duplicate(
+    const uint32_t act_block_h_tiles,
+    const uint32_t act_block_w_tiles,
+    const uint32_t output_image_width,
+    const uint32_t padded_in_channels,
+    const std::array<uint32_t, 2>& kernel_size,
+    const uint32_t input_tile_size) {
+    const uint32_t image_width_tiles =
+        (output_image_width + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;  // todo(sjovic): ceil
+    const uint32_t reuse_loops = std::ceil(static_cast<float>(act_block_h_tiles) / image_width_tiles);
+    const uint32_t image_width_mod_tile = output_image_width % tt::constants::TILE_HEIGHT;
+    const uint32_t image_width_tile_leftover =
+        image_width_mod_tile == 0 ? 0 : tt::constants::TILE_HEIGHT - image_width_mod_tile;
+    const uint32_t reuse_length = reuse_loops * padded_in_channels * kernel_size[1] *
+                                  (1 + image_width_tile_leftover * kernel_size[0]) * 2;  // halo outputs bfloat16
+    const uint32_t reuse_tiles = (reuse_length + input_tile_size - 1) / input_tile_size;
+
+    return image_width_tiles * act_block_w_tiles + reuse_tiles;
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     tt::tt_metal::Program& program,
     const Tensor& a,
@@ -62,6 +85,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -629,7 +653,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t reader_arg_act_block_h_datums = (enable_split_reader ? act_block_h_datums_split : act_block_h_datums);
     TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
-    uint32_t image_width_tiles = 0, image_width_mod_tile = 0, act_cb_num_tiles = 0, reuse_window_offset = 0;
+    uint32_t image_width_tiles = 0, image_width_mod_tile = 0, act_cb_num_tiles_split = 0,
+             act_cb_num_tiles_split_last = 0, reuse_window_offset = 0;
     bool reuse_aligned = false;
 
     if (enable_activation_reuse) {
@@ -637,7 +662,26 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         image_width_mod_tile = output_image_width % tt::constants::TILE_HEIGHT;
         const uint32_t image_width_tile_leftover =
             image_width_mod_tile == 0 ? 0 : tt::constants::TILE_HEIGHT - image_width_mod_tile;
-        act_cb_num_tiles = image_width_tiles * act_block_w_ntiles;
+
+        const uint32_t act_tile_size = tt::tt_metal::detail::TileSize(act_df);
+        act_cb_num_tiles_split = calculate_act_cb_size_with_reuse_op_duplicate(
+            act_block_h_nsubblocks_split,
+            act_block_w_ntiles,
+            output_image_width,
+            conv_act_size_c,
+            {filter_h, filter_w},
+            act_tile_size);
+
+        if (enable_split_reader) {
+            act_cb_num_tiles_split_last = calculate_act_cb_size_with_reuse_op_duplicate(
+                act_block_h_nsubblocks_split_last,
+                act_block_w_ntiles,
+                output_image_width,
+                conv_act_size_c,
+                {filter_h, filter_w},
+                act_tile_size);
+        }
+
         reuse_window_offset =
             filter_w * conv_act_c_read_bytes +
             (filter_w * filter_h * conv_act_c_read_bytes + act_block_w_extra_align_bytes) * image_width_tile_leftover;
@@ -679,7 +723,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     if (enable_activation_reuse) {
         std::vector<uint32_t> activation_reuse_args = {
-            act_cb_num_tiles,
+            act_cb_num_tiles_split,
             act_block_w_ntiles,
             static_cast<uint32_t>(reuse_aligned),
             image_width_tiles,
@@ -783,7 +827,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         if (enable_activation_reuse) {
             std::vector<uint32_t> activation_reuse_args = {
                 filter_h,
-                act_cb_num_tiles,
+                act_cb_num_tiles_split_last,
                 act_block_w_ntiles,
                 static_cast<uint32_t>(reuse_aligned),
                 image_width_tiles,
