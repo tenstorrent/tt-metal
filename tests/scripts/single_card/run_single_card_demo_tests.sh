@@ -56,11 +56,6 @@ run_segformer_func() {
   #Segformer Classification Demo
   pytest models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo
 
-  #Segformer Segmentation Eval DP
-  pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp
-  #Segformer Segmentation Eval
-  pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval
-
 }
 
 run_sentencebert_func() {
@@ -74,9 +69,6 @@ run_yolov11_func() {
 
  #Yolov11 Demo
  pytest models/demos/yolov11/demo/demo.py
-
- #Yolov11 Eval
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov11n
 
 }
 
@@ -269,16 +261,12 @@ run_whisper_perf() {
 run_yolov9c_perf() {
   # yolov9c demo
   pytest models/demos/yolov9c/demo/demo.py
-  # yolov9c eval
-  pytest models/experimental/yolo_eval/evaluate.py::test_yolov9c
 
 }
 run_yolov8s_perf() {
 
   # yolov8s demo
   pytest models/demos/yolov8s/demo/demo.py
-  # yolov8s eval
-  pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s
 
 }
 
@@ -288,8 +276,6 @@ run_mobilenetv2_perf(){
 #  mobilenetv2 demo
  pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp
 
-#  mobilenetv2 eval
-  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp
 
 }
 
@@ -298,8 +284,6 @@ run_yolov8s_world_perf() {
   # yolov8s_world demo
   pytest models/demos/yolov8s_world/demo/demo.py
 
-  # yolov8s_world eval
-  pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s_world
 
 }
 
@@ -321,31 +305,26 @@ run_yolov8x_perf() {
   # yolov8x demo
   pytest models/demos/yolov8x/demo/demo.py
 
-  # yolov8x eval
-  pytest models/experimental/yolo_eval/evaluate.py::test_yolov8x
 
 }
 run_yolov4_perf() {
   #yolov4 demo
   pytest models/demos/yolov4/demo.py::test_yolov4
   pytest models/demos/yolov4/demo.py::test_yolov4_dp
-  #yolov4 eval
-  pytest models/experimental/yolo_eval/evaluate.py::test_run_yolov4_eval
+
 }
 
 run_yolov10x_demo() {
   # yolov10x demo
   pytest models/demos/yolov10x/demo/demo.py
-  #yolov10x eval
-  pytest models/experimental/yolo_eval/evaluate.py::test_yolov10x
+
 
 }
 
 run_yolov7_demo() {
   # yolov7 demo
   pytest models/demos/yolov7/demo/demo.py
-  # yolov7 eval
-  pytest models/experimental/yolo_eval/evaluate.py::test_yolov7
+
 
 }
 
@@ -363,6 +342,7 @@ run_vgg_unet_demo() {
 =======
   pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp
 
+<<<<<<< HEAD
  # vgg_unet eval
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -375,6 +355,8 @@ run_vgg_unet_demo() {
 =======
 >>>>>>> 20e7f2290d ( check vanilla_unet for lower iterations and fix yolov6l, segformer eval and mobv2 e2e perf)
   pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
+=======
+>>>>>>> 2c8edd3897 (disable eval scripts in demo CI's)
 
 }
 
