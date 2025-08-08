@@ -86,7 +86,6 @@ def evaluation(
         sample_count = 0
         max_samples = 500
         all_patient_metrics = defaultdict(list)
-
         for patient_id in patient_folders:
             if sample_count >= max_samples:
                 break
@@ -106,10 +105,8 @@ def evaluation(
             input_list = []
             pred_list = []
             true_list = []
-
             for i, data in tqdm(enumerate(loader)):
                 x, y_true = data
-
                 if model_type == "torch_model":
                     y_pred = model(x)
                 else:
@@ -490,6 +487,7 @@ def evaluation(
         from models.demos.segformer.demo.demo_for_semantic_segmentation import (
             SemanticSegmentationDataset,
             shift_gt_indices,
+            custom_collate_fn,
         )
         from torch.utils.data import DataLoader
 

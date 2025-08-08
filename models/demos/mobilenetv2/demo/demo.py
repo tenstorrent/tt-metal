@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 import pytest
 import torch
 from loguru import logger
@@ -11,7 +12,7 @@ from transformers import AutoImageProcessor
 import ttnn
 from models.demos.mobilenetv2.runner.performant_runner import MobileNetV2Trace2CQ
 from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
-from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
+from models.demos.utils.common_demo_utils import get_batch, get_data_loader, load_imagenet_dataset
 from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
@@ -45,9 +46,8 @@ def run_mobilenetv2_imagenet_demo(
         model_version = "microsoft/resnet-50"
         image_processor = AutoImageProcessor.from_pretrained(model_version)
         logger.info("ImageNet-1k validation Dataset")
-        input_loc = str(model_location_generator("ImageNet_data"))
+        input_loc = load_imagenet_dataset(model_location_generator)
         data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
-
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
@@ -67,7 +67,6 @@ def run_mobilenetv2_imagenet_demo(
             output = mobilenetv2_trace_2cq.run(torch_input_tensor)
             output = ttnn.to_torch(output, mesh_composer=mobilenetv2_trace_2cq.test_infra.output_mesh_composer)
             prediction = output.argmax(dim=-1)
-
             profiler.end(f"run")
             total_inference_time += profiler.get(f"run")
             for i in range(batch_size):
