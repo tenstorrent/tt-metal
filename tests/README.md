@@ -27,24 +27,32 @@ export POSTGRES_PORT="5432"  # Optional, defaults to 5432
 **Without these environment variables, the unit test runner will fail to start.**
 
 #### Sweep Test Framework
-The sweep test framework has two database options:
+The sweep test framework separates where vectors are loaded from (vector source) and where results are written to (result destination):
 
-1. **PostgreSQL** (requires credentials):
-   ```bash
-   export POSTGRES_HOST="your-postgres-host"
-   export POSTGRES_DATABASE="your-database-name"
-   export POSTGRES_USER="your-username"
-   export POSTGRES_PASSWORD="your-password"
-   export POSTGRES_PORT="5432"  # Optional, defaults to 5432
-   ```
+- **Vector sources**: `elastic` (default), `file`, or `vectors_export`
+- **Result destinations**: `postgres` (default), `elastic`, or `results_export`
 
-2. **Elasticsearch** (requires credentials):
-   ```bash
-   export ELASTIC_USERNAME="your-elastic-username"
-   export ELASTIC_PASSWORD="your-elastic-password"
-   ```
+Set credentials based on what you use:
 
-For sweep tests, you must have credentials for **either** PostgreSQL **or** Elasticsearch depending on which `--database` option you choose.
+- **If vector source is elastic OR result destination is elastic** (requires credentials):
+  ```bash
+  export ELASTIC_USERNAME="your-elastic-username"
+  export ELASTIC_PASSWORD="your-elastic-password"
+  ```
+
+- **If result destination is postgres** (requires credentials):
+  ```bash
+  export POSTGRES_HOST="your-postgres-host"
+  export POSTGRES_DATABASE="your-database-name"
+  export POSTGRES_USER="your-username"
+  export POSTGRES_PASSWORD="your-password"
+  export POSTGRES_PORT="5432"  # Optional, defaults to 5432
+  ```
+
+- **If result destination is results_export**: no database credentials are required (results are written to JSON files under `tests/sweep_framework/results_export/`).
+
+Also note:
+- **Tag filter**: Vectors fetched from Elasticsearch are filtered by `--tag` (defaults to your `$USER`). Ensure your tag matches the one used during vector generation.
 
 ## Unit Test Framework
 
@@ -141,71 +149,101 @@ python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise
 
 #### 2. Run Tests
 
-**Choose your database backend and set appropriate credentials:**
+**Choose your vector source and result destination, then set credentials accordingly:**
 
-**Option A: Using PostgreSQL**
+**Option A: Default sources (elastic) with PostgreSQL results (default result destination)**
 ```bash
-# Set PostgreSQL credentials first
+# Set required credentials
+export ELASTIC_USERNAME="your-elastic-username"
+export ELASTIC_PASSWORD="your-elastic-password"
 export POSTGRES_HOST="your-postgres-host"
 export POSTGRES_DATABASE="your-database-name"
 export POSTGRES_USER="your-username"
 export POSTGRES_PASSWORD="your-password"
 
 # Run all available sweep tests
-python tests/sweep_framework/sweeps_runner.py --database postgres
+python tests/sweep_framework/sweeps_runner.py --result-dest postgres --summary
 
 # Run specific module
-python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --database postgres
+python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --result-dest postgres
 
 # Run specific suite within a module
-python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --suite-name suite_1 --database postgres
+python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --suite-name suite_1 --result-dest postgres
 
 # Run multiple modules (comma-separated)
-python tests/sweep_framework/sweeps_runner.py --module-name "eltwise.unary.relu.relu,matmul.short.matmul" --database postgres
+python tests/sweep_framework/sweeps_runner.py --module-name "eltwise.unary.relu.relu,matmul.short.matmul" --result-dest postgres
 ```
 
-**Option B: Using Elasticsearch**
+**Option B: Elasticsearch vectors and results**
 ```bash
-# Set Elasticsearch credentials first
+# Set Elasticsearch credentials
 export ELASTIC_USERNAME="your-elastic-username"
 export ELASTIC_PASSWORD="your-elastic-password"
 
-# Run tests using Elasticsearch (default database backend)
-python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --elastic cloud
+# Run all tests, storing results in Elasticsearch
+python tests/sweep_framework/sweeps_runner.py --result-dest elastic --summary
+```
 
-# Run with custom Elasticsearch URL
-python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --elastic "https://your-elastic-url"
+**Option C: Local JSON results export (no DB required)**
+```bash
+# Set Elasticsearch credentials if using elastic vector source
+export ELASTIC_USERNAME="your-elastic-username"
+export ELASTIC_PASSWORD="your-elastic-password"
+
+# Export results to tests/sweep_framework/results_export/<module>.json
+python tests/sweep_framework/sweeps_runner.py --result-dest results_export --summary
+```
+
+**Option D: File-based vectors**
+```bash
+# Read vectors from a JSON file
+python tests/sweep_framework/sweeps_runner.py --vector-source file --file-path /abs/path/to/vectors.json --result-dest results_export --summary
+```
+
+**Option E: Vectors from local export directory**
+```bash
+# Read vectors from tests/sweep_framework/vectors_export/<module>.json
+python tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --summary
 ```
 
 **Dry Run (works with either backend):**
 ```bash
-# Dry run to see what would be executed (requires appropriate credentials)
-python tests/sweep_framework/sweeps_runner.py --dry-run --database postgres
-# or
-python tests/sweep_framework/sweeps_runner.py --dry-run --elastic cloud
+# Dry run to see what would be executed (requires appropriate credentials based on vector source)
+python tests/sweep_framework/sweeps_runner.py --dry-run --result-dest postgres
+# or, with results exported to JSON
+python tests/sweep_framework/sweeps_runner.py --dry-run --result-dest results_export
 ```
 
 #### 3. Advanced Options
 
 ```bash
 # Run with performance measurement
-python tests/sweep_framework/sweeps_runner.py --module-name mymodule --perf --database postgres
+python tests/sweep_framework/sweeps_runner.py --module-name mymodule --perf --result-dest postgres
 
 # Run with device profiling (requires profiler build)
-python tests/sweep_framework/sweeps_runner.py --module-name mymodule --device-perf --database postgres
+python tests/sweep_framework/sweeps_runner.py --module-name mymodule --device-perf --result-dest postgres
 
 # Run with watcher enabled
-python tests/sweep_framework/sweeps_runner.py --module-name mymodule --watcher --database postgres
+python tests/sweep_framework/sweeps_runner.py --module-name mymodule --watcher --result-dest postgres
 
 # Run single test vector for debugging
-python tests/sweep_framework/sweeps_runner.py --module-name mymodule --vector-id abc123def --database postgres
+python tests/sweep_framework/sweeps_runner.py --module-name mymodule --vector-id abc123def --result-dest postgres
+
+# Run all modules but skip some (only valid when not specifying --module-name)
+python tests/sweep_framework/sweeps_runner.py --skip-modules "eltwise.unary.relu.relu,matmul.short.matmul" --result-dest postgres --summary
+
+# Skip remaining tests in a suite after a timeout
+python tests/sweep_framework/sweeps_runner.py --module-name mymodule --skip-on-timeout --result-dest postgres
+
+# Print a detailed summary at the end
+python tests/sweep_framework/sweeps_runner.py --module-name mymodule --summary --result-dest postgres
 ```
 
 For detailed information on writing sweep tests, see [`tests/sweep_framework/README.md`](sweep_framework/README.md).
 
 ## Database Integration
 
-Both frameworks use a shared PostgreSQL database schema managed by the common database module at `tests/sweep_framework/framework/database.py`.
+Both frameworks can use a shared PostgreSQL database schema (managed by `tests/sweep_framework/framework/database.py`) when the result destination is PostgreSQL. The sweep framework can also write results to Elasticsearch or to JSON files (when using `results_export`).
 
 ### Database Schema
 
@@ -237,3 +275,20 @@ Both frameworks use consistent status classification:
 - **FAIL_WATCHER**: Test failed due to watcher exception
 - **FAIL_CRASH_HANG**: Test timed out or crashed
 - **NOT_RUN**: Test skipped due to invalid vector
+- **FAIL_UNSUPPORTED_DEVICE_PERF**: Device perf requested but unsupported or missing data
+
+### Sweep Runner CLI Reference (key options)
+- `--module-name`: Module name or comma-separated list (comma-separated supported for `elastic` and `vectors_export` sources)
+- `--suite-name`: Suite to run within a module
+- `--vector-source`: One of `elastic` (default), `file`, `vectors_export`
+- `--file-path`: Path to vectors JSON (required when `--vector-source file`)
+- `--vector-id`: Run a single vector by id (requires `--module-name`)
+- `--result-dest`: One of `postgres` (default), `elastic`, `results_export`
+- `--tag`: Tag to filter vectors in Elasticsearch (defaults to `$USER`)
+- `--skip-modules`: Comma-separated modules to skip when running all modules
+- `--skip-on-timeout`: Skip remaining tests in a suite if a test times out
+- `--watcher`: Enable watcher
+- `--perf`: Measure end-to-end perf for ops that support it
+- `--device-perf`: Measure device perf (requires profiler build)
+- `--dry-run`: Plan without executing
+- `--summary`: Print an execution (or dry-run) summary
