@@ -6,7 +6,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
-from loguru import logger
 
 
 def pad_to_next_multiple(tensor):
@@ -111,22 +110,37 @@ class TtLlamaMLP(LightweightModule):
                     ttnn.create_global_semaphore(self.mesh_device, self.tt_ccl.sub_device_crs, 0) for _ in range(3)
                 ]
                 # 512 = 4 devices * 4 pages per packet * 32 tile_width
-                self.persistent_interim_w1_rs_buffers = (
-                    ttnn.from_torch(  # We need to be able to fit 2*3840 into the second dimension
-                        torch.zeros((*(8, 4), 32, 3200)),
-                        device=mesh_device,
-                        layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat8_b,
-                        memory_config=self.args.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
-                        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
-                    )
+                self.persistent_interim_w1_w3_rs_buffers = ttnn.from_torch(
+                    torch.zeros((*(8, 4), 32, 3200)),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=self.args.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
                 )
-                self.persistent_output_w1_rs_buffers = ttnn.from_torch(
+                self.persistent_output_w1_w3_rs_buffers = ttnn.from_torch(
                     torch.zeros((*(8, 4), 32, 3200 // 4)),
                     device=mesh_device,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat8_b,
                     memory_config=self.args.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
+                )
+
+                self.persistent_interim_w2_rs_buffers = ttnn.from_torch(
+                    torch.zeros((*(8, 4), 32, 1280)),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=self.args.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
+                )
+                self.persistent_output_w2_rs_buffers = ttnn.from_torch(
+                    torch.zeros((*(8, 4), 32, 1280 // 4)),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
                     mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
                 )
 
