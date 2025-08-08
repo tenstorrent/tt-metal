@@ -84,6 +84,9 @@ echo `git status`
 echo "git bisect start with good commit $good_commit and bad commit $bad_commit"
 git bisect start $bad_commit $good_commit --
 
+echo "ls -lht"
+ls -lht
+
 while [[ "$found" = "false" ]]; do
    echo "::group::Building `git rev-parse HEAD`"
    if ([ ! -z "$patch" ]); then
@@ -93,9 +96,6 @@ while [[ "$found" = "false" ]]; do
    build_rc=0
    ./build_metal.sh --build-tests > /dev/null || build_rc=$?
    echo "::endgroup::"
-
-   echo "ls -lhtR"
-   ls -lhtR
 
    if [[ $build_rc -ne 0 ]]; then
       echo "Build failed; skipping this commit"
