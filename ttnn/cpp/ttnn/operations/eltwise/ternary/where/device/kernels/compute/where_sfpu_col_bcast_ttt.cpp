@@ -50,19 +50,13 @@ ALWI void process_tile(
 
         // Copy all 3 inputs to destination registers
         copy_tile_to_dst_init_short(predicate_cb);
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(predicate_cb, i, i * 3);  // predicate to reg 0, 3, 6, ...
-        }
+        copy_tile(predicate_cb, 0, 0);  // predicate to reg 0, 3, 6, ...
 
         copy_tile_to_dst_init_short(true_cb);
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(true_cb, i, i * 3 + 1);  // true to reg 1, 4, 7, ...
-        }
+        copy_tile(true_cb, 0, 1);  // true to reg 1, 4, 7, ...
 
         copy_tile_to_dst_init_short(false_cb);
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(false_cb, i, i * 3 + 2);  // false to reg 2, 5, 8, ...
-        }
+        copy_tile(false_cb, 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the where operation
         where_tile_init();
@@ -71,9 +65,8 @@ ALWI void process_tile(
         tile_regs_commit();
 
         tile_regs_wait();
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 3, cb_out);  // result is stored in predicate register
-        }
+
+        pack_tile(0, cb_out);  // result is stored in predicate register
         tile_regs_release();
 
         cb_push_back(cb_out, num_tiles_per_cycle);
