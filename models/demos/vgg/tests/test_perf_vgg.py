@@ -14,7 +14,7 @@ import ttnn
 from models.demos.vgg.tt import ttnn_vgg
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, is_grayskull
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
 
 
 def get_expected_times(vgg):
@@ -122,10 +122,10 @@ def test_perf_device_bare_metal_vgg(batch_size, model_name):
     margin = 0.03
 
     if model_name == "ttnn_vgg11":
-        expected_perf = 150 if is_grayskull() else 416
+        expected_perf = 435
         command = f"pytest tests/ttnn/integration_tests/vgg/test_ttnn_vgg11.py"
     else:
-        expected_perf = 138 if is_grayskull() else 345
+        expected_perf = 345
         command = f"pytest tests/ttnn/integration_tests/vgg/test_ttnn_vgg16.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
