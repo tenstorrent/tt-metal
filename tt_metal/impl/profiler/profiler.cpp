@@ -923,15 +923,6 @@ std::map<uint32_t, OperationDetails> postProcessOperationDataPoints(
                 largest_kernel_timestamp = std::max(largest_kernel_timestamp, op_data_point.timestamp);
             }
         }
-        log_info(
-            tt::LogMetal,
-            "op_id: {}, smallest_fw_timestamp: {}, largest_fw_timestamp: {}, smallest_kernel_timestamp: {}, "
-            "largest_kernel_timestamp: {}",
-            op_id,
-            smallest_fw_timestamp,
-            largest_fw_timestamp,
-            smallest_kernel_timestamp,
-            largest_kernel_timestamp);
 
         TT_ASSERT(largest_fw_timestamp >= smallest_fw_timestamp);
         TT_ASSERT(largest_kernel_timestamp >= smallest_kernel_timestamp);

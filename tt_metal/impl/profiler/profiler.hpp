@@ -165,6 +165,7 @@ struct OperationDataPoint {
     int core_y;
     std::string risc_name;
     uint64_t timestamp;
+    tracy::TTDeviceEventPhase zone_phase;
     std::array<bool, static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::COUNT)> zone_name_keyword_flags;
 };
 
