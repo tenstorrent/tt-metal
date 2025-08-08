@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 import torch
 import random
 import ttnn
+import pytest
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -34,7 +35,7 @@ parameters = {
             {"shape": [6, 2], "repeats": [400, 1]},
             {"shape": [6, 2], "repeats": [9, 1]},
         ],
-        "dtype": [ttnn.bfloat16],
+        "dtype": [ttnn.bfloat16, ttnn.int32, ttnn.uint32],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
@@ -51,6 +52,16 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
 def run(
     repeat_specs,
     dtype,
@@ -64,6 +75,47 @@ def run(
 
     # Create a random tensor of the specified shape
     tensor = torch_random(shape, -0.1, 0.1, dtype=torch.bfloat16)
+
+    # Apply repeat using PyTorch's repeat function
+    torch_output_tensor = tensor.repeat(*repeat_dims)
+
+    # Convert the tensor to the ttnn tensor format
+    ttnn_tensor = ttnn.from_torch(tensor, device=device, layout=layout, dtype=dtype)
+
+    # Measure performance of the repeat operation in ttnn
+    start_time = start_measuring_time()
+
+    # Apply repeat in ttnn
+    ttnn_output_tensor = ttnn.repeat(ttnn_tensor, repeat_dims)
+
+    e2e_perf = stop_measuring_time(start_time)
+
+    # Convert the ttnn tensor back to PyTorch for comparison
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+    # Compare the results and return performance and accuracy check
+    result = check_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+    return [result, e2e_perf]
+
+
+@pytest.mark.parametrize("repeat_specs", parameters["nightly"]["repeat_specs"])
+@pytest.mark.parametrize("dtype", parameters["nightly"]["dtype"])
+@pytest.mark.parametrize("layout", parameters["nightly"]["layout"])
+def test_run(
+    repeat_specs,
+    dtype,
+    layout,
+    *,
+    device,
+):
+    # Extract the shape and repeat dimensions from repeat_specs
+    shape = repeat_specs["shape"]
+    repeat_dims = repeat_specs["repeats"]  # Number of repetitions for each dimension
+
+    # Create a random tensor of the specified shape
+    # tensor = torch_random(shape, -0.1, 0.1, dtype=torch.bfloat16)
+    tensor = random_torch_tensor(dtype, shape)
 
     # Apply repeat using PyTorch's repeat function
     torch_output_tensor = tensor.repeat(*repeat_dims)
