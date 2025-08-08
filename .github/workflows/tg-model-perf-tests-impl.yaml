@@ -62,7 +62,6 @@ jobs:
           },
           {
             name: "Galaxy DiT SD3.5 model perf tests",
-            if: inputs.topology == 'topology-6u',
             model-type: "SD3.5",
             arch: wormhole_b0,
             save-perf-data: true,
