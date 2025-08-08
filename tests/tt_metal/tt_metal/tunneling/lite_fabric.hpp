@@ -367,7 +367,12 @@ struct HostToLiteFabricInterface {
         header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
 
         uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
-        log_info(tt::LogMetal, "Reading data from {} {:#x}", receiver_core.str(), receiver_header_address);
+        log_info(
+            tt::LogMetal,
+            "Reading data from {} {:#x} unaligned {}",
+            receiver_core.str(),
+            receiver_header_address,
+            header.unaligned_offset);
         uint32_t receiver_data_address = receiver_header_address + sizeof(LiteFabricHeader) + header.unaligned_offset;
 
         wait_for_empty_write_slot(receiver_core);
