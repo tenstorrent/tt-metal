@@ -92,6 +92,19 @@ export class HierarchicalTelemetryStore {
         this.updateState(id, initialState, true);
     }
 
+    getChildNames(path) {
+        // Navigate through the hierarchy to find the correct map
+        const parts = path.split("_");
+        let current_map = this._path_children;
+        for (const part of parts) {
+            if (!current_map || !current_map.has(part)) {
+                return [];
+            }
+            current_map = current_map.get(part);
+        }
+        return current_map ? [ ...current_map.keys() ] : [];
+    }
+
     getState(id_or_path) {
         const is_path = typeof(id_or_path) === "string" || id_or_path instanceof String;
         const path = is_path ? id_or_path : this._path_by_id.get(id_or_path);
