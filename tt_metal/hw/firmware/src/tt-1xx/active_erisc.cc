@@ -181,16 +181,13 @@ void __attribute__((noinline)) Application() {
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 // Track if we could not return back to _start
                 return;
-            } else if (
-                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+            } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
-                    mailboxes->go_message.signal = RUN_MSG_DONE;
-                    // Notify dispatcher that this has been done
-                    internal_::notify_dispatch_core_done(dispatch_addr);
-                }
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                mailboxes->go_message.signal = RUN_MSG_DONE;
+                // Notify dispatcher that this has been done
+                internal_::notify_dispatch_core_done(dispatch_addr);
             } else {
                 service_base_fw();
             }
