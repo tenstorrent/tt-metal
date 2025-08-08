@@ -7,6 +7,7 @@
 #include "tt_metal/hw/inc/dataflow_api_addrgen.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 namespace tt::tt_fabric {
 
@@ -22,6 +23,11 @@ uint32_t get_page_size(const InterleavedAddrGen<DRAM>& s) {
 template <bool DRAM>
 uint32_t get_page_size(const InterleavedAddrGenFast<DRAM>& s) {
     return s.page_size;
+}
+
+template <typename ShardingInfoType>
+uint32_t get_page_size(const experimental::ShardedAddrGen<ShardingInfoType>& d) {
+    return d.CONSTANT_ARGS.page_size_jump;
 }
 
 template <typename AddrGenType>
