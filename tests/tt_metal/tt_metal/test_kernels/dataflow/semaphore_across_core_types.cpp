@@ -29,7 +29,8 @@ void kernel_main() {
     uint64_t dst_addr = get_noc_addr_helper(other_noc_xy, (uint32_t)other_sem_addr);
     noc_semaphore_inc(dst_addr, 1);
 
-    DPRINT << "Semaphore: " << HEX() << *my_sem_addr << " rtargs base = " << get_arg_addr(0) << ENDL();
+    DPRINT << "My Semaphore Address: " << HEX() << (uint32_t)my_sem_addr << " Other Semaphore Address: " << HEX()
+           << (uint32_t)other_sem_addr << " RTArgs Base: " << HEX() << (uint32_t)get_arg_addr(0) << ENDL();
 
     // Spin until other core updates the local semaphore confirming the addresses are correct
     while (*my_sem_addr == sem_init_value) {
