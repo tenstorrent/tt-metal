@@ -70,6 +70,8 @@ TT_LOGGER_LEVEL=FATAL ./build/sources/examples/nano_gpt/nano_gpt --model_path na
 ### Nightly only tests
 If CI fails, but local tests pass as expected, please consider changing the
 is_nigthly_tt_train_tests_enabled in the nano_gpt_test.cpp
+TT-Train nightly tests are all tests with "NIGTHLY_" in the name.
+To run it in github please search for `Nightly tt-metal L2 tests`.
 
 ### wandb support
 If you don't have an account to wandb (or don't want to use it), use `-w 0` argument or run `wandb offline` beforehand (creates `wandb/settings` file)
