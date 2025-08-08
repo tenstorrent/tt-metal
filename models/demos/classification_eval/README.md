@@ -37,13 +37,13 @@ Where,
 **Vit:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_eval/classification_eval.py::test_vit_image_classification_eval[wormhole_b0-tt_model-8-device_params0]
+ pytest models/demos/classification_eval/classification_eval.py::test_vit_image_classification_eval[wormhole_b0-tt_model-8-device_params0]
  ```
 
 **Resnet50:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-act_dtype0-weight_dtype0-device_params0-tt_model]
+ pytest models/demos/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-act_dtype0-weight_dtype0-device_params0-tt_model]
  ```
 
 **MobileNetV2:** <br>
@@ -51,12 +51,12 @@ Where,
 
 **_Single-Device (BS-10):_**<br>
  ```sh
- pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[tt_model-10-device_params0]
+ pytest models/demos/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[tt_model-10-device_params0]
  ```
 
 **_Multi-Device (DP-2,N300):_**<br>
  ```sh
- pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp[wormhole_b0-tt_model-10-device_params0]
+ pytest models/demos/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp[wormhole_b0-tt_model-10-device_params0]
  ```
 
 **VoVNet:** <br>
@@ -88,13 +88,13 @@ Where,
 **Vit:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_eval/classification_eval.py::test_vit_image_classification_eval[wormhole_b0-torch_model-8-device_params0]
+ pytest models/demos/classification_eval/classification_eval.py::test_vit_image_classification_eval[wormhole_b0-torch_model-8-device_params0]
  ```
 
 **Resnet50:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-act_dtype0-weight_dtype0-device_params0-torch_model]
+ pytest models/demos/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-act_dtype0-weight_dtype0-device_params0-torch_model]
  ```
 
 **MobileNetV2:** <br>
@@ -102,12 +102,12 @@ Where,
 
 **_Single-Device (BS-10):_**<br>
  ```sh
- pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[torch_model-10-device_params0]
+ pytest models/demos/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[torch_model-10-device_params0]
  ```
 
 **_Multi-Device (DP-2,N300):_**<br>
  ```sh
- pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp[wormhole_b0-torch_model-10-device_params0]
+ pytest models/demos/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp[wormhole_b0-torch_model-10-device_params0]
  ```
 
 **VoVNet:** <br>

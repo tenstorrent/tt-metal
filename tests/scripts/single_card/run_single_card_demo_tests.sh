@@ -3,7 +3,7 @@ set -e
 
 run_falcon7b_func() {
 
-  pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
+  pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"; fail+=$?
 
 }
 
@@ -17,7 +17,7 @@ run_mistral7b_func() {
 
 run_qwen7b_func() {
 
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800; fail+=$?
 
 }
 
@@ -63,10 +63,10 @@ run_gemma3_perf() {
 
 run_segformer_func() {
   #Segformer Segmentation Demo
-  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation
+  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation_dp; fail+=$?
 
   #Segformer Classification Demo
-  pytest models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo
+  pytest models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo_dp; fail+=$?
 
 }
 
@@ -80,7 +80,7 @@ run_sentencebert_func() {
 run_yolov11_func() {
 
  #Yolov11 Demo
- pytest models/demos/yolov11/demo/demo.py
+ pytest models/demos/yolov11/demo/demo.py; fail+=$?
 
 }
 
@@ -115,7 +115,7 @@ run_ufld_v2_func() {
 run_vgg_func() {
 
   #VGG11/VGG16
-  pytest models/demos/vgg/demo/demo.py
+  pytest models/demos/vgg/demo/demo.py; fail+=$?
 
 }
 
@@ -146,18 +146,18 @@ run_bert_func() {
 
 run_resnet_stability() {
 
-  pytest models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
+  pytest models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"; fail+=$?
 
 }
 
 run_resnet_func() {
 
-  pytest models/demos/wormhole/resnet50/demo/demo.py
+  pytest models/demos/wormhole/resnet50/demo/demo.py; fail+=$?
 
 }
 
 run_sdxl_func() {
-  pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2
+  pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2; fail+=$?
 }
 
 run_distilbert_func() {
@@ -175,19 +175,19 @@ run_distilbert_func() {
 
 run_covnet_mnist_func() {
 
-  pytest models/demos/convnet_mnist/demo/demo.py
+  pytest models/demos/convnet_mnist/demo/demo.py; fail+=$?
 
 }
 
 run_mnist_func() {
 
-  pytest models/demos/mnist/demo/demo.py
+  pytest models/demos/mnist/demo/demo.py; fail+=$?
 
 }
 
 run_squeezebert_func() {
 
-  pytest models/demos/squeezebert/demo/demo.py
+  pytest models/demos/squeezebert/demo/demo.py; fail+=$?
 
 }
 
@@ -198,13 +198,13 @@ run_efficientnet_b0_func(){
 }
 run_roberta_func() {
 
-  pytest models/demos/roberta/demo/demo.py
+  pytest models/demos/roberta/demo/demo.py; fail+=$?
 
 }
 
 run_stable_diffusion_func() {
 
-  pytest --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo
+  pytest --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo; fail+=$?
 
 }
 
@@ -253,32 +253,32 @@ run_llama3_perf() {
 run_falcon7b_perf() {
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py; fail+=$?
 
 }
 
 run_mamba_perf() {
 
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420; fail+=$?
 
 }
 
 run_whisper_perf() {
 
   # Whisper conditional generation
-  pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"; fail+=$?
 
 }
 
 run_yolov9c_perf() {
   # yolov9c demo
-  pytest models/demos/yolov9c/demo/demo.py
+  pytest models/demos/yolov9c/demo/demo.py; fail+=$?
 
 }
 run_yolov8s_perf() {
 
   # yolov8s demo
-  pytest models/demos/yolov8s/demo/demo.py
+  pytest models/demos/yolov8s/demo/demo.py; fail+=$?
 
 }
 
@@ -286,7 +286,7 @@ run_yolov8s_perf() {
 run_mobilenetv2_perf(){
 
 #  mobilenetv2 demo
- pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp
+ pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp; fail+=$?
 
 
 }
@@ -294,7 +294,7 @@ run_mobilenetv2_perf(){
 run_yolov8s_world_perf() {
 
   # yolov8s_world demo
-  pytest models/demos/yolov8s_world/demo/demo.py
+  pytest models/demos/yolov8s_world/demo/demo.py; fail+=$?
 
 
 }
@@ -315,44 +315,48 @@ run_swin_v2_demo() {
 run_yolov8x_perf() {
 
   # yolov8x demo
-  pytest models/demos/yolov8x/demo/demo.py
+  pytest models/demos/yolov8x/demo/demo.py; fail+=$?
 
 
 }
 run_yolov4_perf() {
   #yolov4 demo
-  pytest models/demos/yolov4/demo.py::test_yolov4
-  pytest models/demos/yolov4/demo.py::test_yolov4_dp
+  pytest models/demos/yolov4/demo.py::test_yolov4; fail+=$?
+  pytest models/demos/yolov4/demo.py::test_yolov4_dp; fail+=$?
 
 }
 
 run_yolov10x_demo() {
   # yolov10x demo
-  pytest models/demos/yolov10x/demo/demo.py
+  pytest models/demos/yolov10x/demo/demo.py; fail+=$?
 
 
 }
 
 run_yolov7_demo() {
   # yolov7 demo
-  pytest models/demos/yolov7/demo/demo.py
+  pytest models/demos/yolov7/demo/demo.py; fail+=$?
 
 
 }
 
 run_yolov6l_demo() {
-  # yolov6 demo
-  pytest models/demos/yolov6l/demo/demo.py
+
+  pytest models/demos/yolov6l/demo/demo.py; fail+=$?
 
 }
 
 run_vgg_unet_demo() {
  # vgg_unet demo
 <<<<<<< HEAD
+<<<<<<< HEAD
   pytest models/demos/vgg_unet/demo/demo.py
 
 =======
   pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp
+=======
+  pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp; fail+=$?
+>>>>>>> e1c6873aef (move eval to demos)
 
 <<<<<<< HEAD
  # vgg_unet eval
@@ -374,7 +378,7 @@ run_vgg_unet_demo() {
 
 run_yolov12x_demo() {
 
-  pytest models/demos/yolov12x/demo/demo.py
+  pytest models/demos/yolov12x/demo/demo.py; fail+=$?
 
 }
 
