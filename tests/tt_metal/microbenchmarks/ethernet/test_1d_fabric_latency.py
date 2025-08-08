@@ -53,20 +53,33 @@ def profile_results(
     # MAIN-TEST-BODY
     # device = devices[latency_measurement_worker_line_index]
     device = devices[0]
-    latency_avg_cycles = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
-        "Average"
-    ]
-    latency_max_cycles = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
-        "Max"
-    ]
-    latency_min_cycles = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
-        "Min"
-    ]
+    reported_device = None
+    for device in devices:
+        if (
+            device in devices_data["devices"]
+            and "analysis" in devices_data["devices"][device]["cores"]["DEVICE"]
+            and main_test_body_string in devices_data["devices"][device]["cores"]["DEVICE"]["analysis"]
+        ):
+            reported_device = device
+            break
+
+    assert reported_device is not None, "No device reported latency"
+    latency_avg_cycles = devices_data["devices"][reported_device]["cores"]["DEVICE"]["analysis"][main_test_body_string][
+        "stats"
+    ]["Average"]
+    latency_max_cycles = devices_data["devices"][reported_device]["cores"]["DEVICE"]["analysis"][main_test_body_string][
+        "stats"
+    ]["Max"]
+    latency_min_cycles = devices_data["devices"][reported_device]["cores"]["DEVICE"]["analysis"][main_test_body_string][
+        "stats"
+    ]["Min"]
     Hz_per_GHz = 1e9
     latency_avg_ns = latency_avg_cycles / (freq_hz / Hz_per_GHz)
     latency_max_ns = latency_max_cycles / (freq_hz / Hz_per_GHz)
     latency_min_ns = latency_min_cycles / (freq_hz / Hz_per_GHz)
-    count = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"]["Count"]
+    count = devices_data["devices"][reported_device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
+        "Count"
+    ]
 
     return latency_avg_ns, latency_min_ns, latency_max_ns, count
 
