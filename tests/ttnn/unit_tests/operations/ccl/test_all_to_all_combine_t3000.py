@@ -239,7 +239,6 @@ def trace_all_to_all_combine(
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     profiler=BenchmarkProfiler(),
-    use_optional_output_tensors=False,
 ):
     devices = mesh_shape[0] * mesh_shape[1]
     # input, output, interm core range set
