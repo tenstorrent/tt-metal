@@ -182,6 +182,7 @@ def run_reduce_scatter_impl(
                 memory_config=mem_config_rs,
                 topology=ttnn.Topology.Linear,
                 subdevice_id=worker_sub_device_id,
+                barrier_semaphore=barrier_semaphore_handles[i],
             )
 
             all_reduced = tt_out_tensors[0]

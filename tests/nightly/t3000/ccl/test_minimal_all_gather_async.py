@@ -133,6 +133,7 @@ def run_all_gather_impl(
                 memory_config=mem_config_ag,
                 topology=ttnn.Topology.Linear,
                 subdevice_id=worker_sub_device_id,
+                barrier_semaphore=barrier_semaphore_handles[i],
             )
 
             tt_all_gather_out_tensor = ttnn.concat(tt_out_tensors, dim=dim)
