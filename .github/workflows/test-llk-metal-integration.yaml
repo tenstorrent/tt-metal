@@ -44,10 +44,17 @@ on:
         type: number
         default: 240
 
+concurrency:
+  group: llk-integration-${{ inputs.mirrored_branch }}
+  cancel-in-progress: true
+
 env:
   PARENT_BRANCH_NAME: test-llk-${{ inputs.mirrored_branch }}-${{ github.run_id }}
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
   WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 240 }}
+  METAL_REPO: tenstorrent/tt-metal
+  LLK_REPO: tenstorrent/tt-llk
+  GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
   MAX_RETRIES: 3
   POLL_INTERVAL: 120
 
@@ -147,7 +154,7 @@ jobs:
           steps.check-branch.outputs.branch-exists == 'true' &&
           (inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true)
         env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+          GH_TOKEN: ${{ env.GH_TOKEN }}
           WORKFLOW_TIMEOUT: ${{ env.WORKFLOW_TIMEOUT }}
           MAX_RETRIES: ${{ env.MAX_RETRIES }}
           POLL_INTERVAL: ${{ env.POLL_INTERVAL }}
@@ -170,7 +177,7 @@ jobs:
             while [ $retries -lt $MAX_RETRIES ]; do
               while [ $elapsed -lt $timeout_seconds ]; do
                 # Use more efficient status check
-                local status=$(gh run view "$run_id" --json status,conclusion --jq '.status + ":" + (.conclusion // "unknown")' --repo "tenstorrent/tt-metal" 2>/dev/null || echo "unknown:unknown")
+                local status=$(gh run view "$run_id" --json status,conclusion --jq '.status + ":" + (.conclusion // "unknown")' --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "unknown:unknown")
                 local run_status=$(echo "$status" | cut -d: -f1)
                 local conclusion=$(echo "$status" | cut -d: -f2)
                 if [ "$run_status" = "completed" ]; then
@@ -196,7 +203,7 @@ jobs:
               retries=$((retries + 1))
               if [ $retries -lt $MAX_RETRIES ]; then
                 echo "🔄 Retrying $workflow_name (attempt $((retries + 1))/$MAX_RETRIES)"
-                if gh run rerun "$run_id" --failed --repo "tenstorrent/tt-metal"; then
+                if gh run rerun "$run_id" --failed --repo "${{ env.METAL_REPO }}"; then
                   echo "🔄 Retry triggered for $workflow_name"
                   sleep 30
                   elapsed=0  # Reset timer for retry
@@ -213,13 +220,13 @@ jobs:
           for workflow in "${!TEST_CONFIGS[@]}"; do
             if [ "${TEST_CONFIGS[$workflow]}" = "true" ]; then
               echo "Triggering $workflow..."
-              gh workflow run "$workflow" --ref "$PARENT_BRANCH_NAME" --repo "tenstorrent/tt-metal"
+              gh workflow run "$workflow" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
 
               # Poll for run ID
               run_id=""
               for i in {1..12}; do  # Try for 60 seconds max
                 sleep 5
-                run_id=$(gh run list --workflow "$workflow" --branch "$PARENT_BRANCH_NAME" --limit 1 --json databaseId --jq '.[0].databaseId' --repo "tenstorrent/tt-metal" 2>/dev/null || echo "")
+                run_id=$(gh run list --workflow "$workflow" --branch "$PARENT_BRANCH_NAME" --limit 1 --json databaseId --jq '.[0].databaseId' --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
                 if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
                   echo "Found run ID: $run_id for $workflow"
                   break
@@ -257,17 +264,17 @@ jobs:
       - name: Cleanup test branches
         if: needs.setup-and-test.outputs.branch-exists == 'true'
         env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+          GH_TOKEN: ${{ env.GH_TOKEN }}
         run: |
           TEST_BRANCH_NAME="${{ needs.setup-and-test.outputs.test-branch-name }}"
           PARENT_BRANCH_NAME="${{ needs.setup-and-test.outputs.parent-branch-name }}"
 
           # Clean up test branch in submodule
 
-          gh api --method DELETE "repos/tenstorrent/tt-llk/git/refs/heads/$TEST_BRANCH_NAME" 2>/dev/null || echo "Test branch already deleted or doesn't exist"
+          gh api --method DELETE "repos/${{ env.LLK_REPO }}/git/refs/heads/$TEST_BRANCH_NAME" 2>/dev/null || echo "Test branch already deleted or doesn't exist"
 
           # Clean up parent branch
-          gh api --method DELETE "repos/tenstorrent/tt-metal/git/refs/heads/$PARENT_BRANCH_NAME" 2>/dev/null || echo "Parent branch already deleted or doesn't exist"
+          gh api --method DELETE "repos/${{ env.METAL_REPO }}/git/refs/heads/$PARENT_BRANCH_NAME" 2>/dev/null || echo "Parent branch already deleted or doesn't exist"
 
           echo "✅ Cleaned up test branches"
       - name: Generate test report
