@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>noc_async_read_tile_dram_sharded_with_state &mdash; TT-Metalium  documentation</title>
+  <title>noc_semaphore_wait_min &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_read_tile_dram_sharded_with_state.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_semaphore_wait_min.html" />
   <!--[if lt IE 9]>
     <script src="../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="noc_async_write" href="noc_async_write.html" />
-    <link rel="prev" title="noc_async_read_tile_dram_sharded_set_state" href="noc_async_read_tile_dram_sharded_set_state.html" /> 
+    <link rel="next" title="get_noc_addr" href="get_noc_addr.html" />
+    <link rel="prev" title="noc_semaphore_wait" href="noc_semaphore_wait.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -65,18 +65,39 @@
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read.html">noc_async_read</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_set_state.html">noc_async_read_set_state</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_with_state.html">noc_async_read_with_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_one_packet.html">noc_async_read_one_packet</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_one_packet_set_state.html">noc_async_read_one_packet_set_state</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_one_packet_with_state.html">noc_async_read_one_packet_with_state</a></li>
-<li class="toctree-l4"><a class="reference internal" href="noc_async_read_tile_dram_sharded_set_state.html">noc_async_read_tile_dram_sharded_set_state</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">noc_async_read_tile_dram_sharded_with_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_page.html">noc_async_read_page</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_shard.html">noc_async_read_shard</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_write.html">noc_async_write</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_write_multicast.html">noc_async_write_multicast</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write_multicast_loopback_src.html">noc_async_write_multicast_loopback_src</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write_one_packet.html">noc_async_write_one_packet</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write_one_packet_set_state.html">noc_async_write_one_packet_set_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write_one_packet_with_state.html">noc_async_write_one_packet_with_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write_multicast_one_packet.html">noc_async_write_multicast_one_packet</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write_page.html">noc_async_write_page</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write_shard.html">noc_async_write_shard</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_inline_dw_write.html">noc_inline_dw_write</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_inline_dw_write_set_state.html">noc_inline_dw_write_set_state</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_inline_dw_write_with_state.html">noc_inline_dw_write_with_state</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_barrier.html">noc_async_read_barrier</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_write_barrier.html">noc_async_write_barrier</a></li>
-<li class="toctree-l4"><a class="reference internal" href="noc_semaphore_set_multicast.html">noc_semaphore_set_multicast</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_atomic_barrier.html">noc_async_atomic_barrier</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_full_barrier.html">noc_async_full_barrier</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_read_barrier_with_trid.html">noc_async_read_barrier_with_trid</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write_barrier_with_trid.html">noc_async_write_barrier_with_trid</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_writes_flushed.html">noc_async_writes_flushed</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_posted_writes_flushed.html">noc_async_posted_writes_flushed</a></li>
+<li class="toctree-l4"><a class="reference internal" href="get_semaphore.html">get_semaphore</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_semaphore_set.html">noc_semaphore_set</a></li>
-<li class="toctree-l4"><a class="reference internal" href="noc_semaphore_wait.html">noc_semaphore_wait</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_semaphore_set_remote.html">noc_semaphore_set_remote</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_semaphore_set_multicast.html">noc_semaphore_set_multicast</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_semaphore_set_multicast_loopback_src.html">noc_semaphore_set_multicast_loopback_src</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_semaphore_inc.html">noc_semaphore_inc</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_semaphore_wait.html">noc_semaphore_wait</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">noc_semaphore_wait_min</a></li>
 <li class="toctree-l4"><a class="reference internal" href="get_noc_addr.html">get_noc_addr</a></li>
 <li class="toctree-l4"><a class="reference internal" href="get_noc_addr_from_bank_id.html">get_noc_addr_from_bank_id</a></li>
 <li class="toctree-l4"><a class="reference internal" href="get_noc_multicast_addr.html">get_noc_multicast_addr</a></li>
@@ -118,9 +139,9 @@
           <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
           <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
           <li class="breadcrumb-item"><a href="data_movement.html">Data Movement APIs</a></li>
-      <li class="breadcrumb-item active">noc_async_read_tile_dram_sharded_with_state</li>
+      <li class="breadcrumb-item active">noc_semaphore_wait_min</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/noc_async_read_tile_dram_sharded_with_state.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/noc_semaphore_wait_min.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -128,15 +149,15 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="noc-async-read-tile-dram-sharded-with-state">
-<h1>noc_async_read_tile_dram_sharded_with_state<a class="headerlink" href="#noc-async-read-tile-dram-sharded-with-state" title="Permalink to this heading"></a>
+  <section id="noc-semaphore-wait-min">
+<h1>noc_semaphore_wait_min<a class="headerlink" href="#noc-semaphore-wait-min" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv443noc_async_read_tile_dram_sharded_with_state8uint32_t8uint32_t8uint32_t7uint8_t">
-<span class="target" id="dataflow__api_8h_1a333b6a8c7201e38c73bb8e3aff3c8f44"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_read_tile_dram_sharded_with_state</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_base_addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">dest_addr</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv443noc_async_read_tile_dram_sharded_with_state8uint32_t8uint32_t8uint32_t7uint8_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv422noc_semaphore_wait_minPV8uint32_t8uint32_t">
+<span class="target" id="dataflow__api_8h_1a84a965a61b65152c42835f35dca007af"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_semaphore_wait_min</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">volatile</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n sig-param"><span class="pre">sem_addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">val</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv422noc_semaphore_wait_minPV8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Initiates an asynchronous read for a single packet with size &lt;= NOC_MAX_BURST_SIZE (i.e. maximum packet size). This is similar to <em>noc_async_read_with_state</em>, except that the source location is determined by the src_base_addr and src_addr.</p>
+<p>A blocking call that waits until the value of a local L1 memory address on the Tensix core executing this function becomes equal or greater than a target value. This L1 memory address is used as a semaphore of size 4 Bytes, as a synchronization mechanism. Also, see <em>noc_semaphore_set</em>.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -144,39 +165,25 @@
 <tr class="row-odd">
 <th class="head"><p>Argument   </p></th>
 <th class="head"><p>Description   </p></th>
-<th class="head"><p>Data type   </p></th>
-<th class="head"><p>Valid range   </p></th>
-<th class="head"><p>required    </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>src_base_addr   </p></td>
-<td><p>Base address of source location   </p></td>
+<td><p>sem_addr   </p></td>
+<td><p>Semaphore address in local L1 memory   </p></td>
 <td><p>uint32_t   </p></td>
 <td><p>0..1MB   </p></td>
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>src_addr   </p></td>
-<td><p>Address in local L1 memory on source core   </p></td>
+<td><p>val   </p></td>
+<td><p>The target value of the semaphore   </p></td>
 <td><p>uint32_t   </p></td>
-<td><p>0..1MB   </p></td>
-<td><p>True    </p></td>
-</tr>
-<tr class="row-even">
-<td><p>dest_addr   </p></td>
-<td><p>Address in local L1 memory on destination core   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>0..1MB   </p></td>
-<td><p>True    </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>noc   </p></td>
-<td><p>Which NOC to use for the transaction   </p></td>
-<td><p>uint8_t   </p></td>
-<td><p>0 or 1   </p></td>
-<td><p>False   </p></td>
+<td><p>Any uint32_t value   </p></td>
+<td><p>True   </p></td>
 </tr>
 </tbody>
 </table>
@@ -191,8 +198,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="noc_async_read_tile_dram_sharded_set_state.html" class="btn btn-neutral float-left" title="noc_async_read_tile_dram_sharded_set_state" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="noc_async_write.html" class="btn btn-neutral float-right" title="noc_async_write" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="noc_semaphore_wait.html" class="btn btn-neutral float-left" title="noc_semaphore_wait" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="get_noc_addr.html" class="btn btn-neutral float-right" title="get_noc_addr" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
