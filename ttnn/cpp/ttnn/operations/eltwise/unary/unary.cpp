@@ -398,6 +398,22 @@ Tensor Hardtanh::invoke(
         optional_output_tensor);
 }
 
+Tensor Softshrink::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const float lambda,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::SOFTSHRINK;
+    TT_ASSERT(lambda >= 0);
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{op_type, static_cast<float>(lambda)}},
+        memory_config,
+        optional_output_tensor);
+}
+
 Tensor Deg2Rad::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
