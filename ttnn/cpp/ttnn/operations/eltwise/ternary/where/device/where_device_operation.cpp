@@ -264,8 +264,13 @@ WhereDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    // Detect broadcast type for TTT variant
+    WhereBroadcastType broadcast_type =
+        get_broadcast_type(predicate.logical_shape(), value_true.logical_shape(), value_false.logical_shape());
+
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTT,
+        .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
@@ -291,6 +296,7 @@ WhereDeviceOperation::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTS,
+        .broadcast_type = WhereBroadcastType::NONE,  // should use get_broadcast_type when support is added
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
@@ -317,6 +323,7 @@ WhereDeviceOperation::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TST,
+        .broadcast_type = WhereBroadcastType::NONE,  // should use get_broadcast_type when support is added
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_false.dtype()),

@@ -87,19 +87,13 @@ Tensor WhereOperation::invoke(
             const auto& t_true = std::get<Tensor>(value_true);
             const auto& t_false = std::get<Tensor>(value_false);
 
-            // Check for exact shape match or broadcast-compatible shapes
-            bool shapes_compatible =
-                (ternary_utils::have_same_shape(t_true, predicate) &&
-                 ternary_utils::have_same_shape(predicate, t_false));
+            // Check if shapes are broadcast-compatible for TTT using broadcast detection
+            // This needs to be done in the device operation but we need this check here to decide fallback to legacy
 
-            if (!shapes_compatible) {
-                // Check if shapes are broadcast-compatible using our broadcast detection
-                auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-                    predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
-                shapes_compatible = (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::NONE);
-            }
+            auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+                predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
 
-            if (shapes_compatible) {
+            if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_info(tt::LogOp, "Where LLK - TTT");
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
