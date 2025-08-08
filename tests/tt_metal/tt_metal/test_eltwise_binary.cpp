@@ -114,14 +114,14 @@ int main(int argc, char** argv) {
                 tt_metal::CircularBufferConfig(
                     num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(src0_cb_index, single_tile_size);
-            auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
             uint32_t src1_cb_index = tt::CBIndex::c_1;
             tt_metal::CircularBufferConfig cb_src1_config =
                 tt_metal::CircularBufferConfig(
                     num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(src1_cb_index, single_tile_size);
-            auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
             uint32_t ouput_cb_index = tt::CBIndex::c_16;
             uint32_t num_output_tiles = 2;
@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
                 tt_metal::CircularBufferConfig(
                     num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(ouput_cb_index, single_tile_size);
-            auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
             auto binary_reader_kernel = tt_metal::CreateKernel(
                 program,
@@ -149,8 +149,6 @@ int main(int argc, char** argv) {
 
             vector<uint32_t> compute_kernel_args = {};
 
-            bool fp32_dest_acc_en = false;
-            bool math_approx_mode = false;
             std::map<std::string, std::string> binary_defines = {
                 {"ELTWISE_OP", op_id_to_op_define[eltwise_op]},
                 {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};

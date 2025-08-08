@@ -47,7 +47,6 @@ std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
     std::array<bool, 4> directions = {false, false, false, false};
 
     const bool wrap_around_connection = detail::has_wrap_around(topology);
-    auto src_device = mesh_view.get_device(mesh_coordinate);
 
     // Helper that appends neighbours for a single axis
     auto process_axis = [&](int32_t axis_val) {

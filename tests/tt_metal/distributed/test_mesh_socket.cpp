@@ -81,10 +81,6 @@ void test_single_connection_single_device_socket(
     bool use_cbs) {
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 1);
-    auto sender_virtual_coord = md0->worker_core_from_logical_core(sender_logical_coord);
-    auto recv_virtual_coord = md0->worker_core_from_logical_core(recv_logical_coord);
-
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
@@ -132,7 +128,7 @@ void test_single_connection_single_device_socket(
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
     auto send_recv_program = CreateProgram();
-    auto sender_kernel = CreateKernel(
+    CreateKernel(
         send_recv_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/sender.cpp",
         sender_logical_coord,
@@ -159,12 +155,12 @@ void test_single_connection_single_device_socket(
         auto input_cb_index = CBIndex::c_0;
         auto input_cb_config = CircularBufferConfig(page_size, {{input_cb_index, data_format}})
                                    .set_page_size(input_cb_index, tile_size_bytes);
-        auto input_cb = CreateCircularBuffer(send_recv_program, recv_logical_coord, input_cb_config);
+        CreateCircularBuffer(send_recv_program, recv_logical_coord, input_cb_config);
         auto output_cb_index = CBIndex::c_1;
         auto output_cb_config = CircularBufferConfig(2 * page_size, {{output_cb_index, data_format}})
                                     .set_page_size(output_cb_index, tile_size_bytes);
-        auto output_cb = CreateCircularBuffer(send_recv_program, recv_logical_coord, output_cb_config);
-        auto recv_compute_kernel = CreateKernel(
+        CreateCircularBuffer(send_recv_program, recv_logical_coord, output_cb_config);
+        CreateKernel(
             send_recv_program,
             "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_cb_compute.cpp",
             recv_logical_coord,
@@ -177,7 +173,7 @@ void test_single_connection_single_device_socket(
                     static_cast<uint32_t>(page_size),
                     static_cast<uint32_t>(data_size),
                     static_cast<uint32_t>(num_tiles_per_page)}});
-        auto recv_writer_kernel = CreateKernel(
+        CreateKernel(
             send_recv_program,
             "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_cb_writer.cpp",
             recv_logical_coord,
@@ -192,7 +188,7 @@ void test_single_connection_single_device_socket(
                     static_cast<uint32_t>(data_size),
                     static_cast<uint32_t>(num_tiles_per_page)}});
     } else {
-        auto recv_kernel = CreateKernel(
+        CreateKernel(
             send_recv_program,
             "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
             recv_logical_coord,
@@ -251,8 +247,6 @@ void test_single_device_socket_with_workers(
 
     CoreCoord sender_logical_data_core = CoreCoord(0, 0);
     CoreCoord sender_virtual_data_core = md0->worker_core_from_logical_core(sender_logical_data_core);
-
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     std::vector<SocketConnection> socket_connections;
     socket_connections.reserve(socket_core_mappings.size());
@@ -337,20 +331,20 @@ void test_single_device_socket_with_workers(
     auto sender_cb_index = tt::CBIndex::c_0;
     auto sender_cb_config = CircularBufferConfig(data_size, {{sender_cb_index, tt::DataFormat::UInt32}})
                                 .set_page_size(sender_cb_index, data_size);
-    auto sender_cb = CreateCircularBuffer(send_recv_program, sender_crs, sender_cb_config);
+    CreateCircularBuffer(send_recv_program, sender_crs, sender_cb_config);
 
     // Create CB on both receiver and worker so that receiver knows the address
     auto config_cb_index = tt::CBIndex::c_0;
     auto config_cb_config =
         CircularBufferConfig(sizeof(receiver_socket_md), {{config_cb_index, tt::DataFormat::UInt32}})
             .set_page_size(config_cb_index, sizeof(receiver_socket_md));
-    auto config_cb = CreateCircularBuffer(send_recv_program, recv_worker_crs, config_cb_config);
+    CreateCircularBuffer(send_recv_program, recv_worker_crs, config_cb_config);
 
     auto data_cb_index = tt::CBIndex::c_1;
     auto data_cb_config = CircularBufferConfig(2 * page_size, {{data_cb_index, tt::DataFormat::UInt32}})
                               .set_page_size(data_cb_index, page_size);
     // No need to create on recv core, but better dispatch to do so
-    auto data_cb = CreateCircularBuffer(send_recv_program, recv_worker_crs, data_cb_config);
+    CreateCircularBuffer(send_recv_program, recv_worker_crs, data_cb_config);
 
     auto config_sem = CreateSemaphore(send_recv_program, recv_worker_crs, 0);
     auto credits0_sem = CreateSemaphore(send_recv_program, recv_worker_crs, 0);
@@ -400,7 +394,7 @@ void test_single_device_socket_with_workers(
         data_offset += data_logical_coords.size() * data_size;
 
         if (final_ack) {
-            auto recv_kernel = CreateKernel(
+            CreateKernel(
                 send_recv_program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_final_ack.cpp",
                 recv_logical_coord,
@@ -449,7 +443,7 @@ void test_single_device_socket_with_workers(
             }
         } else {
             auto credits1_sem = CreateSemaphore(send_recv_program, recv_worker_crs, 0);
-            auto recv_kernel = CreateKernel(
+            CreateKernel(
                 send_recv_program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_loop_ack.cpp",
                 recv_logical_coord,
@@ -550,7 +544,6 @@ void test_single_connection_multi_device_socket(
 
     auto recv_virtual_coord = md1->worker_core_from_logical_core(recv_logical_coord);
 
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -644,14 +637,14 @@ void test_single_connection_multi_device_socket(
         auto input_cb_index = CBIndex::c_1;
         auto input_cb_config = CircularBufferConfig(page_size, {{input_cb_index, data_format}})
                                    .set_page_size(input_cb_index, tile_size_bytes);
-        auto input_cb = CreateCircularBuffer(recv_program, recv_logical_coord, input_cb_config);
+        CreateCircularBuffer(recv_program, recv_logical_coord, input_cb_config);
 
         auto output_cb_index = CBIndex::c_2;
         auto output_cb_config = CircularBufferConfig(2 * page_size, {{output_cb_index, data_format}})
                                     .set_page_size(output_cb_index, tile_size_bytes);
-        auto output_cb = CreateCircularBuffer(recv_program, recv_logical_coord, output_cb_config);
+        CreateCircularBuffer(recv_program, recv_logical_coord, output_cb_config);
 
-        auto recv_compute_kernel = CreateKernel(
+        CreateKernel(
             recv_program,
             "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_cb_compute.cpp",
             recv_logical_coord,
@@ -725,12 +718,10 @@ void test_single_connection_multi_device_socket_with_workers(
     auto recv_logical_coord = CoreCoord(0, 0);
     auto worker_logical_coord = CoreCoord(0, 2);
     auto output_logical_coord = CoreCoord(0, 3);
-    auto sender_virtual_coord = md0->worker_core_from_logical_core(sender_logical_coord);
     auto recv_virtual_coord = md1->worker_core_from_logical_core(recv_logical_coord);
     auto worker_virtual_coord = md1->worker_core_from_logical_core(worker_logical_coord);
     auto output_virtual_coord = md1->worker_core_from_logical_core(output_logical_coord);
 
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -818,13 +809,13 @@ void test_single_connection_multi_device_socket_with_workers(
     auto config_cb_config =
         CircularBufferConfig(sizeof(receiver_socket_md), {{config_cb_index, tt::DataFormat::UInt32}})
             .set_page_size(config_cb_index, sizeof(receiver_socket_md));
-    auto config_cb = CreateCircularBuffer(recv_program, recv_worker_crs, config_cb_config);
+    CreateCircularBuffer(recv_program, recv_worker_crs, config_cb_config);
 
     auto data_cb_index = tt::CBIndex::c_2;
     auto data_cb_config = CircularBufferConfig(2 * page_size, {{data_cb_index, tt::DataFormat::UInt32}})
                               .set_page_size(data_cb_index, page_size);
     // No need to create on recv core, but better dispatch to do so
-    auto data_cb = CreateCircularBuffer(recv_program, recv_worker_crs, data_cb_config);
+    CreateCircularBuffer(recv_program, recv_worker_crs, data_cb_config);
 
     auto config_sem = CreateSemaphore(recv_program, recv_worker_crs, 0);
     auto credits_sem = CreateSemaphore(recv_program, recv_worker_crs, 0);
@@ -991,11 +982,11 @@ std::shared_ptr<Program> create_split_reduce_program(
                 CoreRange(recv_logical_coord_0), CoreRange(recv_logical_coord_1), CoreRange(reduce_logical_coord)})
             .merge_ranges();
     // Socket Config CB
-    auto config_cb_handle0 = CreateCircularBuffer(*recv_program, recv_worker_crs, config_cb_config0);
-    auto config_cb_handle1 = CreateCircularBuffer(*recv_program, recv_worker_crs, config_cb_config1);
+    CreateCircularBuffer(*recv_program, recv_worker_crs, config_cb_config0);
+    CreateCircularBuffer(*recv_program, recv_worker_crs, config_cb_config1);
     // Data CBs
-    auto in0_cb_handle = CreateCircularBuffer(*recv_program, reduce_logical_coord, in0_cb_config);
-    auto in1_cb_handle = CreateCircularBuffer(*recv_program, reduce_logical_coord, in1_cb_config);
+    CreateCircularBuffer(*recv_program, reduce_logical_coord, in0_cb_config);
+    CreateCircularBuffer(*recv_program, reduce_logical_coord, in1_cb_config);
 
     auto config0_sem = CreateSemaphore(*recv_program, recv_worker_crs, 0);
     auto credits0_sem = CreateSemaphore(*recv_program, recv_worker_crs, 0);
@@ -1036,7 +1027,7 @@ std::shared_ptr<Program> create_split_reduce_program(
                 static_cast<uint32_t>(reduce_virtual_core.x),
                 static_cast<uint32_t>(reduce_virtual_core.y)}});
 
-    auto reduce_kernel = CreateKernel(
+    CreateKernel(
         *recv_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/reduce_worker.cpp",
         reduce_logical_coord,
@@ -1113,8 +1104,6 @@ std::shared_ptr<Program> create_reduce_program(
     const auto reducer_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(reducer_physical_device_id);
 
-    auto reduce_virtual_coord = reducer->worker_core_from_logical_core(reduce_logical_coord);
-
     auto reduce_program = std::make_shared<Program>();
 
     auto output_cb_config = CircularBufferConfig(2 * page_size, {{out_cb_index, tt::DataFormat::UInt32}})
@@ -1122,7 +1111,7 @@ std::shared_ptr<Program> create_reduce_program(
     CoreRangeSet reduce_crs = CoreRangeSet(reduce_logical_coord).merge_ranges();
 
     // Data CBs
-    auto out_cb_handle = CreateCircularBuffer(*reduce_program, reduce_crs, output_cb_config);
+    CreateCircularBuffer(*reduce_program, reduce_crs, output_cb_config);
 
     auto recv_kernel = CreateKernel(
         *reduce_program,
@@ -1194,7 +1183,6 @@ std::shared_ptr<Program> create_recv_program(
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
     const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
 
-    auto recv_virtual_coord = output_data_buffer->device()->worker_core_from_logical_core(recv_logical_coord);
     auto output_virtual_coord = output_data_buffer->device()->worker_core_from_logical_core(output_logical_coord);
 
     auto recv_program = std::make_shared<Program>();

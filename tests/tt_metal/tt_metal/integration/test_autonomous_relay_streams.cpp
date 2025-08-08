@@ -287,7 +287,6 @@ void build_and_run_autonomous_stream_test(
     tt_metal::EnqueueWriteBuffer(device->command_queue(), input_buffer, inputs, false);
     // Explicitly overwrite to 0 in case of left over state from prior run(s)
     tt_metal::EnqueueWriteBuffer(device->command_queue(), output_buffer, zeroes_buffer, true);
-    const uint32_t dram_input_buf_base_addr = input_buffer->address();
 
     // For overlay blob on relay core
     constexpr uint32_t dummy_cb_index3 = CBIndex::c_3;
@@ -305,7 +304,7 @@ void build_and_run_autonomous_stream_test(
     const uint32_t cb_size = page_size_plus_header * read_write_cb_num_pages;
     auto const& cb_config = tt_metal::CircularBufferConfig(cb_size, {{cb_index, tt::DataFormat::Float16_b}})
                                 .set_page_size(cb_index, page_size_plus_header);
-    auto sender_cb = CreateCircularBuffer(program, sender_core, cb_config);
+    CreateCircularBuffer(program, sender_core, cb_config);
     auto receiver_cb = CreateCircularBuffer(program, receiver_core, cb_config);
 
     // Stream Tile Header Buffers
@@ -646,7 +645,6 @@ void build_and_run_autonomous_stream_test(
 
 TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreams) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");
         return;
@@ -689,7 +687,6 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreams) {
 
 TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSmallPackets) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");
         return;
@@ -732,7 +729,6 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSmal
 
 TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingShort) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");
         return;
@@ -778,7 +774,6 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoop
 // or anything like that
 TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingRandomShort) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     // if (num_devices != 8) {
     //     log_info(tt::LogTest, "Need at least 2 devices to run this test");
     //     return;
@@ -833,7 +828,6 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoop
 // or anything like that
 TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingLong) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");
         return;
@@ -879,7 +873,6 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoop
 // or anything like that
 TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSweep) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");
         return;

@@ -727,7 +727,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     // bool fp32_dest_acc_en = true;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores_with_work,
@@ -747,7 +747,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (in0_height_sharded) {
         src0_cb_config.set_globally_allocated_address(*in0_buffer);
     }
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -764,7 +764,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (in1_is_sharded and not in1_is_dram) {
         src1_cb_config.set_globally_allocated_address(*in1_buffer);
     }
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -822,7 +822,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -860,7 +860,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
                 .set_page_size(src3_cb_index, bias_single_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
-        auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",

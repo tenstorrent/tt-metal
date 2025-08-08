@@ -56,11 +56,6 @@ int main(int argc, char** argv) {
     constexpr uint32_t default_gk_x = 0;
     constexpr uint32_t default_gk_y = 9;
 
-    constexpr uint32_t default_mux_x = 0;
-    constexpr uint32_t default_mux_y = 1;
-    constexpr uint32_t default_demux_x = 0;
-    constexpr uint32_t default_demux_y = 2;
-
     constexpr uint32_t default_prng_seed = 0x100;
     constexpr uint32_t default_data_kb_per_tx = 1024 * 1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
@@ -185,8 +180,6 @@ int main(int argc, char** argv) {
 
     uint32_t tx_x = test_args::get_command_option_uint32(input_args, "--tx_x", default_tx_x);
     uint32_t tx_y = test_args::get_command_option_uint32(input_args, "--tx_y", default_tx_y);
-    uint32_t rx_x = test_args::get_command_option_uint32(input_args, "--rx_x", default_rx_x);
-    uint32_t rx_y = test_args::get_command_option_uint32(input_args, "--rx_y", default_rx_y);
     uint32_t gk_x = test_args::get_command_option_uint32(input_args, "--gk_x", default_gk_x);
     uint32_t gk_y = test_args::get_command_option_uint32(input_args, "--gk_y", default_gk_y);
     uint32_t prng_seed = test_args::get_command_option_uint32(input_args, "--prng_seed", default_prng_seed);
@@ -200,10 +193,6 @@ int main(int argc, char** argv) {
         test_args::get_command_option_uint32(input_args, "--tx_queue_start_addr", default_tx_queue_start_addr);
     uint32_t tx_queue_size_bytes =
         test_args::get_command_option_uint32(input_args, "--tx_queue_size_bytes", default_tx_queue_size_bytes);
-    uint32_t rx_queue_start_addr =
-        test_args::get_command_option_uint32(input_args, "--rx_queue_start_addr", default_rx_queue_start_addr);
-    uint32_t rx_queue_size_bytes =
-        test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
     uint32_t tunneler_queue_size_bytes = test_args::get_command_option_uint32(
         input_args, "--tunneler_queue_size_bytes", default_tunneler_queue_size_bytes);
     uint32_t test_results_addr =
@@ -216,14 +205,10 @@ int main(int argc, char** argv) {
         input_args, "--tunneler_test_results_size", default_tunneler_test_results_size);
     uint32_t timeout_mcycles =
         test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
-    uint32_t rx_disable_data_check =
-        test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
     uint32_t rx_disable_header_check =
         test_args::get_command_option_uint32(input_args, "--rx_disable_header_check", default_rx_disable_header_check);
     uint32_t tx_skip_pkt_content_gen =
         test_args::get_command_option_uint32(input_args, "--tx_skip_pkt_content_gen", default_tx_skip_pkt_content_gen);
-    uint32_t dump_stat_json =
-        test_args::get_command_option_uint32(input_args, "--dump_stat_json", default_dump_stat_json);
     std::string output_dir = test_args::get_command_option(input_args, "--output_dir", std::string(default_output_dir));
     uint32_t check_txrx_timeout =
         test_args::get_command_option_uint32(input_args, "--check_txrx_timeout", default_check_txrx_timeout);
@@ -605,13 +590,11 @@ int main(int argc, char** argv) {
 
         if (pass) {
             double total_tx_bw = 0.0;
-            uint64_t total_rx_words_checked = 0;
             for (uint32_t i = 0; i < num_src_endpoints; i++) {
                 uint64_t tx_words_sent = get_64b_result(tx_results[i], TT_FABRIC_WORD_CNT_INDEX);
                 uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], TT_FABRIC_CYCLES_INDEX);
                 double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
                 total_tx_bw += tx_bw;
-                uint64_t iter = get_64b_result(tx_results[i], TT_FABRIC_ITER_INDEX);
                 // uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
                 // uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
                 // uint64_t many_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);

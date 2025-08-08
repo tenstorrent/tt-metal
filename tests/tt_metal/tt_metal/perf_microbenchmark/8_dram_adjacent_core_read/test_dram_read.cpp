@@ -127,7 +127,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig cb_config =
         tt_metal::CircularBufferConfig(cb_size, {{cb_index, tile_format}}).set_page_size(cb_index, single_tile_size);
-    auto cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     std::vector<uint32_t> compile_time_args = {
         (std::uint32_t)input_buffer_addr,
@@ -344,7 +344,6 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         uint32_t input_size = 0;
         tt::DataFormat tile_format = tt::DataFormat::Bfp8_b;
-        uint32_t total_banks = 12;
         if (df == 0) {
             input_size = k * n * 1088 / 1024;
             tile_format = tt::DataFormat::Bfp8_b;
@@ -359,7 +358,6 @@ int main(int argc, char** argv) {
         uint32_t block_h = kt / num_blocks;
         uint32_t block_w = nt / num_banks;
         uint32_t num_datum_per_slice = 32 * 32;
-        uint32_t eth_coord_y_phy = 6;
 
         uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
         if (input_size % single_tile_size != 0) {
@@ -380,8 +378,6 @@ int main(int argc, char** argv) {
 
         TT_ASSERT(
             device->arch() == ARCH::WORMHOLE_B0 or device->arch() == ARCH::BLACKHOLE, "device must be wh_b0 or bh");
-
-        int clock_freq_mhz = get_tt_npu_clock(device);
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks;  // number of DRAM banks

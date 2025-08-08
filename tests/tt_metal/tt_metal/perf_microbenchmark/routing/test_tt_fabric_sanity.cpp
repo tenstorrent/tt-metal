@@ -973,9 +973,6 @@ struct test_traffic_t {
             tx_core = std::get<2>(tx_workers[i]);
             rx_core = std::get<2>(rx_workers[tx_to_rx_map[i]]);
 
-            auto routing_plane =
-                tx_device->board_handle->get_routing_plane_from_chan(tx_device->physical_chip_id, eth_chan);
-
             // setup runtime args
             std::vector<uint32_t> runtime_args = {
                 time_seed,                                           // 0: time based seed
@@ -1190,7 +1187,6 @@ struct test_traffic_t {
         double total_tx_bw = 0.0;
         double total_tx_bw_2 = 0.0;
         uint64_t total_tx_words_sent = 0;
-        uint64_t total_rx_words_checked = 0;
         uint64_t max_tx_elapsed_cycles = 0;
         for (uint32_t i = 0; i < num_tx_workers; i++) {
             uint64_t tx_words_sent = get_64b_result(tx_results[i], TT_FABRIC_WORD_CNT_INDEX);
@@ -1198,7 +1194,6 @@ struct test_traffic_t {
             uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], TT_FABRIC_CYCLES_INDEX);
             double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
             total_tx_bw += tx_bw;
-            uint64_t iter = get_64b_result(tx_results[i], TT_FABRIC_ITER_INDEX);
             max_tx_elapsed_cycles = std::max(max_tx_elapsed_cycles, tx_elapsed_cycles);
             // uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
             // uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
@@ -1319,11 +1314,6 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_rx_x = 0;
     constexpr uint32_t default_rx_y = 3;
 
-    constexpr uint32_t default_mux_x = 0;
-    constexpr uint32_t default_mux_y = 1;
-    constexpr uint32_t default_demux_x = 0;
-    constexpr uint32_t default_demux_y = 2;
-
     constexpr uint32_t default_prng_seed = 0xFFFFFFFF;
     constexpr uint32_t default_data_kb_per_tx = 1024 * 1024;
 
@@ -1350,7 +1340,6 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_rx_disable_data_check = 0;
     constexpr uint32_t default_rx_disable_header_check = 0;
 
-    constexpr uint32_t src_endpoint_start_id = 4;
     constexpr uint32_t dest_endpoint_start_id = 11;
 
     // constexpr uint32_t num_endpoints = 1;
@@ -1429,30 +1418,22 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    uint32_t tx_x = test_args::get_command_option_uint32(input_args, "--tx_x", default_tx_x);
-    uint32_t tx_y = test_args::get_command_option_uint32(input_args, "--tx_y", default_tx_y);
-    uint32_t rx_x = test_args::get_command_option_uint32(input_args, "--rx_x", default_rx_x);
-    uint32_t rx_y = test_args::get_command_option_uint32(input_args, "--rx_y", default_rx_y);
     uint32_t prng_seed = test_args::get_command_option_uint32(input_args, "--prng_seed", default_prng_seed);
     uint32_t data_kb_per_tx =
         test_args::get_command_option_uint32(input_args, "--data_kb_per_tx", default_data_kb_per_tx);
     uint32_t routing_table_start_addr = test_args::get_command_option_uint32(
         input_args, "--routing_table_start_addr", default_routing_table_start_addr);
     uint32_t tx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--tx_queue_start_addr", default_tx_queue_start_addr);
-    uint32_t tx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tx_queue_size_bytes", default_tx_queue_size_bytes);
-    uint32_t rx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--rx_queue_start_addr", default_rx_queue_start_addr);
-    uint32_t rx_queue_size_bytes =
-        test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
+    uint32_t tx_queue_size_bytes =
+        test_args::get_command_option_uint32(input_args, "--tx_queue_size_bytes", default_tx_queue_size_bytes);
     uint32_t tunneler_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tunneler_queue_size_bytes", default_tunneler_queue_size_bytes);
     uint32_t test_results_addr = test_args::get_command_option_uint32(input_args, "--test_results_addr", default_test_results_addr);
     uint32_t test_results_size = test_args::get_command_option_uint32(input_args, "--test_results_size", default_test_results_size);
     uint32_t tunneler_test_results_addr = test_args::get_command_option_uint32(input_args, "--tunneler_test_results_addr", default_tunneler_test_results_addr);
     uint32_t tunneler_test_results_size = test_args::get_command_option_uint32(input_args, "--tunneler_test_results_size", default_tunneler_test_results_size);
-    uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
-    uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
-    uint32_t rx_disable_header_check = test_args::get_command_option_uint32(input_args, "--rx_disable_header_check", default_rx_disable_header_check);
+    uint32_t timeout_mcycles =
+        test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
     bool tx_skip_pkt_content_gen = test_args::has_command_option(input_args, "--tx_skip_pkt_content_gen");
-    uint32_t dump_stat_json = test_args::get_command_option_uint32(input_args, "--dump_stat_json", default_dump_stat_json);
     std::string output_dir = test_args::get_command_option(input_args, "--output_dir", std::string(default_output_dir));
     bool disable_txrx_timeout = test_args::has_command_option(input_args, "--disable_txrx_timeout");
     uint32_t tx_pkt_dest_size_choice = (uint8_t)test_args::get_command_option_uint32(
@@ -1626,7 +1607,6 @@ int main(int argc, char **argv) {
         }
 
         // init traffic
-        chip_id_t tx_chip_id, rx_chip_id;
         for (auto& [tx_chip_id, rx_chip_ids] : test_board.tx_rx_map) {
             if (num_allocated_devices >= num_traffic_devices) {
                 break;

@@ -33,7 +33,7 @@ TEST_F(DispatchFixture, TensixCreateKernelsOnComputeCores) {
         tt_metal::Program program = CreateProgram();
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
         EXPECT_NO_THROW(
-            auto test_kernel = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                 CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
@@ -55,7 +55,7 @@ TEST_F(DispatchFixture, DISABLED_TensixCreateKernelsOnStorageCores) {
         }
         CoreRangeSet storage_core_range_set(storage_only_core_ranges);
         EXPECT_ANY_THROW(
-            auto test_kernel = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                 storage_core_range_set,
@@ -81,7 +81,7 @@ TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
         }
         CoreRangeSet dispatch_core_range_set(dispatch_core_ranges);
         if (dispatch_core_type == CoreType::WORKER) {
-            EXPECT_ANY_THROW(auto test_kernel = tt_metal::CreateKernel(
+            EXPECT_ANY_THROW(tt_metal::CreateKernel(
                                  program,
                                  "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                                  CoreRangeSet(dispatch_core_range_set),
@@ -89,7 +89,7 @@ TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
                                      .processor = tt_metal::DataMovementProcessor::RISCV_0,
                                      .noc = tt_metal::NOC::RISCV_0_default}););
         } else if (dispatch_core_type == CoreType::ETH) {
-            EXPECT_ANY_THROW(auto test_kernel = tt_metal::CreateKernel(
+            EXPECT_ANY_THROW(tt_metal::CreateKernel(
                                  program,
                                  "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
                                  CoreRangeSet(dispatch_core_range_set),

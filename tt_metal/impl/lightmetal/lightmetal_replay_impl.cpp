@@ -374,7 +374,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceC
         cmd->cq_id(),
         cmd->tid(),
         cmd->blocking());
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_id());
     TT_THROW("Light Metal Trace is no longer supported.");
     // EnqueueTrace(cq, cmd->tid(), cmd->blocking());
 }

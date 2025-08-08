@@ -183,12 +183,12 @@ bool run_sfpu_all_same_buffer(CommandQueue& cq, const SfpuConfig& test_config) {
         tt_metal::CircularBufferConfig l1_input_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
                 .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
-        auto l1_input_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
+        tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
 
         tt_metal::CircularBufferConfig l1_output_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
                 .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
-        auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
+        tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
 
         auto reader_kernel = tt_metal::CreateKernel(
             program,
@@ -217,7 +217,7 @@ bool run_sfpu_all_same_buffer(CommandQueue& cq, const SfpuConfig& test_config) {
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
 
-        auto sfpu_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/compute/eltwise_sfpu.cpp",
             test_config.cores,
@@ -225,8 +225,6 @@ bool run_sfpu_all_same_buffer(CommandQueue& cq, const SfpuConfig& test_config) {
                 .math_approx_mode = test_config.approx_mode,
                 .compile_args = compute_kernel_args,
                 .defines = sfpu_defines});
-
-        int chip_id = 0;
 
         // TODO(agrebenisan): Clean this up to only use the first path once Enqueue apis supported on WH
         for (const CoreCoord& core_coord : core_range) {

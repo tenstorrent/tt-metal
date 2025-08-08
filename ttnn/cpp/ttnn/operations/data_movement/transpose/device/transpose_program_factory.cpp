@@ -539,7 +539,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
 
     // create reader kernel with compile time and runtime args
     tt::tt_metal::Buffer* src_buffer = a.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t element_size = a.element_size();
     uint32_t padding_val_packed = 0;

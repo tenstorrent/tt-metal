@@ -305,9 +305,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
 
-    const bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool output_is_dram = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     TT_ASSERT(input_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);

@@ -59,7 +59,7 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
         worker,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto sfpu_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         worker,

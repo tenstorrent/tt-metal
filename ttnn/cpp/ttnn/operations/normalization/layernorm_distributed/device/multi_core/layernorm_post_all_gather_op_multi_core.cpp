@@ -76,7 +76,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     const uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    const auto& a_dtype = a.dtype();
 
     const uint32_t Wt = W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
@@ -139,16 +138,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
-    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
-    uint32_t inb_single_tile_size = 0;
-
     auto a_addr = a.buffer()->address();
     auto stats_addr = stats.buffer()->address();
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    uint32_t num_tiles = a.physical_volume() / TILE_HW;
     uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
     uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
@@ -250,7 +245,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t max_cores_y = grid_size.y;
-    uint32_t max_cores_x = grid_size.x;
     uint32_t tiles_per_core_y = Wt;
 
     // Declare all variables that will be used later
@@ -343,7 +337,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
                                                       (std::uint32_t)is_dram(output),
                                                       (std::uint32_t)block_size};
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
     if (gamma.has_value()) {

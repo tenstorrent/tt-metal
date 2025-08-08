@@ -226,7 +226,6 @@ void ScaledDotProductAttentionDecode::validate(
             input_tensors.at(0).dtype() == DataType::BFLOAT16,
             "GQA expects BFLOAT16 input tensor, but got {}",
             input_tensors.at(0).dtype());
-        uint32_t num_heads_per_kv = q_shape_unpadded[2] / k_shape[1];
         TT_FATAL(
             q_shape_unpadded[2] % k_shape[1] == 0,
             "GQA expects Q to have a multiple of K heads, but got {} and {}",

@@ -639,8 +639,6 @@ private:
     }
 
     void trace_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        const auto& hops = config.hops;
-
         // Use proper topology detection from fixture
         if (fixture_->get_topology() == Topology::Ring) {
             // Ring topology - use ring traversal logic with boundary turning

@@ -131,7 +131,7 @@ TEST_F(DispatchFixture, EthTestBlank) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
+        [[maybe_unused]] CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
             program,
             "tt_metal/kernels/dataflow/blank.cpp",
@@ -185,7 +185,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
+        [[maybe_unused]] CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
@@ -242,7 +242,7 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
                                              .set_page_size(intermediate_cb, single_tile_size)
                                              .set_page_size(out_cb, single_tile_size);
-        auto cb = CreateCircularBuffer(program, core_coord, cb_config);
+        CreateCircularBuffer(program, core_coord, cb_config);
 
         CreateKernel(
             program,
@@ -310,7 +310,7 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
         CoreCoord worker{0, 0};
         Program program;
         // Kernel will block if it doesn't early return.
-        auto writer_kernel = CreateKernel(
+        CreateKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             worker,

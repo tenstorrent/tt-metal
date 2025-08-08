@@ -181,8 +181,8 @@ int main(int argc, char **argv) {
         uint32_t dram_bank_id = 0;
         auto src0_dram_buffer = MakeBufferBFP16(device, num_tiles, false);
         auto output_dram_buffer = MakeBufferBFP16(device, num_dests * num_tiles, false);
-        auto cb_src0 = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
-        auto cb_output = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
 
         ////////// DATA MOVEMENT CONFIG SETUP //////////
         DataMovementConfig DataMovementConfigIn = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};

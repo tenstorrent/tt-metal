@@ -73,7 +73,7 @@ std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<std::pai
 
 bool do_sync_on_close = true;
 std::unordered_set<chip_id_t> sync_set_devices;
-constexpr CoreCoord SYNC_CORE = {0, 0};
+[[maybe_unused]] constexpr CoreCoord SYNC_CORE = {0, 0};
 
 void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)
