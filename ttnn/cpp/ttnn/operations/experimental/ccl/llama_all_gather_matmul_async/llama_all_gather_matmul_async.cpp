@@ -13,7 +13,6 @@ namespace ttnn::operations::experimental::ccl {
 ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& input_tensor_b,
-    const ttnn::Tensor& intermediate_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -30,7 +29,6 @@ ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
     return ttnn::operations::experimental::ccl::llama_all_gather_matmul_async(
         input_tensor,
         input_tensor_b,
-        intermediate_tensor,
         dim,
         cluster_axis,
         mesh_device,

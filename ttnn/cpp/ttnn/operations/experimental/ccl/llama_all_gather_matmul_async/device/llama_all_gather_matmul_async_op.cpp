@@ -45,7 +45,6 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
-    Tensor intermediate_tensor = output_tensors[0].value();
 }
 
 std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
@@ -240,7 +239,6 @@ ttnn::LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
 Tensor llama_all_gather_matmul_async_impl(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
-    const Tensor& intermediate_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -276,7 +274,7 @@ Tensor llama_all_gather_matmul_async_impl(
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     optional_input_tensors.push_back(std::nullopt);
     std::vector<std::optional<Tensor>> optional_output_tensors = {};
-    optional_output_tensors.push_back(intermediate_tensor);
+    optional_output_tensors.push_back(std::nullopt);
 
     ttnn::AllGatherSP all_gather_struct = ttnn::AllGatherSP{
         {},
@@ -328,7 +326,6 @@ Tensor llama_all_gather_matmul_async_impl(
 Tensor llama_all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
-    const Tensor& intermediate_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -345,7 +342,6 @@ Tensor llama_all_gather_matmul_async(
     return llama_all_gather_matmul_async_impl(
         input_tensor,
         input_tensor_b,
-        intermediate_tensor,
         dim,
         cluster_axis,
         mesh_device,

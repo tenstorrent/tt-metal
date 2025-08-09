@@ -16,7 +16,6 @@ struct ExecuteAllGatherMatmulAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& input_tensor_b,
-        const ttnn::Tensor& intermediate_tensor,
         const int32_t dim,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,

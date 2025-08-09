@@ -273,15 +273,6 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    intermediate_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            intermediate_core_range_set,
-            [M, interemediate_N_per_shard],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
     ag_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -321,18 +312,6 @@ def run_llama_all_gather_matmul_impl(
         memory_config=in1_sharded_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
-    intermediate_tensor = torch.zeros(intermediate_shape)
-    tt_intermediate_tensors = []
-    for i in range(num_buffers):
-        tt_intermediate_tensor = ttnn.from_torch(
-            intermediate_tensor,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=in0_dtype,
-            memory_config=intermediate_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-        )
-        tt_intermediate_tensors.append(tt_intermediate_tensor)
 
     # All Gather Replicate Golden
     output_tensor_goldens_list = []
@@ -355,7 +334,6 @@ def run_llama_all_gather_matmul_impl(
             out = ttnn.experimental.llama_all_gather_matmul_async(
                 tt_input_tensor,
                 tt_in1_tensor,
-                intermediate_tensor=tt_intermediate_tensors[i % num_buffers],
                 dim=3,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
