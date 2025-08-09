@@ -30,8 +30,6 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
 
-using namespace tt;
-
 namespace ttnn {
 namespace operations::conv {
 using sliding_window::ParallelConfig;
@@ -55,10 +53,10 @@ uint32_t find_closest_largest_divisor(uint32_t num1, uint32_t num2, uint32_t sta
 
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
-    uint32_t padded_num = round_up(num, divisor);
+    uint32_t padded_num = tt::round_up(num, divisor);
     while ((padded_num - num) >= (int)(padded_num / divisor)) {
         divisor = divisor - 1;
-        padded_num = round_up(num, divisor);
+        padded_num = tt::round_up(num, divisor);
     }
     return divisor;
 }
@@ -66,11 +64,11 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
 uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, uint32_t start_divisor, uint32_t mult) {
     uint32_t divisor = start_divisor;
     uint32_t big_divisor = divisor * mult;
-    uint32_t padded_num = round_up(num, big_divisor);
+    uint32_t padded_num = tt::round_up(num, big_divisor);
     while ((padded_num - num) >= (int)(padded_num / big_divisor) and divisor > 1) {
         divisor = divisor - 1;
         big_divisor = divisor * mult;
-        padded_num = round_up(num, big_divisor);
+        padded_num = tt::round_up(num, big_divisor);
     }
     return divisor;
 }
@@ -108,12 +106,12 @@ uint32_t get_input_channels_alignment(
 
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t num2, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
-    uint32_t padded_num1 = round_up(num1, divisor);
-    uint32_t padded_num2 = round_up(num2, divisor);
+    uint32_t padded_num1 = tt::round_up(num1, divisor);
+    uint32_t padded_num2 = tt::round_up(num2, divisor);
     while ((padded_num1 - num1) >= (padded_num1 / divisor) || (padded_num2 - num2) >= (padded_num2 / divisor)) {
         divisor = divisor - 1;
-        padded_num1 = round_up(num1, divisor);
-        padded_num2 = round_up(num2, divisor);
+        padded_num1 = tt::round_up(num1, divisor);
+        padded_num2 = tt::round_up(num2, divisor);
     }
     return divisor;
 }
@@ -154,6 +152,12 @@ ParallelConfig determine_parallel_config(
         grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t input_channels_blocks = tt::div_up(input_channels, input_channels_alignment);
+        log_info(
+            tt::LogOp,
+            "input_channels_blocks: {}, input_channels: {}, input_channels_alignment: {}",
+            input_channels_blocks,
+            input_channels,
+            input_channels_alignment);
         uint32_t start_divisor =
             block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
         uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(
@@ -162,9 +166,10 @@ ParallelConfig determine_parallel_config(
             block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
         uint32_t num_cores_c =
             enable_channels_padding
-                ? find_closest_largest_divisor_with_num_padding(
-                      out_channels_ntiles, input_channels_blocks, start_divisor_c)
+                ? find_closest_largest_divisor_with_num_padding(input_channels_blocks, start_divisor_c)
                 : find_closest_largest_divisor(out_channels_ntiles, input_channels_blocks, start_divisor_c);
+
+        log_info(tt::LogOp, "num_cores_nhw: {}, num_cores_c: {}", num_cores_nhw, num_cores_c);
         uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
         CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
@@ -192,19 +197,31 @@ ParallelConfig determine_output_parallel_config(
     const ParallelConfig& input_parallel_config,
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
+    ShardOrientation block_shard_orientation,
     bool is_mm_conv) {
     ParallelConfig output_parallel_config = input_parallel_config;
-    if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !is_mm_conv) {
-        uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
-        output_parallel_config = {
-            .grid = tt::tt_metal::num_cores_to_corerangeset(
-                find_closest_largest_divisor_with_num_padding(
-                    tt::div_up(out_channels, tt::constants::TILE_WIDTH), max_num_cores),
+    if (!is_mm_conv) {
+        const uint32_t out_channels_ntiles = tt::div_up(out_channels, tt::constants::TILE_WIDTH);
+        if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::WIDTH_SHARDED) {
+            uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
+            output_parallel_config.grid = tt::tt_metal::num_cores_to_corerangeset(
+                find_closest_largest_divisor_with_num_padding(out_channels_ntiles, max_num_cores),
                 compute_grid_size,
-                true),
-            .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
-            .shard_orientation = input_parallel_config.shard_orientation};
+                true);
+        } else if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::BLOCK_SHARDED) {
+            const uint32_t start_divisor_c =
+                block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
+            uint32_t num_cores_c = find_closest_largest_divisor_with_num_padding(out_channels_ntiles, start_divisor_c);
+            const uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(input_parallel_config);
+            const uint32_t cores_x =
+                block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
+            const uint32_t cores_y =
+                block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
+            CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
+            output_parallel_config.grid = CoreRangeSet({core_range});
+        }
     }
+
     return output_parallel_config;
 }
 
@@ -287,7 +304,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     uint32_t nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
     uint32_t nhw_padded = nhw_shape;
     if (shard_scheme != TensorMemoryLayout::WIDTH_SHARDED) {
-        nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
+        nhw_padded = tt::round_up(nhw_shape, num_cores_nhw * tile_size);
     }
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_FATAL(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
@@ -305,8 +322,8 @@ OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_o
         .grid_size = shard_spec.grid.bounding_box().grid_size(),
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
-        .per_core_out_matrix_height_ntile = div_up(shard_shape[0], tt::constants::TILE_HEIGHT),
-        .per_core_out_matrix_width_ntile = div_up(shard_shape[1], tt::constants::TILE_WIDTH),
+        .per_core_out_matrix_height_ntile = tt::div_up(shard_shape[0], tt::constants::TILE_HEIGHT),
+        .per_core_out_matrix_width_ntile = tt::div_up(shard_shape[1], tt::constants::TILE_WIDTH),
     };
 }
 
@@ -362,18 +379,18 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntile;
 
     if (act_block_h_override > 0) {
-        uint32_t act_block_h_override_ntiles = act_block_h_override / constants::TILE_HEIGHT;
+        uint32_t act_block_h_override_ntiles = act_block_h_override / tt::constants::TILE_HEIGHT;
         if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
             act_block_h_ntiles = act_block_h_override_ntiles;
         } else {
-            uint32_t act_block_h_override_ntiles = act_block_h_override / constants::TILE_HEIGHT;
+            uint32_t act_block_h_override_ntiles = act_block_h_override / tt::constants::TILE_HEIGHT;
             if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
                 act_block_h_ntiles = act_block_h_override_ntiles;
             } else {
                 act_block_h_ntiles =
                     find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
                 log_info(
-                    LogOp,
+                    tt::LogOp,
                     "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
                     "instead {} was selected as closest valid option!",
                     act_block_h_override_ntiles,
@@ -387,9 +404,9 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = 0;
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-        act_block_w = round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+        act_block_w = tt::round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
     } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
-        act_block_w = round_up(
+        act_block_w = tt::round_up(
             padded_in_channels / act_c_num_blocks * window_w * (full_inner_dim ? window_h : 1),
             tt::constants::TILE_WIDTH);
 
@@ -674,8 +691,10 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
         .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
 
-    ParallelConfig output_parallel_config =
-        determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, is_mm_conv);
+    ShardOrientation shard_orientation =
+        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+    ParallelConfig output_parallel_config = determine_output_parallel_config(
+        parallel_config, compute_grid_size, out_channels, shard_orientation, is_mm_conv);
 
     // We can have flat and unflattened (n, h, w, c) tensors here
     const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
@@ -835,7 +854,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         if (conv_config.act_block_h_override == 0) {
             // Set act_block_h_override to min value to
             // be conservative with L1 memory usage.
-            conv_config.act_block_h_override = constants::TILE_HEIGHT;
+            conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
             // Split reader is currently only supported for height sharded convs that are not 1d deptwise.
             if (conv_config.enable_split_reader && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
                 !conv_is_1d_deptwise) {
@@ -846,8 +865,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
 
         const uint32_t input_channels_alignment =
             get_input_channels_alignment(shard_layout, input_layout, is_mm_conv, std::nullopt);
-        const uint32_t in_channels_aligned = round_up(in_channels, input_channels_alignment);
-        const uint32_t output_channels_padded = round_up(out_channels, constants::TILE_WIDTH);
+        const uint32_t in_channels_aligned = tt::round_up(in_channels, input_channels_alignment);
+        const uint32_t output_channels_padded = tt::round_up(out_channels, tt::constants::TILE_WIDTH);
         // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
         // conv2d params, but these are good enough for L1 usage estimation.
         const ttnn::Shape weights_shape(
@@ -872,7 +891,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             input_parallel_config,
             compute_grid_size,
             out_channels,
-            is_mm_conv && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED);
+            shard_orientation,
+            is_mm_conv /* && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED*/);
 
         const uint32_t in_channels_padded = tt::round_up(
             in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
@@ -894,7 +914,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             // Set act_block_w_div to max value to
             // be conservative with L1 memory usage.
             // act_block_w_div == 1 is currently the default value.
-            conv_config.act_block_w_div = tt::div_up(in_channels, width_sharded_num_cores * constants::TILE_WIDTH);
+            conv_config.act_block_w_div = tt::div_up(in_channels, width_sharded_num_cores * tt::constants::TILE_WIDTH);
         }
 
         conv_op_l1_usage l1_usage = calculate_L1_usage(
@@ -1066,7 +1086,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
     uint32_t slice_rounding_value = 1;
-    if (conv_config.output_layout == tt_metal::Layout::TILE) {
+    if (conv_config.output_layout == tt::tt_metal::Layout::TILE) {
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
@@ -1125,8 +1145,10 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             .shard_scheme = sliced_input_tensor_memory_config.memory_layout(),
             .shard_orientation = sliced_input_tensor_memory_config.shard_spec().value().orientation};
 
-        ParallelConfig output_parallel_config =
-            determine_output_parallel_config(parallel_config, params.compute_grid, params.out_channels, params.mm_conv);
+        ShardOrientation shard_orientation =
+            conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+        ParallelConfig output_parallel_config = determine_output_parallel_config(
+            parallel_config, params.compute_grid, params.out_channels, shard_orientation, params.mm_conv);
 
         auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
             conv_config,
@@ -1135,7 +1157,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             output_parallel_config,
             tt::round_up(
                 params.in_channels,
-                constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config)),
+                tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config)),
             params.out_channels,
             params.batch_size,
             output_slice_height,
@@ -1362,7 +1384,7 @@ ttnn::Tensor fold_tensor(
         padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
         "Conv2D kernel stride folding: Padding must be 0 for folding");
     TT_FATAL(
-        tensor.dtype() != tt_metal::DataType::BFLOAT8_B,
+        tensor.dtype() != tt::tt_metal::DataType::BFLOAT8_B,
         "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
     TT_FATAL(
         stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1],

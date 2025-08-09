@@ -50,11 +50,7 @@ def torch_tensor_map(request):
     return torch_tensor_map
 
 
-def randomize_torch_tensor(
-    torch_tensor_map,
-    tensor_shape,
-    generate_positive_numbers=False,
-):
+def randomize_torch_tensor(torch_tensor_map, tensor_shape, generate_positive_numbers=False, generate_ones=False):
     if generate_positive_numbers:
         torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
         torch_tensor = torch.abs(torch_tensor)
@@ -63,7 +59,10 @@ def randomize_torch_tensor(
         if tensor_shape in torch_tensor_map.keys():
             torch_tensor = torch_tensor_map[tensor_shape]
         else:
-            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+            if generate_ones:
+                torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16).float()
+            else:
+                torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
             torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
@@ -163,15 +162,17 @@ def run_conv(
     # in order to get valid sqrt values
     sqrt_act_function = activation == "sqrt"
     torch_input_tensor_nchw = randomize_torch_tensor(
-        torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
+        torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function, generate_ones=False
     )
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(
-        torch_tensor_map, conv_weight_shape, generate_positive_numbers=sqrt_act_function
+        torch_tensor_map, conv_weight_shape, generate_positive_numbers=sqrt_act_function, generate_ones=False
     )
     torch_bias_tensor = (
-        randomize_torch_tensor(torch_tensor_map, conv_bias_shape, generate_positive_numbers=sqrt_act_function) * 10
+        randomize_torch_tensor(
+            torch_tensor_map, conv_bias_shape, generate_positive_numbers=sqrt_act_function, generate_ones=False
+        )
         if has_bias
         else None
     )
@@ -271,6 +272,9 @@ def run_conv(
         dtype=output_dtype,
     )
 
+    # print("prepared weights")
+    # print(d_w)
+
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
@@ -319,6 +323,7 @@ def run_conv(
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
         pcc = pcc * 0.99
 
+    # print(out)
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
         if fp32_accum and output_dtype != ttnn.bfloat8_b and input_dtype != ttnn.bfloat8_b:

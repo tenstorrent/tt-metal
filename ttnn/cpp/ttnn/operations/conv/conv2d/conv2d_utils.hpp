@@ -80,6 +80,7 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
+    tt::tt_metal::ShardOrientation block_shard_orientation,
     bool is_mm_conv);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
