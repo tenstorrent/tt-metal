@@ -395,6 +395,7 @@ class OpTestResultRecord(BaseModel):
     # Identifiers and headers
     test_name: str = Field(description="Name of the test module (e.g., eltwise.unary.relu.relu).")
     suite_name: Optional[str] = Field(None, description="Suite name within the test module, if applicable.")
+    # consider removing this field
     vector_id: Optional[str] = Field(None, description="Identifier of the specific test vector within the suite.")
     input_hash: Optional[str] = Field(None, description="Hash of the input vector for deduplication and traceability.")
 
@@ -415,13 +416,7 @@ class OpTestResultRecord(BaseModel):
         skipped = "skipped"  # Vector not run (invalid/filtered/timeout-skip)
         error = "error"  # Other error category
 
-    status: Optional[OpTestStatus] = Field(
-        None,
-        description=(
-            "Execution status for this vector. One of: pass, fail_assert_exception, "
-            "fail_l1_out_of_mem, fail_watcher, fail_crash_hang, fail_unsupported_device_perf, skipped, error."
-        ),
-    )
+    status: OpTestStatus = Field(description="Execution status for this vector.")
     message: Optional[str] = Field(None, description="Optional informational message about the execution outcome.")
     exception: Optional[str] = Field(None, description="Exception text when a failure occurred, if any.")
     error_signature: Optional[str] = Field(None, description="Derived error signature from the exception, if any.")
@@ -434,16 +429,8 @@ class OpTestResultRecord(BaseModel):
         None, description="Device-level performance measurements, when device profiling is enabled."
     )
 
-    # Environment and traceability
-    git_hash: Optional[str] = Field(None, description="Short git commit hash recorded at execution time.")
-    host: Optional[str] = Field(None, description="Hostname where the vector executed.")
-    user: Optional[str] = Field(None, description="Username associated with the execution environment.")
-
     # Original vector contents (sanitized/normalized for JSON)
-    original_vector_data: Optional[Dict[str, Any]] = Field(
-        None,
-        description="Original test vector contents captured for traceability, normalized for JSON compatibility.",
-    )
+    original_vector_data: Dict[str, Any] = Field(description="Original test vector contents.")
 
 
 class OpTestRun(BaseModel):
@@ -453,16 +440,14 @@ class OpTestRun(BaseModel):
     """
 
     initiated_by: str = Field(description="User or CI pipeline that initiated the run.")
-    host: Optional[str] = Field(None, description="Hostname of the machine executing the run.")
-    device: Optional[str] = Field(None, description="Target device/architecture identifier, if available.")
+    host: str = Field(None, description="Hostname of the machine executing the run.")
+    device: str = Field(None, description="Target device/architecture identifier, if available.")
     run_type: str = Field(description="Type of op test run (e.g., sweeps, unit_test).")
-    run_contents: Optional[str] = Field(
-        None, description="Human-readable description of run contents (e.g., module/suite selection)."
-    )
+    run_contents: str = Field(description="Human-readable description of run contents (e.g., module/suite selection).")
 
-    git_author: Optional[str] = Field(None, description="Git author configured in the environment.")
-    git_branch_name: Optional[str] = Field(None, description="Current git branch name.")
-    git_commit_hash: Optional[str] = Field(None, description="Short git commit hash for the run.")
+    git_author: str = Field(description="Git author configured in the environment.")
+    git_branch_name: str = Field(description="Current git branch name.")
+    git_commit_hash: str = Field(description="Short git commit hash for the run.")
     github_pipeline_id: Optional[int] = Field(
         None,
         description="Identifier for the GitHub Actions pipeline run (GITHUB_RUN_ID) or analogous CI pipeline id.",
@@ -470,5 +455,5 @@ class OpTestRun(BaseModel):
 
     run_start_ts: datetime = Field(description="Timestamp with timezone when the sweeps run started.")
     run_end_ts: Optional[datetime] = Field(None, description="Timestamp with timezone when the sweeps run ended.")
-    status: Optional[str] = Field(None, description="Overall run status aggregated from testcases.")
+    status: str = Field(description="Overall run status aggregated from testcases.")
     results: List[OpTestResultRecord] = Field(description="List of per-vector op test execution results.")

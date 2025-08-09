@@ -266,6 +266,7 @@ class FileResultDestination(ResultDestination):
             try:
                 from framework.statuses import TestStatus
 
+                # TODO: consider removing this mapping and just using the TestStatus enum directly
                 if isinstance(value, TestStatus):
                     mapping = {
                         TestStatus.PASS: "pass",

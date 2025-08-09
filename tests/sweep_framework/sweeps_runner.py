@@ -498,27 +498,19 @@ def run_sweeps(
         raise ValueError(f"Unknown vector source: {config.vector_source}")
 
     # Create result destination based on config
-    if config.result_destination == "postgres":
-        result_dest = ResultDestinationFactory.create_destination("postgres")
-    elif config.result_destination == "elastic":
-        if not config.elastic_connection_string:
-            raise ValueError("Elastic connection string is required for elastic result destination")
-
-        elastic_username = config.elastic_username
-        elastic_password = config.elastic_password
-
-        if not all([elastic_username, elastic_password]):
-            raise ValueError("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set for elastic result destination")
-        result_dest = ResultDestinationFactory.create_destination(
-            "elastic",
-            connection_string=config.elastic_connection_string,
-            username=elastic_username,
-            password=elastic_password,
-        )
+    result_kwargs = {}
+    if config.result_destination == "elastic":
+        result_kwargs = {
+            "connection_string": config.elastic_connection_string,
+            "username": config.elastic_username,
+            "password": config.elastic_password,
+        }
     elif config.result_destination == "results_export":
-        result_dest = ResultDestinationFactory.create_destination("results_export")
-    else:
-        raise ValueError(f"Unknown result destination: {config.result_destination}")
+        # Optionally: pass a custom export_dir via config if you add it later
+        # result_kwargs = {"export_dir": pathlib.Path("...")}
+        pass
+
+    result_dest = ResultDestinationFactory.create_destination(config.result_destination, **result_kwargs)
 
     # Initialize run metadata and run record
     run_id = None
