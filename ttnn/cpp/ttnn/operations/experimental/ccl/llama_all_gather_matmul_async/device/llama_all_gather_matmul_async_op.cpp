@@ -25,16 +25,17 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
         "All Gather Replicate currently requires aligned pages");
 
     TT_FATAL(
-        input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather_replicate need to be on device!");
+        input_tensor.storage_type() == StorageType::DEVICE,
+        "Operands to llama_all_gather_matmul need to be on device!");
     TT_FATAL(
         input_tensor.buffer() != nullptr,
-        "Operands to all_gather_replicate need to be allocated in buffers on device!");
+        "Operands to llama_all_gather_matmul need to be allocated in buffers on device!");
     TT_FATAL(
-        this->all_gather_replicate_async_struct.num_links > 0,
+        this->all_gather_sp_async_struct.num_links > 0,
         "Error, num_links should be more than 0 but has {}",
-        this->all_gather_replicate_async_struct.num_links);
+        this->all_gather_sp_async_struct.num_links);
     TT_FATAL(
-        this->all_gather_replicate_async_struct.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
+        this->all_gather_sp_async_struct.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
@@ -53,15 +54,21 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     const auto& input_tensor1 = input_tensors[1];
 
     auto intermediate_shape = input_tensor0.padded_shape();
-    intermediate_shape[-1] = intermediate_shape[-1] * this->all_gather_replicate_async_struct.ring_size;
-    auto intermediate_shard_shape = this->all_gather_replicate_async_struct.output_mem_config.shard_spec()->shape;
+    intermediate_shape[-1] = intermediate_shape[-1] * this->all_gather_sp_async_struct.ring_size;
+    auto intermediate_shard_shape = this->all_gather_sp_async_struct.output_mem_config.shard_spec()->shape;
+    TensorSpec intermediate_tensor_spec = TensorSpec(
+        intermediate_shape,
+        TensorLayout(
+            input_tensor0.dtype(),
+            input_tensor0.tensor_spec().page_config(),
+            this->all_gather_sp_async_struct.output_mem_config));
 
     // Calculate aggregated tensor shape and shard specs
     auto aggregated_shape = intermediate_shape;
     aggregated_shape[-1] = intermediate_shape[-1] * 60;
 
     auto aggregated_shard_shape = intermediate_shard_shape;
-    aggregated_shard_shape[1] = intermediate_shard_shape[1] * this->all_gather_replicate_async_struct.ring_size;
+    aggregated_shard_shape[1] = intermediate_shard_shape[1] * this->all_gather_sp_async_struct.ring_size;
 
     // Create aggregated tensor memory config
     MemoryConfig aggregated_mem_config = MemoryConfig(
@@ -80,24 +87,26 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     ttnn::TensorSpec matmul_output_specs =
         this->matmul_struct.compute_output_specs({input_tensors[0], input_tensors[1]}, {})[0];
 
-    return {aggregated_tensor_spec, matmul_output_specs};
+    return {aggregated_tensor_spec, matmul_output_specs, intermediate_tensor_spec};
 }
 
 std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     // Create aggregated tensor internally with exact same specs as pytest
-    const auto& intermediate_tensor = input_tensors[2];
+    // const auto& intermediate_tensor = input_tensors[2];
 
     auto specs = compute_output_specs(input_tensors);
     const auto& aggregated_tensor_spec = specs[0];
+    const auto& intermediate_tensor_spec = specs[2];
 
-    ttnn::Tensor aggregated_tensor = create_device_tensor(aggregated_tensor_spec, intermediate_tensor.device());
+    ttnn::Tensor aggregated_tensor = create_device_tensor(aggregated_tensor_spec, input_tensors[0].device());
+    ttnn::Tensor intermediate_tensor = create_device_tensor(intermediate_tensor_spec, input_tensors[0].device());
 
     // Matmul output tensor
     ttnn::Tensor matmul_output_tensor =
         this->matmul_struct.create_output_tensors({aggregated_tensor, input_tensors[1]})[0];
 
-    return {aggregated_tensor, matmul_output_tensor};
+    return {aggregated_tensor, matmul_output_tensor, intermediate_tensor};
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks LlamaAllGatherMatmulAsync::create_mesh_workload(
@@ -119,31 +128,31 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
     auto mesh_device = input_tensors[0].mesh_device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
-    if (this->all_gather_replicate_async_struct.cluster_axis.has_value()) {
+    if (this->all_gather_sp_async_struct.cluster_axis.has_value()) {
         // User specified the cluster-axis. Derive devices based on the current coordinate
         // and the cluster-axis.
         const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
-        devices_to_use = (this->all_gather_replicate_async_struct.cluster_axis.value() == 0)
+        devices_to_use = (this->all_gather_sp_async_struct.cluster_axis.value() == 0)
                              ? mesh_view.get_devices_on_column(mesh_coordinate[1])
                              : mesh_view.get_devices_on_row(mesh_coordinate[0]);
     } else {
-        devices_to_use = this->all_gather_replicate_async_struct.devices;
+        devices_to_use = this->all_gather_sp_async_struct.devices;
     }
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < this->all_gather_replicate_async_struct.ring_size; ++i) {
+    for (uint32_t i = 0; i < this->all_gather_sp_async_struct.ring_size; ++i) {
         if (devices_to_use.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
                 backward_device = devices_to_use.at(i - 1);
-            } else if (this->all_gather_replicate_async_struct.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(this->all_gather_replicate_async_struct.ring_size - 1);
+            } else if (this->all_gather_sp_async_struct.topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices_to_use.at(this->all_gather_sp_async_struct.ring_size - 1);
             }
-            if (i != this->all_gather_replicate_async_struct.ring_size - 1) {
+            if (i != this->all_gather_sp_async_struct.ring_size - 1) {
                 forward_device = devices_to_use.at(i + 1);
-            } else if (this->all_gather_replicate_async_struct.topology == ttnn::ccl::Topology::Ring) {
+            } else if (this->all_gather_sp_async_struct.topology == ttnn::ccl::Topology::Ring) {
                 forward_device = devices_to_use.at(0);
             }
         }
@@ -152,19 +161,19 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
     return llama_all_gather_mm_async_sharded(
         input_tensors[0],   // in0
         input_tensors[1],   // in1
-        input_tensors[2],   // intermediate_tensor
+        output_tensors[2],  // intermediate_tensor
         output_tensors[0],  // aggregated_tensor (now output)
         output_tensors[1],  // mm output tensor
         target_device,
         forward_device,
         backward_device,
-        this->all_gather_replicate_async_struct.dim,
-        this->all_gather_replicate_async_struct.num_links,
-        this->all_gather_replicate_async_struct.ring_size,
+        this->all_gather_sp_async_struct.dim,
+        this->all_gather_sp_async_struct.num_links,
+        this->all_gather_sp_async_struct.ring_size,
         device_index,
-        this->all_gather_replicate_async_struct.topology,
-        this->all_gather_replicate_async_struct.semaphore,
-        this->all_gather_replicate_async_struct.sub_device_id,
+        this->all_gather_sp_async_struct.topology,
+        this->all_gather_sp_async_struct.semaphore,
+        this->all_gather_sp_async_struct.sub_device_id,
         // MM params
         this->matmul_struct.compute_kernel_config.value(),
         this->matmul_struct.program_config.value(),
@@ -191,15 +200,15 @@ tt::tt_metal::operation::Hash LlamaAllGatherMatmulAsync::compute_program_hash(
     auto intermediate_dtype = input_tensors[1].dtype();
     auto intermediate_memory_config = input_tensors[1].memory_config();
 
-    uint32_t semaphore_address = this->all_gather_replicate_async_struct.semaphore
-                                     .address();  // semaphore address is not used in the hash operation
+    uint32_t semaphore_address =
+        this->all_gather_sp_async_struct.semaphore.address();  // semaphore address is not used in the hash operation
     return tt::tt_metal::operation::hash_operation<LlamaAllGatherMatmulAsync>(
-        this->all_gather_replicate_async_struct.dim,
-        this->all_gather_replicate_async_struct.num_links,
-        this->all_gather_replicate_async_struct.ring_size,
-        this->all_gather_replicate_async_struct.output_mem_config,
-        this->all_gather_replicate_async_struct.topology,
-        this->all_gather_replicate_async_struct.cluster_axis,
+        this->all_gather_sp_async_struct.dim,
+        this->all_gather_sp_async_struct.num_links,
+        this->all_gather_sp_async_struct.ring_size,
+        this->all_gather_sp_async_struct.output_mem_config,
+        this->all_gather_sp_async_struct.topology,
+        this->all_gather_sp_async_struct.cluster_axis,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -222,10 +231,10 @@ namespace ccl {
 namespace {
 
 ttnn::LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
-    const ttnn::AllGatherSP& all_gather_replicate_async_struct,
+    const ttnn::AllGatherSP& all_gather_sp_async_struct,
     const operations::matmul::Matmul& matmul_struct,
     const std::vector<IDevice*>& devices) {
-    return ttnn::LlamaAllGatherMatmulAsync{all_gather_replicate_async_struct, matmul_struct, devices};
+    return ttnn::LlamaAllGatherMatmulAsync{all_gather_sp_async_struct, matmul_struct, devices};
 }
 
 Tensor llama_all_gather_matmul_async_impl(
@@ -309,8 +318,9 @@ Tensor llama_all_gather_matmul_async_impl(
         {input_tensor, input_tensor_b, intermediate_tensor},
         optional_input_tensors,
         optional_output_tensors);
-    tensors_out.at(0).deallocate(
-        true);  // deallocate the aggregated tensor, it's allocated in the op and no longer needed outside the op.
+    tensors_out.at(0).deallocate(true);
+    tensors_out.at(2).deallocate(
+        true);  // deallocate the intermediate tensor, it's allocated in the op and no longer needed outside the op.
     return tensors_out.at(1);
 }
 }  // namespace

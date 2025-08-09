@@ -59,7 +59,7 @@ struct AllGatherSP {
 
 struct LlamaAllGatherMatmulAsync {
     /* All Gather Replicate Params */
-    const ttnn::AllGatherSP all_gather_replicate_async_struct;
+    const ttnn::AllGatherSP all_gather_sp_async_struct;
 
     /* Matmul Params */
     const operations::matmul::Matmul matmul_struct;
