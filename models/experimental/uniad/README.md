@@ -67,10 +67,11 @@ pytest models/experimental/uniad/tests/pcc/test_ttnn_query_interaction.py
 pytest models/experimental/uniad/tests/pcc/test_ttnn_pan_segformer_head.py.py
 ```
 
-**Uniad** -
+## Run the following command to test full model(UniAD) integration
+
 ```
 pytest models/experimental/uniad/tests/pcc/test_ttnn_uniad.py
 ```
 
 Note:
-- **BEVFormerTrackHead** is tested with random weights
+- Raised issue for fallback torch ops and added the issue links to resp
