@@ -411,8 +411,11 @@ Result conv2d_DRAM(
 
         TT_FATAL(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
 
+        ShardOrientation shard_orientation =
+                conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
         auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
-            conv_config,
+            conv_config.shard_layout.value(),
+            shard_orientation,
             batch_size,
             ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
             ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
@@ -703,7 +706,7 @@ Result conv2d_L1(
             .stride_hw = {stride[0], stride[1]},
             .padding = {{padding_n4[0], padding_n4[1], padding_n4[2], padding_n4[3]}},
             .dilation_hw = {dilation[0], dilation[1]},
-            .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
+            .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw_out,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid,
             .snap_to_tile = true,
         };

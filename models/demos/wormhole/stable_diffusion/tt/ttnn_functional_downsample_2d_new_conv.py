@@ -147,33 +147,33 @@ class downsample_2d:
             "conv_config": conv_config,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_weights):
-            self.conv_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_weights,
-                weights_format="OIHW",
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                has_bias=True,
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_bias,
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
-            self.conv_bias = ttnn.to_device(self.conv_bias, self.device)
-
-        hidden_states = ttnn.conv2d(
+        hidden_states, [self.conv_weights, self.conv_bias] = ttnn.conv2d(
             input_tensor=hidden_states,
             **conv_kwargs,
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             compute_config=compute_config,
             dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        is_bs = hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        xdim = hidden_states.memory_config().shard_spec.grid.bounding_box().grid_size().x
+
+        print(f"xdim: {xdim}, is_bs: {is_bs}")
+        if self.out_channels == 640 and xdim == 7 and is_bs:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                hidden_states.shape, ttnn.CoreGrid(x=5, y=8), ttnn.ShardStrategy.BLOCK
+            )
+            print(f"target hs mem cfg: {mem_cfg}")
+            hidden_states = ttnn.reshard(hidden_states, mem_cfg)
+
+        if is_bs:
+            out_channels_tiles = self.out_channels // (ttnn.TILE_SIZE)
+            xdim = hidden_states.memory_config().shard_spec.grid.bounding_box().grid_size().x
+            if out_channels_tiles % xdim != 0:
+                print(
+                    f"xdim: {xdim}, mem cfg: {hidden_states.memory_config()}, conv_shortcut_out_channels: {self.out_channels}"
+                )
+                assert False, "invalid output"
 
         return hidden_states

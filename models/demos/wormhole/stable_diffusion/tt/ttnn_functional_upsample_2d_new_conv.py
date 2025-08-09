@@ -103,33 +103,30 @@ class upsample2d:
             "device": self.device,
             "conv_config": conv_config,
         }
-        if not ttnn.is_tensor_storage_on_device(self.conv_weight_tensor):
-            self.conv_weight_tensor = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_weight_tensor,
-                weights_format="OIHW",
-                input_layout=tt_out.get_layout(),
-                input_memory_config=tt_out.memory_config(),
-                has_bias=True,
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_bias_tensor = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_bias_tensor,
-                input_memory_config=tt_out.memory_config(),
-                input_layout=tt_out.get_layout(),
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
 
-            self.conv_weight_tensor = ttnn.to_device(self.conv_weight_tensor, self.device)
-            self.conv_bias_tensor = ttnn.to_device(self.conv_bias_tensor, self.device)
-
-        tt_out = ttnn.conv2d(
+        tt_out, [self.conv_weight_tensor, self.conv_bias_tensor] = ttnn.conv2d(
             input_tensor=tt_out,
             weight_tensor=self.conv_weight_tensor,
             bias_tensor=self.conv_bias_tensor,
             **conv_kwargs,
             compute_config=compute_config,
             dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        is_bs = tt_out.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        xdim = tt_out.memory_config().shard_spec.grid.bounding_box().grid_size().x
+
+        if self.conv_out_channels == 640 and xdim == 7 and is_bs:
+            mem_cfg = ttnn.create_sharded_memory_config(tt_out.shape, ttnn.CoreGrid(x=5, y=8), ttnn.ShardStrategy.BLOCK)
+            print(f"target hs mem cfg: {mem_cfg}")
+            tt_out = ttnn.reshard(tt_out, mem_cfg)
+
+        if is_bs:
+            out_channels_tiles = self.conv_out_channels // (ttnn.TILE_SIZE)
+            xdim = tt_out.memory_config().shard_spec.grid.bounding_box().grid_size().x
+            if out_channels_tiles % xdim != 0:
+                print(
+                    f"xdim: {xdim}, mem cfg: {tt_out.memory_config()}, conv_shortcut_out_channels: {self.conv_out_channels}"
+                )
+                assert False, "invalid output"
         return tt_out

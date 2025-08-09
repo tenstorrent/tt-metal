@@ -127,7 +127,7 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     // Tiled output shape is padded shape. Padded to tile shape.
     auto shape_w = batch_size * conv_output_h * conv_output_w;
     auto shape_c = output_channels;
-    auto padded_shape_w = parallelization_config.num_cores_nhw *
+    auto padded_shape_w = parallelization_config.num_cores_nhw_out *
                           parallelization_config.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
     auto padded_shape_c = tt::round_up(this->output_channels, tt::constants::TILE_WIDTH);
     ttnn::Shape output_shape({1, 1, shape_w, shape_c});
