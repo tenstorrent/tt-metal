@@ -315,49 +315,35 @@ def tt_sharded_distributed_rmsnorm(
 
 # TODO: #26351
 # Fabric AG currently doesn't support gathering on a padded dim 3
-# This functionality is in development, and when ready should replace this reshape workaround
-def ag_on_padded_dim_3(inp, mesh_device, tt_ccl, is_galaxy, cluster_axis, num_links, topology):
+# This functionality is in development, and when ready should replace this workaround
+def ag_on_padded_dim_3(inp, tt_ccl, cluster_axis, num_links, topology):
     ag_memory_config = inp.memory_config()
-    output_memory_config = inp.memory_config()
-    input_shape = inp.shape
-    reshape_required = input_shape[3] % 32 != 0
 
-    if reshape_required:
-        gather_dim_input_tensor_size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
-        if gather_dim_input_tensor_size % 32 != 0:
-            assert False, "AG does not support gathering on padded dim 3"
-
-        ag_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        inp = ttnn.reshape(
+    if inp.shape[3] % 32 != 0:
+        inp = ttnn.to_layout(inp, layout=ttnn.ROW_MAJOR_LAYOUT)
+        all_broadcast_output_tensors = ttnn.experimental.all_broadcast_async(
             inp,
-            (1, 1, 1, gather_dim_input_tensor_size),
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles()[0],
+            num_links=num_links,
             memory_config=ag_memory_config,
+            topology=ttnn.Topology.Linear,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
         )
-
-    ag_output = ttnn.experimental.all_gather_async(
-        inp,
-        persistent_output_buffer=None,
-        dim=3,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
-        num_links=num_links,
-        memory_config=ag_memory_config,
-        cluster_axis=cluster_axis,
-        topology=topology,
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=10,
-        num_workers_per_link=2,
-        num_buffers_per_channel=2,
-    )
-
-    ttnn.deallocate(inp)
-
-    output_tensor = ag_output
-    if reshape_required:
-        split_size = gather_dim_input_tensor_size
-        split_tensors = ttnn.split(ag_output, split_size=split_size, dim=3)
-        split_tensors = [ttnn.reshape(tensor, input_shape) for tensor in split_tensors]
-
-        output_tensor = ttnn.concat(split_tensors, dim=3)
-        output_tensor = ttnn.to_memory_config(output_tensor, output_memory_config)
-
-    return output_tensor
+        all_gather_output_tensor = ttnn.concat(all_broadcast_output_tensors, dim=3)
+        ttnn.deallocate(all_broadcast_output_tensors)
+        return ttnn.to_layout(all_gather_output_tensor, ttnn.TILE_LAYOUT)
+    else:
+        return ttnn.experimental.all_gather_async(
+            inp,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=num_links,
+            memory_config=ag_memory_config,
+            cluster_axis=cluster_axis,
+            topology=topology,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )

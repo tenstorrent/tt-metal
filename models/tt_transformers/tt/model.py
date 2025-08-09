@@ -347,9 +347,7 @@ class Transformer(LightweightModule):
         if self.args.num_devices > 1:
             tt_logits = ag_on_padded_dim_3(
                 tt_logits,
-                self.mesh_device,
                 self.tt_ccl,
-                is_galaxy=self.args.is_galaxy,
                 cluster_axis=0 if self.args.is_galaxy else None,
                 num_links=2 if self.args.is_galaxy else 1,
                 topology=self.args.ccl_topology(),
