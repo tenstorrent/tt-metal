@@ -30,7 +30,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_layernorm_parameter,
 )
-from models.experimental.uniad.tests.pcc.test_tt_interaction import (
+from models.experimental.uniad.tests.pcc.test_ttnn_interaction import (
     custom_preprocessor as custom_preprocessor_interations,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
