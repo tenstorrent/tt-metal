@@ -53,7 +53,6 @@ jobs:
               ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh
           - name: dispatch multicmd queue
             cmd: |
-              TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*
               TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
           - name: CCL
             cmd: |
