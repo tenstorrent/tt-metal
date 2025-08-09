@@ -62,7 +62,7 @@ class TtnnResnet34:
             batch_size=batch_size,
             input_h=out_ht,
             input_w=out_wdth,
-            channels=x.shape[-1],
+            channels=x1.shape[-1],
             kernel_size=[self.maxpool_args.kernel_size, self.maxpool_args.kernel_size],
             stride=[self.maxpool_args.stride, self.maxpool_args.stride],
             padding=[self.maxpool_args.padding, self.maxpool_args.padding],

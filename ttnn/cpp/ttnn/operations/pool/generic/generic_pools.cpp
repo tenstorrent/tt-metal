@@ -4,7 +4,6 @@
 
 #include "generic_pools.hpp"
 
-#include <optional>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -14,7 +13,6 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-#include <limits>
 
 namespace ttnn {
 namespace operations::pool {
@@ -41,6 +39,23 @@ static Tensor pool2d_invoke(
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     bool in_place_halo = false) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
+    bool is_out_tiled = false;  // pool output is row major
+    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    validate_input_params(
+        input_tensor,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding_4d[0],
+        padding_4d[1],
+        padding_4d[2],
+        padding_4d[3],
+        dilation.has_value() ? dilation.value()[0] : 1,
+        dilation.has_value() ? dilation.value()[1] : 1,
+        is_in_tiled);
     uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
     uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
     sliding_window::SlidingWindowConfig sliding_window_config{
@@ -55,10 +70,6 @@ static Tensor pool2d_invoke(
     };
     auto output_shape = sliding_window_config.get_output_shape();
     auto input_tensor_sharded = input_tensor;
-
-    // pool output is row major
-    bool is_out_tiled = false;
-    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
 
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor_sharded.memory_config();
