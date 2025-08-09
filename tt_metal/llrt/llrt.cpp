@@ -227,7 +227,7 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, go_msg_addr, sizeof(uint32_t));
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, go_msg_addr & ~0x3, sizeof(uint32_t));
         go_msg_t* core_status = (go_msg_t*)(run_mailbox_read_val.data());
         uint8_t run = core_status->signal;
         if (run != run_state && run != RUN_MSG_DONE) {
@@ -273,7 +273,7 @@ void wait_until_cores_done(
         if (loop_count % 1000 == 0) {
             log_debug(
                 tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
@@ -307,7 +307,7 @@ void send_msg_to_eth_mailbox(
     std::vector<uint32_t> args,
     bool wait_for_ack,
     int timeout_ms) {
-    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
+    constexpr auto k_sleep_time = std::chrono::nanoseconds{100};
     constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_device_feature_enabled(tt::tt_metal::DeviceFeature::ETH_FW_API)) {
@@ -333,9 +333,14 @@ void send_msg_to_eth_mailbox(
         read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] & status_mask;
     {
         const auto start_time = std::chrono::steady_clock::now();
-        while (msg_status != done_message && msg_status != 0) {
+        while (true) {
             uint32_t mailbox_val = read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
             msg_status = mailbox_val & status_mask;
+            if (!(msg_status != done_message && msg_status != 0)) {
+                // This is to skip the sleep if we see done on the first read.
+                break;
+            }
+
             const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
             if (elapsed > timeout_ms) {
@@ -355,19 +360,12 @@ void send_msg_to_eth_mailbox(
         }
     }
 
-    // Must write args first.
-    auto write_arg = [&](int index, uint32_t val) {
-        uint32_t arg_addr = hal.get_eth_fw_mailbox_arg_addr(mailbox_index, index);
-        write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{val}, arg_addr);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
-    };
-
     TT_ASSERT(args.size() <= max_args, "Too many args provided {} max args {}", args.size(), max_args);
     // Pad remaining args to zero
     args.resize(max_args, 0);
-    for (int i = 0; i < max_args; ++i) {
-        write_arg(i, args[i]);
-    }
+    uint32_t first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(mailbox_index, 0);
+    write_hex_vec_to_core(device_id, virtual_core, args, first_arg_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
     const uint32_t msg = call | msg_val;
@@ -384,7 +382,7 @@ void send_msg_to_eth_mailbox(
     // Wait for ack
     if (wait_for_ack) {
         const auto start_time = std::chrono::steady_clock::now();
-        do {
+        while (true) {
             uint32_t mailbox_val = read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
@@ -407,8 +405,11 @@ void send_msg_to_eth_mailbox(
                     run_flag_val);
                 std::abort();
             }
+            if (msg_status == done_message) {
+                break;
+            }
             std::this_thread::sleep_for(k_sleep_time);
-        } while (msg_status != done_message);
+        }
     }
 }
 
@@ -423,7 +424,7 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
 
     uint32_t heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
     uint32_t previous_heartbeat_val = heartbeat_val;
-    const auto start = std::chrono::high_resolution_clock::now();
+    const auto start = std::chrono::steady_clock::now();
     constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
 
     while (heartbeat_val == previous_heartbeat_val) {
@@ -431,7 +432,7 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
         previous_heartbeat_val = heartbeat_val;
         heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
         if (timeout_ms > 0) {
-            const auto now = std::chrono::high_resolution_clock::now();
+            const auto now = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
                 auto core_type_idx =
