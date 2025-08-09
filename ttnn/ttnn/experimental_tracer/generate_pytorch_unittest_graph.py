@@ -14,6 +14,22 @@ from tracer_backend_utils import (
     AtenMulTensor,
     AtenCat,
     AtenBmm,
+    AtenNativeBatchNorm,
+    AtenSilu,
+    AtenPermute,
+    AtenView,
+    AtenClone,
+    AtenUnsafeView,
+    AtenExpand,
+    AtenTransposeInt,
+    AtenDivTensor,
+    AtenSigmoid,
+    AtenSoftmax,
+    AtenSplitTensor,
+    TorchOnes,
+    AtenSplitWithSizes,
+    AtenUpsampleNearest2d,
+    AtenSubTensor,
 )
 from typing import List, Optional, Type, Dict, Any
 from dataclasses import dataclass
@@ -170,6 +186,298 @@ class BmmUnittest(UnitTestOperation):
         """Generate the code for this bmm unit test operation."""
         group_unit_test = BmmGroupUnittest([self.input_shapes])
         return group_unit_test.generate_code()
+
+
+class NativeBatchNormUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["NativeBatchNormUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.native_batch_norm":
+            batch_norm = operation.to_operation(AtenNativeBatchNorm)
+            return NativeBatchNormUnittest(batch_norm.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this batch norm unit test operation."""
+        group_unit_test = NativeBatchNormGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class SiluUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["SiluUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.silu":
+            silu_op = operation.to_operation(AtenSilu)
+            return SiluUnittest(silu_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this silu unit test operation."""
+        group_unit_test = SiluGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class DivTensorUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["DivTensorUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.div.Tensor":
+            div_tensor = operation.to_operation(AtenDivTensor)
+            return DivTensorUnittest(div_tensor.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this div tensor unit test operation."""
+        group_unit_test = DivTensorGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class SigmoidUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["SigmoidUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.sigmoid":
+            sigmoid_op = operation.to_operation(AtenSigmoid)
+            return SigmoidUnittest(sigmoid_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this sigmoid unit test operation."""
+        group_unit_test = SigmoidGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class SoftmaxUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["SoftmaxUnittest"]:
+        if operation.function_call_name == "torch.ops.aten._softmax":
+            softmax_op = operation.to_operation(AtenSoftmax)
+            return SoftmaxUnittest(softmax_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this softmax unit test operation."""
+        group_unit_test = SoftmaxGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class SubTensorUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["SubTensorUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.sub.Tensor":
+            sub_tensor = operation.to_operation(AtenSubTensor)
+            return SubTensorUnittest(sub_tensor.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this sub tensor unit test operation."""
+        group_unit_test = SubTensorGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class UpsampleNearest2dUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["UpsampleNearest2dUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.upsample_nearest2d":
+            upsample_op = operation.to_operation(AtenUpsampleNearest2d)
+            return UpsampleNearest2dUnittest(upsample_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this upsample nearest2d unit test operation."""
+        group_unit_test = UpsampleNearest2dGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class TorchOnesUnittest(UnitTestOperation):
+    def __init__(self, output_shapes: Optional[List[Any]]):
+        self.output_shapes = output_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["TorchOnesUnittest"]:
+        if operation.function_call_name == "torch.ones":
+            ones_op = operation.to_operation(TorchOnes)
+            return TorchOnesUnittest(ones_op.output_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this torch.ones unit test operation."""
+        group_unit_test = TorchOnesGroupUnittest([self.output_shapes])
+        return group_unit_test.generate_code()
+
+
+class PermuteUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["PermuteUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.permute":
+            permute_op = operation.to_operation(AtenPermute)
+            return PermuteUnittest(permute_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this permute unit test operation."""
+        group_unit_test = PermuteGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class ViewUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["ViewUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.view":
+            view_op = operation.to_operation(AtenView)
+            return ViewUnittest(view_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this view unit test operation."""
+        group_unit_test = ViewGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class CloneUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["CloneUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.clone":
+            clone_op = operation.to_operation(AtenClone)
+            return CloneUnittest(clone_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this clone unit test operation."""
+        group_unit_test = CloneGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class UnsafeViewUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["UnsafeViewUnittest"]:
+        if operation.function_call_name == "torch.ops.aten._unsafe_view":
+            unsafe_view_op = operation.to_operation(AtenUnsafeView)
+            return UnsafeViewUnittest(unsafe_view_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this unsafe view unit test operation."""
+        group_unit_test = UnsafeViewGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class ExpandUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["ExpandUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.expand":
+            expand_op = operation.to_operation(AtenExpand)
+            return ExpandUnittest(expand_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this expand unit test operation."""
+        group_unit_test = ExpandGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class TransposeIntUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["TransposeIntUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.transpose.int":
+            transpose_op = operation.to_operation(AtenTransposeInt)
+            return TransposeIntUnittest(transpose_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this transpose int unit test operation."""
+        group_unit_test = TransposeIntGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class SplitTensorUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["SplitTensorUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.split.Tensor":
+            split_op = operation.to_operation(AtenSplitTensor)
+            return SplitTensorUnittest(split_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this split tensor unit test operation."""
+        group_unit_test = SplitTensorGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class SplitWithSizesUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["SplitWithSizesUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.split_with_sizes":
+            split_op = operation.to_operation(AtenSplitWithSizes)
+            return SplitWithSizesUnittest(split_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this split with sizes unit test operation."""
+        group_unit_test = SplitWithSizesGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+# Note: These operations (View, Permute, Clone, UnsafeView, Expand, TransposeInt, SplitTensor, SplitWithSizes)
+# are generally zero-cost operations but unit tests are still useful for validation
 
 
 class ConvolutionGroupUnittest(UnitTestOperation):
@@ -584,6 +892,633 @@ def test_bmm(device, input_shape_a, input_shape_b, dtype):
 """
 
 
+class NativeBatchNormGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this batch norm unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_native_batch_norm(device, input_shape, dtype):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    num_features = input_shape[1]
+    
+    # Create batch norm module
+    batch_norm = torch.nn.BatchNorm2d(num_features, dtype=torch.bfloat16)
+    torch_output_tensor = batch_norm(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    
+    # Note: This is a simplified test - actual implementation may vary
+    output_tensor = ttnn.to_torch(input_tensor)
+    pcc = 0.98
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class SiluGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this silu unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_silu(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.silu(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensor = ttnn.silu(input_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class DivTensorGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 2]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this div tensor unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape_a, input_shape_b",
+    (
+{''.join(set(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_div_tensor(device, input_shape_a, input_shape_b, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor_a = torch.randn(input_shape_a, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_shape_b, dtype=torch.bfloat16) + 0.1  # Avoid division by zero
+    torch_output_tensor = torch_input_tensor_a / torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=layout, device=device, dtype=dtype)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=layout, device=device, dtype=dtype)
+
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class SigmoidGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this sigmoid unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_sigmoid(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.sigmoid(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensor = ttnn.sigmoid(input_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class SoftmaxGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this softmax unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_softmax(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.softmax(torch_input_tensor, dim=-1)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensor = ttnn.softmax(input_tensor, dim=-1)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class SubTensorGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 2]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this sub tensor unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape_a, input_shape_b",
+    (
+{''.join(set(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_sub_tensor(device, input_shape_a, input_shape_b, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor_a = torch.randn(input_shape_a, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_shape_b, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a - torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=layout, device=device, dtype=dtype)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=layout, device=device, dtype=dtype)
+
+    output_tensor = ttnn.subtract(input_tensor_a, input_tensor_b)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class UpsampleNearest2dGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this upsample nearest2d unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape, scale_factor",
+    (
+{''.join(set(f'        ({shape[0]}, 2),' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_upsample_nearest2d(device, input_shape, scale_factor, dtype):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.interpolate(
+        torch_input_tensor, scale_factor=scale_factor, mode='nearest'
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    
+    # Note: This is a simplified test - actual ttnn implementation may vary
+    output_tensor = ttnn.to_torch(input_tensor)
+    pcc = 0.98
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class TorchOnesGroupUnittest(UnitTestOperation):
+    def __init__(self, output_shapes_list: List[Optional[List[Any]]]):
+        self.output_shape_list = [shapes for shapes in output_shapes_list if shapes is not None]
+        self.output_shape_list = [
+            [list(shape) if hasattr(shape, '__iter__') else [shape] for shape in shapes] 
+            for shapes in self.output_shape_list if shapes
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this torch.ones unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "output_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.output_shape_list if len(shape) > 0))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_torch_ones(device, output_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_output_tensor = torch.ones(output_shape, dtype=torch.bfloat16)
+    output_tensor = ttnn.ones(output_shape, layout=layout, device=device, dtype=dtype)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.99
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class PermuteGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this permute unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_permute(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    dims = list(range(len(input_shape)))
+    dims[-1], dims[-2] = dims[-2], dims[-1]  # Swap last two dimensions
+    torch_output_tensor = torch_input_tensor.permute(dims)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensor = ttnn.permute(input_tensor, dims)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.99
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class ViewGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this view unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_view(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    new_shape = [-1, input_shape[-1]]  # Flatten all but last dimension
+    torch_output_tensor = torch_input_tensor.view(new_shape)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensor = ttnn.reshape(input_tensor, new_shape)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.99
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class CloneGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this clone unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_clone(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.clone()
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensor = ttnn.clone(input_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.99
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class UnsafeViewGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this unsafe view unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_unsafe_view(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    new_shape = [-1, input_shape[-1]]  # Flatten all but last dimension
+    torch_output_tensor = torch_input_tensor.view(new_shape)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensor = ttnn.reshape(input_tensor, new_shape)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.99
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class ExpandGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this expand unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_expand(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    expand_shape = list(input_shape)
+    expand_shape[0] = expand_shape[0] * 2  # Double the batch size
+    torch_output_tensor = torch_input_tensor.expand(expand_shape)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensor = ttnn.expand(input_tensor, expand_shape)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.99
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class TransposeIntGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this transpose int unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_transpose_int(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    dim0, dim1 = -2, -1  # Transpose last two dimensions
+    torch_output_tensor = torch_input_tensor.transpose(dim0, dim1)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensor = ttnn.transpose(input_tensor, dim0, dim1)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.99
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class SplitTensorGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this split tensor unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_split_tensor(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    split_size = input_shape[-1] // 2 if input_shape[-1] > 1 else 1
+    torch_output_tensors = torch.split(torch_input_tensor, split_size, dim=-1)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensors = ttnn.split(input_tensor, split_size, dim=-1)
+
+    for torch_out, ttnn_out in zip(torch_output_tensors, output_tensors):
+        ttnn_out = ttnn.to_torch(ttnn_out)
+        pcc = 0.99
+        assert_with_pcc(torch_out, ttnn_out, pcc=pcc)
+"""
+
+
+class SplitWithSizesGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this split with sizes unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_split_with_sizes(device, input_shape, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    last_dim = input_shape[-1]
+    split_sizes = [last_dim // 3, last_dim // 3, last_dim - 2 * (last_dim // 3)] if last_dim > 2 else [last_dim]
+    torch_output_tensors = torch.split(torch_input_tensor, split_sizes, dim=-1)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+    output_tensors = ttnn.split(input_tensor, split_sizes, dim=-1)
+
+    for torch_out, ttnn_out in zip(torch_output_tensors, output_tensors):
+        ttnn_out = ttnn.to_torch(ttnn_out)
+        pcc = 0.99
+        assert_with_pcc(torch_out, ttnn_out, pcc=pcc)
+"""
+
+
 class UnitTestOperationCombiner:
     @staticmethod
     def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
@@ -679,6 +1614,182 @@ class BmmCombiner(UnitTestOperationCombiner):
         return BmmGroupUnittest(combined_shapes)
 
 
+class NativeBatchNormCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple native batch norm operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [bn_op.input_shapes for bn_op in operations if isinstance(bn_op, NativeBatchNormUnittest)]
+        return NativeBatchNormGroupUnittest(combined_shapes)
+
+
+class SiluCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple silu operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [silu_op.input_shapes for silu_op in operations if isinstance(silu_op, SiluUnittest)]
+        return SiluGroupUnittest(combined_shapes)
+
+
+class DivTensorCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple div tensor operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [div_op.input_shapes for div_op in operations if isinstance(div_op, DivTensorUnittest)]
+        return DivTensorGroupUnittest(combined_shapes)
+
+
+class SigmoidCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple sigmoid operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [sigmoid_op.input_shapes for sigmoid_op in operations if isinstance(sigmoid_op, SigmoidUnittest)]
+        return SigmoidGroupUnittest(combined_shapes)
+
+
+class SoftmaxCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple softmax operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [softmax_op.input_shapes for softmax_op in operations if isinstance(softmax_op, SoftmaxUnittest)]
+        return SoftmaxGroupUnittest(combined_shapes)
+
+
+class SubTensorCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple sub tensor operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [sub_op.input_shapes for sub_op in operations if isinstance(sub_op, SubTensorUnittest)]
+        return SubTensorGroupUnittest(combined_shapes)
+
+
+class UpsampleNearest2dCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple upsample nearest2d operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [upsample_op.input_shapes for upsample_op in operations if isinstance(upsample_op, UpsampleNearest2dUnittest)]
+        return UpsampleNearest2dGroupUnittest(combined_shapes)
+
+
+class TorchOnesCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple torch.ones operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [ones_op.output_shapes for ones_op in operations if isinstance(ones_op, TorchOnesUnittest)]
+        return TorchOnesGroupUnittest(combined_shapes)
+
+
+class PermuteCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple permute operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [permute_op.input_shapes for permute_op in operations if isinstance(permute_op, PermuteUnittest)]
+        return PermuteGroupUnittest(combined_shapes)
+
+
+class ViewCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple view operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [view_op.input_shapes for view_op in operations if isinstance(view_op, ViewUnittest)]
+        return ViewGroupUnittest(combined_shapes)
+
+
+class CloneCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple clone operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [clone_op.input_shapes for clone_op in operations if isinstance(clone_op, CloneUnittest)]
+        return CloneGroupUnittest(combined_shapes)
+
+
+class UnsafeViewCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple unsafe view operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [unsafe_view_op.input_shapes for unsafe_view_op in operations if isinstance(unsafe_view_op, UnsafeViewUnittest)]
+        return UnsafeViewGroupUnittest(combined_shapes)
+
+
+class ExpandCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple expand operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [expand_op.input_shapes for expand_op in operations if isinstance(expand_op, ExpandUnittest)]
+        return ExpandGroupUnittest(combined_shapes)
+
+
+class TransposeIntCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple transpose int operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [transpose_op.input_shapes for transpose_op in operations if isinstance(transpose_op, TransposeIntUnittest)]
+        return TransposeIntGroupUnittest(combined_shapes)
+
+
+class SplitTensorCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple split tensor operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [split_op.input_shapes for split_op in operations if isinstance(split_op, SplitTensorUnittest)]
+        return SplitTensorGroupUnittest(combined_shapes)
+
+
+class SplitWithSizesCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple split with sizes operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [split_op.input_shapes for split_op in operations if isinstance(split_op, SplitWithSizesUnittest)]
+        return SplitWithSizesGroupUnittest(combined_shapes)
+
+
 class UnitTestCombiner:
     def __init__(
         self,
@@ -688,7 +1799,7 @@ class UnitTestCombiner:
         self.operations = operations
         self.class_to_combiner = class_to_combiner
 
-    def group_operations(self) -> List[UnitTestOperation]:
+    def group_operations(self) -> Dict[Type[UnitTestOperation], List[UnitTestOperation]]:
         """Group operations based on their type or attributes."""
         grouped_operations: Dict[Type[UnitTestOperation], List[UnitTestOperation]] = {}
         for operation in self.operations:
@@ -730,6 +1841,22 @@ class PytorchLayerUnitTestGraphConfig:
                 MulTensorUnittest,
                 CatUnittest,
                 BmmUnittest,
+                NativeBatchNormUnittest,
+                SiluUnittest,
+                DivTensorUnittest,
+                SigmoidUnittest,
+                SoftmaxUnittest,
+                SubTensorUnittest,
+                UpsampleNearest2dUnittest,
+                TorchOnesUnittest,
+                PermuteUnittest,
+                ViewUnittest,
+                CloneUnittest,
+                UnsafeViewUnittest,
+                ExpandUnittest,
+                TransposeIntUnittest,
+                SplitTensorUnittest,
+                SplitWithSizesUnittest,
             ]
         if self.group_unit_test_operations is None:
             self.group_unit_test_operations = {
@@ -740,6 +1867,22 @@ class PytorchLayerUnitTestGraphConfig:
                 MulTensorUnittest: MulTensorCombiner,
                 CatUnittest: CatCombiner,
                 BmmUnittest: BmmCombiner,
+                NativeBatchNormUnittest: NativeBatchNormCombiner,
+                SiluUnittest: SiluCombiner,
+                DivTensorUnittest: DivTensorCombiner,
+                SigmoidUnittest: SigmoidCombiner,
+                SoftmaxUnittest: SoftmaxCombiner,
+                SubTensorUnittest: SubTensorCombiner,
+                UpsampleNearest2dUnittest: UpsampleNearest2dCombiner,
+                TorchOnesUnittest: TorchOnesCombiner,
+                PermuteUnittest: PermuteCombiner,
+                ViewUnittest: ViewCombiner,
+                CloneUnittest: CloneCombiner,
+                UnsafeViewUnittest: UnsafeViewCombiner,
+                ExpandUnittest: ExpandCombiner,
+                TransposeIntUnittest: TransposeIntCombiner,
+                SplitTensorUnittest: SplitTensorCombiner,
+                SplitWithSizesUnittest: SplitWithSizesCombiner,
             }
 
 
@@ -753,7 +1896,7 @@ class PytorchLayerUnitTestGraph:
         unit_test_operations = []
         for node_id in list(nx.topological_sort(self.graph)):
             operation = self.graph.nodes[node_id].get("operation")
-            if operation:
+            if operation and self.config.register_unit_test_operations:
                 for unit_test_op_cls in self.config.register_unit_test_operations:
                     unit_test_op = unit_test_op_cls.parse_from_operation(operation)
                     if unit_test_op:

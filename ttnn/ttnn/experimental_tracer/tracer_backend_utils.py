@@ -291,7 +291,13 @@ class AtenView(WrappedOperation):
 class TorchOnes(WrappedOperation):
     """Represents the torch.ones operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate operations for tensor initialization."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            return output_shapes[0].numel()  # One initialization per element
+        return super().ops
 
 
 @dataclass
@@ -299,7 +305,20 @@ class TorchOnes(WrappedOperation):
 class AtenNativeBatchNorm(WrappedOperation):
     """Represents the native_batch_norm operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for batch normalization operation."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # Batch norm operations per element:
+            # 1. Subtract mean: x - mean
+            # 2. Divide by std: (x - mean) / sqrt(var + eps)
+            # 3. Scale: ((x - mean) / sqrt(var + eps)) * gamma
+            # 4. Shift: ((x - mean) / sqrt(var + eps)) * gamma + beta
+            # Total: 4 operations per element
+            return num_elements * 4
+        return super().ops
 
 
 @dataclass
@@ -349,7 +368,16 @@ class AtenCat(WrappedOperation):
 class AtenSigmoid(WrappedOperation):
     """Represents the sigmoid operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for sigmoid activation function."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # Sigmoid: 1 / (1 + exp(-x))
+            # Operations: exp, add, div = 3 operations per element
+            return num_elements * 3
+        return super().ops
 
 
 @dataclass
@@ -357,7 +385,16 @@ class AtenSigmoid(WrappedOperation):
 class AtenSoftmax(WrappedOperation):
     """Represents the _softmax operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for softmax activation function."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # Softmax: exp(x) / sum(exp(x))
+            # Operations: exp, sum, div = ~3 operations per element
+            return num_elements * 3
+        return super().ops
 
 
 @dataclass
@@ -423,7 +460,13 @@ class AtenUpsampleNearest2d(WrappedOperation):
 class AtenClone(WrappedOperation):
     """Represents the clone operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate operations for tensor cloning."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            return output_shapes[0].numel()  # One copy operation per element
+        return super().ops
 
 
 @dataclass
@@ -644,7 +687,16 @@ class AtenSoftplus(WrappedOperation):
 class AtenTanh(WrappedOperation):
     """Represents the tanh operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for tanh activation function."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # Tanh: (exp(2x) - 1) / (exp(2x) + 1)
+            # Operations: exp, sub, add, div = ~4 operations per element
+            return num_elements * 4
+        return super().ops
 
 
 @dataclass
@@ -652,7 +704,16 @@ class AtenTanh(WrappedOperation):
 class AtenPowTensorScalar(WrappedOperation):
     """Represents the pow.Tensor_Scalar operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for power operation."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # Power operation: x^y
+            # Operations: logarithm and exponential approximation = ~5 operations per element
+            return num_elements * 5
+        return super().ops
 
 
 @dataclass
@@ -660,7 +721,19 @@ class AtenPowTensorScalar(WrappedOperation):
 class AtenSilu(WrappedOperation):
     """Represents the silu operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for SiLU (Swish) activation function."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # SiLU operation: x * sigmoid(x)
+            # This involves:
+            # 1. Sigmoid computation (exp, add, div): ~3 ops per element
+            # 2. Multiplication: x * sigmoid(x): 1 op per element
+            # Total: 4 operations per element
+            return num_elements * 4
+        return super().ops
 
 
 @dataclass
