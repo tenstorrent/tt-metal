@@ -23,8 +23,6 @@ from tracy import signpost
 
 SUB_DEVICE_CRS = ttnn.CoreRangeSet(
     [
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 3)),
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(0, 7)),
         ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
         ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
     ]
@@ -413,19 +411,11 @@ def run_llama_all_gather_matmul_impl(
     ##################################
     def validate(tt_out_tensor, output_tensor):
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            # get_device_tensors returns row major, so we need to select the correct golden tensor
-            # if cluster_axis == 0:
-            #     output_tensor_ = output_tensor[i % cluster_shape[not (cluster_axis)]]
-            # else:
-            #     output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]]
             row_index = i // cluster_shape[1]
             col_index = i % cluster_shape[1]
             output_tensor_ = output_tensor[row_index, col_index]
             tt_output_tensor = t.cpu().to_torch().squeeze(0).squeeze(0)
-            # print(f"i: {i}, row_index: {row_index}, col_index: {col_index}")
 
-            # print(f"tt_output_tensor: {tt_output_tensor}")
-            # print(f"output_tensor_: {output_tensor_}")
             if in0_dtype == ttnn.bfloat16:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
             else:

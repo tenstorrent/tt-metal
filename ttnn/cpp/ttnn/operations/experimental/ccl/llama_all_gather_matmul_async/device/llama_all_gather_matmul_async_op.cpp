@@ -15,7 +15,7 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
+    TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
@@ -315,7 +315,7 @@ Tensor llama_all_gather_matmul_async_impl(
     //     .at(0);
     auto tensors_out = tt::tt_metal::operation::run(
         llama_all_gather_matmul_async_struct,
-        {input_tensor, input_tensor_b, intermediate_tensor},
+        {input_tensor, input_tensor_b},
         optional_input_tensors,
         optional_output_tensors);
     tensors_out.at(0).deallocate(true);
