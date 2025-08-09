@@ -19,13 +19,24 @@ on:
         required: false
         type: string
         default: "in-service"
+      requested-models:
+        required: true
+        default: "all"
+        type: string
+      run-perf-tests:
+        required: true
+        type: boolean
+        default: true
 
 jobs:
-  single-card-demo-tests:
+  define-demo-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      demo-tests: ${{ steps.compute-tests.demo-tests }}
     strategy:
-      fail-fast: false
       matrix:
-        test-group: [
+        default-demo-tests: [
+          [
                     { name: "falcon7b", runner-label: "N150", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
                     { name: "llama3", runner-label: "N150", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
                     { name: "vgg", runner-label: "N150", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
@@ -93,6 +104,26 @@ jobs:
                     # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
                     { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_func, owner_id: U07RY6B5FLJ},  #Gongyu Wang
         ]
+      ]
+    steps:
+      - name: Compute tests
+        shell: bash
+        id: compute-tests
+        run: |
+          set -euo pipefail
+
+          echo "[info] Outputing default values"
+          default_demo_tests=${{ matrix.default-demo-tests }}
+          echo $default_demo_tests
+          echo "[info] Outputing default values via jq"
+          echo $default_demo_tests | jq
+
+  single-card-demo-tests:
+    needs: define-demo-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.compute-tests.outputs.demo-tests) }}
     name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ (matrix.test-group.performance && 'perf') || 'func' }}
     env:
       LOGURU_LEVEL: INFO
