@@ -13,6 +13,7 @@ import pytest
 import requests
 from pathlib import Path
 import hashlib
+from collections import deque
 
 
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
@@ -119,6 +120,7 @@ def run_llama3_demo(
     start_pos,
     enable_prefetcher_performance_mode=True,
     galaxy_type="4U",
+    print_outputs=False,
 ):
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -274,6 +276,11 @@ def run_llama3_demo(
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
     logger.info("Starting decode...")
+
+    # Deques to store iteration data when print_outputs is False
+    prefill_iteration_data = deque()
+    decode_iteration_data = deque()
+
     # Initial positions
     decoding_pos = [start_pos] * batch_size
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
@@ -466,7 +473,7 @@ def run_llama3_demo(
             )
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
             profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
-            if not is_ci_env:
+            if not is_ci_env and print_outputs:
                 # Print out generated outputs for each user at the end of every iteration
                 logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
@@ -474,9 +481,24 @@ def run_llama3_demo(
             iteration_time = iteration_time_ends - iteration_time_start
             tokens_per_second_per_user = 1 / iteration_time
 
-            if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
+            if is_ci_env and (iteration < 200 or iteration % 1000 == 0):
                 logger.info(
                     f"Iteration : {iteration}, Prefill Iteration : {iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+                )
+            elif not is_ci_env and print_outputs:
+                logger.info(
+                    f"Iteration : {iteration}, Prefill Iteration : {iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+                )
+            elif not is_ci_env and not print_outputs:
+                # Store prefill iteration data for later printing
+                prefill_iteration_data.append(
+                    {
+                        "iteration": iteration,
+                        "prefill_iteration": iteration,
+                        "time_ms": 1000 * iteration_time,
+                        "tokens_per_second_per_user": tokens_per_second_per_user,
+                        "throughput": batch_size / iteration_time,
+                    }
                 )
             profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
             iteration_time_start = time()
@@ -495,7 +517,7 @@ def run_llama3_demo(
                 all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
 
                 profiler.start(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
-                if not is_ci_env:
+                if not is_ci_env and print_outputs:
                     # Print out generated outputs for each user at the end of every iteration
                     logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
@@ -506,9 +528,24 @@ def run_llama3_demo(
 
                 all_tokens_per_second_per_user.append(tokens_per_second_per_user)
 
-                if not is_ci_env or current_iteration < 200 or current_iteration % 1000 == 0:
+                if is_ci_env and (current_iteration < 200 or current_iteration % 1000 == 0):
                     logger.info(
                         f"Iteration : {current_iteration}, Decode Iteration : {current_decode_iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+                    )
+                elif not is_ci_env and print_outputs:
+                    logger.info(
+                        f"Iteration : {current_iteration}, Decode Iteration : {current_decode_iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+                    )
+                elif not is_ci_env and not print_outputs:
+                    # Store decode iteration data for later printing
+                    decode_iteration_data.append(
+                        {
+                            "iteration": current_iteration,
+                            "decode_iteration": current_decode_iteration,
+                            "time_ms": 1000 * iteration_time,
+                            "tokens_per_second_per_user": tokens_per_second_per_user,
+                            "throughput": batch_size / iteration_time,
+                        }
                     )
                 profiler.end(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
 
@@ -590,6 +627,26 @@ def run_llama3_demo(
         # Print out total number of tsu_failures
         logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {tsu_perf_drop_limit})")
 
+    # Print all stored iteration data if print_outputs was False
+    if not print_outputs:
+        if prefill_iteration_data:
+            logger.info("=== Prefill Loop Performance Summary ===")
+            for prefill_data in prefill_iteration_data:
+                logger.info(
+                    f"Prefill Iteration {prefill_data['iteration']}: Time: {prefill_data['time_ms']:.4f}ms, tok/s/user: {prefill_data['tokens_per_second_per_user']:.2f}, Throughput: {prefill_data['throughput']:.2f} tok/s"
+                )
+            logger.info("=== End Prefill Loop Performance Summary ===")
+
+        if decode_iteration_data:
+            logger.info("=== Decode Loop Performance Summary ===")
+            for decode_data in decode_iteration_data:
+                logger.info(
+                    f"Decode Iteration {decode_data['iteration']} (Decode {decode_data['decode_iteration']}): Time: {decode_data['time_ms']:.4f}ms, tok/s/user: {decode_data['tokens_per_second_per_user']:.2f}, Throughput: {decode_data['throughput']:.2f} tok/s"
+                )
+            logger.info("=== End Decode Loop Performance Summary ===")
+
+    return benchmark_data
+
 
 # List of supported Parameters for demo.py
 #
@@ -605,7 +662,7 @@ def run_llama3_demo(
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
-    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos, print_outputs",
     [
         (  # full demo, batch 32
             "instruct",
@@ -621,6 +678,7 @@ def run_llama3_demo(
             {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos
+            False,  # print_outputs
         ),
         (  # quick 1L demo
             "random",
@@ -636,6 +694,7 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
+            True,  # print_outputs
         ),
         (  # Stress test: 4*128k generation length
             "instruct",
@@ -651,6 +710,7 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},  # sampling_params
             True,  # stress_test
             0,  # start_pos
+            True,  # print_outputs
         ),
         (  # mini stress test
             "instruct",
@@ -666,6 +726,7 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
+            True,  # print_outputs
         ),
         (  # 10 layers for devive perf measurements
             "instruct",
@@ -681,6 +742,7 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
+            True,  # print_outputs
         ),
         (  # ND hang test
             "instruct",
@@ -696,6 +758,7 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
+            True,  # print_outputs
         ),
     ],
     ids=[
@@ -753,6 +816,7 @@ def test_llama_demo(
     reset_seeds,
     request,
     galaxy_type,
+    print_outputs,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -772,6 +836,7 @@ def test_llama_demo(
         paged_attention_config = None
 
     enable_pf_perf_mode = not request.config.getoption("--disable_pf_perf_mode")
+    print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
     return run_llama3_demo(
         user_input=input_prompts,
@@ -793,4 +858,5 @@ def test_llama_demo(
         start_pos=start_pos,
         enable_prefetcher_performance_mode=enable_pf_perf_mode,
         galaxy_type=galaxy_type,
+        print_outputs=print_outputs,
     )
