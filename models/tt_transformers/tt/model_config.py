@@ -719,7 +719,8 @@ class ModelArgs:
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
-                self.ccl_topology() == ttnn.Topology.Ring
+                self.num_devices == 8
+                and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
             )
@@ -794,7 +795,9 @@ class ModelArgs:
                 if self.is_galaxy
                 else (
                     1024
-                    if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
+                    if self.num_devices == 8
+                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                    and 1024 % (self.dim / self.num_devices) == 0
                     else self.dim
                 )
             )
