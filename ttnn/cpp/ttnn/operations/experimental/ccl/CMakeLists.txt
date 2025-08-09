@@ -36,7 +36,6 @@ target_sources(
         all_gather_async/device/all_gather_async_program_minimal_variants.cpp
         llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.cpp
-        llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_mm_async_program_factory.cpp
         llama_all_gather_matmul_async/device/llama_1d_mm_fusion_program_factory.cpp
         all_to_all_async/all_to_all_async.cpp

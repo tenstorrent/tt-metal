@@ -149,22 +149,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
-tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_sharded(
-    const Tensor& input_tensor,
-    const Tensor& intermediate_tensor,
-    const Tensor& aggregated_tensor,
-    Tensor& output_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
-
 namespace operations {
 namespace experimental {
 namespace ccl {
