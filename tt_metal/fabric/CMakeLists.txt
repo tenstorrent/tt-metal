@@ -42,6 +42,8 @@ target_sources(
         fabric_mux_config.cpp
         compressed_routing_table.cpp
         serialization/intermesh_link_table.cpp
+        erisc_datamover_builder_helper.cpp
+        ccl/ccl_common.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
