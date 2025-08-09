@@ -39,9 +39,9 @@ using namespace ccl;
 tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
+    Tensor& output_tensor,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
-    Tensor& output_tensor,
     IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -460,9 +460,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
             const auto& input = input_tensors[0];
             const auto& input_b = input_tensors[1];
 
-            const auto& aggregated = output_tensors[0];
-            const auto& mm_output = output_tensors[1];
-            const auto& intermediate = output_tensors[2];
+            const auto& mm_output = output_tensors[0];
+            const auto& intermediate = output_tensors[1];
+            const auto& aggregated = output_tensors[2];
 
             auto semaphore =
                 static_cast<const ttnn::LlamaAllGatherMatmulAsync*>(operation)->all_gather_params.semaphore;

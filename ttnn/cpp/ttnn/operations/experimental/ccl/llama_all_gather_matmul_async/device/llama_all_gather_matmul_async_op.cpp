@@ -86,7 +86,7 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     ttnn::TensorSpec matmul_output_specs =
         this->matmul_struct.compute_output_specs({input_tensors[0], input_tensors[1]}, {})[0];
 
-    return {aggregated_tensor_spec, matmul_output_specs, intermediate_tensor_spec};
+    return {matmul_output_specs, intermediate_tensor_spec, aggregated_tensor_spec};
 }
 
 std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
@@ -95,8 +95,8 @@ std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
     // const auto& intermediate_tensor = input_tensors[2];
 
     auto specs = compute_output_specs(input_tensors);
-    const auto& aggregated_tensor_spec = specs[0];
-    const auto& intermediate_tensor_spec = specs[2];
+    const auto& intermediate_tensor_spec = specs[1];
+    const auto& aggregated_tensor_spec = specs[2];
 
     ttnn::Tensor aggregated_tensor = create_device_tensor(aggregated_tensor_spec, input_tensors[0].device());
     ttnn::Tensor intermediate_tensor = create_device_tensor(intermediate_tensor_spec, input_tensors[0].device());
@@ -105,7 +105,7 @@ std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
     ttnn::Tensor matmul_output_tensor =
         this->matmul_struct.create_output_tensors({aggregated_tensor, input_tensors[1]})[0];
 
-    return {aggregated_tensor, matmul_output_tensor, intermediate_tensor};
+    return {matmul_output_tensor, intermediate_tensor, aggregated_tensor};
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks LlamaAllGatherMatmulAsync::create_mesh_workload(
@@ -160,9 +160,9 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
     return llama_all_gather_mm_async_sharded(
         input_tensors[0],   // in0
         input_tensors[1],   // in1
-        output_tensors[2],  // intermediate_tensor
-        output_tensors[0],  // aggregated_tensor (now output)
-        output_tensors[1],  // mm output tensor
+        output_tensors[0],  // mm output tensor
+        output_tensors[1],  // intermediate_tensor
+        output_tensors[2],  // aggregated_tensor (now output)
         target_device,
         forward_device,
         backward_device,
@@ -309,10 +309,10 @@ Tensor llama_all_gather_matmul_async_impl(
         {input_tensor, input_tensor_b},
         optional_input_tensors,
         optional_output_tensors);
-    tensors_out.at(0).deallocate(true);
+    tensors_out.at(1).deallocate(true);
     tensors_out.at(2).deallocate(
         true);  // deallocate the intermediate tensor, it's allocated in the op and no longer needed outside the op.
-    return tensors_out.at(1);
+    return tensors_out.at(0);
 }
 }  // namespace
 
