@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "conv2d/conv2d_utils.hpp"
+#include "conv2d/device/conv2d_op.hpp"
 #include "tt-metalium/assert.hpp"
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
@@ -797,7 +799,6 @@ static OptimizedConvBlockConfig get_opt_block_config(
             in_channels,
             output_height,
             output_width,
-            out_channels,
             in_channels_alignment,
             compute_grid_size,
             shard_orientation,
@@ -806,20 +807,10 @@ static OptimizedConvBlockConfig get_opt_block_config(
             true,
             conv_config.act_block_h_override);
     }
-    auto output_parallel_config = parallel_config;
-    if (conv_config.shard_layout.value() == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !mm_conv) {
-        uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
-        output_parallel_config = {
-            .grid = tt::tt_metal::num_cores_to_corerangeset(
-                find_closest_largest_divisor(tt::div_up(out_channels, tt::constants::TILE_WIDTH), max_num_cores),
-                compute_grid_size,
-                true),
-            .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
-            .shard_orientation = parallel_config.shard_orientation};
-        log_debug(tt::LogOp, "Changing width sharded output grid to  {}", output_parallel_config.grid);
-    }
+    ParallelConfig output_parallel_config =
+        determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, shard_orientation, mm_conv);
 
-    auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
+    MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(
             {1,
              1,
@@ -829,13 +820,14 @@ static OptimizedConvBlockConfig get_opt_block_config(
                  get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH)}),
         output_parallel_config,
         tt::constants::TILE_HEIGHT);
-    auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
-                                       ? output_parallel_config
-                                       : parallel_config;
-    auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
-        conv_out_memory_config,
-        get_num_cores_nhw_from_parallel_config(largest_parallel_config),
-        get_num_cores_channels_from_parallel_config(parallel_config));
+    ParallelConfig largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
+                                                 ? output_parallel_config
+                                                 : parallel_config;
+    OptimizedConvParallelizationConfig opt_conv_op_parallel_config =
+        determine_conv_op_parallel_config_from_conv_output_mem_config(
+            conv_out_memory_config,
+            get_num_cores_nhw_from_parallel_config(largest_parallel_config),
+            get_num_cores_channels_from_parallel_config(parallel_config));
 
     uint32_t in_channels_padded =
         tt::round_up(in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * in_channels_alignment);
@@ -970,7 +962,6 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             in_channels,
             output_height,
             output_width,
-            out_channels,
             input_channels_alignment,
             device->compute_with_storage_grid_size(),
             shard_orientation,
@@ -981,7 +972,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     }
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
+        parallel_config, device->compute_with_storage_grid_size(), out_channels, shard_orientation, mm_conv);
 
     return Conv2dWeightsBiasPrepConfig(
         input_channels_alignment,
@@ -1055,6 +1046,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
         out_channels);
 
     uint32_t input_num_cores_channels = get_num_cores_channels_from_parallel_config(params.input_parallel_config);
+    uint32_t output_num_cores_channels = get_num_cores_channels_from_parallel_config(params.output_parallel_config);
     uint32_t out_channels_padded = calculate_out_channels_padded(out_channels, params.output_parallel_config);
     uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
     uint32_t out_channel_padding = out_channels_padded - out_channels;
@@ -1069,7 +1061,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
             weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
     } else if (params.input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-            weight_tensor_, input_num_cores_channels, params.full_inner_dim, weight_tensor_.dtype());
+            weight_tensor_, output_num_cores_channels, params.full_inner_dim, weight_tensor_.dtype());
     } else {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
             weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
