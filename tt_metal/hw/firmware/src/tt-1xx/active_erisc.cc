@@ -134,8 +134,6 @@ void __attribute__((noinline)) Application() {
     // do {
     //     __asm__ volatile("fence");
     // } while (gEnableFwFlag[0] != 1);
-    // This flag must be set to 1 before launching this firmware
-    gEnableFwFlag[0] = 1;
     // BH-104 Workaround: ignore a duplicate host disable (0) from a previous run until
     // the first GO of this instance, but only for a short grace window so that
     // a legitimate immediate close (without GO) can still succeed.
@@ -167,6 +165,9 @@ void __attribute__((noinline)) Application() {
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     overwrite_mailbox_to_done();
+
+    // This flag must be set to 1 before launching this firmware
+    gEnableFwFlag[0] = 1;
 
     while (1) {
         // Wait...
