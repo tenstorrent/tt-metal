@@ -36,7 +36,6 @@
 #include "umd/device/types/xy_pair.h"
 
 using namespace tt;
-using namespace tt::tt_metal::distributed;
 
 namespace unit_tests_common::dram::test_dram {
 struct DRAMConfig {
@@ -66,12 +65,13 @@ tt::tt_metal::KernelHandle CreateKernelFromVariant(tt::tt_metal::Program& progra
 }
 
 bool dram_single_core_db(
-    tt::tt_metal::MeshDispatchFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt::tt_metal::MeshDispatchFixture* fixture, std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device) {
+    tt_metal::distributed::MeshWorkload workload;
+    auto zero_coord = tt_metal::distributed::MeshCoordinate(0, 0);
+    tt_metal::distributed::MeshCoordinateRange device_range =
+        tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    tt_metal::distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};
@@ -87,14 +87,14 @@ bool dram_single_core_db(
     TT_FATAL(total_l1_buffer_size_tiles % 2 == 0, "Error");
     uint32_t total_l1_buffer_size_bytes = total_l1_buffer_size_tiles * single_tile_size;
 
-    distributed::DeviceLocalBufferConfig dram_config{
+    tt_metal::distributed::DeviceLocalBufferConfig dram_config{
         .page_size = dram_buffer_size_bytes, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size_bytes};
+    tt_metal::distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size_bytes};
 
-    auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto input_dram_buffer = tt_metal::distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
-    auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto output_dram_buffer = tt_metal::distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
     auto dram_copy_kernel = tt_metal::CreateKernel(
@@ -132,27 +132,28 @@ bool dram_single_core_db(
 
 bool dram_single_core(
     tt::tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
     const DRAMConfig& cfg) {
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(cfg.dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     // Create a program
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt_metal::distributed::MeshWorkload workload;
+    auto zero_coord = tt_metal::distributed::MeshCoordinate(0, 0);
+    tt_metal::distributed::MeshCoordinateRange device_range =
+        tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    tt_metal::distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
 
-    distributed::DeviceLocalBufferConfig dram_config{
+    tt_metal::distributed::DeviceLocalBufferConfig dram_config{
         .page_size = cfg.dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig buffer_config{.size = cfg.dram_buffer_size};
+    tt_metal::distributed::ReplicatedBufferConfig buffer_config{.size = cfg.dram_buffer_size};
 
-    auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto input_dram_buffer = tt_metal::distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
-    auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto output_dram_buffer = tt_metal::distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
     log_info(tt::LogTest, "Creating kernel at {}", cfg.core_range.str());
@@ -185,34 +186,35 @@ bool dram_single_core(
 
 bool dram_single_core_pre_allocated(
     tt::tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
     const DRAMConfig& cfg) {
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(cfg.dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
     // Create a program
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt_metal::distributed::MeshWorkload workload;
+    auto zero_coord = tt_metal::distributed::MeshCoordinate(0, 0);
+    tt_metal::distributed::MeshCoordinateRange device_range =
+        tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    tt_metal::distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
 
-    distributed::DeviceLocalBufferConfig dram_config{
+    tt_metal::distributed::DeviceLocalBufferConfig dram_config{
         .page_size = cfg.dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig buffer_config{.size = cfg.dram_buffer_size};
+    tt_metal::distributed::ReplicatedBufferConfig buffer_config{.size = cfg.dram_buffer_size};
 
-    auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto input_dram_buffer = tt_metal::distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t input_dram_buffer_addr = input_dram_buffer->address();
-    auto input_dram_pre_allocated_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get(), input_dram_buffer_addr);
+    auto input_dram_pre_allocated_buffer = tt_metal::distributed::MeshBuffer::create(
+        buffer_config, dram_config, mesh_device.get(), input_dram_buffer_addr);
     uint32_t input_dram_pre_allocated_buffer_addr = input_dram_pre_allocated_buffer->address();
 
     EXPECT_EQ(input_dram_buffer_addr, input_dram_pre_allocated_buffer_addr);
 
-    auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto output_dram_buffer = tt_metal::distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
-    auto output_dram_pre_allocated_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get(), output_dram_buffer_addr);
+    auto output_dram_pre_allocated_buffer = tt_metal::distributed::MeshBuffer::create(
+        buffer_config, dram_config, mesh_device.get(), output_dram_buffer_addr);
     uint32_t output_dram_pre_allocated_buffer_addr = output_dram_pre_allocated_buffer->address();
 
     EXPECT_EQ(output_dram_buffer_addr, output_dram_pre_allocated_buffer_addr);
@@ -344,9 +346,10 @@ TEST_F(MeshDispatchFixture, DISABLED_IdleEthDRAMLoopbackSingleCore) {
 // the same DRAM endpoint at a fast rate.
 TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
     auto mesh_device = devices_.at(0);
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt_metal::distributed::MeshWorkload workload;
+    auto zero_coord = tt_metal::distributed::MeshCoordinate(0, 0);
+    tt_metal::distributed::MeshCoordinateRange device_range =
+        tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
