@@ -109,4 +109,22 @@ uint32_t calculate_L1_usage(
     bool count_include_pad,
     std::optional<int32_t> divisor_override);
 
+// pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure
+// they are sensical to avoid problems in sliding window config, halo and other setup procedures
+void validate_input_params(
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    uint32_t pad_top,
+    uint32_t pad_bottom,
+    uint32_t pad_left,
+    uint32_t pad_right,
+    uint32_t dilation_h,
+    uint32_t dilation_w,
+    bool is_in_tiled);
+
 }  // namespace ttnn::operations::pool
