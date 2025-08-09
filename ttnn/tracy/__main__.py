@@ -99,6 +99,9 @@ def main():
         help="List of device analysis types",
         default=[],
     )
+    parser.add_option(
+        "--tracy-tools-folder", dest="binary_folder", action="store", help="Tracy tools folder", type="string"
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -117,8 +120,16 @@ def main():
         os.environ["TT_METAL_PROFILER_DIR"] = options.output_folder
         outputFolder = Path(options.output_folder)
 
+    binaryFolder = PROFILER_BIN_DIR
+    if options.binary_folder:
+        logger.info(f"Setting tracy tool folder to {options.binary_folder}")
+        binaryFolder = Path(options.binary_folder)
+        if not binaryFolder.exists():
+            logger.error(f"Tracy tools folder {options.binary_folder} does not exist")
+            sys.exit(1)
+
     if options.processLogsOnly:
-        generate_report(generate_logs_folder(outputFolder), "", None, options.collect_noc_traces)
+        generate_report(generate_logs_folder(outputFolder), binaryFolder, "", None, options.collect_noc_traces)
         sys.exit(0)
 
     if options.port:
@@ -155,7 +166,7 @@ def main():
                 logger.error("No available port found")
                 sys.exit(1)
             logger.info(f"Using port {port}")
-            doReport, captureProcess = run_report_setup(options.verbose, outputFolder, port)
+            doReport, captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
 
         if not doReport:
             code = None
@@ -237,6 +248,7 @@ def main():
                 captureProcess.communicate(timeout=15)
                 generate_report(
                     outputFolder,
+                    binaryFolder,
                     options.name_append,
                     options.child_functions,
                     options.collect_noc_traces,
