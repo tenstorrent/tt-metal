@@ -45,7 +45,7 @@ FORCE_INLINE void receiver_mark_packet_processed() { increment_local_update_ptr_
 
 FORCE_INLINE void notify_remote_receiver_of_new_packet() { remote_update_ptr_val<pkts_received_stream_id, 0>(1); }
 
-FORCE_INLINE auto get_sender_num_unprocessed_acks() { return get_ptr_val(pkts_acked_stream_id); }
+FORCE_INLINE int32_t get_sender_num_unprocessed_acks() { return get_ptr_val(pkts_acked_stream_id); }
 
 FORCE_INLINE void sender_mark_ack_processed() { increment_local_update_ptr_val(pkts_acked_stream_id, -1); }
 
@@ -90,17 +90,23 @@ void process_send_side(
     // Process Ack
     auto num_unprocessed_acks = get_sender_num_unprocessed_acks();
     if (num_unprocessed_acks > 0) {
-        uint64_t start_cycles = eth_read_wall_clock();
         current_chunk_ack_index = BufferIndex{static_cast<uint8_t>(current_chunk_ack_index.get() + 1)};
-        bool can_release_chunk = current_chunk_ack_index == CHUNK_N_PKTS;
-        if (can_release_chunk) {
-            send_pool.return_chunk(open_chunks_cb.pop());
+        bool can_release_chunk = current_chunk_ack_index.get() == CHUNK_N_PKTS;
+        uint64_t start_cycles;
+        uint64_t end_cycles;
+        if (can_release_chunk) {  // 22 cycles!??!?! (44 -> 22 if I don't include the branch condition in the timing)
+
+            start_cycles = eth_read_wall_clock();
+            auto chunk = open_chunks_cb.pop();  // avg 7.3 cycles
+            end_cycles = eth_read_wall_clock();
+            send_pool.return_chunk(chunk);  // 16 cycles
             current_chunk_ack_index = BufferIndex{0};
         }
         sender_mark_ack_processed();
-        uint64_t end_cycles = eth_read_wall_clock();
-        timing_stats->total_release_cycles += (end_cycles - start_cycles);
-        timing_stats->release_count++;
+        if (can_release_chunk) {
+            timing_stats->release_count++;
+            timing_stats->total_release_cycles += (end_cycles - start_cycles);
+        }
         messages_acked++;
     }
 
@@ -130,8 +136,8 @@ void process_send_side(
     if ((open_chunks_cb.is_empty() || current_chunk_slot_index == CHUNK_N_PKTS) && !send_pool.is_empty()) {
         current_chunk_slot_index = BufferIndex{0};
         // Acquire new chunk - measure timing
-        uint64_t start_cycles = eth_read_wall_clock();
         auto new_chunk = send_pool.get_free_chunk();
+        uint64_t start_cycles = eth_read_wall_clock();
         open_chunks_cb.push(new_chunk);
         uint64_t end_cycles = eth_read_wall_clock();
 
@@ -193,7 +199,16 @@ void kernel_main() {
 
     BufferIndex current_chunk_slot_index = BufferIndex{0};
     BufferIndex current_chunk_ack_index = BufferIndex{0};
+#if defined(ARCH_WORMHOLE)
+    // acq: 6.00
+    // rel: 9.5
+    WormholeEfficientCircularBuffer<typename ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>
+        open_chunks_cb;
+#else
+    // acq: 17
+    // rel: 4
     CircularBuffer<typename ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS> open_chunks_cb;
+#endif
 
     ChannelBufferPointer<RX_N_PKTS> sender_view_rx_buf_wr_ptr;
 
