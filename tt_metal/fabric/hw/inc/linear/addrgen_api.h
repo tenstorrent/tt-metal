@@ -7,6 +7,7 @@
 #include "tt_metal/hw/inc/dataflow_api_addrgen.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 namespace tt::tt_fabric {
 
@@ -23,6 +24,38 @@ template <bool DRAM>
 uint32_t get_page_size(const InterleavedAddrGenFast<DRAM>& s) {
     return s.page_size;
 }
+
+template <typename ShardingInfoType>
+uint32_t get_page_size(const experimental::ShardedAddrGen<ShardingInfoType>& d) {
+    return d.CONSTANT_ARGS.page_size_jump;
+}
+
+template <typename AddrGenType>
+FORCE_INLINE uint64_t get_noc_address(const AddrGenType& d, const uint32_t id, uint32_t offset = 0) {
+    uint64_t noc_address = d.get_noc_addr(id, offset, edm_to_local_chip_noc);
+#if defined(ARCH_WORMHOLE)
+    // We do this for 2 reasons:
+    // 1. Wormhole doesn't support virtual coordinates for DRAM cores (and we could be writing to one)
+    // 2. We want to write to the best bank for the fabric writer noc, so we'd prefer to get the noc
+    // coordinate for that.
+    // However, the fabric APIs canonically expect coordinates in "noc0" system, so we need to flip
+    // them to noc0
+    //
+    // A little less efficient, but:
+    // a) cleaner
+    // b) less blast-radius (more incremental change)
+    // c) compiler may see the redundant transformation after inlinine
+    auto noc_address_components = get_noc_address_components(noc_address);
+    auto noc_addr = safe_get_noc_addr(
+        noc_address_components.first.x,
+        noc_address_components.first.y,
+        noc_address_components.second,
+        edm_to_local_chip_noc);
+    noc_address = noc_addr;
+#endif
+    return noc_address;
+}
+
 }  // namespace addrgen_detail
 
 // Placeholder max page size for the addrgen until the page size is properly visible by the worker
@@ -42,7 +75,7 @@ FORCE_INLINE void validate_max_payload_size(uint32_t payload_size) {
 template <typename AddrGenType>
 FORCE_INLINE void to_noc_unicast_write(
     volatile PACKET_HEADER_TYPE* pkt_hdr, const uint32_t id, const AddrGenType& d, uint32_t offset = 0) {
-    auto noc_address = d.get_noc_addr(id, offset, edm_to_local_chip_noc);
+    auto noc_address = addrgen_detail::get_noc_address(d, id, offset);
     auto page_size = addrgen_detail::get_page_size(d);
     pkt_hdr->to_noc_unicast_write(NocUnicastCommandHeader{noc_address}, page_size);
 
@@ -57,7 +90,7 @@ FORCE_INLINE void to_noc_fused_unicast_write_atomic_inc(
     const AddrGenType& d,
     uint32_t offset = 0) {
     auto page_size = addrgen_detail::get_page_size(d);
-    auto noc_address = d.get_noc_addr(id, offset, edm_to_local_chip_noc);
+    auto noc_address = addrgen_detail::get_noc_address(d, id, offset);
 
     pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader(
@@ -78,8 +111,8 @@ FORCE_INLINE void to_noc_unicast_scatter_write(
     auto page_size = addrgen_detail::get_page_size(d);
     auto payload_size = page_size * 2;
 
-    auto noc_address0 = d.get_noc_addr(id0, offset0, edm_to_local_chip_noc);
-    auto noc_address1 = d.get_noc_addr(id1, offset1, edm_to_local_chip_noc);
+    auto noc_address0 = addrgen_detail::get_noc_address(d, id0, offset0);
+    auto noc_address1 = addrgen_detail::get_noc_address(d, id1, offset1);
 
     pkt_hdr->to_noc_unicast_scatter_write(
         NocUnicastScatterCommandHeader({{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)}), payload_size);
