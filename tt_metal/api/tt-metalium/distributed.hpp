@@ -65,6 +65,8 @@ void ReadShard(
     const MeshCoordinate& coord,
     bool blocking = true) {
 
+    // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
+    // Tracking removal of free function APIs in this file in this issue.
     auto mesh_device = mesh_cq.device();
     if (!mesh_device->is_local(coord)) {
         return;
