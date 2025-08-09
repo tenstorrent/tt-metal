@@ -136,7 +136,7 @@ operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor.memory_config())) {
-        return detail::reshard_multi_core(input_tensor, output_tensor);
+        return detail::reshard_multi_core(input_tensors, output_tensor);
     } else {
         return detail::nd_reshard_multi_core(input_tensor, output_tensor);
     }
