@@ -94,7 +94,8 @@ void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {}
 void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}
 
-void SDMeshCommandQueue::reset_worker_state(bool, uint32_t, const vector_aligned<uint32_t>&) {}
+void SDMeshCommandQueue::reset_worker_state(
+    bool, uint32_t, const vector_aligned<uint32_t>&, const std::vector<std::pair<CoreRangeSet, uint32_t>>&) {}
 
 void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&) {
     TT_THROW("Not supported for slow dispatch");
