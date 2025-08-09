@@ -260,6 +260,7 @@ void __attribute__((noinline)) Application() {
             run_subordinate_eriscs(enables);
 
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+                DPRINT << "Primary GO" << ENDL();
                 WAYPOINT("R");
 
                 constexpr int index =

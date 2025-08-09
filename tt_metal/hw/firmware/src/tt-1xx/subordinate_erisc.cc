@@ -114,6 +114,7 @@ int main() {
         while (*subordinate_erisc_run != RUN_SYNC_MSG_GO) {
             invalidate_l1_cache();
         }
+        DPRINT << "Subordinate GO" << ENDL();
         DeviceZoneScopedMainN(PROFILER_NAME);
 
         flush_erisc_icache();
