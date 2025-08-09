@@ -20,11 +20,9 @@ on:
         type: string
         default: "in-service"
       requested-models:
-        required: true
         default: "all"
         type: string
       run-perf-tests:
-        required: true
         type: boolean
         default: true
 
