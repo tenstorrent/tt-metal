@@ -458,8 +458,11 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
-            const auto& intermediate = output_tensors[2];
+            const auto& input_b = input_tensors[1];
+
             const auto& aggregated = output_tensors[0];
+            const auto& mm_output = output_tensors[1];
+            const auto& intermediate = output_tensors[2];
 
             auto semaphore =
                 static_cast<const ttnn::LlamaAllGatherMatmulAsync*>(operation)->all_gather_sp_async_struct.semaphore;
@@ -493,9 +496,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
                 matmul_override_runtime_arguments_callback.value()(
                     operation,
                     program,
-                    {output_tensors[0], input_tensors[1]}, /* all gather output tensor, weight tensor */
+                    {aggregated, input_b}, /* all gather output tensor, weight tensor */
                     optional_input_tensors,
-                    {output_tensors[1]} /* matmul output tensor */
+                    {mm_output} /* matmul output tensor */
                 );
             }
         };
