@@ -19,13 +19,22 @@ on:
         required: false
         type: string
         default: "in-service"
+      requested-models:
+        default: "all"
+        type: string
+      run-perf-tests:
+        type: boolean
+        default: true
 
 jobs:
-  single-card-demo-tests:
+  define-demo-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      demo-tests: ${{ steps.compute-tests.outputs.demo-tests }}
     strategy:
-      fail-fast: false
       matrix:
-        test-group: [
+        default-demo-tests: [
+          [
                     { name: "falcon7b", runner-label: "N150", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
                     { name: "llama3", runner-label: "N150", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
                     { name: "vgg", runner-label: "N150", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
@@ -93,6 +102,52 @@ jobs:
                     # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
                     { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_func, owner_id: U07RY6B5FLJ},  #Gongyu Wang
         ]
+      ]
+    steps:
+      - name: Compute tests
+        shell: bash
+        id: compute-tests
+        run: |
+          set -euo pipefail
+
+          echo "[info] Outputing default values"
+          default_demo_tests='${{ toJSON(matrix.default-demo-tests) }}'
+          echo $default_demo_tests
+          echo "[info] Outputing default values via jq"
+          echo $default_demo_tests | jq
+          requested_demo_tests=$default_demo_tests
+
+          requested_models=${{ toJSON(inputs.requested-models) }}
+          echo "[info] requested-models: $requested_models"
+          run_perf_tests=${{ inputs.run-perf-tests }}
+          echo "[info] run-perf-tests: $run_perf_tests"
+
+          if [[ "$requested_models" != "all" ]]; then
+            requested_demo_tests=$(jq --argjson requested_models "$requested_models" '[.[] | select(.name | IN($requested_models[]))]' <<< "$requested_demo_tests")
+            echo "[info] after filtering for requested models: $requested_demo_tests"
+          fi
+
+          # By default, test list includes perf tests. If we don't want to run perf tests,
+          # filter them out
+          if [[ "$run_perf_tests" == "false" ]]; then
+            requested_demo_tests=$(jq '[.[] | select(.performance == false)]' <<< "$requested_demo_tests")
+            echo "[info] after filtering filtering out perf tests: $requested_demo_tests"
+          fi
+
+          # Check that we have a valid test list that's not empty
+          echo "$requested_demo_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
+
+          echo "demo-tests=$(echo $requested_demo_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+          echo "[info] Showing GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  single-card-demo-tests:
+    needs: define-demo-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.define-demo-tests.outputs.demo-tests) }}
     name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ (matrix.test-group.performance && 'perf') || 'func' }}
     env:
       LOGURU_LEVEL: INFO
