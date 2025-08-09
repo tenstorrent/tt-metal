@@ -7,13 +7,13 @@ import torch
 
 import ttnn
 
-from models.experimental.uniad.reference.utils import Instances
 from models.experimental.uniad.tt.ttnn_utils import Instances as TtInstances
 
 from models.experimental.uniad.tt.ttnn_head import TtBEVFormerTrackHead
 from models.experimental.uniad.tt.ttnn_resnet import TtResNet
 from models.experimental.uniad.tt.ttnn_fpn import TtFPN
-from models.experimental.uniad.reference.runtime_tracker_base import RuntimeTrackerBase
+
+from models.experimental.uniad.tt.ttnn_runtime_tracker_base import TtRuntimeTrackerBase
 
 from models.experimental.uniad.tt.ttnn_query_interaction import TtQueryInteractionModule
 
@@ -233,7 +233,7 @@ class TtUniAD:
         self.reference_points = ttnn.linear  # nn.Linear(self.embed_dims, 3)
 
         self.mem_bank_len = mem_args["memory_bank_len"]
-        self.track_base = RuntimeTrackerBase(
+        self.track_base = TtRuntimeTrackerBase(
             score_thresh=score_thresh,
             filter_score_thresh=filter_score_thresh,
             miss_tolerance=miss_tolerance,
@@ -496,12 +496,6 @@ class TtUniAD:
         bev_embed = result_track[0]["bev_embed"]
 
         if self.with_seg_head:
-            # bev_embed = ttnn.from_torch(bev_embed, device=self.device, layout=ttnn.TILE_LAYOUT)
-
-            # gt_lane_labels = [ttnn.from_torch(label, device=self.device, layout=ttnn.TILE_LAYOUT) for label in gt_lane_labels]
-
-            # gt_lane_masks = [ttnn.from_torch(mask, device=self.device, layout=ttnn.TILE_LAYOUT) for mask in gt_lane_masks]
-
             result_seg = self.seg_head.forward_test(
                 bev_embed,
                 [gt_lane_labels[0]],
@@ -511,125 +505,6 @@ class TtUniAD:
             )
 
         if self.with_motion_head:
-            result_track[0]["track_query_embeddings"] = ttnn.from_torch(
-                result_track[0]["track_query_embeddings"],
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            result_track[0]["track_bbox_results"] = [
-                [
-                    result_track[0]["track_bbox_results"][0][0],
-                    ttnn.from_torch(
-                        result_track[0]["track_bbox_results"][0][1],
-                        device=self.device,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                    ),
-                    ttnn.from_torch(
-                        result_track[0]["track_bbox_results"][0][2],
-                        device=self.device,
-                        dtype=ttnn.int32,
-                        layout=ttnn.TILE_LAYOUT,
-                    ),
-                    ttnn.from_torch(
-                        result_track[0]["track_bbox_results"][0][3],
-                        device=self.device,
-                        dtype=ttnn.int32,
-                        layout=ttnn.TILE_LAYOUT,
-                    ),
-                    ttnn.from_torch(
-                        result_track[0]["track_bbox_results"][0][4],
-                        device=self.device,
-                        dtype=ttnn.int32,
-                        layout=ttnn.TILE_LAYOUT,
-                    ),
-                ]
-            ]
-            # result_track[0]["boxes_3d"] = result_track[0]["boxes_3d"]
-            result_track[0]["scores_3d"] = ttnn.from_torch(
-                result_track[0]["scores_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            result_track[0]["labels_3d"] = ttnn.from_torch(
-                result_track[0]["labels_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            result_track[0]["track_scores"] = ttnn.from_torch(
-                result_track[0]["track_scores"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            result_track[0]["track_ids"] = ttnn.from_torch(
-                result_track[0]["track_ids"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            # result_track[0]["sdc_boxes_3d"] = result_track[0]["sdc_boxes_3d"]
-            result_track[0]["sdc_scores_3d"] = ttnn.from_torch(
-                result_track[0]["sdc_scores_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            result_track[0]["sdc_track_scores"] = ttnn.from_torch(
-                result_track[0]["sdc_track_scores"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            result_track[0]["sdc_track_bbox_results"] = [
-                [
-                    result_track[0]["sdc_track_bbox_results"][0][0],
-                    ttnn.from_torch(
-                        result_track[0]["sdc_track_bbox_results"][0][1],
-                        device=self.device,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                    ),
-                    ttnn.from_torch(
-                        result_track[0]["sdc_track_bbox_results"][0][2],
-                        device=self.device,
-                        dtype=ttnn.int32,
-                        layout=ttnn.TILE_LAYOUT,
-                    ),
-                    ttnn.from_torch(
-                        result_track[0]["sdc_track_bbox_results"][0][3],
-                        device=self.device,
-                        dtype=ttnn.int32,
-                        layout=ttnn.TILE_LAYOUT,
-                    ),
-                    ttnn.from_torch(
-                        result_track[0]["sdc_track_bbox_results"][0][4],
-                        device=self.device,
-                        dtype=ttnn.int32,
-                        layout=ttnn.TILE_LAYOUT,
-                    ),
-                ]
-            ]
-            result_track[0]["sdc_embedding"] = ttnn.from_torch(
-                result_track[0]["sdc_embedding"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            result_track[0]["boxes_3d_det"] = result_track[0]["boxes_3d_det"]
-            result_track[0]["scores_3d_det"] = ttnn.from_torch(
-                result_track[0]["scores_3d_det"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            result_track[0]["labels_3d_det"] = ttnn.from_torch(
-                result_track[0]["labels_3d_det"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-
-            # result_seg[0]["args_tuple"] = [
-            #     ttnn.from_torch(
-            #         result_seg[0]["args_tuple"][0], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #     ),
-            #     ttnn.from_torch(
-            #         result_seg[0]["args_tuple"][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #     ),
-            #     ttnn.from_torch(
-            #         result_seg[0]["args_tuple"][2], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #     ),
-            #     ttnn.from_torch(
-            #         result_seg[0]["args_tuple"][3], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #     ),
-            #     None,
-            #     ttnn.from_torch(
-            #         result_seg[0]["args_tuple"][5], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #     ),
-            #     [
-            #         ttnn.from_torch(
-            #             torch.zeros(50, 50), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
-            #     ],
-            # ]
-
             result_motion, outs_motion = self.motion_head.forward_test(
                 bev_embed, outs_track=result_track[0], outs_seg=result_seg[0]
             )
@@ -693,75 +568,49 @@ class TtUniAD:
         return result
 
     def _generate_empty_tracks(self):
-        track_instances = Instances((1, 1))  # used as torch need ttnn support(will be replaced soon)
+        track_instances = TtInstances(
+            (1, 1), ttnn_device=self.device
+        )  # used as torch need ttnn support(will be replaced soon)
         num_queries, dim = self.parameters["query_embedding"].weight.shape  # (300, 256 * 2)
         # device = self.query_embedding.weight.device
         query = ttnn.to_layout(self.parameters["query_embedding"].weight, layout=ttnn.TILE_LAYOUT)
-        track_instances.ref_pts = ttnn.to_torch(
-            self.reference_points(
-                query[..., : dim // 2],
-                self.parameters["reference_points"]["weight"],
-                bias=self.parameters["reference_points"]["bias"],
-            )
-        )
+        ref_pts_input = query[:901, :256]
 
+        track_instances.ref_pts = self.reference_points(
+            ref_pts_input,
+            self.parameters["reference_points"]["weight"],
+            bias=self.parameters["reference_points"]["bias"],
+        )
         # init boxes: xy, wl, z, h, sin, cos, vx, vy, vz
-        pred_boxes_init = ttnn.zeros(
-            (len(track_instances), 10), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-        )
-        track_instances.query = ttnn.to_torch(query)
+        pred_boxes_init = ttnn.zeros((num_queries, 10), dtype=ttnn.bfloat16, device=self.device)
+        track_instances.query = query
 
-        track_instances.output_embedding = ttnn.to_torch(ttnn.zeros((num_queries, dim >> 1), device=self.device))
+        track_instances.output_embedding = ttnn.zeros((num_queries, dim // 2), dtype=ttnn.bfloat16, device=self.device)
+        # obj_idxes = torch.full((num_queries,), -1, dtype=torch.long)
+        track_instances.obj_idxes = ttnn.full((901,), -1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=self.device)
+        track_instances.matched_gt_idxes = ttnn.full((num_queries,), -1, dtype=ttnn.int32, device=self.device)
+        track_instances.disappear_time = ttnn.zeros((num_queries,), dtype=ttnn.int32, device=self.device)
 
-        track_instances.obj_idxes = ttnn.to_torch(
-            ttnn.full((len(track_instances),), -1, dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT)
-        )
-        track_instances.matched_gt_idxes = ttnn.to_torch(
-            ttnn.full((len(track_instances),), -1, dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT)
-        )
-        track_instances.disappear_time = ttnn.to_torch(
-            ttnn.zeros((len(track_instances),), device=self.device, layout=ttnn.TILE_LAYOUT)
-        )
+        track_instances.iou = ttnn.zeros((num_queries,), dtype=ttnn.bfloat16, device=self.device)
+        track_instances.scores = ttnn.zeros((num_queries,), dtype=ttnn.bfloat16, device=self.device)
+        track_instances.track_scores = ttnn.zeros((num_queries,), dtype=ttnn.bfloat16, device=self.device)
 
-        track_instances.iou = ttnn.to_torch(
-            ttnn.zeros((len(track_instances),), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
-        )
-        track_instances.scores = ttnn.to_torch(
-            ttnn.zeros((len(track_instances),), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
-        )
-        track_instances.track_scores = ttnn.to_torch(
-            ttnn.zeros((len(track_instances),), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
-        )
-        # xy, wl, z, h, sin, cos, vx, vy, vz
-        track_instances.pred_boxes = ttnn.to_torch(pred_boxes_init)
+        track_instances.pred_boxes = pred_boxes_init
 
-        track_instances.pred_logits = ttnn.to_torch(
-            ttnn.zeros(
-                (len(track_instances), self.num_classes),
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-            )
+        track_instances.pred_logits = ttnn.zeros(
+            (num_queries, self.num_classes), dtype=ttnn.bfloat16, device=self.device
         )
 
         mem_bank_len = self.mem_bank_len
-        track_instances.mem_bank = ttnn.to_torch(
-            ttnn.zeros(
-                (len(track_instances), mem_bank_len, dim // 2),
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-            )
+        track_instances.mem_bank = ttnn.zeros(
+            (num_queries, mem_bank_len, dim // 2), dtype=ttnn.bfloat16, device=self.device
         )
 
-        track_instances.mem_padding_mask = ttnn.to_torch(
-            ttnn.ones(
-                (len(track_instances), mem_bank_len), dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT
-            )
+        track_instances.mem_padding_mask = ttnn.ones(
+            (num_queries, mem_bank_len), dtype=ttnn.bfloat16, device=self.device
         )
-        track_instances.save_period = ttnn.to_torch(
-            ttnn.zeros((len(track_instances),), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
-        )
+
+        track_instances.save_period = ttnn.zeros((num_queries,), dtype=ttnn.bfloat16, device=self.device)
 
         return track_instances
 
@@ -889,18 +738,18 @@ class TtUniAD:
 
     def _track_instances2results(self, track_instances, img_metas, with_mask=True):
         bbox_dict = dict(
-            cls_scores=ttnn.from_torch(track_instances.pred_logits, device=self.device, layout=ttnn.TILE_LAYOUT),
-            bbox_preds=ttnn.from_torch(track_instances.pred_boxes, device=self.device, layout=ttnn.TILE_LAYOUT),
-            track_scores=ttnn.from_torch(track_instances.scores, device=self.device, layout=ttnn.TILE_LAYOUT),
-            obj_idxes=ttnn.from_torch(track_instances.obj_idxes, device=self.device, layout=ttnn.TILE_LAYOUT),
+            cls_scores=track_instances.pred_logits,
+            bbox_preds=track_instances.pred_boxes,
+            track_scores=track_instances.scores,
+            obj_idxes=track_instances.obj_idxes,
         )
         # bboxes_dict = self.bbox_coder.decode(bbox_dict, with_mask=with_mask)[0]
         bboxes_dict = self.bbox_coder.decode(bbox_dict, with_mask=with_mask, img_metas=img_metas)[0]
         bboxes = bboxes_dict["bboxes"]
         # bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
         bboxes = img_metas[0]["box_type_3d"](bboxes, 9)
-        for i in bboxes_dict.keys():
-            bboxes_dict[i] = ttnn.to_torch(bboxes_dict[i])
+        # for i in bboxes_dict.keys():
+        #     bboxes_dict[i] = ttnn.to_torch(bboxes_dict[i])
         labels = bboxes_dict["labels"]
         scores = bboxes_dict["scores"]
         bbox_index = bboxes_dict["bbox_index"]
@@ -909,13 +758,13 @@ class TtUniAD:
         obj_idxes = bboxes_dict["obj_idxes"]
         result_dict = dict(
             boxes_3d=bboxes,
-            scores_3d=scores.cpu(),
-            labels_3d=labels.cpu(),
-            track_scores=track_scores.cpu(),
-            bbox_index=bbox_index.cpu(),
-            track_ids=obj_idxes.cpu(),
-            mask=bboxes_dict["mask"].cpu(),
-            track_bbox_results=[[bboxes, scores.cpu(), labels.cpu(), bbox_index.cpu(), bboxes_dict["mask"].cpu()]],
+            scores_3d=scores,
+            labels_3d=labels,
+            track_scores=track_scores,
+            bbox_index=bbox_index,
+            track_ids=obj_idxes,
+            mask=bboxes_dict["mask"],
+            track_bbox_results=[[bboxes, scores, labels, bbox_index, bboxes_dict["mask"]]],
         )
         return result_dict
 
@@ -943,12 +792,22 @@ class TtUniAD:
 
     def select_active_track_query(self, track_instances, active_index, img_metas, with_mask=True):
         result_dict = self._track_instances2results(track_instances[active_index], img_metas, with_mask=with_mask)
-        result_dict["track_query_embeddings"] = track_instances.output_embedding[active_index][
-            result_dict["bbox_index"]
-        ][result_dict["mask"]]
-        result_dict["track_query_matched_idxes"] = track_instances.matched_gt_idxes[active_index][
-            result_dict["bbox_index"]
-        ][result_dict["mask"]]
+        if sum(active_index) == 0:
+            result_dict["track_query_embeddings"] = ttnn.from_torch(
+                torch.randn(0, 256), device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )
+        else:
+            result_dict["track_query_embeddings"] = track_instances.output_embedding[active_index][
+                result_dict["bbox_index"]
+            ][result_dict["mask"]]
+        if sum(active_index) == 0:
+            result_dict["track_query_matched_idxes"] = ttnn.from_torch(
+                torch.randn(0), device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
+            )
+        else:
+            result_dict["track_query_matched_idxes"] = track_instances.matched_gt_idxes[active_index][
+                result_dict["bbox_index"]
+            ][result_dict["mask"]]
         return result_dict
 
     def select_sdc_track_query(self, sdc_instance, img_metas):
@@ -990,18 +849,14 @@ class TtUniAD:
             active_inst.ref_pts = self.reference_points(active_inst.query[..., : dim // 2])
             active_inst.ref_pts[..., :2] = ref_pts[..., :2]
 
-        track_instances = Instances.cat([other_inst, active_inst])
+        track_instances = TtInstances.cat([other_inst, active_inst], device=self.device)
 
         # NOTE: You can replace BEVFormer with other BEV encoder and provide bev_embed here
         bev_embed, bev_pos = self.get_bevs(img, img_metas, prev_bev=prev_bev)
         det_output = self.pts_bbox_head.get_detections(
             bev_embed,
-            object_query_embeds=ttnn.from_torch(
-                track_instances.query, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            ),
-            ref_points=ttnn.from_torch(
-                track_instances.ref_pts, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            ),
+            object_query_embeds=track_instances.query,
+            ref_points=track_instances.ref_pts,
             img_metas=img_metas,
         )
         output_classes = det_output["all_cls_scores"]
@@ -1022,20 +877,36 @@ class TtUniAD:
         """ update track instances with predict results """
         track_scores = ttnn.to_torch(ttnn.sigmoid(output_classes[-1, 0, :])).max(dim=-1).values
         # each track will be assigned an unique global id by the track base.
-        track_instances.scores = track_scores
+        track_instances.scores = ttnn.from_torch(track_scores, device=self.device, layout=ttnn.TILE_LAYOUT)
         # track_instances.track_scores = track_scores  # [300]
-        track_instances.pred_logits = ttnn.to_torch(output_classes[-1, 0])  # [300, num_cls]
-        track_instances.pred_boxes = ttnn.to_torch(output_coords[-1, 0])  # [300, box_dim]
-        track_instances.output_embedding = ttnn.to_torch(query_feats[-1][0]).to(torch.float)  # [300, feat_dim]
-        track_instances.ref_pts = ttnn.to_torch(last_ref_pts[0])
+        track_instances.pred_logits = output_classes[-1, 0]  # [300, num_cls]
+        track_instances.pred_boxes = output_coords[-1, 0]  # [300, box_dim]
+        track_instances.output_embedding = query_feats[-1][0]  # [300, feat_dim]
+        track_instances.ref_pts = last_ref_pts[0]
         # hard_code: assume the 901 query is sdc query
-        track_instances.obj_idxes[900] = -2
+
+        obj_idxes = ttnn.to_torch(track_instances.obj_idxes)
+
+        obj_idxes[900] = -2
+        track_instances.obj_idxes = ttnn.from_torch(
+            obj_idxes, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
+        )
         """ update track base """
         self.track_base.update(track_instances, None)
 
-        active_index = (track_instances.obj_idxes >= 0) & (
-            track_instances.scores >= self.track_base.filter_score_thresh
+        active_index = ttnn.bitwise_and(
+            (track_instances.obj_idxes >= 0),
+            (
+                ttnn.to_device(
+                    ttnn.to_dtype(
+                        ttnn.from_device(track_instances.scores >= self.track_base.filter_score_thresh),
+                        dtype=ttnn.int32,
+                    ),
+                    device=self.device,
+                )
+            ),
         )  # filter out sleep objects
+
         out.update(self.select_active_track_query(track_instances, active_index, img_metas))
         out.update(self.select_sdc_track_query(track_instances[track_instances.obj_idxes == -2], img_metas))
 
@@ -1052,78 +923,78 @@ class TtUniAD:
         # print("tt_track_instances.mem_padding_mask",tt_track_instances.mem_padding_mask)
         # tt_track_instances.mem_bank = ttnn.from_torch(track_instances.mem_bank, dtype=ttnn.bfloat16, device=self.device)
 
-        track_instances.mem_bank = track_instances.mem_bank.to(torch.float)
+        # track_instances.mem_bank = track_instances.mem_bank
 
         # Converting the above track_instances to torch.
-        tt_track_instances = TtInstances((1, 1))
-        tt_track_instances.ref_pts = ttnn.from_torch(track_instances.ref_pts, device=self.device)
-        tt_track_instances.query = ttnn.from_torch(track_instances.query, device=self.device, layout=ttnn.TILE_LAYOUT)
-        tt_track_instances.output_embedding = ttnn.from_torch(
-            track_instances.output_embedding, dtype=ttnn.bfloat16, device=self.device
-        )
-        tt_track_instances.obj_idxes = ttnn.from_torch(track_instances.obj_idxes, device=self.device)
-        tt_track_instances.scores = ttnn.from_torch(track_instances.scores, device=self.device)
-        tt_track_instances.save_period = ttnn.from_torch(
-            track_instances.save_period, device=self.device, layout=ttnn.TILE_LAYOUT
-        )
-        tt_track_instances.mem_padding_mask = track_instances.mem_padding_mask.to(dtype=torch.bool)
-        tt_track_instances.mem_bank = ttnn.from_torch(track_instances.mem_bank, dtype=ttnn.bfloat16, device=self.device)
-
+        # tt_track_instances = TtInstances((1, 1),ttnn_device=self.device)
+        # tt_track_instances.ref_pts = track_instances.ref_pts
+        # tt_track_instances.query = track_instances.query
+        # tt_track_instances.output_embedding = track_instances.output_embedding
+        # tt_track_instances.scores = track_instances.scores
+        # tt_track_instances.save_period =     track_instances.save_period
+        # track_instances.mem_padding_mask = track_instances.mem_padding_mask.to(dtype=torch.bool)
+        # tt_track_instances.mem_bank = ttnn.from_torch(track_instances.mem_bank, dtype=ttnn.bfloat16, device=self.device)
+        track_instances.mem_padding_mask = ttnn.to_torch(track_instances.mem_padding_mask).to(dtype=torch.bool)
         """ update with memory_bank """
         if self.memory_bank is not None:
-            tt_track_instances = self.memory_bank(tt_track_instances)
+            track_instances = self.memory_bank(track_instances)
 
         # track_instances=Instances((1, 1))
-        track_instances.ref_pts = ttnn.to_torch(tt_track_instances.ref_pts).to(dtype=torch.float)
-        track_instances.query = ttnn.to_torch(tt_track_instances.query).to(dtype=torch.float)
-        track_instances.output_embedding = ttnn.to_torch(tt_track_instances.output_embedding).to(dtype=torch.float)
-        track_instances.obj_idxes = ttnn.to_torch(tt_track_instances.obj_idxes)
-        track_instances.scores = ttnn.to_torch(tt_track_instances.scores).to(dtype=torch.float)
-        track_instances.save_period = ttnn.to_torch(tt_track_instances.save_period)
-        track_instances.mem_padding_mask = tt_track_instances.mem_padding_mask
-        track_instances.mem_bank = ttnn.to_torch(tt_track_instances.mem_bank).to(dtype=torch.float)
+        # track_instances.ref_pts = ttnn.to_torch(tt_track_instances.ref_pts).to(dtype=torch.float)
+        # track_instances.query = ttnn.to_torch(tt_track_instances.query).to(dtype=torch.float)
+        # track_instances.output_embedding = ttnn.to_torch(tt_track_instances.output_embedding).to(dtype=torch.float)
+        # track_instances.obj_idxes = ttnn.to_torch(tt_track_instances.obj_idxes)
+        # track_instances.scores = ttnn.to_torch(tt_track_instances.scores).to(dtype=torch.float)
+        # track_instances.save_period = ttnn.to_torch(tt_track_instances.save_period)
+        # track_instances.mem_padding_mask = tt_track_instances.mem_padding_mask
+        # track_instances.mem_bank = ttnn.to_torch(tt_track_instances.mem_bank).to(dtype=torch.float)
 
         """  Update track instances using matcher """
         tmp = {}
         tmp["init_track_instances"] = self._generate_empty_tracks()
         tmp["track_instances"] = track_instances
 
-        tmp_ttnn = {}
-        tmp_ttnn["init_track_instances"] = TtInstances((1, 1), ttnn_device=self.device)
-        tmp_ttnn["track_instances"] = TtInstances((1, 1), ttnn_device=self.device)
+        # tmp_ttnn = {}
+        # tmp_ttnn["init_track_instances"] = TtInstances((1, 1), ttnn_device=self.device)
+        # tmp_ttnn["track_instances"] = TtInstances((1, 1), ttnn_device=self.device)
 
-        tmp_ttnn["init_track_instances"].ref_pts = ttnn.from_torch(
-            tmp["init_track_instances"].ref_pts, device=self.device
-        )
-        tmp_ttnn["init_track_instances"].query = ttnn.from_torch(
-            tmp["init_track_instances"].query, device=self.device, layout=ttnn.TILE_LAYOUT
-        )
-        tmp_ttnn["init_track_instances"].output_embedding = ttnn.from_torch(
-            tmp["init_track_instances"].output_embedding, device=self.device
-        )
-        tmp_ttnn["init_track_instances"].obj_idxes = ttnn.from_torch(
-            tmp["init_track_instances"].obj_idxes, device=self.device
-        )
+        # tmp_ttnn["init_track_instances"].ref_pts = ttnn.from_torch(
+        #     tmp["init_track_instances"].ref_pts, device=self.device
+        # )
+        # tmp_ttnn["init_track_instances"].query = ttnn.from_torch(
+        #     tmp["init_track_instances"].query, device=self.device, layout=ttnn.TILE_LAYOUT
+        # )
+        # tmp_ttnn["init_track_instances"].output_embedding = ttnn.from_torch(
+        #     tmp["init_track_instances"].output_embedding, device=self.device
+        # )
+        # tmp_ttnn["init_track_instances"].obj_idxes = ttnn.from_torch(
+        #     tmp["init_track_instances"].obj_idxes, device=self.device
+        # )
 
-        tmp_ttnn["track_instances"].ref_pts = ttnn.from_torch(tmp["track_instances"].ref_pts, device=self.device)
-        tmp_ttnn["track_instances"].query = ttnn.from_torch(
-            tmp["track_instances"].query, device=self.device, layout=ttnn.TILE_LAYOUT
-        )
-        tmp_ttnn["track_instances"].output_embedding = ttnn.from_torch(
-            tmp["track_instances"].output_embedding, device=self.device
-        )
-        tmp_ttnn["track_instances"].obj_idxes = ttnn.from_torch(
-            tmp["track_instances"].obj_idxes.to(dtype=torch.long), device=self.device
-        )
+        # tmp_ttnn["track_instances"].ref_pts = ttnn.from_torch(tmp["track_instances"].ref_pts, device=self.device)
+        # tmp_ttnn["track_instances"].query = ttnn.from_torch(
+        #     tmp["track_instances"].query, device=self.device, layout=ttnn.TILE_LAYOUT
+        # )
+        # tmp_ttnn["track_instances"].output_embedding = ttnn.from_torch(
+        #     tmp["track_instances"].output_embedding, device=self.device
+        # )
+        # tmp_ttnn["track_instances"].obj_idxes = ttnn.from_torch(
+        #     tmp["track_instances"].obj_idxes.to(dtype=torch.long), device=self.device
+        # )
+        # tmp["init_track_instances"]["mem_padding_mask"]=ttnn.from_torch(tmp["init_track_instances"]["mem_padding_mask"],device=self.device,layout=ttnn.TILE_LAYOUT,dtype=ttnn.int32)
 
-        tt_out_track_instances = self.query_interact(tmp_ttnn)
+        tmp["track_instances"].mem_padding_mask = ttnn.from_torch(
+            tmp["track_instances"].mem_padding_mask, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
+        )
+        out_track_instances = self.query_interact(tmp)
+        # out_track_instances.mem_padding_mask=ttnn.to_torch(out_track_instances.mem_padding_mask).to(dtype=torch.bool)
 
-        out_track_instances = tmp["init_track_instances"]
+        # out_track_instances = tmp["init_track_instances"]
 
-        out_track_instances.ref_pts = ttnn.to_torch(tt_out_track_instances.ref_pts)
-        out_track_instances.query = ttnn.to_torch(tt_out_track_instances.query)
-        out_track_instances.output_embedding = ttnn.to_torch(tt_out_track_instances.output_embedding)
-        out_track_instances.obj_idxes = ttnn.to_torch(tt_out_track_instances.obj_idxes)
+        # out_track_instances.ref_pts = ttnn.to_torch(tt_out_track_instances.ref_pts)
+        # out_track_instances.query = ttnn.to_torch(tt_out_track_instances.query)
+        # out_track_instances.output_embedding = ttnn.to_torch(tt_out_track_instances.output_embedding)
+        # out_track_instances.obj_idxes = ttnn.to_torch(tt_out_track_instances.obj_idxes)
 
         out["track_instances_fordet"] = track_instances
         out["track_instances"] = out_track_instances
@@ -1147,13 +1018,13 @@ class TtUniAD:
             - tracking_score
         """
         # filter out sleep querys
-        if instances.pred_logits.numel() == 0:
+        if instances.pred_logits.shape[0] == 0:
             return [None]
         bbox_dict = dict(
-            cls_scores=ttnn.from_torch(instances.pred_logits, device=self.device, layout=ttnn.TILE_LAYOUT),
-            bbox_preds=ttnn.from_torch(instances.pred_boxes, device=self.device, layout=ttnn.TILE_LAYOUT),
-            track_scores=ttnn.from_torch(instances.scores, device=self.device, layout=ttnn.TILE_LAYOUT),
-            obj_idxes=ttnn.from_torch(instances.obj_idxes, device=self.device, layout=ttnn.TILE_LAYOUT),
+            cls_scores=instances.pred_logits,
+            bbox_preds=instances.pred_boxes,
+            track_scores=instances.scores,
+            obj_idxes=instances.obj_idxes,
         )
         bboxes_dict = self.bbox_coder.decode(bbox_dict, img_metas=img_metas)[0]
         bboxes = bboxes_dict["bboxes"]
@@ -1168,8 +1039,8 @@ class TtUniAD:
         result_dict = results[0]
         result_dict_det = dict(
             boxes_3d_det=bboxes,
-            scores_3d_det=scores.cpu(),
-            labels_3d_det=labels.cpu(),
+            scores_3d_det=scores,
+            labels_3d_det=labels,
         )
         if result_dict is not None:
             result_dict.update(result_dict_det)
