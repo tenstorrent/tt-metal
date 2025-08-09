@@ -25,4 +25,7 @@ jobs:
       wheel-artifact-name: eager-dist-cp310-ubuntu-22.04-any
       arch: wormhole_b0
       requested-models: ${{ inputs.requested-models || 'all' }}
-      run-perf-tests: ${{ inputs.run-perf-tests || true }}
+      # Using || true after is dangerous since that will always be passed in if first value is falsy
+      # which it can be if inputs.run-perf-tests isn't clicked. So, scope the default true to only
+      # when we're not using workflow_dispatch and can't possibly have an input anyway
+      run-perf-tests: ${{ inputs.run-perf-tests || (github.event_name != 'workflow_dispatch' && true) }}
