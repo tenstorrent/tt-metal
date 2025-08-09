@@ -219,6 +219,12 @@ void __attribute__((noinline)) Application() {
             }
         }
         WAYPOINT("GD");
+
+        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+        for (uint32_t n = 0; n < NUM_NOCS; n++) {
+            noc_local_state_init(n);
+        }
+
         // First valid GO observed; re-arm normal exit behavior and clear any stale disable
         // overwrite_mailbox_to_done() not needed because host is not checking this value at this point
         if (ignore_disable_until_first_go) {
