@@ -258,6 +258,8 @@ void __attribute__((noinline)) Application(void) {
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
+            DPRINT << "Run Erisc. Enables = " << HEX() << (uint32_t)enables << ENDL();
+
             run_subordinate_eriscs(enables);
 
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
