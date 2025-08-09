@@ -131,7 +131,7 @@ void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core) {
     uint64_t go_signal_adrr =
         tt_metal::MetalContext::instance().hal().get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
-    go_msg_t reset_msg;
+    go_msg_t reset_msg{};
     reset_msg.signal = RUN_MSG_RESET_READ_PTR_FROM_HOST;
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         &reset_msg, sizeof(go_msg_t), tt_cxy_pair(chip, virtual_core), go_signal_adrr);

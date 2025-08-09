@@ -62,7 +62,7 @@ protected:
         }
     }
 
-    tt::tt_metal::IDevice* device_;
+    tt::tt_metal::IDevice* device_{};
     tt::tt_metal::Program program_;
 
 private:

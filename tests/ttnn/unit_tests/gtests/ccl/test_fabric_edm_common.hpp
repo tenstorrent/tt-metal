@@ -73,8 +73,8 @@ using tt::tt_metal::distributed::SystemMesh;
 
 class BaseFabricFixture {
 protected:
-    tt::ARCH arch_;
-    std::size_t num_devices_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
+    std::size_t num_devices_{};
     bool device_open = false;
 
     // Common constants for both fixtures
@@ -185,8 +185,8 @@ public:
 
 class Fabric1DDeviceInitFixture {
 public:
-    tt::ARCH arch_;
-    std::size_t num_devices_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
+    std::size_t num_devices_{};
     bool device_open = false;
 
     // Common constants for both fixtures
@@ -1814,7 +1814,8 @@ bool RunPipelinedWorkersTest(
     auto full_mesh_device = test_fixture.mesh_device_;
 
     IDevice* device = full_mesh_device->get_device(MeshCoordinate(0, 0));
-    std::shared_ptr<distributed::MeshDevice> mesh_device = full_mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    std::shared_ptr<distributed::MeshDevice> mesh_device =
+        full_mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
 
     // General setup is as follows:
     // Worker 1 reads input tensor as a sequence of slices - it forwards to an output tensor and after each slice, it
@@ -2764,7 +2765,7 @@ void read_fabric_telemetry_data(MeshDeviceView* mesh_device) {
                 telemetry_raw_data,
                 CoreType::ETH);
 
-            LowResolutionBandwidthTelemetry telemetry_data;
+            LowResolutionBandwidthTelemetry telemetry_data{};
             std::memcpy(&telemetry_data, telemetry_raw_data.data(), telemetry_struct_size_bytes);
 
             // Calculate bandwidth

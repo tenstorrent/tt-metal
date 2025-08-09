@@ -67,7 +67,7 @@ public:
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
 
 private:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
     std::string arch_name_;
     std::string aliased_arch_name_;
 
@@ -97,7 +97,7 @@ protected:
     int core_id_;
     int is_fw_;
     uint32_t dispatch_message_addr_;
-    bool process_defines_at_compile;
+    bool process_defines_at_compile{};
 
     std::string out_path_;
     std::string target_name_;
