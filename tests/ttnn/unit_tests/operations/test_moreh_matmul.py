@@ -16,8 +16,11 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 
 
-def create_tt_tensor(tensor: torch.Tensor, dtype, layout, device):
-    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
+def create_tt_tensor(tensor: torch.Tensor, dtype, layout, device, extra_torch_entries=[0]):
+    current_entries_count = device.num_program_cache_entries()
+    result = ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
+    return result
 
 
 def get_tensors(
@@ -32,6 +35,7 @@ def get_tensors(
     npu_dtype=ttnn.bfloat16,
     cpu_dtype=torch.bfloat16,
     npu_layout=ttnn.TILE_LAYOUT,
+    extra_torch_entries=[0],
 ):
     # create tensors for forward
     if use_randint:
@@ -43,9 +47,9 @@ def get_tensors(
         other = torch.rand(other_shape, dtype=cpu_dtype)
         output = torch.rand(output_shape, dtype=cpu_dtype)
 
-    tt_input = create_tt_tensor(input, npu_dtype, npu_layout, device)
-    tt_other = create_tt_tensor(other, npu_dtype, npu_layout, device)
-    tt_output = create_tt_tensor(output, npu_dtype, npu_layout, device)
+    tt_input = create_tt_tensor(input, npu_dtype, npu_layout, device, extra_torch_entries=extra_torch_entries)
+    tt_other = create_tt_tensor(other, npu_dtype, npu_layout, device, extra_torch_entries=extra_torch_entries)
+    tt_output = create_tt_tensor(output, npu_dtype, npu_layout, device, extra_torch_entries=extra_torch_entries)
 
     torch_input = input.reshape(-1) if is_1d else input
     torch_other = other.reshape(-1) if is_1d else other
@@ -58,7 +62,9 @@ def get_tensors(
             if use_randint
             else torch.rand(output_shape, dtype=cpu_dtype)
         )
-        tt_output_grad = create_tt_tensor(output_grad, npu_dtype, npu_layout, device)
+        tt_output_grad = create_tt_tensor(
+            output_grad, npu_dtype, npu_layout, device, extra_torch_entries=extra_torch_entries
+        )
 
         torch_output_grad = output_grad[0][0][0][0] if is_1d else output_grad
 
@@ -68,7 +74,9 @@ def get_tensors(
 
         if require_other_grad:
             other_grad = torch.full(other_shape, float("nan"), dtype=cpu_dtype)
-            tt_other_grad = create_tt_tensor(other_grad, npu_dtype, npu_layout, device)
+            tt_other_grad = create_tt_tensor(
+                other_grad, npu_dtype, npu_layout, device, extra_torch_entries=extra_torch_entries
+            )
 
     return (
         tt_input,
@@ -110,6 +118,7 @@ def moreh_matmul(
     npu_dtype=ttnn.bfloat16,
     cpu_dtype=torch.bfloat16,
     npu_layout=ttnn.TILE_LAYOUT,
+    extra_torch_entries=[0],
 ):
     torch.manual_seed(3072)
     input_shape, other_shape, output_shape, transpose_input, transpose_other = params
@@ -125,6 +134,7 @@ def moreh_matmul(
         npu_dtype=npu_dtype,
         cpu_dtype=cpu_dtype,
         npu_layout=npu_layout,
+        extra_torch_entries=extra_torch_entries,
     )
     if not has_output:
         tt_output = None
@@ -309,15 +319,16 @@ def test_moreh_matmul_wo_output(params, use_randint, dtype, compute_kernel_optio
 )
 def test_moreh_matmul_enable_cache(params, device):
     torch.manual_seed(3072)
+    extra_torch_entries = [0]
     for i in range(4):
         # change input's transpose option
         if i % 2 == 1:
             param_list = list(params)
             param_list[3] = False if param_list[3] else True
             params = tuple(param_list)
-        passing = moreh_matmul(params, False, None, device)
+        passing = moreh_matmul(params, False, None, device, extra_torch_entries=extra_torch_entries)
         assert passing
-    assert device.num_program_cache_entries() == 2
+    assert device.num_program_cache_entries() - extra_torch_entries[0] == 2
 
 
 @pytest.mark.parametrize(
