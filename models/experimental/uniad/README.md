@@ -21,42 +21,56 @@
 
 **DetectionTransformerDecoder** -
 ```
-pytest models/experimental/uniad/tests/pcc/test_tt_decoder.py
+pytest models/experimental/uniad/tests/pcc/test_ttnn_decoder.py
 ```
 **BEVFormerEncoder** -
 ```
-pytest models/experimental/uniad/tests/pcc/test_tt_encoder.py
+pytest models/experimental/uniad/tests/pcc/test_ttnn_encoder.py
 ```
 **MotionHead** -
 ```
-pytest models/experimental/uniad/tests/pcc/test_tt_motion_head.py
+pytest models/experimental/uniad/tests/pcc/test_ttnn_motion_head.py
 ```
 
 **MemoryBank** -
 ```
-pytest models/experimental/uniad/tests/pcc/test_memory_bank.py
+pytest models/experimental/uniad/tests/pcc/test_ttnn_memory_bank.py
 ```
 
 **BEVFormerTrackHead** -
 ```
-pytest models/experimental/uniad/tests/pcc/test_tt_head.py
+pytest models/experimental/uniad/tests/pcc/test_ttnn_head.py
 ```
 
 **OccHead** -
 ```
-pytest models/experimental/uniad/tests/pcc/test_occ_head.py
+pytest models/experimental/uniad/tests/pcc/test_ttnn_occ_head.py
 ```
 
 **ResNet** -
 ```
-pytest models/experimental/uniad/tests/pcc/test_tt_resnet.py::test_uniad_resnet
+pytest models/experimental/uniad/tests/pcc/test_ttnn_resnet.py::test_uniad_resnet
 ```
 
 **PlanningHeadSingleMode** -
 ```
-pytest models/experimental/uniad/tests/pcc/test_tt_planning_head.py
+pytest models/experimental/uniad/tests/pcc/test_ttnn_planning_head.py
+```
+
+**QueryInteractionModule** -
+```
+pytest models/experimental/uniad/tests/pcc/test_ttnn_query_interaction.py
+```
+
+**PansegformerHead** -
+```
+pytest models/experimental/uniad/tests/pcc/test_ttnn_pan_segformer_head.py.py
+```
+
+**Uniad** -
+```
+pytest models/experimental/uniad/tests/pcc/test_ttnn_uniad.py
 ```
 
 Note:
-- e2e ttnn pipeline is in progress
 - **BEVFormerTrackHead** is tested with random weights
