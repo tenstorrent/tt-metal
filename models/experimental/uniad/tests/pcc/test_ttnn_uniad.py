@@ -18,7 +18,7 @@ from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_reference(device, reset_seeds):
+def test_uniad(device, reset_seeds):
     weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     reference_model = UniAD(
         True,
