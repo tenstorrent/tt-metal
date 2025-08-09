@@ -264,7 +264,7 @@ void __attribute__((noinline)) Application() {
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
-                // CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
+                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }

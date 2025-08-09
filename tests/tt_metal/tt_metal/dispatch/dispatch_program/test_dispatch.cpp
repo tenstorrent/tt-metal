@@ -29,6 +29,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "llrt.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 
@@ -133,7 +134,23 @@ static void test_sems_across_core_types(
             };
             SetRuntimeArgs(program, tensix_kernel, tensix_core, tensix_rtas);
 
+            // Start another thread as a watchdog which will check the run flag on the target ethernet core
+            std::thread t([&]() {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                auto metal_eth_fw_run_flag = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+                    tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+                    tt::tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
+                auto run_flag_val = llrt::read_hex_vec_from_core(
+                    device->id(), phys_eth_core, metal_eth_fw_run_flag, sizeof(uint32_t))[0];
+                log_warning(
+                    tt::LogTest,
+                    "Ethernet core {} virt{} run flag: {:#x}",
+                    eth_core.str(),
+                    phys_eth_core.str(),
+                    run_flag_val);
+            });
             fixture->RunProgram(device, program);
+            t.join();
         }
     }
 }
