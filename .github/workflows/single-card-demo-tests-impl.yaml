@@ -115,6 +115,9 @@ jobs:
           echo $default_demo_tests
           echo "[info] Outputing default values via jq"
           echo $default_demo_tests | jq
+          requested_demo_tests=$default_demo_tests
+
+          echo "demo-tests=$requested_demo_tests" >> "$GITHUB_OUTPUT"
 
   single-card-demo-tests:
     needs: define-demo-tests
