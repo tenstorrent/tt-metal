@@ -206,11 +206,14 @@ def find_max_tile_span(W, group_size, tile_width):
     return max_tile_span
 
 
-def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel):
+def create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=False):
     import torch
 
     block_wt = find_max_tile_span(num_channel, num_channel // num_groups, 32)
-    input_mask_tensor = torch.zeros((1, num_groups, 32, int(32 * block_wt)), dtype=torch.bfloat16)
+    if is_negative_mask == False:
+        input_mask_tensor = torch.zeros((1, num_groups, 32, int(32 * block_wt)), dtype=torch.bfloat16)
+    else:
+        input_mask_tensor = torch.ones((1, num_groups, 32, int(32 * block_wt)), dtype=torch.bfloat16)
 
     num_groups_per_core = num_groups // num_cores_across_channel
     num_cols_per_group = num_channel // num_groups
@@ -229,13 +232,22 @@ def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_chann
             start_strides.append(row_offset)
         end_strides = [i + num_cols_per_group for i in start_strides]
 
+    mask_val = 1 if is_negative_mask == False else 0
     for group in range(num_groups):
         start_stride = start_strides[group]
         end_stride = end_strides[group]
         end_stride = min(end_stride, input_mask_tensor.shape[3])
-        input_mask_tensor[:, group, :, start_stride:end_stride] = 1
+        input_mask_tensor[:, group, :, start_stride:end_stride] = mask_val
 
     return input_mask_tensor
+
+
+def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel):
+    return create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=False)
+
+
+def create_group_norm_input_negative_mask(num_channel, num_groups, num_cores_across_channel):
+    return create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=True)
 
 
 def get_group_norm_cores_accross_channel(memory_layout, core_grid):
