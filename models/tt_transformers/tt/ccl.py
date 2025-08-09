@@ -330,7 +330,7 @@ def ag_on_padded_dim_3(inp, tt_ccl, cluster_axis, num_links, topology):
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
         )
         all_gather_output_tensor = ttnn.concat(all_broadcast_output_tensors, dim=3)
-        ttnn.deallocate(all_broadcast_output_tensors)
+        [ttnn.deallocate(all_broadcast_output_tensor) for all_broadcast_output_tensor in all_broadcast_output_tensors]
         return ttnn.to_layout(all_gather_output_tensor, ttnn.TILE_LAYOUT)
     else:
         return ttnn.experimental.all_gather_async(
