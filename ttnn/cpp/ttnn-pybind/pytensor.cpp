@@ -36,6 +36,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -1486,36 +1487,19 @@ void pytensor_module(py::module& m_tensor) {
 
         )doc")
         .def(
-            "buffer",
-            [](const Tensor& self) -> HostBuffer {
-                return std::visit(
-                    tt::stl::overloaded{
-                        [](const HostStorage& s) -> HostBuffer {
-                            std::vector<HostBuffer> buffers;
-                            s.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                            TT_FATAL(
-                                buffers.size() == 1,
-                                "Can't get a single buffer from host storage distributed over mesh shape {}. Did you "
-                                "forget to use mesh composer to concatenate tensor shards?",
-                                s.buffer().shape());
-                            return buffers.front();
-                        },
-                        [&](const DeviceStorage& s) -> HostBuffer {
-                            TT_THROW(
-                                "{} doesn't support buffer method",
-                                tt::stl::get_active_type_name_in_variant(self.storage()));
-                        },
-                    },
-                    self.storage());
+            "host_buffer",
+            [](Tensor& self) -> DistributedHostBuffer {
+                TT_FATAL(self.storage_type() == StorageType::HOST, "Tensor must be on host to access host_buffer");
+                return self.host_storage().buffer();
             },
             R"doc(
-            Get the underlying buffer.
+            Get the underlying host buffer.
 
             The tensor must be on the cpu when calling this function.
 
             .. code-block:: python
 
-                buffer = tt_tensor.cpu().buffer() # move TT Tensor to host and get the buffer
+                buffer = tt_tensor.cpu().host_buffer() # move TT Tensor to host and get the buffer
 
         )doc")
         .def(
