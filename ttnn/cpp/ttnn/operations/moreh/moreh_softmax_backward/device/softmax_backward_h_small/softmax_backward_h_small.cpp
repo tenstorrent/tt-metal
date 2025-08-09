@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
@@ -63,24 +64,26 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
         });
 
     // create read/wrtie kernel
-    bool y_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dy_is_dram = output_grad.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dx_is_dram = input_grad.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
 
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*output_grad.buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/reader_moreh_softmax_backward_h.cpp",
         all_cores,
-        {y_is_dram, dy_is_dram},
+        reader_ct_args,
         reader_defines);
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*input_grad.buffer()).append_to(writer_ct_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/writer_moreh_softmax_h.cpp",
         all_cores,
-        {dx_is_dram},
+        writer_ct_args,
         writer_defines);
 
     std::map<std::string, std::string> compute_defines;

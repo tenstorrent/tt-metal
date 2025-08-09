@@ -30,10 +30,10 @@ inline uint32_t get_output_grad_tile(
 
 void kernel_main() {
     // compile time args
-    constexpr bool input_is_dram = (get_compile_time_arg_val(0) == 1);
-    constexpr bool output_is_dram = (get_compile_time_arg_val(1) == 1);
-    constexpr bool output_grad_is_dram = (get_compile_time_arg_val(2) == 1);
-    constexpr uint32_t input_grad_rank = get_compile_time_arg_val(3);
+    constexpr uint32_t input_grad_rank = get_compile_time_arg_val(0);
+    constexpr auto input_args = TensorAccessorArgs<1>();
+    constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto output_grad_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     // runtime args
     ArgFetcher arg_fetcher;
@@ -81,26 +81,15 @@ void kernel_main() {
 
     // input
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_data_format = get_dataformat(cb_id_input);
-
-    const InterleavedAddrGenFast<input_is_dram> input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
 
     // output
     const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_data_format = get_dataformat(cb_id_output);
-
-    const InterleavedAddrGenFast<output_is_dram> output_addrg = {
-        .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
+    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
 
     // output_grad
     const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
-    const auto output_grad_data_format = get_dataformat(cb_id_output_grad);
-
-    const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
 
     fill_cb_with_value(cb_id_decimal, decimal);
 
