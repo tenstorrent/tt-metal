@@ -281,6 +281,7 @@ models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
 docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT
+docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @pgkeller @abhullar-tt @rtawfik01 @vvukomanovicTT @atatuzunerTT
 
 # misc
 dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra
