@@ -44,18 +44,18 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
     const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
 
 // Configuration structure for a device, containing its receiver and sender device ids.
-struct SenderRecieverConfig {
+struct SenderReceiverConfig {
     uint32_t device_index = 0;
     std::optional<chip_id_t> sender_device_id;
     std::optional<chip_id_t> receiver_device_id;
 };
 
-// Returns `SenderRecieverConfig` for a given device, given topology.
-SenderRecieverConfig get_device_sender_receiver_config(
+// Returns `SenderReceiverConfig` for a given device, given topology.
+SenderReceiverConfig get_device_sender_receiver_config(
     const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
 
-// Returns `SenderRecieverConfig` for a given device in a ring topology with a given cluster axis.
-SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+// Returns `SenderReceiverConfig` for a given device in a ring topology with a given cluster axis.
+SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
 
 // Returns a vector of devices that the given tensor is stored on.

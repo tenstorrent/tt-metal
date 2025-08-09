@@ -238,7 +238,7 @@ def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_chann
     return input_mask_tensor
 
 
-def get_group_norm_cores_accross_channel(memory_layout, core_grid):
+def get_group_norm_cores_across_channel(memory_layout, core_grid):
     if memory_layout == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED:
         num_cores_across_channel = core_grid.y
     elif memory_layout == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED:
@@ -264,7 +264,7 @@ def _golden_function(
     import torch
 
     num_channels = input_tensor.shape[-1]
-    num_cores_across_channel = get_group_norm_cores_accross_channel(memory_config.memory_layout, core_grid)
+    num_cores_across_channel = get_group_norm_cores_across_channel(memory_config.memory_layout, core_grid)
     weight = weight.reshape((num_cores_across_channel, -1))
     weight = weight[:, : num_channels // num_cores_across_channel].flatten()
     if bias is not None:

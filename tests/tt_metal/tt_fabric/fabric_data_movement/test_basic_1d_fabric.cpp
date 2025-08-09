@@ -134,16 +134,16 @@ void get_mcast_receivers(
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info) {
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
-    bool system_accomodates_mcast = false;
+    bool system_accommodates_mcast = false;
     for (const auto& mesh : user_meshes) {
         auto mesh_shape = control_plane.get_physical_mesh_shape(mesh);
         // Need at least 8 chips for all mcast tests
         if (mesh_shape.mesh_size() >= 8) {
-            system_accomodates_mcast = true;
+            system_accommodates_mcast = true;
             break;
         }
     }
-    if (!system_accomodates_mcast) {
+    if (!system_accommodates_mcast) {
         GTEST_SKIP() << "No mesh found for line mcast test";
     }
     // Setup mcast path

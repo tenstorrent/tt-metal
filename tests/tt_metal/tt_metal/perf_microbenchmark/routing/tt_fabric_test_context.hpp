@@ -900,10 +900,10 @@ private:
                     double bandwidth_gb_s = (bandwidth_bytes_per_cycle * device_frequency_mhz) / 1e3;
                     double packets_per_second = static_cast<double>(total_packets) / duration_seconds;
 
-                    // TODO: need to fugure out a better way to show the number of devices in a test.
-                    // Ex, we compute number of devices for linear topology test as NS and EW seperated.
-                    // But in a mesh topology setup, how do we run linear topology and still show seperate
-                    // number of devices? There will be even more choices for arbitary unicast setups.
+                    // TODO: need to figure out a better way to show the number of devices in a test.
+                    // Ex, we compute number of devices for linear topology test as NS and EW separated.
+                    // But in a mesh topology setup, how do we run linear topology and still show separate
+                    // number of devices? There will be even more choices for arbitrary unicast setups.
                     uint32_t num_devices = 0;
                     const auto mesh_shape = fixture_->get_mesh_shape();
                     const auto topology = fixture_->get_topology();
