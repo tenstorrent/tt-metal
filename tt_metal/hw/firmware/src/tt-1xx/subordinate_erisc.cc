@@ -114,7 +114,6 @@ int main() {
         while (*subordinate_erisc_run != RUN_SYNC_MSG_GO) {
             invalidate_l1_cache();
         }
-        DPRINT << "Subordinate GO" << ENDL();
         DeviceZoneScopedMainN(PROFILER_NAME);
 
         flush_erisc_icache();
@@ -129,6 +128,7 @@ int main() {
         uint32_t kernel_lma =
             kernel_config_base +
             mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[PROCESSOR_TYPE_INDEX];
+        DPRINT << "Subordinate GO at " << HEX() << kernel_lma << ENDL();
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");

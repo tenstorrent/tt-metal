@@ -748,7 +748,12 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     tt::llrt::send_reset_go_signal(device->id(), physical_core);
                 }
 
-                log_info(tt::LogMetal, "Writing launch msg. Enables = {:#x}", msg->kernel_config.enables);
+                log_info(
+                    tt::LogMetal,
+                    "Writing launch msg. Enables = {:#x} {} {}",
+                    msg->kernel_config.enables,
+                    core_type,
+                    logical_core.str());
 
                 tt::llrt::write_launch_msg_to_core(
                     device->id(),

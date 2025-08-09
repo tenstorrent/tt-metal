@@ -258,12 +258,11 @@ void __attribute__((noinline)) Application(void) {
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
-            DPRINT << "Run Erisc. Enables = " << HEX() << (uint32_t)enables << ENDL();
+            DPRINT << "Enables = " << (uint32_t)enables << ENDL();
 
             run_subordinate_eriscs(enables);
 
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
-                DPRINT << "Primary GO" << ENDL();
                 WAYPOINT("R");
 
                 constexpr int index =
@@ -273,12 +272,12 @@ void __attribute__((noinline)) Application(void) {
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+                DPRINT << "Primary GO at " << HEX() << kernel_lma << ENDL();
                 reinterpret_cast<void (*)()>(kernel_lma)();
                 WAYPOINT("D");
             }
 
             wait_subordinate_eriscs();
-            launch_msg_address->kernel_config.enables = 0;
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed

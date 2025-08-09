@@ -703,6 +703,12 @@ bool EthernetKernel::configure(
     if (tt::tt_metal::MetalContext::instance().hal().get_core_has_kernel_config_buffer(
             this->get_kernel_programmable_core_type())) {
         uint32_t offset_idx = enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(this->config_.processor);
+        log_info(
+            tt::LogMetal,
+            "Writing binary to address {:#x}. Offset idx = {}. Size = {}",
+            base_address + offsets[offset_idx],
+            offset_idx,
+            binary_mem.size() * sizeof(uint32_t));
         llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);
     } else {
         const auto erisc_core_index =
