@@ -14,7 +14,6 @@ using routing_plane_id_t = std::uint8_t;
 
 static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
 static constexpr std::uint32_t GATEKEEPER_INFO_SIZE = 848;
-static constexpr std::uint32_t PULL_CLIENT_INTERFACE_SIZE = 304;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_BYTES = 48;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
