@@ -54,6 +54,9 @@ public:
     // Throws if the index is out of global bounds.
     void emplace_shard(const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer);
 
+    // Returns true if the shard at the specified `coord` is local, false if remote.
+    bool is_local(const distributed::MeshCoordinate& coord) const;
+
     // Specifies the execution policy for the `transform` and `apply` functions.
     enum class ProcessShardExecutionPolicy {
         SEQUENTIAL,
