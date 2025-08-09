@@ -124,7 +124,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJSON(needs.compute-tests.outputs.demo-tests) }}
+        test-group: ${{ fromJSON(needs.define-demo-tests.outputs.demo-tests) }}
     name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ (matrix.test-group.performance && 'perf') || 'func' }}
     env:
       LOGURU_LEVEL: INFO
