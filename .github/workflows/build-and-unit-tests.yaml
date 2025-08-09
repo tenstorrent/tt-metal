@@ -83,6 +83,26 @@ jobs:
           # Unsure why these C++ tests need the wheel...  a cleanup to do separately
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+      - name: Print machine info and PCI bus details
+        run: |
+          echo "Machine Name: $(hostname)"
+          echo "Operating System: $(lsb_release -d | cut -f2- || cat /etc/os-release)"
+          echo "Kernel Version: $(uname -r)"
+          echo "Architecture: $(uname -m)"
+          echo "Current User: $(whoami)"
+          echo "Number of CPU Cores: $(nproc)"
+          echo "CPU Information:"
+          lscpu
+          echo "Memory Information:"
+          free -h
+          echo "Disk Usage:"
+          df -h
+          echo "Show file usage"
+          du -h --max-depth=1 | sort -rh
+          echo "Installing pciutils for lspci..."
+          apt-get update && apt-get install -y pciutils
+          echo "LSPCI -vv output:"
+          sudo lspci -d 1e52: -vvv
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
