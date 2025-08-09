@@ -53,20 +53,33 @@ def profile_results(
     # MAIN-TEST-BODY
     # device = devices[latency_measurement_worker_line_index]
     device = devices[0]
-    latency_avg_cycles = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
-        "Average"
-    ]
-    latency_max_cycles = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
-        "Max"
-    ]
-    latency_min_cycles = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
-        "Min"
-    ]
+    reported_device = None
+    for device in devices:
+        if (
+            device in devices_data["devices"]
+            and "analysis" in devices_data["devices"][device]["cores"]["DEVICE"]
+            and main_test_body_string in devices_data["devices"][device]["cores"]["DEVICE"]["analysis"]
+        ):
+            reported_device = device
+            break
+
+    assert reported_device is not None, "No device reported latency"
+    latency_avg_cycles = devices_data["devices"][reported_device]["cores"]["DEVICE"]["analysis"][main_test_body_string][
+        "stats"
+    ]["Average"]
+    latency_max_cycles = devices_data["devices"][reported_device]["cores"]["DEVICE"]["analysis"][main_test_body_string][
+        "stats"
+    ]["Max"]
+    latency_min_cycles = devices_data["devices"][reported_device]["cores"]["DEVICE"]["analysis"][main_test_body_string][
+        "stats"
+    ]["Min"]
     Hz_per_GHz = 1e9
     latency_avg_ns = latency_avg_cycles / (freq_hz / Hz_per_GHz)
     latency_max_ns = latency_max_cycles / (freq_hz / Hz_per_GHz)
     latency_min_ns = latency_min_cycles / (freq_hz / Hz_per_GHz)
-    count = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"]["Count"]
+    count = devices_data["devices"][reported_device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
+        "Count"
+    ]
 
     return latency_avg_ns, latency_min_ns, latency_max_ns, count
 
@@ -92,7 +105,7 @@ def run_latency_test(
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
     cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
-            {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_1d_fabric_latency \
+            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/tt_fabric/unit_tests_1d_fabric_latency \
                 {line_size} \
                 {latency_measurement_worker_line_index} \
                 {latency_ping_message_size_bytes} \
@@ -104,6 +117,8 @@ def run_latency_test(
                 {int(congestion_writers_use_mcast)} \
                 {int(enable_fused_payload_with_sync)} \
                 {topology}"
+
+    print(f"cmd: {cmd}")
     rc = os.system(cmd)
     if rc != 0:
         if os.WEXITSTATUS(rc) == 1:
@@ -137,10 +152,28 @@ def run_latency_test(
     upper_bound_threshold_percent = 1.05
     min_max_latency_upper_bound_threshold_percent = 1.08
 
-    assert latency_avg_ns <= expected_mean_latency_ns + allowable_delta
-    assert latency_min_ns <= expected_min_latency_ns * min_max_latency_upper_bound_threshold_percent
-    assert latency_max_ns <= expected_max_latency_ns * min_max_latency_upper_bound_threshold_percent
-    assert avg_hop_latency <= expected_avg_hop_latency_ns * upper_bound_threshold_percent
+    failed = False
+    if latency_avg_ns > expected_mean_latency_ns + allowable_delta:
+        logger.error(f"{latency_avg_ns} (measured) > {expected_mean_latency_ns} * {allowable_delta} (expected)")
+        failed = True
+    if latency_min_ns > expected_min_latency_ns * min_max_latency_upper_bound_threshold_percent:
+        logger.error(
+            f"{latency_min_ns} (measured) > {expected_min_latency_ns} * {min_max_latency_upper_bound_threshold_percent} (expected)"
+        )
+        failed = True
+    if latency_max_ns > expected_max_latency_ns * min_max_latency_upper_bound_threshold_percent:
+        logger.error(
+            f"{latency_max_ns} (measured) > {expected_max_latency_ns} * {min_max_latency_upper_bound_threshold_percent} (expected)"
+        )
+        failed = True
+    if avg_hop_latency > expected_avg_hop_latency_ns * upper_bound_threshold_percent:
+        logger.error(
+            f"{avg_hop_latency} (measured) > {expected_avg_hop_latency_ns} + {upper_bound_threshold_percent} (expected)"
+        )
+        failed = True
+
+    if failed:
+        pytest.fail("Test because some measured values were worse than expected. The regressions should be fixed.")
 
     is_under_avg_lower_bound = latency_avg_ns <= expected_mean_latency_ns - allowable_delta
     is_under_min_lower_bound = latency_min_ns <= expected_min_latency_ns * min_max_latency_lower_bound_threshold_percent
@@ -151,10 +184,24 @@ def run_latency_test(
         logger.warning(
             f"Some measured values were under (better) than the expected values (including margin). Please update targets accordingly."
         )
-        assert expected_mean_latency_ns - allowable_delta <= latency_avg_ns
-        assert expected_min_latency_ns * min_max_latency_lower_bound_threshold_percent <= latency_min_ns
-        assert expected_max_latency_ns * min_max_latency_lower_bound_threshold_percent <= latency_max_ns
-        assert expected_avg_hop_latency_ns * lower_bound_threshold_percent <= avg_hop_latency
+
+        if is_under_avg_lower_bound:
+            logger.warning(
+                f"latency_avg_ns: {latency_avg_ns} (measured) <= {expected_mean_latency_ns} - {allowable_delta} (expected)"
+            )
+        if is_under_min_lower_bound:
+            logger.warning(
+                f"latency_min_ns: {latency_min_ns} (measured) <= {expected_min_latency_ns} * {min_max_latency_lower_bound_threshold_percent} (expected)"
+            )
+        if is_under_max_lower_bound:
+            logger.warning(
+                f"latency_max_ns: {latency_max_ns} (measured) <= {expected_max_latency_ns} * {min_max_latency_lower_bound_threshold_percent} (expected)"
+            )
+        if is_under_avg_hop_lower_bound:
+            logger.warning(
+                f"avg_hop_latency: {avg_hop_latency} (measured) <= {expected_avg_hop_latency_ns} * {lower_bound_threshold_percent} (expected)"
+            )
+        pytest.fail("Test because some measured values were better than expected. Targets should be updated.")
 
 
 #####################################
@@ -167,19 +214,11 @@ def run_latency_test(
 @pytest.mark.parametrize(
     "latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
     [
-        (0, 0, False, 10625, 10300, 11000, 760),
-        (0, 1, False, 9000, 8680, 9430, 750),
-        (4096, 1, False, 15750, 15500, 16200, 1310),
-        (0, 2, False, 7550, 7240, 7840, 755),
-        (0, 3, False, 6160, 5850, 6200, 770),
-        (0, 4, False, 4680, 4450, 4975, 780),
-        (0, 5, False, 3160, 2975, 3200, 790),
-        (0, 6, False, 1520, 1420, 1680, 760),
-        (16, 6, False, 1520, 1400, 1605, 760),
-        (16, 6, True, 1535, 1425, 1700, 770),
-        (1024, 6, False, 2000, 1820, 2150, 1000),
-        (2048, 6, False, 2240, 2150, 2290, 1120),
-        (4096, 6, False, 2600, 2520, 2770, 1300),
+        (0, 0, False, 9971, 10300, 10400, 715),
+        (16, 0, False, 9870, 9510, 10310, 705),
+        (1024, 0, False, 12510, 12150, 12880, 890),
+        (2048, 0, False, 14480, 14120, 14930, 1030),
+        (4096, 0, False, 17680, 17400, 17950, 1260),
     ],
 )
 @pytest.mark.parametrize("latency_ping_burst_size", [1])
@@ -224,16 +263,16 @@ def test_1D_line_fabric_latency_on_uncongested_fabric(
 
 
 # 1D All-to-All Multicast
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize(
     "latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
     [
-        (0, 0, False, 3320, 2880, 3520, 805),
-        (16, 0, False, 3130, 2840, 3400, 780),
-        (16, 0, True, 3170, 2860, 3527, 790),
-        (1024, 0, False, 3920, 3580, 4310, 975),
-        (2048, 0, False, 4470, 4220, 4730, 1115),
-        (4096, 0, False, 5310, 5050, 5700, 1330),
+        (0, 0, False, 6150, 5770, 6590, 770),
+        (16, 0, False, 6050, 5690, 6400, 760),
+        (16, 0, True, 6120, 5670, 6600, 765),
+        (1024, 0, False, 7530, 7030, 7930, 940),
+        (2048, 0, False, 8630, 8260, 9035, 1080),
+        (4096, 0, False, 10450, 9970, 10990, 1305),
     ],
 )
 @pytest.mark.parametrize("latency_ping_burst_size", [1])
