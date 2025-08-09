@@ -977,7 +977,7 @@ void MetalContext::initialize_firmware(
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
                     mailbox_index,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
-                    true);
+                    false);
                 // There are 4 mailboxes. wrap to 0 after 3
                 mailbox_index = (mailbox_index + 1) % 4;
             }
