@@ -16,18 +16,18 @@ class TtMultiheadAttention:
         init_cfg=None,
         batch_first=False,
     ):
-        params = params.attn  # Changed here
+        params = params.attn
         super().__init__()
         self.params = params
         self.embed_dims = embed_dims
         self.num_heads = num_heads
         self.device = device
         self.batch_first = batch_first
-        self.attn_in_proj__weight = params.in_proj_weight  # Changed here
+        self.attn_in_proj__weight = params.in_proj_weight
         self.attn_in_proj__weight = ttnn.to_layout(self.attn_in_proj__weight, layout=ttnn.TILE_LAYOUT)  # Changed here
-        self.attn_in_proj__bias = params.in_proj_bias  # Changed here
+        self.attn_in_proj__bias = params.in_proj_bias
         self.attn_in_proj__bias = ttnn.to_layout(self.attn_in_proj__bias, layout=ttnn.TILE_LAYOUT)  # Changed here
-        self.attn_in_proj__weight_permute = self.attn_in_proj__weight  # Changed here
+        self.attn_in_proj__weight_permute = self.attn_in_proj__weight
         self.attn_in_proj__bias_squeeze = ttnn.squeeze(self.attn_in_proj__bias, 0)
         self.attn_out_proj_weight = params.out_proj.weight
         self.attn_out_proj_weight = ttnn.to_layout(self.attn_out_proj_weight, layout=ttnn.TILE_LAYOUT)  # Changed here

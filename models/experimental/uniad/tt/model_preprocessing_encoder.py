@@ -140,9 +140,7 @@ def create_uniad_FPN_parameters(model, input_tensors, device=None):
         model=model, run_model=lambda model: model(input_tensors), device=device
     )
     parameters["model_args"] = model
-    # assert parameters is not None
-    # for key in parameters.conv_args.keys():
-    #     parameters.conv_args[key].module = getattr(model, key)
+
     return parameters
 
 
@@ -157,9 +155,7 @@ def create_uniad_model_parameters(model, input_tensors, device=None):
         model=model, run_model=lambda model: model(input_tensors), device=device
     )
     parameters["model_args"] = model.img_neck
-    # assert parameters is not None
-    # for key in parameters.conv_args.keys():
-    #     parameters.conv_args[key].module = getattr(model, key)
+
     return parameters
 
 
@@ -212,15 +208,6 @@ def create_uniad_model_parameters_tsa(model, input_tensor, device=None):
     for key in parameters.conv_args.keys():
         parameters.conv_args[key].module = getattr(model, key)
     return parameters
-
-
-# def create_uniad_model_parameters_decoder(model: ResNet, input_tensor, device=None):
-#     parameters = preprocess_model_parameters(
-#         initialize_model=lambda: model,
-#         custom_preprocessor=custom_preprocessor,
-#         device=device,
-#     )
-#     return parameters
 
 
 def create_uniad_model_parameters_encoder(model, device=None):

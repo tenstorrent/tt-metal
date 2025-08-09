@@ -187,11 +187,6 @@ class TtPlanningHeadSingleMode:
         self.mlp_fuser = [ttnn.linear, ttnn.layer_norm, ttnn.relu]
         self.pos_embed = parameters.pos_embed.weight
 
-        # # self.loss_collision = []
-        # # for cfg in loss_collision:
-        # #     self.loss_collision.append(build_loss(cfg))
-        # # self.loss_collision = nn.ModuleList(self.loss_collision)
-
         self.use_col_optim = use_col_optim
         self.occ_filter_range = col_optim_args["occ_filter_range"]
         self.sigma = col_optim_args["sigma"]
@@ -214,8 +209,6 @@ class TtPlanningHeadSingleMode:
                     device, parameters=parameters.bev_adapter[2][2], conv_pt=conv_pt.bev_adapter[2][2], activation=""
                 ),
             ]
-
-        # self.occ_filter_range_tt = ttnn.from_torch(torch.tensor([col_optim_args['occ_filter_range']**2]), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
 
     def __call__(self, bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command=None):
         sdc_traj_query = sdc_traj_query[-1]
@@ -344,15 +337,6 @@ class TtPlanningHeadSingleMode:
             b = ttnn.unsqueeze(b, 1)
             pos_xy = ttnn.concat([a, b], dim=-1)  # PCC:1.0
 
-            # filter the occupancy in range
-            # sdc_pos = ttnn.expand(ttnn.unsqueeze(sdc_traj_all[0, t, :2], 0), (pos_xy.shape[0], pos_xy.shape[1]))
-            # points = pos_xy[:, :2]
-            # diff = sdc_pos - points
-            # diff_pow = ttnn.pow(diff, 2)
-            # dist_squared = ttnn.sum(diff_pow, dim=-1) # shape: [N]
-            # keep_index = dist_squared < self.occ_filter_range_tt
-            # return keep_index
-
             pos_xy = ttnn.to_torch(pos_xy)
 
             keep_index = (
@@ -365,10 +349,6 @@ class TtPlanningHeadSingleMode:
 
             # valid_occupancy_num += torch.sum(keep_index>0)
 
-        # if valid_occupancy_num == 0:
-        #     return sdc_traj_all
-
-        # sdc_traj_all = ttnn.to_torch(sdc_traj_all)
         col_optimizer = CollisionNonlinearOptimizer(
             self.planning_steps, 0.5, self.sigma, self.alpha_collision, pos_xy_t
         )

@@ -890,7 +890,7 @@ def custom_preprocessor_motion_decoder(model, name):
     return parameters
 
 
-def create_uniad_model_parameters_perception_transformer(model, device=None):
+def create_uniad_model_parameters_uniad(model, device=None):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,

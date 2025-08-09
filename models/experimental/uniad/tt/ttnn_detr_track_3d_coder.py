@@ -60,21 +60,6 @@ class TtDETRTrack3DCoder(TtBaseBBoxCoder):
         labels = ttnn.remainder(indexs, self.num_classes)
         labels = ttnn.to_torch(labels)
 
-        # labels = ttnn.to_torch(labels, dtype=torch.int64) # Low E2e PCC
-        # track_scores = ttnn.reshape(track_scores, (1, 1, 1, -1))
-        # _, bbox_index = ttnn.topk(
-        #     track_scores,
-        #     k=max_num,
-        #     dim=-1,
-        #     largest=True,
-        #     sorted=True,
-        # )
-
-        # bbox_index = ttnn.squeeze(ttnn.squeeze(ttnn.squeeze(bbox_index, 0), 0), 0)
-        # track_scores = ttnn.squeeze(ttnn.squeeze(ttnn.squeeze(track_scores, 0), 0), 0)
-        # bbox_index = ttnn.to_torch(bbox_index, torch.int64)
-        # track_scores = ttnn.to_torch(track_scores)
-
         track_scores = ttnn.to_torch(track_scores)
         _, bbox_index = track_scores.topk(max_num)
 
