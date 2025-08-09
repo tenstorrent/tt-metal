@@ -37,17 +37,18 @@ void kernel_main() {
     }
 
     // Here we overflow the received count and fill the buffer.
-    cb_reserve_back(cb_id, cb_step_size);
-    cb_push_back(cb_id, cb_step_size);
+    cb_reserve_back(cb_id, cb_step_size * 2);
+    cb_push_back(cb_id, cb_step_size * 2);
 
     // Note: Reader is not pulling any more data out of the buffer,
     // buffer stays full.
 
+    // Should be: Received: 0x0000, Acked: 0xFFC0
     DPRINT << "Before: Received: " << HEX() << *get_cb_tiles_received_ptr(cb_id)
            << " Acked: " << *get_cb_tiles_acked_ptr(cb_id) << ENDL();
 
     // This reserve should not return
-    cb_reserve_back(cb_id, cb_step_size + 1);
+    cb_reserve_back(cb_id, 1);
 
     DPRINT << "Should be unreachable" << ENDL();
 
