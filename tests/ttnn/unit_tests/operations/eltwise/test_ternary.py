@@ -71,7 +71,8 @@ def assert_where_with_pcc(torch_input_tensor, torch_input1, torch_input2, device
         return ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device)
 
     input_tensor, input1, input2 = (
-        from_torch_if_tensor(arg) for arg in (torch_input_tensor, torch_input1, torch_input2)
+        from_torch_if_tensor(arg)
+        for arg in ((torch_input_tensor > 0).to(torch_input_tensor.dtype), torch_input1, torch_input2)
     )
     golden_fn = ttnn.get_golden_function(ttnn.where)
     torch_output_tensor = golden_fn(torch_input_tensor > 0, torch_input1, torch_input2)
