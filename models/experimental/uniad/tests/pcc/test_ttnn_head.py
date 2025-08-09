@@ -7,6 +7,7 @@ from models.experimental.uniad.reference.head import BEVFormerTrackHead
 from models.experimental.uniad.tt.ttnn_head import TtBEVFormerTrackHead
 import pytest
 import numpy as np
+from collections import OrderedDict
 
 import ttnn
 
@@ -50,6 +51,43 @@ def test_head_get_detections(device, reset_seeds):
         },
     )
 
+    weights = torch.load(weights_path, map_location=torch.device("cpu"))
+
+    state_dict = weights.get("state_dict", weights)
+
+    # Your model's expected shape
+    new_bev_h = 50
+    new_bev_w = 50
+    new_bev_size = new_bev_h * new_bev_w
+
+    # 1. Slice row_embed and col_embed from [200, 128] → [50, 128]
+    for key in [
+        "pts_bbox_head.positional_encoding.row_embed.weight",
+        "pts_bbox_head.positional_encoding.col_embed.weight",
+    ]:
+        if key in state_dict:
+            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_h, state_dict[key].shape[1])}")
+            state_dict[key] = state_dict[key][:new_bev_h, :]
+
+    # 2. Slice bev_embedding from [40000, 256] → [2500, 256]
+    for key in ["pts_bbox_head.bev_embedding.weight", "seg_head.bev_embedding.weight"]:
+        if key in state_dict:
+            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_size, state_dict[key].shape[1])}")
+            state_dict[key] = state_dict[key][:new_bev_size, :]
+
+    if "criterion.code_weights" in state_dict:
+        del state_dict["criterion.code_weights"]
+
+    # Load the modified checkpoint
+    prefix = "pts_bbox_head"
+    filtered = OrderedDict(
+        (
+            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
+            for k, v in weights["state_dict"].items()
+            if k.startswith(prefix)
+        )
+    )
+    reference_model.load_state_dict(filtered)
     reference_model.eval()
 
     parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
@@ -158,6 +196,45 @@ def test_head_get_bev_features(device, reset_seeds):
             "test_cfg": None,
         },
     )
+
+    weights = torch.load(weights_path, map_location=torch.device("cpu"))
+
+    state_dict = weights.get("state_dict", weights)
+
+    # Your model's expected shape
+    new_bev_h = 50
+    new_bev_w = 50
+    new_bev_size = new_bev_h * new_bev_w
+
+    # 1. Slice row_embed and col_embed from [200, 128] → [50, 128]
+    for key in [
+        "pts_bbox_head.positional_encoding.row_embed.weight",
+        "pts_bbox_head.positional_encoding.col_embed.weight",
+    ]:
+        if key in state_dict:
+            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_h, state_dict[key].shape[1])}")
+            state_dict[key] = state_dict[key][:new_bev_h, :]
+
+    # 2. Slice bev_embedding from [40000, 256] → [2500, 256]
+    for key in ["pts_bbox_head.bev_embedding.weight", "seg_head.bev_embedding.weight"]:
+        if key in state_dict:
+            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_size, state_dict[key].shape[1])}")
+            state_dict[key] = state_dict[key][:new_bev_size, :]
+
+    if "criterion.code_weights" in state_dict:
+        del state_dict["criterion.code_weights"]
+
+    # Load the modified checkpoint
+    prefix = "pts_bbox_head"
+    filtered = OrderedDict(
+        (
+            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
+            for k, v in weights["state_dict"].items()
+            if k.startswith(prefix)
+        )
+    )
+    reference_model.load_state_dict(filtered)
+
     reference_model.eval()
 
     parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
@@ -298,4 +375,4 @@ def test_head_get_bev_features(device, reset_seeds):
     )
 
     assert_with_pcc(reference_output_get_bev_features[0], ttnn.to_torch(ttnn_output[0]), pcc=0.99)
-    assert_with_pcc(reference_output_get_bev_features[1], ttnn.to_torch(ttnn_output[1]), pcc=0.88)
+    assert_with_pcc(reference_output_get_bev_features[1], ttnn.to_torch(ttnn_output[1]), pcc=0.99)
