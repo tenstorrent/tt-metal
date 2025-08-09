@@ -123,6 +123,7 @@ jobs:
           echo "[info] run-perf-tests: $run_perf_tests"
 
           if [[ "$requested_models" != "all" ]]; then
+            jq --argjson requested_models "$requested_models" '[.[] | select(.name | IN($requested_models[]))]' <<< "$requested_demo_tests"
             requested_demo_tests=$(jq --argjson requested_models "$requested_models" '[.[] | select(.name | IN($requested_models[]))]' <<< "$requested_demo_tests")
             echo "[info] after filtering for requested models: ${requested_demo_tests"
           fi
