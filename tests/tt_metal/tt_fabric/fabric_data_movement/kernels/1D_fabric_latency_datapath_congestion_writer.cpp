@@ -6,7 +6,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "dataflow_api.h"
 
 #include <cstdint>

@@ -13,6 +13,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <vector>
 #include <umd/device/tt_core_coordinates.h>
+#include <optional>
 
 namespace tt {
 namespace tt_metal {

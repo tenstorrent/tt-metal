@@ -2615,6 +2615,7 @@ void kernel_main() {
         receiver_channel_1_trid_tracker,
         port_direction_table,
         local_sender_channel_free_slots_stream_ids_ordered);
+    WAYPOINT("LPDN");
 
     // we force these values to a non-zero value so that if we run the fabric back to back,
     // and we can reliably probe from host that this kernel has initialized properly.

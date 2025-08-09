@@ -6,7 +6,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "dataflow_api.h"
 
 #include <cstdint>
@@ -22,11 +21,11 @@ void kernel_main() {
 
     // A safe location to dump payload data
     const size_t dest_dummy_payload_buffer_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t semaphore_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const size_t semaphore_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts_to_send = get_arg_val<uint32_t>(arg_idx++);
-    const size_t num_hops_over_loopback_fabric_to_self = get_arg_val<uint32_t>(arg_idx++);
+    const size_t num_hops_to_receiver = get_arg_val<uint32_t>(arg_idx++);
     const size_t congestion_writers_ready_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_congestion_writers = get_arg_val<uint32_t>(arg_idx++);
 
@@ -86,12 +85,12 @@ void kernel_main() {
 
     // PACKET HEADER SETUP
     if constexpr (payloads_are_mcast) {
-        auto mcast_hops = static_cast<uint8_t>(num_hops_over_loopback_fabric_to_self);
+        auto mcast_hops = static_cast<uint8_t>(num_hops_to_receiver);
         payload_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
         sem_inc_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
     } else {
-        payload_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_over_loopback_fabric_to_self));
-        sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_over_loopback_fabric_to_self));
+        payload_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_to_receiver));
+        sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_to_receiver));
     }
     auto dest_semaphore_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
