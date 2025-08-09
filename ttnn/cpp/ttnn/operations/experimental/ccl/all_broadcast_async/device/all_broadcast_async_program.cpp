@@ -49,7 +49,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<GlobalSemaphore>& barrier_semaphore) {
     tt::tt_metal::Program program{};
 
     auto mesh_device = input_tensor.mesh_device();
@@ -208,12 +209,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
                                 // semaphore
+    CoreCoord barrier_core;
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
             // drain sync core is the first worker core
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         }
+
+        barrier_core = mesh_device->worker_core_from_logical_core(core);
 
         // Set reader runtime args
         uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
@@ -250,6 +254,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             drain_sync_core.x,                               // out_ready_sem_noc0_x
             drain_sync_core.y,                               // out_ready_sem_noc0_y
             out_ready_sem_wait_value,                        // out_ready_sem_wait_value
+            barrier_semaphore.has_value(),                   // use_barrier
+            barrier_semaphore.has_value()                    // barrier_sem
+                ? barrier_semaphore.value().address()
+                : 0,
+            barrier_core.x,  // barrier_sem_noc0_x
+            barrier_core.y   // barrier_sem_noc0_y
         };
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
@@ -286,6 +296,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             const auto& input = input_tensors[0];
 
             auto semaphore = static_cast<const ttnn::AllBroadcastAsync*>(operation)->semaphore;
+            auto barrier_semaphore = static_cast<const ttnn::AllBroadcastAsync*>(operation)->barrier_semaphore;
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
 
@@ -300,6 +311,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output_tensors[ring_index].buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
+
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_runtime_args[10] = barrier_semaphore.value().address();
+                }
             }
         };
 
