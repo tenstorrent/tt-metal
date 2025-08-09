@@ -31,7 +31,7 @@ struct ExecutePad {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding,
+        const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
         float value,
         bool use_multicore = false,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
