@@ -1183,8 +1183,10 @@ void DeviceProfiler::readRiscProfilerResults(
                     riscNumRead = data_buffer.at(index) & 0x7;
                     coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
                     runHostCounterRead = data_buffer.at(index + 1);
+                    uint32_t base_program_id =
+                        tt::tt_metal::detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
 
-                    opname = getOpNameIfAvailable(device_id, runHostCounterRead);
+                    opname = getOpNameIfAvailable(device_id, base_program_id);
 
                 } else {
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
