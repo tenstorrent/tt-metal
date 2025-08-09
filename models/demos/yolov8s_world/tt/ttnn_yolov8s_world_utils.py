@@ -3,18 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
-from pathlib import Path
 
 import torch
-import torch.nn as nn
-from loguru import logger
 from ttnn.model_preprocessing import (  # preprocess_layernorm_parameter,; preprocess_linear_bias,; preprocess_linear_weight,
     ParameterDict,
     ParameterList,
 )
 
 import ttnn
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8s_world.reference.yolov8s_world import (
     SPPF,
     C2f,
@@ -59,66 +56,6 @@ def move_to_device(object, device):
         return ttnn.to_device(object, device)
     else:
         return object
-
-
-class Ensemble(nn.ModuleList):
-    def __init__(self):
-        super(Ensemble, self).__init__()
-
-    def forward(self, x, augment=False):
-        y = []
-        for module in self:
-            y.append(module(x, augment)[0])
-        y = torch.cat(y, 1)
-        return y, None
-
-
-def attempt_download(file, repo="ultralytics/assets"):
-    tests = Path(__file__).parent.parent
-    file_path = tests / Path(str(file).strip().replace("'", "").lower())
-
-    if not file_path.exists():
-        name = "yolov8s-world.pt"
-        msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
-        try:
-            url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
-            logger.info(f"Downloading {url} to {file_path}...")
-            torch.hub.download_url_to_file(url, file_path)
-
-            assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
-        except Exception as e:
-            logger.info(f"Error downloading from GitHub: {e}. Trying secondary source...")
-
-            url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
-            logger.info(f"Downloading {url} to {file_path}...")
-            os.system(f"curl -L {url} -o {file_path}")
-
-            if not file_path.exists() or file_path.stat().st_size < 1e6:
-                file_path.unlink(missing_ok=True)
-                logger.info(f"ERROR: Download failure for {msg}")
-            else:
-                logger.info(f"Download succeeded from secondary source!")
-    return file_path
-
-
-def attempt_load(weights, map_location=None):
-    model = Ensemble()
-    for w in weights if isinstance(weights, list) else [weights]:
-        weight_path = attempt_download(w)
-        logger.info(f"Loading weights from: {weight_path}")
-        ckpt = torch.load(weight_path, map_location=map_location, weights_only=False)
-        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
-    for m in model.modules():
-        if isinstance(m, (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU)):
-            m.inplace = True
-        elif isinstance(m, nn.Upsample):
-            m.recompute_scale_factor = None
-    if len(model) == 1:
-        return model[-1]
-    else:
-        for k in ["names", "stride"]:
-            setattr(model, k, getattr(model[-1], k))
-        return model
 
 
 def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
@@ -747,15 +684,3 @@ def ttnn_custom_normalize(x, dim, device):
     normalized = ttnn.divide(x, norm_expanded)
 
     return normalized
-
-
-def get_mesh_mappers(device):
-    if device.get_num_devices() > 1:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
-        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
-        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
-    else:
-        inputs_mesh_mapper = None
-        weights_mesh_mapper = None
-        output_mesh_composer = None
-    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
