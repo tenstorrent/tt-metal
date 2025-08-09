@@ -9,6 +9,7 @@
 #include "array_wrapper.h"
 #include "dspec.h"
 #include "helpers.h"
+#include "shard_pages_address_iterator.h"
 #include "compile_time_args.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -45,8 +46,10 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
  *
  * @tparam DSpec        DistributionSpec type.
  */
-template <typename DSpec>
+template <typename _DSpec>
 struct TensorAccessor {
+    using DSpec = _DSpec;
+
 private:
     // DSpec can be static or dynamic, so we use a conditional instance
     using StaticDspec = tensor_accessor::detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
@@ -211,6 +214,13 @@ public:
         return is_local_bank(bank_x, bank_y, noc);
     }
 
+    // Returns a proxy for shard pages iterator
+    ShardPages<TensorAccessor> shard_pages(
+        uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
+        static_assert(DSpec::has_static_rank, "ShardPages is only supported for static rank");
+        return ShardPages<TensorAccessor>(*this, shard_id, start_page_offset, noc);
+    }
+
 private:
     // NOC APIs
     FORCE_INLINE
@@ -254,6 +264,8 @@ private:
 public:
     const size_t bank_base_address = 0;
     const uint32_t page_size = 0;
+
+    friend class ShardPagesAddressIterator<TensorAccessor>;
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)

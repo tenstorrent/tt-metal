@@ -51,6 +51,7 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
                    out_mem_config.shard_spec().value().shape[1];
         }
     }
+    return true;
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
@@ -72,8 +73,8 @@ void ReshardDeviceOperation::validate_with_output_tensors(
         has_output_tensor ? output_tensors[0].value().memory_config() : this->output_mem_config;
     TT_FATAL(out_mem_config.is_sharded(), "output must be sharded");
 
-    if (!CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, out_mem_config)) {
-        auto output_tensor_spec = compute_output_specs(input_tensors, output_tensors).front();
+    auto output_tensor_spec = compute_output_specs(input_tensors, output_tensors).front();
+    if (!CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor_spec.memory_config())) {
         auto out_distribution_spec = output_tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec();
         auto input_distribution_spec = input_tensor.buffer()->buffer_distribution_spec();
 
