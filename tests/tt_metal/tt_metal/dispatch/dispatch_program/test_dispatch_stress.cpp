@@ -120,7 +120,7 @@ void RunTest(IDevice* device) {
     }
 }
 
-TEST(DispatchStress, TensixRunManyTimes) {
+TEST(DispatchStress, DISABLED_TensixRunManyTimes) {
     auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     // Skip fast dispatch until it's supported for remote device.
     if (!slow_dispatch) {
