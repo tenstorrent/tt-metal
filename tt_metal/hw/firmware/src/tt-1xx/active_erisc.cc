@@ -258,7 +258,7 @@ void __attribute__((noinline)) Application(void) {
 
             DPRINT << "Enables = " << (uint32_t)enables << ENDL();
 
-            run_subordinate_eriscs(enables);
+            // run_subordinate_eriscs(enables);
 
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
@@ -275,7 +275,7 @@ void __attribute__((noinline)) Application(void) {
                 WAYPOINT("D");
             }
 
-            wait_subordinate_eriscs();
+            // wait_subordinate_eriscs();
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed

@@ -352,6 +352,9 @@ inline uint32_t Hal::get_processor_classes_count(
         },
         programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
+    if (index == get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)) {
+        return 1;
+    }
     return this->core_info_[index].get_processor_classes_count();
 }
 
