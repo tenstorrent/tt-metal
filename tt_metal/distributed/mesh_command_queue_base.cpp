@@ -284,7 +284,7 @@ void MeshCommandQueueBase::enqueue_read_shards(
 void MeshCommandQueueBase::enqueue_read(
     const std::shared_ptr<MeshBuffer>& buffer,
     DistributedHostBuffer& host_buffer,
-    const std::optional<std::unordered_set<MeshCoordinate>>& shards,
+    const std::optional<std::set<MeshCoordinate>>& shards,
     bool blocking) {
     auto lock = lock_api_function_();
     std::vector<ShardDataTransfer> shard_data_transfers;
