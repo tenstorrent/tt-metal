@@ -16,10 +16,10 @@ from framework.database import (
     generate_error_signature,
     map_test_status_to_run_status,
 )
-from framework.serialize import serialize, serialize_for_postgres
-from framework.serialize import deserialize, deserialize_for_postgres
+from framework.serialize import serialize, serialize_structured
+from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
-from infra.data_collection.pydantic_models import OpTestResultRecord, DevicePerfMetric
+from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus
 
 
 class ResultDestination(ABC):
@@ -248,7 +248,7 @@ class FileResultDestination(ResultDestination):
         return None
 
     def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
-        """Export results to JSON file using Pydantic validation (OpTestResultRecord)."""
+        """Export results to JSON file using Pydantic validation (OpTest)."""
         if not results:
             return "success"
 
@@ -260,24 +260,24 @@ class FileResultDestination(ResultDestination):
         validated_records = []
 
         # Map internal TestStatus enum (or strings) to file schema enum values
-        def _map_status(value: Any) -> Optional[str]:
+        def _map_status(value: Any) -> Optional[TestStatus]:
             if value is None:
                 return None
             try:
-                from framework.statuses import TestStatus
+                from framework.statuses import TestStatus as RunnerStatus
 
                 # TODO: consider removing this mapping and just using the TestStatus enum directly
-                if isinstance(value, TestStatus):
+                if isinstance(value, RunnerStatus):
                     mapping = {
-                        TestStatus.PASS: "pass",
-                        TestStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
-                        TestStatus.FAIL_CRASH_HANG: "fail_crash_hang",
-                        TestStatus.NOT_RUN: "skipped",
-                        TestStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
-                        TestStatus.FAIL_WATCHER: "fail_watcher",
-                        TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
+                        RunnerStatus.PASS: "pass",
+                        RunnerStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
+                        RunnerStatus.FAIL_CRASH_HANG: "fail_crash_hang",
+                        RunnerStatus.NOT_RUN: "skipped",
+                        RunnerStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
+                        RunnerStatus.FAIL_WATCHER: "fail_watcher",
+                        RunnerStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
                     }
-                    return mapping.get(value, "error")
+                    return TestStatus(mapping.get(value, "error"))
             except Exception:
                 pass
             # If already a string, trust but verify
@@ -287,13 +287,13 @@ class FileResultDestination(ResultDestination):
                 if s.startswith("TestStatus."):
                     suffix = s.split(".", 1)[1].lower()
                     if suffix == "pass":
-                        return "pass"
-                    return suffix
-                return s
+                        return TestStatus("pass")
+                    return TestStatus(suffix)
+                return TestStatus(s)
             except Exception:
-                return "error"
+                return TestStatus("error")
 
-        def _coerce_device_perf(device_perf_raw: Any) -> Optional[set[DevicePerfMetric]]:
+        def _coerce_device_perf(device_perf_raw: Any) -> Optional[set[PerfMetric]]:
             if device_perf_raw is None:
                 return None
             # If list of dicts, merge or take first
@@ -303,7 +303,7 @@ class FileResultDestination(ResultDestination):
                     return None
             if not isinstance(device_perf_raw, dict):
                 return None
-            metrics: set[DevicePerfMetric] = set()
+            metrics: set[PerfMetric] = set()
 
             def _to_float(v):
                 try:
@@ -312,7 +312,7 @@ class FileResultDestination(ResultDestination):
                     return None
 
             for k, v in device_perf_raw.items():
-                metrics.add(DevicePerfMetric(metric_name=str(k), metric_value=_to_float(v)))
+                metrics.add(PerfMetric(metric_name=str(k), metric_value=_to_float(v)))
             return metrics if metrics else None
 
         for i in range(len(results)):
@@ -322,7 +322,7 @@ class FileResultDestination(ResultDestination):
             exception_text = raw.get("exception", None)
 
             # Build a validated record via Pydantic
-            record = OpTestResultRecord(
+            record = OpTest(
                 test_name=header.get("sweep_name"),
                 suite_name=header.get("suite_name"),
                 vector_id=header.get("vector_id"),
@@ -339,7 +339,7 @@ class FileResultDestination(ResultDestination):
                 host=raw.get("host"),
                 user=raw.get("user"),
                 original_vector_data=_flatten_serialized(
-                    _normalize_original_vector_data(raw.get("original_vector_data"))
+                    _normalize_original_vector_data(raw.get("original_vector_data")) or {}
                 ),
             )
 
@@ -409,7 +409,7 @@ def _normalize_original_vector_data(original):
         obj = v
         # Try postgres-aware deserialization first, then generic
         try:
-            obj = deserialize_for_postgres(v)
+            obj = deserialize_structured(v)
         except Exception:
             try:
                 obj = deserialize(v)
@@ -417,7 +417,7 @@ def _normalize_original_vector_data(original):
                 obj = v
         # Re-serialize into JSON-friendly shape with enum strings parsed
         try:
-            normalized[k] = serialize_for_postgres(obj)
+            normalized[k] = serialize_structured(obj)
         except Exception:
             normalized[k] = str(obj)
     return normalized

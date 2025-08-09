@@ -50,6 +50,7 @@ class SweepsConfig:
     elastic_username: Optional[str] = None
     elastic_password: Optional[str] = None
     summary: bool = False
+    run_contents: str = None
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -265,11 +266,7 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
     try:
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
-            # Deserialize a test vector (dictionary) back into original object form
-            if config.result_destination == "postgres" or config.result_destination == "results_export":
-                test_vector = deserialize_vector_for_postgres(test_vector)
-            else:
-                test_vector = deserialize(test_vector)
+            test_vector = deserialize_vector_structured(test_vector)
             try:
                 results = test_module.run(**test_vector, device=device)
                 if type(results) == list:
@@ -323,7 +320,6 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
 
-        # Use appropriate deserialization based on database backend
         validity = deserialize(test_vector["validity"])
 
         if validity == VectorValidity.INVALID:
@@ -462,40 +458,23 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
 def run_sweeps(
     module_names,
     config: SweepsConfig,
-    run_contents=None,
 ):
     pbar_manager = enlighten.get_manager()
 
     # Create vector source based on config
+    source_kwargs = {}
     if config.vector_source == "elastic":
-        if not all([config.elastic_connection_string, config.sweeps_tag]):
-            raise ValueError("Elastic credentials are required when using elastic vector source")
-
-        # Get credentials from environment
-        elastic_username = config.elastic_username
-        elastic_password = config.elastic_password
-
-        if not all([elastic_username, elastic_password]):
-            raise ValueError("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
-
-        vector_source = VectorSourceFactory.create_source(
-            config.vector_source,
-            connection_string=config.elastic_connection_string,
-            username=elastic_username,
-            password=elastic_password,
-            tag=config.sweeps_tag,
-        )
+        source_kwargs = {
+            "connection_string": config.elastic_connection_string,
+            "username": config.elastic_username,
+            "password": config.elastic_password,
+            "tag": config.sweeps_tag,
+        }
     elif config.vector_source == "file":
-        if not config.file_path:
-            raise ValueError("File path is required when using file vector source")
-        vector_source = VectorSourceFactory.create_source(
-            config.vector_source,
-            file_path=config.file_path,
-        )
-    elif config.vector_source == "vectors_export":
-        vector_source = VectorSourceFactory.create_source(config.vector_source)
-    else:
-        raise ValueError(f"Unknown vector source: {config.vector_source}")
+        source_kwargs = {
+            "file_path": config.file_path,
+        }
+    vector_source = VectorSourceFactory.create_source(config.vector_source, **source_kwargs)
 
     # Create result destination based on config
     result_kwargs = {}
@@ -525,7 +504,7 @@ def run_sweeps(
             "git_commit_hash": git_hash(),
             "start_time_ts": dt.datetime.now(),
             "status": "success",
-            "run_contents": run_contents,
+            "run_contents": config.run_contents,
             "device": ttnn.get_arch_name(),
             "github_pipeline_id": get_github_pipeline_id(),
         }
@@ -790,7 +769,7 @@ if __name__ == "__main__":
         enable_profiler()
 
     # Generate run contents description
-    run_contents = get_run_contents(config)
+    config.run_contents = get_run_contents(config)
 
     logger.info(
         f"Running current sweeps with tag: {config.sweeps_tag} using {config.vector_source} test vector source, outputting to {config.result_destination}."
@@ -811,7 +790,6 @@ if __name__ == "__main__":
     run_sweeps(
         module_names,
         config=config,
-        run_contents=run_contents,
     )
 
     if config.watcher:

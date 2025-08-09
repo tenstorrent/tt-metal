@@ -375,7 +375,25 @@ class CompleteBenchmarkRun(BaseModel):
     measurements: List[BenchmarkMeasurement] = Field(description="List of benchmark measurements.")
 
 
-class DevicePerfMetric(BaseModel):
+class TestStatus(str, Enum):
+    passed = "pass"
+    fail_assert_exception = "fail_assert_exception"
+    fail_l1_out_of_mem = "fail_l1_out_of_mem"
+    fail_watcher = "fail_watcher"
+    fail_crash_hang = "fail_crash_hang"
+    fail_unsupported_device_perf = "fail_unsupported_device_perf"
+    skipped = "skipped"
+    error = "error"
+
+
+class RunStatus(str, Enum):
+    passed = "pass"
+    fail = "fail"
+    did_not_finish = "did_not_finish"
+    exception = "exception"
+
+
+class PerfMetric(BaseModel):
     """
     Metric name and its value.
     """
@@ -384,7 +402,7 @@ class DevicePerfMetric(BaseModel):
     metric_value: Optional[float] = Field(description="Metric value.")
 
 
-class OpTestResultRecord(BaseModel):
+class OpTest(BaseModel):
     """
     One flattened record for a op test (sweeps or unit test) testcase/vector execution result.
 
@@ -403,20 +421,7 @@ class OpTestResultRecord(BaseModel):
     test_start_ts: datetime = Field(description="Timestamp with timezone when the vector execution started.")
     test_end_ts: datetime = Field(description="Timestamp with timezone when the vector execution ended.")
 
-    # Status & messaging
-    class OpTestStatus(str, Enum):
-        """Allowed execution statuses for a op test vector result."""
-
-        pass_ = "pass"  # Test met expected criteria
-        fail_assert_exception = "fail_assert_exception"  # Assertion or unexpected exception
-        fail_l1_out_of_mem = "fail_l1_out_of_mem"  # L1 memory exhaustion
-        fail_watcher = "fail_watcher"  # Watcher exception
-        fail_crash_hang = "fail_crash_hang"  # Timeout or crash/hang
-        fail_unsupported_device_perf = "fail_unsupported_device_perf"  # Device perf requested but unsupported/missing
-        skipped = "skipped"  # Vector not run (invalid/filtered/timeout-skip)
-        error = "error"  # Other error category
-
-    status: OpTestStatus = Field(description="Execution status for this vector.")
+    status: TestStatus = Field(description="Execution status for this vector.")
     message: Optional[str] = Field(None, description="Optional informational message about the execution outcome.")
     exception: Optional[str] = Field(None, description="Exception text when a failure occurred, if any.")
     error_signature: Optional[str] = Field(None, description="Derived error signature from the exception, if any.")
@@ -425,7 +430,7 @@ class OpTestResultRecord(BaseModel):
     e2e_perf: Optional[float] = Field(
         None, description="End-to-end performance metric for the test (units depend on the specific test)."
     )
-    device_perf: Optional[set[DevicePerfMetric]] = Field(
+    device_perf: Optional[set[PerfMetric]] = Field(
         None, description="Device-level performance measurements, when device profiling is enabled."
     )
 
@@ -433,7 +438,7 @@ class OpTestResultRecord(BaseModel):
     original_vector_data: Dict[str, Any] = Field(description="Original test vector contents.")
 
 
-class OpTestRun(BaseModel):
+class OpRun(BaseModel):
     """
     High-level metadata describing a op test run session (spanning many testcases/vectors).
     Mirrors the metadata constructed in the sweeps and unit test runner before exporting results.
@@ -455,5 +460,5 @@ class OpTestRun(BaseModel):
 
     run_start_ts: datetime = Field(description="Timestamp with timezone when the sweeps run started.")
     run_end_ts: Optional[datetime] = Field(None, description="Timestamp with timezone when the sweeps run ended.")
-    status: str = Field(description="Overall run status aggregated from testcases.")
-    results: List[OpTestResultRecord] = Field(description="List of per-vector op test execution results.")
+    status: RunStatus = Field(description="Overall run status aggregated from testcases.")
+    results: List[OpTest] = Field(description="List of per-vector op test execution results.")
