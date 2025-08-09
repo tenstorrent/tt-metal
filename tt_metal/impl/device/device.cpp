@@ -44,6 +44,7 @@
 #include "command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
+#include "hal.hpp"
 #include "program/program_impl.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"

@@ -158,6 +158,7 @@ inline __attribute__((always_inline)) void configure_l1_data_cache() {
     // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
     // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
     asm(R"ASM(
+            fence
             li t1, 0x8
             csrrs zero, 0x7c0, t1
              )ASM" ::

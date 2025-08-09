@@ -22,6 +22,7 @@
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "dev_mem_map.h"
+#include "eth_fw_api.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -65,29 +66,119 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
-int main() {
-    configure_csr();
-    WAYPOINT("I");
-    do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+void set_deassert_addresses() {
+#ifdef ARCH_BLACKHOLE
+    WRITE_REG(SUBORDINATE_AERISC_RESET_PC, MEM_SUBORDINATE_AERISC_FIRMWARE_BASE);
+#endif
+}
 
-    // put this into scratch space similar to idle erisc
+inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
+    // List of subordinate eriscs to run
+    if (enables & DISPATCH_CLASS_MASK_ETH_DM1) {
+        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+    }
+}
+
+inline void service_base_fw() {
+    // reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+    // if (is_port_up()) {
+    //     // Write to MEM_AERISC_LIVE_LINK_STATUS_BASE for debug
+    //     reinterpret_cast<void (*)(uint32_t)>(
+    //         (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    // }
+}
+
+inline void wait_subordinate_eriscs() {
+    WAYPOINT("SEW");
+    do {
+        invalidate_l1_cache();
+        service_base_fw();
+        __asm__ volatile("fence");
+    } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+    WAYPOINT("SED");
+}
+
+// Copy from init scratch space to local memory
+inline void initialize_local_memory() {
+    uint32_t* data_image = (uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+    extern uint32_t __ldm_data_start[];
+    extern uint32_t __ldm_data_end[];
+    const uint32_t ldm_data_size = (uint32_t)__ldm_data_end - (uint32_t)__ldm_data_start;
+    // Copy data from data_image in __ldm_data_start for ldm_data_size bytes
+    l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
+}
+
+inline void overwrite_mailbox_to_done() {
+    // BH-104 / https://github.com/tenstorrent/tt-metal/issues/25427
+    for (uint32_t i = 0; i < eth_mailbox_e::NUM_ETH_MAILBOX; i++) {
+        invalidate_l1_cache();
+        all_eth_mailbox_t* mailbox = reinterpret_cast<all_eth_mailbox_t*>(MEM_SYSENG_ETH_MAILBOX_ADDR);
+        mailbox->mailbox[i].msg = MEM_SYSENG_ETH_MSG_DONE | (mailbox->mailbox[i].msg & MEM_SYSENG_ETH_MSG_TYPE_MASK);
+    }
+}
+
+void __attribute__((noinline)) Application() {
+    WAYPOINT("I");
+    configure_csr();
+    initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
-    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+    *((volatile uint32_t*)RISCV_DEBUG_REG_DEST_CG_CTRL) = 0;
+
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     risc_init();
 
+    // Stall for the host to set this flag to 1 otherwise we could exit
+    // to base firmware while the host is still initializing
+    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+    volatile uint32_t* const debug_run_count = reinterpret_cast<volatile uint32_t*>(0x3680);
+    volatile uint32_t* mailbox_pointer = reinterpret_cast<volatile uint32_t*>(0x7D000);
+    debug_run_count[0]++;
+
+    debug_dump_addr[0] = 0x22222222;
+    debug_dump_addr[2] = mailbox_pointer[0];
+    debug_dump_addr[3] = mailbox_pointer[1];
+    debug_dump_addr[4] = mailbox_pointer[2];
+
+    // do {
+    //     __asm__ volatile("fence");
+    // } while (gEnableFwFlag[0] != 1);
+    // This flag must be set to 1 before launching this firmware
+    gEnableFwFlag[0] = 1;
+    // BH-104 Workaround: ignore a duplicate host disable (0) from a previous run until
+    // the first GO of this instance, but only for a short grace window so that
+    // a legitimate immediate close (without GO) can still succeed.
+    bool ignore_disable_until_first_go = true;
+    uint32_t ignore_disable_spin_budget = 1000000;  // small fence-spins budget
+
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+
+    set_deassert_addresses();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
 
+    // There may be some random data from the base FW
+    // Using ncrisc_noc_full_sync() instead of noc_async_full_barrier() to avoid
+    // RECORD_NOC_EVENT()
+    ncrisc_noc_full_sync();
+
+    // #18384: This register was left dirty by eth training.
+    // It is not used in dataflow api, so it can be set to 0
+    // one time here instead of setting it everytime in dataflow_api.
+    NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
+
+    deassert_all_reset();
+    wait_subordinate_eriscs();
     mailboxes->go_message.signal = RUN_MSG_DONE;
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+    overwrite_mailbox_to_done();
 
     while (1) {
         // Wait...
@@ -95,19 +186,49 @@ int main() {
 
         uint8_t go_message_signal = RUN_MSG_DONE;
         while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+            debug_dump_addr[0] = 0x5b5b5b5b;
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
-                // Set the rd_ptr on workers to specified value
-                mailboxes->launch_msg_rd_ptr = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+            if (!ignore_disable_until_first_go && gEnableFwFlag[0] != 1) {
                 mailboxes->go_message.signal = RUN_MSG_DONE;
-                // Notify dispatcher that this has been done
-                internal_::notify_dispatch_core_done(dispatch_addr);
+                // Track if we could not return back to _start
+                debug_dump_addr[0] = 0xefefefef;
+                return;
+            } else if (
+                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+                // Set the rd_ptr on workers to specified value
+                debug_dump_addr[0] = 0xbe12be12;
+                mailboxes->launch_msg_rd_ptr = 0;
+                if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                    mailboxes->go_message.signal = RUN_MSG_DONE;
+                    // Notify dispatcher that this has been done
+                    internal_::notify_dispatch_core_done(dispatch_addr);
+                }
+            } else {
+                service_base_fw();
+            }
+
+            // Expire the grace window to honor legitimate immediate exit without GO
+            // No writes expected into any mailbox slot while metal is running
+            if (ignore_disable_until_first_go && ignore_disable_spin_budget > 0) {
+                ignore_disable_spin_budget--;
+                overwrite_mailbox_to_done();
+                if (ignore_disable_spin_budget == 0) {
+                    ignore_disable_until_first_go = false;
+                }
             }
         }
         WAYPOINT("GD");
+        // First valid GO observed; re-arm normal exit behavior and clear any stale disable
+        // overwrite_mailbox_to_done() not needed because host is not checking this value at this point
+        if (ignore_disable_until_first_go) {
+            ignore_disable_until_first_go = false;
+            gEnableFwFlag[0] = 1;
+            __asm__ volatile("fence");
+        }
+        debug_dump_addr[0] = 0xcccccccc;
 
         {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
@@ -123,37 +244,39 @@ int main() {
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            flush_erisc_icache();
+            // #18384: This register was left dirty by eth training.
+            // It is not used in dataflow api, so it can be set to 0
+            // one time here instead of setting it everytime in dataflow_api.
+            NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 
-            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+            flush_erisc_icache();
 
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
-            // Run the ERISC kernel, no kernel config buffer on active eth
+            run_subordinate_eriscs(enables);
+
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
-#ifdef ARCH_BLACKHOLE
-                // #18384: This register was left dirty by eth training.
-                // It is not used in dataflow api, so it can be set to 0
-                // one time here instead of setting it everytime in dataflow_api.
-                NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
-#endif
-                // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
-                //  this will run on risc0
-                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+
+                constexpr int index =
+                    static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+                uint32_t kernel_config_base =
+                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
                 uint32_t kernel_lma =
+                    kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
-                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
-                record_stack_usage(stack_free);
+                reinterpret_cast<void (*)()>(kernel_lma)();
                 WAYPOINT("D");
             }
 
+            wait_subordinate_eriscs();
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
+                launch_msg_address->kernel_config.preload = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
@@ -162,5 +285,6 @@ int main() {
         }
     }
 
-    return 0;
+    // Getting here is an invalid state
+    internal_::disable_erisc_app();
 }
