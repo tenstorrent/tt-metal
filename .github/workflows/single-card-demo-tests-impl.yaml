@@ -30,7 +30,7 @@ jobs:
   define-demo-tests:
     runs-on: ubuntu-latest
     outputs:
-      demo-tests: ${{ steps.compute-tests.demo-tests }}
+      demo-tests: ${{ steps.compute-tests.outputs.demo-tests }}
     strategy:
       matrix:
         default-demo-tests: [
