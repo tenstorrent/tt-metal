@@ -47,13 +47,9 @@ void kernel_main() {
         }
     }
 
-    tt::tt_fabric::WorkerToFabricEdmSender connections[num_send_dir] = {};
     auto route_id = PacketHeaderPool::allocate_header_n(num_send_dir);
-    for (uint32_t i = 0; i < num_send_dir; i++) {
-        connections[i] =
-            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_arg_idx);
-        connections[i].open();
-    }
+    tt::tt_fabric::WorkerToFabricEdmSender connections[num_send_dir] = {};
+    open_connections(connections, rt_arg_idx);
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
@@ -146,9 +142,7 @@ void kernel_main() {
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-    for (uint32_t i = 0; i < num_send_dir; i++) {
-        connections[i].close();
-    }
+    close_connections(connections);
 
     noc_async_write_barrier();
 
