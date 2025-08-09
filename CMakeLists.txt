@@ -172,6 +172,7 @@ add_compile_options(
     -Wno-unused-but-set-variable
     -Wno-unused-function
     -Wno-unused-variable
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-literal-operator>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-for-loop-analysis>"
