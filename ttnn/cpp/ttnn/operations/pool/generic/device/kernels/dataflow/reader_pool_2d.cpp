@@ -225,16 +225,18 @@ void kernel_main() {
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(21);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(22);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(27);
+    constexpr uint32_t in_idx_cb_id = (reader_id == 1) ? get_compile_time_arg_val(19) : get_compile_time_arg_val(18);
+    constexpr uint32_t in_shard_idx_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(22);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(23);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(25);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(28);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(29);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(30);
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;

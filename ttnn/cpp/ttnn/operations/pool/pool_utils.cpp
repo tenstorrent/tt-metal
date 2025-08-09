@@ -242,15 +242,27 @@ uint32_t calculate_L1_usage(
         in_cb_config_1_size = in_cb_npages * in_cb_pagesize;
     }
 
+    uint32_t in_idx_cb_config_0_size = 0;
+    uint32_t in_idx_cb_config_1_size = 0;
+    if (return_indices) {
+        uint32_t in_idx_cb_pagesize = params.index_nbytes * in_cb_page_padded;
+        in_idx_cb_config_0_size = in_cb_npages * in_idx_cb_pagesize;
+        if (params.split_reader) {
+            in_idx_cb_config_1_size = in_cb_npages * in_idx_cb_pagesize;
+        }
+    }
+
     // after reduction
     uint32_t out_cb_pagesize =
         std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * params.nbytes;
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.in_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
-    uint32_t indices_cb_config_size = 0;
+    uint32_t out_idx_cb_config_size = 0;
     if (return_indices) {
-        indices_cb_config_size = out_cb_config_size;
+        uint32_t out_cb_pagesize =
+            std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * params.index_nbytes;
+        out_idx_cb_config_size = out_cb_npages * out_cb_pagesize;
     }
 
     uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
@@ -260,8 +272,8 @@ uint32_t calculate_L1_usage(
     };
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           align(out_cb_config_size) + align(indices_cb_config_size); /* global, involved */
-    ;
+           in_idx_cb_config_0_size + in_idx_cb_config_1_size + align(out_cb_config_size) +
+           align(out_idx_cb_config_size);
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(

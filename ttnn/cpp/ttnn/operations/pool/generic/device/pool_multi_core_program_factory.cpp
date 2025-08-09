@@ -371,6 +371,24 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
     }
 
+    uint32_t in_idx_cb_id_0 = 32;
+    uint32_t in_idx_cb_id_1 = 32;
+    if (return_indices) {
+        const uint32_t in_idx_cb_pagesize = params.index_nbytes * in_cb_page_padded;
+        const uint32_t in_idx_cb_npages = params.multi_buffering_factor;
+
+        in_idx_cb_id_0 = next_cb_index++;
+        tt::tt_metal::create_cb(
+            in_idx_cb_id_0, program, all_cores, in_idx_cb_pagesize, in_idx_cb_npages, params.index_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_idx_cb_id_0, in_idx_cb_pagesize, in_idx_cb_npages);
+        if (params.split_reader) {
+            in_idx_cb_id_1 = next_cb_index++;
+            tt::tt_metal::create_cb(
+                in_idx_cb_id_1, program, all_cores, in_idx_cb_pagesize, in_idx_cb_npages, params.index_format);
+            log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_idx_cb_id_1, in_idx_cb_pagesize, in_idx_cb_npages);
+        }
+    }
+
     // output of reduce == writer to write
     // output rows in RM after reduction
     const uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, outputs[0].shard_spec().value().shape[1]) *
@@ -476,6 +494,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_id_0,
         in_cb_id_1,
         raw_in_cb_id,
+        in_idx_cb_id_0,
+        in_idx_cb_id_1,
+        raw_in_idx_cb_id,
         in_reader_indices_cb_id,
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
@@ -520,9 +541,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         params.max_rows_for_reduction,
         in_cb_id_0,
         in_cb_id_1,
+        in_idx_cb_id_0,
+        in_idx_cb_id_1,
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
         out_cb_id,
+        out_idx_cb_id,
         one_scalar_per_core,
         (uint32_t)return_indices};
 
