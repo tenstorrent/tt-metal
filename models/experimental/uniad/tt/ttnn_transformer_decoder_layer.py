@@ -87,12 +87,6 @@ class TtTransformerDecoderLayer:
                 bias=self.parameters.norm1.bias,
             )
 
-            # x = x + self.multihead_attn(
-            #             x,
-            #             memory,
-            #             memory,
-            #         )[0]
-            #     # )
             x = self.norm2(
                 (
                     x

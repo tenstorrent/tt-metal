@@ -37,8 +37,6 @@ def custom_preprocessor(model, name):
         child = model.interaction_transformer
         if isinstance(child, nn.TransformerDecoderLayer):
             parameters_tmp = {}
-            # parameters_tmp["self_attn"] = child.self_attn
-            # parameters_tmp["multihead_attn"] = child.multihead_attn
 
             parameters_tmp["self_attn"] = {}
             parameters_tmp["self_attn"]["in_proj_weight"] = ttnn.from_torch(
