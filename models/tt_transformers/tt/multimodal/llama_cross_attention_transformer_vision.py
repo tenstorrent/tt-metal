@@ -7,12 +7,14 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
+from models.utility_functions import is_blackhole
 
 
 class TtLlamaCrossAttentionTransformerVision(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -24,6 +26,7 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.model_config = configuration.get_model_config()
 
         self.dim = configuration.dim
@@ -34,6 +37,7 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
 
         self.vision_encoder = TtLlamaVisionEncoder(
             mesh_device,
+            self.tt_ccl,
             state_dict,
             f"{state_dict_prefix}vision_encoder.",
             weight_cache_path=configuration.weight_cache_path(dtype),
@@ -103,6 +107,22 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        vision_tokens = ttnn.all_gather(vision_tokens, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+        # TODO: 26411
+        # Remove this blackhole condition once fabric CCLs are working on blackhole
+        if is_blackhole():
+            vision_tokens = ttnn.all_gather(vision_tokens, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+        else:
+            vision_tokens = ttnn.experimental.all_gather_async(
+                vision_tokens,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
 
         return vision_tokens

@@ -32,6 +32,7 @@ jobs:
             runner-label: config-t3000,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -54,7 +55,7 @@ jobs:
             benchmark-timeout: 5,
             runner-label: config-tg,
             mesh-device: TG,
-            override-tt-config: "{\"data_parallel\": 16}",
+            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D\"}",
             tt-llama-text-ver: tt_transformers,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
