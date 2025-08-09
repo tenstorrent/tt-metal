@@ -117,10 +117,10 @@ inline void overwrite_mailbox_to_done() {
     }
 }
 
-void __attribute__((noinline)) Application() {
+void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
     configure_csr();
-    initialize_local_memory();
+    // initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
     noc_index = 0;
