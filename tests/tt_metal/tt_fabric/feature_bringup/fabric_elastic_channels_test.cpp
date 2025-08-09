@@ -217,7 +217,7 @@ void kernel_main() {
 
         auto test_start_cycles = eth_read_wall_clock();
 
-        while (messages_acked < total_messages_target && messages_received < total_messages_target) {
+        while (messages_acked < total_messages_target || messages_received < total_messages_target) {
             bool made_progress = false;
 
             if (BIDIRECTIONAL_MODE || is_sender_offset_0) {
