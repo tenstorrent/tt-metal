@@ -23,42 +23,48 @@ class TT_CCL:
             }
         )
 
-        self.barrier_semaphore_idx = 0
-        self.barrier_semaphore_handles = []
+        self.barrier_semaphore_idx = [0, 0, 0]
+        self.barrier_semaphore_handles = [[], [], []]
 
-        self.ag_semaphores_idx = 0
-        self.ag_semaphore_handles = [[], []]
+        self.ag_semaphores_idx = [0, 0, 0]
+        self.ag_semaphore_handles = [[], [], []]
 
-        self.rs_semaphores_idx = 0
-        self.rs_semaphore_handles = [[], []]
+        self.rs_semaphores_idx = [0, 0, 0]
+        self.rs_semaphore_handles = [[], [], []]
 
-        for i in range(2):
-            self.barrier_semaphore_handles.append(
-                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
-            )
+        # cluster-axis-0, cluster-axis-1, no-cluster-axis
+        for i in range(3):
+            # double buffered semaphores
             for _ in range(2):
+                self.barrier_semaphore_handles[i].append(
+                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                )
+
                 self.ag_semaphore_handles[i].append(
-                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)]
                 )
-            for _ in range(3):
+
                 self.rs_semaphore_handles[i].append(
-                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
 
-    def get_and_cycle_barrier_semaphore_handle(self):
-        current_idx = self.barrier_semaphore_idx
-        self.barrier_semaphore_idx = (self.barrier_semaphore_idx + 1) % 2
-        return self.barrier_semaphore_handles[current_idx]
+    def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
+        semaphore_index = 2 if not cluster_axis else cluster_axis
+        current_idx = self.barrier_semaphore_idx[semaphore_index]
+        self.barrier_semaphore_idx[semaphore_index] = (self.barrier_semaphore_idx[semaphore_index] + 1) % 2
+        return self.barrier_semaphore_handles[semaphore_index][current_idx]
 
-    def get_and_cycle_ag_semaphore_handles(self):
-        current_idx = self.ag_semaphores_idx
-        self.ag_semaphores_idx = (self.ag_semaphores_idx + 1) % 2
-        return self.ag_semaphore_handles[current_idx]
+    def get_and_cycle_ag_semaphore_handles(self, cluster_axis=None):
+        semaphore_index = 2 if not cluster_axis else cluster_axis
+        current_idx = self.ag_semaphores_idx[semaphore_index]
+        self.ag_semaphores_idx[semaphore_index] = (self.ag_semaphores_idx[semaphore_index] + 1) % 2
+        return self.ag_semaphore_handles[semaphore_index][current_idx]
 
-    def get_and_cycle_rs_semaphore_handles(self):
-        current_idx = self.rs_semaphores_idx
-        self.rs_semaphores_idx = (self.rs_semaphores_idx + 1) % 2
-        return self.rs_semaphore_handles[current_idx]
+    def get_and_cycle_rs_semaphore_handles(self, cluster_axis=None):
+        semaphore_index = 2 if not cluster_axis else cluster_axis
+        current_idx = self.rs_semaphores_idx[semaphore_index]
+        self.rs_semaphores_idx[semaphore_index] = (self.rs_semaphores_idx[semaphore_index] + 1) % 2
+        return self.rs_semaphore_handles[semaphore_index][current_idx]
 
 
 def tt_all_reduce(
@@ -126,12 +132,12 @@ def tt_all_reduce(
             input_tensor,
             persistent_output_buffer=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_all_gather_links,
             cluster_axis=cluster_axis,
             topology=topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
@@ -156,8 +162,8 @@ def tt_all_reduce(
             input_tensor,
             persistent_output_buffers=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             num_links=num_reduce_scatter_links,
             cluster_axis=cluster_axis,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
@@ -172,12 +178,12 @@ def tt_all_reduce(
             reduced_tensor,
             persistent_output_buffer=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_all_gather_links,
             cluster_axis=cluster_axis,
             topology=topology,
             memory_config=input_mem_cfg,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
@@ -234,12 +240,12 @@ def tt_all_gather(
             input_tensor,
             persistent_output_buffer=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_links,
             cluster_axis=cluster_axis,
             topology=topology,
             memory_config=memory_config,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
@@ -285,16 +291,17 @@ def tt_sharded_distributed_rmsnorm(
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
 
     # All gather stats
+    cluster_axis = 1
     tt_stats = ttnn.experimental.all_gather_async(
         tt_stats,
         persistent_output_buffer=None,
         dim=3,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
         num_links=1,
-        cluster_axis=1,
+        cluster_axis=cluster_axis,
         topology=ttnn.Topology.Linear,
         memory_config=ln_sharded_stats_memcfg,
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
         chunks_per_sync=10,
         num_workers_per_link=2,
         num_buffers_per_channel=2,
@@ -317,15 +324,13 @@ def tt_sharded_distributed_rmsnorm(
 # Fabric AG currently doesn't support gathering on a padded dim 3
 # This functionality is in development, and when ready should replace this workaround
 def ag_on_padded_dim_3(inp, tt_ccl, cluster_axis, num_links, topology):
-    ag_memory_config = inp.memory_config()
-
     if inp.shape[3] % 32 != 0:
         inp = ttnn.to_layout(inp, layout=ttnn.ROW_MAJOR_LAYOUT)
         all_broadcast_output_tensors = ttnn.experimental.all_broadcast_async(
             inp,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles()[0],
             num_links=num_links,
-            memory_config=ag_memory_config,
+            memory_config=inp.memory_config(),
             topology=ttnn.Topology.Linear,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
         )
@@ -337,12 +342,12 @@ def ag_on_padded_dim_3(inp, tt_ccl, cluster_axis, num_links, topology):
             inp,
             persistent_output_buffer=None,
             dim=3,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_links,
-            memory_config=ag_memory_config,
+            memory_config=inp.memory_config(),
             cluster_axis=cluster_axis,
             topology=topology,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
