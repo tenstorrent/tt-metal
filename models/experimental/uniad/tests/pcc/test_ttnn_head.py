@@ -49,23 +49,10 @@ def test_head_get_detections(device, reset_seeds):
             "test_cfg": None,
         },
     )
-    # weights = torch.load(weights_path, map_location=torch.device("cpu"))
 
-    # prefix = "pts_bbox_head"
-    # filtered = OrderedDict(
-    #     (
-    #         (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-    #         for k, v in weights["state_dict"].items()
-    #         if k.startswith(prefix)
-    #     )
-    # )
-
-    # reference_model.load_state_dict(filtered)
     reference_model.eval()
 
     parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
-
-    # print("parameters",parameters)
 
     ttnn_model = TtBEVFormerTrackHead(
         parameters=parameters,
@@ -171,23 +158,9 @@ def test_head_get_bev_features(device, reset_seeds):
             "test_cfg": None,
         },
     )
-    # weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    # prefix = "pts_bbox_head"
-    # filtered = OrderedDict(
-    #     (
-    #         (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-    #         for k, v in weights["state_dict"].items()
-    #         if k.startswith(prefix)
-    #     )
-    # )
-
-    # reference_model.load_state_dict(filtered)
     reference_model.eval()
 
     parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
-
-    # print("parameters",parameters)
 
     ttnn_model = TtBEVFormerTrackHead(
         parameters=parameters,
@@ -326,66 +299,3 @@ def test_head_get_bev_features(device, reset_seeds):
 
     assert_with_pcc(reference_output_get_bev_features[0], ttnn.to_torch(ttnn_output[0]), pcc=0.99)
     assert_with_pcc(reference_output_get_bev_features[1], ttnn.to_torch(ttnn_output[1]), pcc=0.88)
-
-
-# def test_head_reference():
-#     weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
-#     reference_model = BEVFormerTrackHead(
-#       args=(),
-#       with_box_refine=True,
-#       as_two_stage=False,
-#       num_cls_fcs=2,
-#       code_weights=None,
-#       bev_h=200,
-#       bev_w=200,
-#       past_steps=4,
-#       fut_steps=4,
-#       **{'num_query': 900, 'num_classes': 10, 'in_channels': 256, 'sync_cls_avg_factor': True, 'positional_encoding': {'type': 'LearnedPositionalEncoding', 'num_feats': 128, 'row_num_embed': 200, 'col_num_embed': 200}, 'loss_cls': {'type': 'FocalLoss', 'use_sigmoid': True, 'gamma': 2.0, 'alpha': 0.25, 'loss_weight': 2.0}, 'loss_bbox': {'type': 'L1Loss', 'loss_weight': 0.25}, 'loss_iou': {'type': 'GIoULoss', 'loss_weight': 0.0}, 'train_cfg': None, 'test_cfg': None}
-#     )
-#     weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-#     prefix = "pts_bbox_head"
-#     filtered = OrderedDict(
-#         (
-#             (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-#             for k, v in weights["state_dict"].items()
-#             if k.startswith(prefix)
-#         )
-#     )
-
-#     reference_model.load_state_dict(filtered)
-#     reference_model.eval()
-
-
-#     print("reference_model",reference_model)
-
-#     bev_embed=torch.load("/home/ubuntu/punith/tt-metal/models/experimental/uniad/reference/bevformer_tensors/bev_embed.pt")
-#     object_query_embeds=torch.load("/home/ubuntu/punith/tt-metal/models/experimental/uniad/reference/bevformer_tensors/object_query_embeds.pt")
-#     ref_points=torch.load("/home/ubuntu/punith/tt-metal/models/experimental/uniad/reference/bevformer_tensors/ref_points.pt")
-#     img_metas=None
-
-#     reference_output_get_detections=reference_model.get_detections(bev_embed=bev_embed,object_query_embeds=object_query_embeds,ref_points=ref_points,img_metas=img_metas)
-
-#     from tests.ttnn.utils_for_testing import assert_with_pcc
-
-#     torch_output_get_detections=torch.load("/home/ubuntu/punith/tt-metal/models/experimental/uniad/reference/bevformer_tensors/outs_output.pt")
-
-#     _,x1=assert_with_pcc(torch_output_get_detections["all_cls_scores"],reference_output_get_detections["all_cls_scores"],pcc=0)
-#     _,x2=assert_with_pcc(torch_output_get_detections["all_bbox_preds"],reference_output_get_detections["all_bbox_preds"],pcc=0)
-#     _,x3=assert_with_pcc(torch_output_get_detections["all_past_traj_preds"],reference_output_get_detections["all_past_traj_preds"],pcc=0)
-#     _,x4=assert_with_pcc(torch_output_get_detections["last_ref_points"],reference_output_get_detections["last_ref_points"],pcc=0)
-#     _,x5=assert_with_pcc(torch_output_get_detections["query_feats"],reference_output_get_detections["query_feats"],pcc=0)
-#     print("x1",x1,x2,x3,x4,x5)
-#     mlvl_feats=torch.load("/home/ubuntu/punith/tt-metal/models/experimental/uniad/reference/bevformer_tensors/new/mlvl_feats.pt")
-#     # img_metas=torch.load("/home/ubuntu/punith/tt-metal/models/experimental/uniad/reference/transformer_inputs/img_metas_updated.pt")
-#     prev_bev=None
-#     print("here")
-#     reference_output_get_bev_features=reference_model.get_bev_features(mlvl_feats=mlvl_feats,img_metas=None,prev_bev=None)
-
-#     _,y1=assert_with_pcc(reference_output_get_bev_features[0],torch.load("/home/ubuntu/punith/tt-metal/models/experimental/uniad/reference/bevformer_tensors/new/bev_queries.pt"))
-#     _,y2=assert_with_pcc(reference_output_get_bev_features[1],torch.load("/home/ubuntu/punith/tt-metal/models/experimental/uniad/reference/bevformer_tensors/new/bev_mask.pt"))
-#     _,y3=assert_with_pcc(reference_output_get_bev_features[2],torch.load("/home/ubuntu/punith/tt-metal/models/experimental/uniad/reference/bevformer_tensors/new/bev_pos.pt"))
-
-
-#     print("y",y1,y2,y3)

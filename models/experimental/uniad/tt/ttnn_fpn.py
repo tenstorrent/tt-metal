@@ -64,24 +64,6 @@ class TtFPN:
         self.fpn_convs.append(extra_fpn_conv)
 
     def __call__(self, input_tensor):
-        # input_tensor = []
-        # tensor1 = torch.load("input_0.pt")
-        # tensor2 = torch.load("input_1.pt")
-        # tensor3 = torch.load("input_2.pt")
-        # tensor1 = torch.permute(tensor1, (0, 2, 3, 1))
-        # tensor1 = torch.reshape(tensor1, [1, 1, tensor1.shape[0] * tensor1.shape[1] * tensor1.shape[2], tensor1.shape[-1]])
-
-        # tensor2 = torch.permute(tensor2, (0, 2, 3, 1))
-        # tensor2 = torch.reshape(tensor2, [1, 1, tensor2.shape[0] * tensor2.shape[1] * tensor2.shape[2], tensor2.shape[-1]])
-
-        # tensor3 = torch.permute(tensor3, (0, 2, 3, 1))
-        # tensor3 = torch.reshape(tensor3, [1, 1, tensor3.shape[0] * tensor3.shape[1] * tensor3.shape[2], tensor3.shape[-1]])
-        # input_tensor.append(tensor1)
-        # input_tensor.append(tensor2)
-        # input_tensor.append(tensor3)
-        # input_tensor[0] = ttnn.from_torch(input_tensor[0], device=self.device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        # input_tensor[1] = ttnn.from_torch(input_tensor[1], device=self.device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        # input_tensor[2] = ttnn.from_torch(input_tensor[2], device=self.device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
         laterals = []
         for i, lateral_conv in enumerate(self.lateral_convs):
             output = lateral_conv(input_tensor[i])
@@ -108,8 +90,7 @@ class TtFPN:
                     laterals_sliced.shape[-1],
                 ],
             )
-            # ttnn.deallocate(laterals_upsample)
-            # ttnn.deallocate(laterals_reshaped)
+
             laterals_sliced = ttnn.sharded_to_interleaved(laterals_sliced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             laterals_sliced = ttnn.to_layout(laterals_sliced, ttnn.TILE_LAYOUT)
             laterals[i - 1] = ttnn.add(laterals[i - 1], laterals_sliced)
