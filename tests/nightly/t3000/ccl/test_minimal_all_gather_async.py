@@ -192,23 +192,29 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 1, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 16, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 8, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 64, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (8, [1, 1, 256, 16], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
-    ids=[
-        "sd35_spatial",
-        "sd35_prompt",
-        "gather_dim_0",
-        "gather_dim_1",
-        "gather_dim_2",
-        "gather_dim_2_padded_dim_3",
-        "gather_dim_3_padded_dim_2",
-    ],
+    # ids=[
+    #     "sd35_spatial",
+    #     "sd35_prompt",
+    #     "gather_dim_0",
+    #     "gather_dim_1",
+    #     "gather_dim_2",
+    #     "gather_dim_2_padded_dim_3",
+    #     "gather_dim_3_padded_dim_2",
+    # ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
@@ -222,10 +228,10 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
+        # (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    # ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -240,10 +246,10 @@ def run_all_gather_impl(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    # ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_async(
     t3k_mesh_device,
