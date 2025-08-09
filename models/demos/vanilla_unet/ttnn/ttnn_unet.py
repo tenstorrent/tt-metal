@@ -6,6 +6,18 @@ import ttnn
 from models.demos.vanilla_unet.ttnn.common import Conv, ConvTranspose
 
 
+def torch_to_ttnn(input, device=None):
+    input = ttnn.from_torch(input, ttnn.bfloat16, device=device)
+    return input
+
+
+def ttnn_to_torch(input):
+    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
+    input = ttnn.from_device(input)
+    input = ttnn.to_torch(input)
+    return input
+
+
 class TtUnet:
     def __init__(
         self,
@@ -155,7 +167,6 @@ class TtUnet:
         enc1 = self.enc1_1(device, nhwc)
         enc1 = ttnn.to_memory_config(enc1, ttnn.DRAM_MEMORY_CONFIG)
         enc1 = self.enc1_2(device, enc1)
-
         pool_in = ttnn.reshape(enc1, (1, 1, enc1.shape[0] * enc1.shape[1] * enc1.shape[2], enc1.shape[3]))
         pool_1 = ttnn.max_pool2d(
             input_tensor=pool_in,

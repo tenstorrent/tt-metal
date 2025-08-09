@@ -10,6 +10,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.vanilla_unet.common import load_torch_model
 from models.demos.vanilla_unet.tests.pcc.test_ttnn_unet import create_custom_preprocessor
+from models.demos.vanilla_unet.ttnn.common import get_mesh_mappers
 from models.demos.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -24,25 +25,33 @@ class VanillaUNetPerformanceRunnerInfra:
         weight_dtype,
         model_location_generator=None,
         resolution=(480, 640),
+        channels=3,
         torch_input_tensor=None,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
         self.pcc_passed = False
+        self.channels = channels
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
-        self.batch_size = batch_size
+        self.num_devices = self.device.get_num_devices()
+        self.batch_size = batch_size * self.device.get_num_devices()
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
+        in_mapper, wt_mapper, out_composer = get_mesh_mappers(self.device)
+        self.inputs_mesh_mapper = in_mapper
+        self.weights_mesh_mapper = wt_mapper
+        self.output_mesh_composer = out_composer
 
         self.torch_input_tensor = (
-            torch.randn((1, 3, 480, 640)) if self.torch_input_tensor is None else self.torch_input_tensor
+            torch.randn((self.batch_size, self.channels, resolution[0], resolution[1]))
+            if self.torch_input_tensor is None
+            else self.torch_input_tensor
         )
 
         self.torch_model = load_torch_model(model_location_generator)
-
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
         self.parameters = preprocess_model_parameters(
@@ -56,28 +65,30 @@ class VanillaUNetPerformanceRunnerInfra:
     def run(self):
         self.output_tensor = self.ttnn_model(self.device, self.input_tensor)
 
-    def _setup_l1_sharded_input(self, device, torch_input_tensor=None):
+    def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
-            exit("Unsupported device")
+            raise RuntimeError("Unsupported device: Only Wormhole B0 is currently supported.")
 
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
-        # torch tensor
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
         n, c, h, w = torch_input_tensor.shape
 
-        ## Converting from image based channels (3) to min channels (16)
-        if c == 3:
-            c = 16
+        if c < min_channels:
+            c = min_channels
+        elif c % min_channels != 0:
+            c = ((c // min_channels) + 1) * min_channels
+        n = n // self.num_devices if n // self.num_devices != 0 else n
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, c, 640, w],
+            [n, c, self.resolution[1], w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-
+        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
+        tt_inputs_host = ttnn.from_host_shards(
+            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
+        )
         return tt_inputs_host, input_mem_config
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
@@ -102,7 +113,7 @@ class VanillaUNetPerformanceRunnerInfra:
     def validate(self, output_tensor=None, torch_output_tensor=None):
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
-        output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor, mesh_composer=self.output_mesh_composer)
         output_tensor = output_tensor.permute(0, 3, 1, 2)
         output_tensor = output_tensor.reshape(torch_output_tensor.shape)
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.94)
