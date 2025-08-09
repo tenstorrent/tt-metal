@@ -40,11 +40,6 @@ void get_optimal_noc_for_edm(
     uint32_t num_links,
     Topology topology);
 
-// Helper: BFS distance map from a start chip to all reachable chips using the
-// provided adjacency map. Returned distances are expressed in hop count.
-std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
-    chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map);
-
 // Helper: Build adjacency map and discover corners/edges using BFS
 struct IntraMeshAdjacencyMap {
     std::unordered_map<chip_id_t, std::vector<chip_id_t>> adjacency_map;
