@@ -29,35 +29,82 @@ class VAEParallelConfig:
         self,
         device: ttnn.MeshDevice,
         new_gather_handles: list[ttnn._ttnn.global_semaphore.global_sempahore],
-        gather_semaphore: ttnn._ttnn.global_semaphore.global_sempahore,
         reduce_from_semaphore: ttnn._ttnn.global_semaphore.global_sempahore,
         reduce_to_semaphore: ttnn._ttnn.global_semaphore.global_sempahore,
         num_links: int,
-        barrier_semaphore: list[ttnn._ttnn.global_semaphore.global_sempahore],
     ):
         self.device = device
         self.new_gather_handles = new_gather_handles
-        self.barrier_semaphore = barrier_semaphore
-        self.gather_semaphore = gather_semaphore
+        # self.barrier_semaphore = barrier_semaphore
         self.reduce_from_semaphore = reduce_from_semaphore
         self.reduce_to_semaphore = reduce_to_semaphore
         self.num_links = num_links
         self.ping_pong_idx = 0
 
-    def vae_all_gather(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # VAE Persistent buffers
+        self.buffer_count = 1  # Double buffer causing OOM
+        vae_shapes = [
+            # [1, 128, 128, 512],
+            # [1, 256, 256, 512],
+            # [1, 512, 512, 512],
+            # [1, 512, 512, 256],
+            # [1, 1024, 1024, 256],
+            # [1, 1024, 1024, 128],
+            # more optimal reahaped versions
+            [1, 1, 128 * 128, 512],
+            [1, 1, 256 * 256, 512],
+            [1, 1, 512 * 512, 512],
+            [1, 1, 512 * 512, 256],
+            [1, 1, 1024 * 1024, 256],
+            [1, 1, 1024 * 1024, 128],
+        ]
+
+        # We only need to create buffers for what is used
+        self.vae_persistent_buffers = {}
+        for buffer_shape in vae_shapes:
+            self.vae_persistent_buffers[f"vae_all_gather_{buffer_shape}"] = [
+                ttnn.from_torch(
+                    torch.zeros(buffer_shape),
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                )
+                for _ in range(self.buffer_count)
+            ]  # double buffer , depending on buffer_count
+
+    def vae_all_gather(self, x: ttnn.Tensor, cluster_axis: int = 1) -> ttnn.Tensor:
         semaphores = self.new_gather_handles[self.ping_pong_idx * 2 : (self.ping_pong_idx + 1) * 2]
+
+        # reshape to b,1,h*w,c. This was tested to be faster. Need to verify overhead. TODO: Cleanup
+        b, h, w, c = x.shape
+        if h != 1:  # Check if its already in desired shape. E.g group norm already reshaped to 1,1,h*w,c
+            x = x.reshape(b, 1, h * w, c)
+
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)  # All gather requires tile layout
+
+        gather_shape = list(x.shape)
+        gather_shape[3] *= self.device.shape[cluster_axis]  # get_num_devices()
+
         x_g = ttnn.experimental.all_gather_async(
             input_tensor=x,
             dim=3,
+            persistent_output_buffer=self.vae_persistent_buffers[f"vae_all_gather_{gather_shape}"][
+                self.ping_pong_idx % self.buffer_count
+            ],
             multi_device_global_semaphore=semaphores,
             topology=ttnn.Topology.Linear,
-            mesh_device=self.device,
-            cluster_axis=1,
+            cluster_axis=cluster_axis,
             num_links=self.num_links,
-            barrier_semaphore=self.barrier_semaphore[self.ping_pong_idx],
+            num_workers_per_link=4,
+            chunks_per_sync=80,
+            num_buffers_per_channel=4,
         )
+
+        # reshape back to original expected shape
+        if h != 1:
+            x_g = x_g.reshape(b, h, w, -1)
 
         self.ping_pong_idx = 1 - self.ping_pong_idx
         return x_g
@@ -71,11 +118,7 @@ def create_vae_parallel_config(
         device=vae_device,
         new_gather_handles=[
             ttnn.create_global_semaphore(vae_device, parallel_manager.ccl_cores, 0) for _ in range(2 * 2)
-        ],  # Ping pong
-        barrier_semaphore=[
-            ttnn.create_global_semaphore(vae_device, parallel_manager.ccl_cores, 0) for _ in range(2)
-        ],  # Barrier
-        gather_semaphore=ttnn.create_global_semaphore(vae_device, parallel_manager.ccl_cores, 0),
+        ],
         reduce_from_semaphore=ttnn.create_global_semaphore(vae_device, parallel_manager.ccl_cores, 0),
         reduce_to_semaphore=ttnn.create_global_semaphore(vae_device, parallel_manager.ccl_cores, 0),
         num_links=parallel_manager.num_links,
