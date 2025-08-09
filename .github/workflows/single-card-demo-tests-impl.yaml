@@ -123,9 +123,15 @@ jobs:
           echo "[info] run-perf-tests: $run_perf_tests"
 
           if [[ "$requested_models" != "all" ]]; then
-            jq --argjson requested_models "$requested_models" '[.[] | select(.name | IN($requested_models[]))]' <<< "$requested_demo_tests"
             requested_demo_tests=$(jq --argjson requested_models "$requested_models" '[.[] | select(.name | IN($requested_models[]))]' <<< "$requested_demo_tests")
             echo "[info] after filtering for requested models: $requested_demo_tests"
+          fi
+
+          # By default, test list includes perf tests. If we don't want to run perf tests,
+          # filter them out
+          if [[ "$run_perf_tests" == "false" ]]; then
+            requested_demo_tests=$(jq '[.[] | select(.performance == false)]' <<< "$requested_demo_tests")
+            echo "[info] after filtering filtering out perf tests: $requested_demo_tests"
           fi
 
           # Check that we have a valid test list that's not empty
