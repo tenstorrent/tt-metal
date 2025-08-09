@@ -16,8 +16,7 @@
 // Validate assumptions on mailbox layout on host compile
 // Constexpr definitions allow for printing of breaking values at compile time
 // These are only used in ncrisc-halt.S
-static_assert(
-    MEM_MAILBOX_BASE + offsetof(mailboxes_t, subordinate_sync.dm1) == MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS);
+static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, subordinate_sync.dm1) == MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS);
 static_assert(
     MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
 

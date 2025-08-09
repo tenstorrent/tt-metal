@@ -88,8 +88,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
                 fw_launch = SUBORDINATE_IERISC_RESET_PC;
                 fw_launch_value = fw_base;
             } break;
-            default:
-                TT_THROW("Unexpected processor class {} for Blackhole Idle Ethernet", processor_class_idx);
+            default: TT_THROW("Unexpected processor class {} for Blackhole Idle Ethernet", processor_class_idx);
         }
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = fw_base,
