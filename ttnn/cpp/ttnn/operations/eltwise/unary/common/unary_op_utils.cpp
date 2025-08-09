@@ -421,7 +421,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::LOG1P: op_init_and_name = {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)}; break;
         case UnaryOpType::TANH: op_init_and_name = {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)}; break;
         case UnaryOpType::SIGNBIT:
-            op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)};
+            }
             break;
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;

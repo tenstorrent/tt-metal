@@ -1888,7 +1888,11 @@ void py_module(py::module& module) {
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
-        module, ttnn::signbit, R"doc(\mathrm{{output\_tensor}}_i = \verb|signbit|(\mathrm{{input\_tensor}}_i))doc");
+        module,
+        ttnn::signbit,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|signbit|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, FLOAT32)doc");
     bind_unary_operation(
         module,
         ttnn::silu,
