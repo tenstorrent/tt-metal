@@ -51,7 +51,7 @@ class TtClipAttention(nn.Module):
 
         self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
 
-    def forward(self, hidden_states, causal_mask=None):
+    def forward(self, hidden_states, causal_attention_mask):
         B = hidden_states.shape[0]
 
         query_states = ttnn.linear(
@@ -88,7 +88,7 @@ class TtClipAttention(nn.Module):
         key_states = ttnn.transpose(key_states, -2, -1)
 
         attn_weights = ttnn.matmul(query_states, key_states, compute_kernel_config=self.default_compute_kernel_config)
-        attn_weights = attn_weights + causal_mask
+        attn_weights = attn_weights + causal_attention_mask
         attn_weights = ttnn.softmax(attn_weights, dim=-1)
 
         attn_output = ttnn.matmul(attn_weights, value_states, compute_kernel_config=self.default_compute_kernel_config)

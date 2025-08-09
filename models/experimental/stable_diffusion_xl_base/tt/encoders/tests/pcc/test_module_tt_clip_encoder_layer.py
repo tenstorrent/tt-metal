@@ -13,22 +13,19 @@ from transformers.modeling_attn_mask_utils import _create_4d_causal_attention_ma
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.experimental.stable_diffusion_xl_base.tt.encoders.encoder_utils import _create_tt_4d_causal_attention_mask
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_id, num_attention_heads",
+    "input_shape, encoder_id, num_attention_heads, pcc",
     [
-        ((1, 77, 768), 1, 12),
-        # ((1, 77, 1280), 2, 20),
+        ((1, 77, 768), 1, 12, 0.994),
+        ((1, 77, 1280), 2, 20, 0.995),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_layer(
-    device,
-    input_shape,
-    encoder_id,
-    num_attention_heads,
-):
+def test_layer(device, input_shape, encoder_id, num_attention_heads, pcc):
+    torch.manual_seed(0)
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -52,7 +49,7 @@ def test_layer(
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     causal_mask = _create_4d_causal_attention_mask(
-        input_shape[:1], torch_input_tensor.dtype, device=torch_input_tensor.device
+        input_shape[:2], torch_input_tensor.dtype, device=torch_input_tensor.device
     )
 
     torch_output_tensor = torch_layer(torch_input_tensor, attention_mask=None, causal_attention_mask=causal_mask)[
@@ -66,12 +63,13 @@ def test_layer(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    ttnn_causal_mask = _create_tt_4d_causal_attention_mask(input_shape[:2], device, dtype=ttnn_input_tensor.dtype)
 
-    ttnn_output_tensor = tt_layer.forward(ttnn_input_tensor)
+    ttnn_output_tensor = tt_layer.forward(ttnn_input_tensor, causal_attention_mask=ttnn_causal_mask)
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     del pipe, tt_layer
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is: {pcc_message}")

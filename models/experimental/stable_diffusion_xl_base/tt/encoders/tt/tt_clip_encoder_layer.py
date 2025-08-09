@@ -62,7 +62,7 @@ class TtClipEncoderLayer(nn.Module):
             packer_l1_acc=True,
         )
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, causal_attention_mask):
         residual = hidden_states
 
         hidden_states = ttnn.layer_norm(
@@ -73,8 +73,7 @@ class TtClipEncoderLayer(nn.Module):
             compute_kernel_config=self.ln_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        hidden_states = self.self_attn.forward(hidden_states)
-        print("TT HS", ttnn.to_torch(hidden_states))
+        hidden_states = self.self_attn.forward(hidden_states, causal_attention_mask)
         hidden_states = ttnn.add(hidden_states, residual)
 
         residual = hidden_states
