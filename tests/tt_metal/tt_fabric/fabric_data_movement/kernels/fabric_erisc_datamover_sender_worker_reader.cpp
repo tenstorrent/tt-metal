@@ -10,8 +10,7 @@ void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t num_pages_to_read_total = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t _ = get_compile_time_arg_val(3);  // unused pages_per_edm_buffer
-    constexpr bool write_scatter_mode = get_compile_time_arg_val(4) == 1;
+    constexpr bool write_scatter_mode = get_compile_time_arg_val(3) == 1;
     constexpr uint32_t pages_per_edm_buffer = (write_scatter_mode ? 2 : 1);
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 

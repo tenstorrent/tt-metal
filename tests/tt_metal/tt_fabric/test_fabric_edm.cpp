@@ -12,8 +12,8 @@
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 #include "persistent_kernel_cache.hpp"
+#include "tests/tt_metal/tt_fabric/common/test_fabric_edm_common.hpp"
 
 // Global state for daemon mode
 static bool daemon_running = true;
@@ -76,7 +76,7 @@ static int baseline_validate_test_environment(const FullMeshTestParams& params) 
 
     uint32_t galaxy_num_devices = 32;
     for (size_t axis = 0; axis < FullMeshTestParams::MAX_NUM_AXES; axis++) {
-        if (params.num_links[axis] > 2 && tt::tt_metal::GetNumAvailableDevices() < galaxy_num_devices) {
+        if (params.num_links[axis] > 1 && tt::tt_metal::GetNumAvailableDevices() < galaxy_num_devices) {
             log_warning(
                 tt::LogTest, "This test with {} links can only be run on Galaxy systems", params.num_links[axis]);
             return 1;
@@ -97,13 +97,18 @@ static int baseline_validate_test_environment(const WriteThroughputStabilityTest
     }
 
     uint32_t galaxy_num_devices = 32;
-    if (params.num_links > 2 && tt::tt_metal::GetNumAvailableDevices() < galaxy_num_devices) {
+    uint32_t t3000_num_devices = 8;
+    if (params.num_links >= 2 && params.line_size > 2 && tt::tt_metal::GetNumAvailableDevices() < galaxy_num_devices) {
         log_warning(tt::LogTest, "This test with {} links can only be run on Galaxy systems", params.num_links);
         return 1;
     }
+    if (params.line_size < 8 && tt::tt_metal::GetNumAvailableDevices() == t3000_num_devices) {
+        log_warning(tt::LogTest, "This test with {} links can only be run on Galaxy systems", params.line_size);
+        return 1;
+    }
 
-    if (tt::tt_metal::GetNumAvailableDevices() == min_test_num_devices && params.num_links > 1 && params.line_size > 4) {
-        log_warning(tt::LogTest, "T3000 cannot run multi-link with more than 4 devices");
+    if (tt::tt_metal::GetNumAvailableDevices() == min_test_num_devices && params.num_links > 1) {
+        log_warning(tt::LogTest, "T3000 cannot run multi-link tests");
         return 1;
     }
 
@@ -150,10 +155,18 @@ static int run_single_test(
 
     try {
         if (test_mode == "1_fabric_instance") {
-            Run1DFabricPacketSendTest(
-                test_fixture,
-                test_specs,
-                std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params));
+            auto& params = std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params);
+            if (params.fabric_mode == FabricTestMode::Linear) {
+                Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(
+                    test_fixture,
+                    test_specs,
+                    std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params));
+            } else {
+                Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(
+                    test_fixture,
+                    test_specs,
+                    std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params));
+            }
         } else if (test_mode == "1D_fabric_on_mesh") {
             auto& params = std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params);
             if (params.fabric_mode == FabricTestMode::Linear) {
