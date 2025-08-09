@@ -25,14 +25,6 @@
 namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
-
-enum class AllGatherSPVersion {
-    GENERIC = 0,
-    MINIMAL_INTERLEAVED_32 = 1,
-    LLAMA_MINIMAL_SHARDED = 2,
-    MINIMAL_INTERLEAVED_ANY = 3,
-};
-
 struct AllGatherSP {
     std::vector<IDevice*> devices;
     const uint32_t dim;
@@ -63,38 +55,6 @@ struct AllGatherSP {
         semaphore(semaphore),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis) {}
-
-    // Add attributes method for reflection
-    auto attributes() const {
-        using tt::stl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-
-        attrs.emplace_back("dim", dim);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore", semaphore);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        return attrs;
-    }
-
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
-        const ttnn::MeshCoordinate& coord,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
-    tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
-
-    AllGatherSPVersion select_version(const Tensor& input_tensor) const;
 };
 
 struct LlamaAllGatherMatmulAsync {
