@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-
+import json
 from random import randint
 
 import pytest
@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
+from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block import MoEDecoderBlock
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_decode as reference_forward
@@ -33,7 +34,8 @@ def hf_config(hf_config):
 
 def load_reference_model(hf_config, layer_idx):
     """Load the reference model for testing."""
-
+    torch.manual_seed(5)
+    torch.use_deterministic_algorithms(True)
     model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval()
 
     return model
@@ -50,7 +52,7 @@ def load_reference_model(hf_config, layer_idx):
     "DecoderBlockClass, module_path, reference_layer_idx",
     [
         (DecoderBlock, None, 0),
-        # (MoEDecoderBlock, None, 3), # TODO: Uncomment once PCC is fixed for MoE
+        (MoEDecoderBlock, None, 3),
         # (DecoderBlock, "model.layers.0", None),
         # (MoEDecoderBlock, "model.layers.3", None), # TODO: Uncomment once PCC is fixed for MoE
     ],
@@ -71,7 +73,7 @@ def test_forward_pass(
     seq_len,
     batch_size,
     hf_config,
-    tmp_path,
+    deepseek_cache_path,
     mesh_device,
     model_path,
     ccl,
@@ -131,7 +133,20 @@ def test_forward_pass(
 
     # For now, since we're only loading one layer, we can replicate
     state_dicts = [state_dict] * num_rows
-    weight_config = DecoderBlockClass.convert_weights(hf_config, state_dicts, tmp_path, mesh_device)
+
+    # create a test cache path for the current test
+    test_cache_path = deepseek_cache_path / f"test_{DecoderBlockClass.__name__}"
+    tensors_cache_path = test_cache_path / "tensors_cache"
+    weights_config_path = test_cache_path / "weights_config.json"
+
+    # check if the weight_config file exists, then load it
+    if weights_config_path.exists():
+        with open(weights_config_path, "r") as f:
+            weight_config = json.load(f)
+    else:
+        weight_config = DecoderBlockClass.convert_weights(hf_config, state_dicts, tensors_cache_path, mesh_device)
+        with open(weights_config_path, "w") as f:
+            json.dump(weight_config, f)
 
     is_padding_layer = [False] * num_rows
     if mode == "prefill":
