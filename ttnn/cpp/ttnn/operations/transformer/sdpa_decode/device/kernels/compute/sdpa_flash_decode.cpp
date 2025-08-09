@@ -28,16 +28,12 @@ constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 namespace NAMESPACE {
 
 void MAIN {
-    // Compile time arguments
-
-    // Input dimensions in tiles
     constexpr uint32_t St = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
 
-    // Matmul configs
     constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(5);
     constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(6);
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(7);
@@ -52,8 +48,6 @@ void MAIN {
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(16);
     constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(19);
     constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(20);
-
-    // Attention-specific parameters
     constexpr bool is_causal = get_compile_time_arg_val(21) == 1;
     constexpr bool use_attention_mask = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
@@ -67,8 +61,7 @@ void MAIN {
     constexpr bool untilize_output = tilize_q;
     constexpr bool use_pack_untilize = out_chunk_tiles <= MAX_PACK_UNTILIZE_WIDTH;
 
-    // CB index definitions
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;  // reuse it also for reduce input o
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
@@ -96,7 +89,6 @@ void MAIN {
     constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
     constexpr uint32_t cb_out_final = tt::CBIndex::c_20;
 
-    // Runtime arguments
     uint32_t arg_idx = 0;
     const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool apply_mask_at_last_chunk = do_reduce && is_causal;
@@ -107,7 +99,7 @@ void MAIN {
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
-    // Idle core
+    // idle core
     // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates
     // an idle_core
     if (get_arg_val<uint32_t>(0) == 65) {
@@ -131,30 +123,28 @@ void MAIN {
             cur_pos = index_addr_ptr[cb_get_tile_offset + (cur_batch / q_heads_parallel_factor)];
             cb_release_tile(cb_index_id);
         }
+
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
             return;
         }
     }
 
-    // Get dynamic chunk size for K in tiles
     auto Sk_chunk_t_dynamic = get_dynamic_Sk_chunk_t<Sk_chunk_t, max_dynamic_chunk_size>(cur_pos);
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
-    // Get the sequence length assignment
+    // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
         get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
     }
 
-    // Get number of worker cores to wait for
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
     if (num_cores_per_head > k_num_chunks) {
         num_cores_to_wait = k_num_chunks - 1;
     }
 
-    // We tilize input Q if it is in ROW MAJOR layout
     if constexpr (tilize_q) {
         compute_kernel_hw_startup(cb_q_rm, cb_q_in);
         tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
@@ -164,13 +154,13 @@ void MAIN {
         tilize_uninit(cb_q_rm, cb_q_in);
         cb_push_back(cb_q_in, q_chunk_tiles);
         cb_pop_front(cb_q_rm, q_chunk_tiles);
+
         mm_init_short(cb_q_in, cb_k_in);
     } else {
         mm_init(cb_q_in, cb_k_in, cb_qk_im);
     }
     cb_wait_front(cb_q_in, q_chunk_tiles);
 
-    // Define dynamic matmul configs
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;
     const uint32_t qk_subblock_w_dynamic = Sk_chunk_t_dynamic;  // Guaranteed < DST
@@ -197,13 +187,11 @@ void MAIN {
     // NOTE: Using VectorMode::RC for 16x32 tiles will be correct accuracy, just slower due to unnecessary math
     constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
 
-    // We set up Ping Pong intermediate buffers between loops
+    // Ping pong intermediate buffers between loops to avoid copies
     uint32_t cb_cur_max = cb_max_1;
     uint32_t cb_prev_max = cb_max_2;
     uint32_t cb_cur_sum = cb_sum_1;
     uint32_t cb_prev_sum = cb_sum_2;
-
-    // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
 
         /******************************************************************************
@@ -256,17 +244,13 @@ void MAIN {
          * @param qk_chunk_tiles - Number of QK chunk tiles (dynamic)
          * @param out_chunk_tiles - Number of output chunk tiles
          */
-        /* START OF FLASH ATTENTION LOOP */
         {
             uint32_t cb_out_mm = cb_out_accumulate_im;
-
-            // Loop through all K chunks
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
-                // Reconfig register DF
-                reconfig_data_format(cb_q_in, cb_k_in);
+                /* QK = Q_CHUNK @ K_CHUNK */
+                reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
                 pack_reconfig_data_format(cb_qk_im);
 
-                // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
                 bool add_mask_fusion =
                     is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk || use_attention_mask;
@@ -274,7 +258,6 @@ void MAIN {
                 bool add_mask_fusion = false;
 #endif
 
-                /* QK = Q_CHUNK @ K_CHUNK */
                 cb_matmul_blocks(
                     cb_q_in,
                     cb_k_in,
@@ -293,11 +276,11 @@ void MAIN {
                     cb_mask_in,
                     cb_zero_in);
 
-                /* QK += MASK */
                 if (!add_mask_fusion) {
                     if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
                         if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
+                            /* QK += MASK */
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
@@ -310,7 +293,7 @@ void MAIN {
                 }
 
                 /**
-                 * OPTIMIZATION
+                 * Note
                  * Typically, scores are multiplied by a scalar here, but an optimization was employed
                  * where the scaling is fused into exp both in exp(x - max) and exp(prev_max - cur_max).
                  * This gives us scaling for free on the performance-critical exp(x - max) computation.
@@ -318,15 +301,14 @@ void MAIN {
 
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_max);
-
                 /**
-                 * OPTIMIZATION
                  * reduce_c can perform both reduce_max and eltwise max with previous result.
                  * if do_eltwise_max:
                  *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
+
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
 
@@ -334,10 +316,10 @@ void MAIN {
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);
                 pack_reconfig_data_format(cb_qk_im);
-
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
+
                 sub_exp_block_bcast_cols_inplace_reduce<
                     cb_qk_im,
                     Sq_chunk_t,
@@ -346,17 +328,17 @@ void MAIN {
                     cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
 
-                // Reconfig register DF
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
+                uint32_t cb_sum_dest = k_chunk > k_chunk_start ? cb_cur_sum : cb_prev_sum;
 
-                /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
+                    cb_sum_dest, cb_sum_dest, Sk_chunk_t_dynamic, false);
 
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
                 pack_reconfig_data_format(cb_out_im);
+
                 cb_matmul_blocks(
                     cb_qk_im,
                     cb_v_in,
@@ -375,7 +357,6 @@ void MAIN {
                     cb_mask_in,
                     cb_zero_in);
 
-                // Reconfig register DF
                 reconfig_data_format_srca(cb_out_im);
                 cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
 
@@ -383,121 +364,95 @@ void MAIN {
                 if (k_chunk == k_chunk_start) {
                     cb_out_mm = cb_out_im;
                 } else {
-                    // When there is more than 1 chunk, we perform Lazy Softmax
-
-                    // Reconfig register DF
-                    reconfig_data_format(cb_prev_max, cb_cur_max);
+                    reconfig_data_format(cb_prev_max, cb_cur_max);  // DEBUG
                     pack_reconfig_data_format(cb_exp_max_diff);
-
-                    /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
+                    /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
                     sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     cb_pop_front(cb_prev_max, Sq_chunk_t);
 
-                    /* PREV_SUM *= EXP_MAX_DIFF */
+                    /* cb_prev_sum *= cb_exp_max_diff */
                     mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
-                    /* OUT_ACC *= EXP_MAX_DIFF */
-                    reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);
+                    /* cb_out_accumulate_im *= cb_exp_max_diff */
+                    reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);  // DEBUG
                     pack_reconfig_data_format(cb_out_accumulate_im);
                     mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im, Sq_chunk_t, vDHt);
 
-                    /* CUR_SUM += PREV_SUM */
-                    reconfig_data_format(cb_cur_sum, cb_prev_sum);
+                    /* cb_cur_sum += cb_prev_sum */
+                    reconfig_data_format(cb_cur_sum, cb_prev_sum);  // DEBUG
                     pack_reconfig_data_format(cb_cur_sum);
-                    add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    add_block(cb_cur_sum, cb_prev_sum, cb_prev_sum, Sq_chunk_t);
 
-                    /* OUT_ACC += OUT_IM */
-                    reconfig_data_format(cb_out_accumulate_im, cb_out_im);
+                    /* cb_out_accumulate_im += cb_out_im */
+                    reconfig_data_format(cb_out_accumulate_im, cb_out_im);  // DEBUG
                     pack_reconfig_data_format(cb_out_accumulate_im);
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
                 }
 
                 if (k_chunk < k_chunk_end - 1 || do_reduce) {
-                    // Move intermediate sum and max values to appropriate ping pong buffers
-                    reconfig_data_format(cb_cur_max, cb_cur_max);
+                    reconfig_data_format(cb_cur_max, cb_cur_max);  // DEBUG
                     pack_reconfig_data_format(cb_prev_max);
-
-                    // PREV_MAX <- CUR_MAX
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
-
-                    // PREV_SUM <- CUR_SUM
-                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 } else {
-                    // Write results OUT_ACC, CUR_MAX, CUR_SUM to designated
                     // Write o, m, l into cb_out
                     move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
                     move_block<true>(cb_cur_max, cb_out_m, Sq_chunk_t);
-                    move_block<true>(cb_cur_sum, cb_out_l, Sq_chunk_t);
+                    move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
                 }
             }
         }
         /* END OF FLASH ATTENTION LOOP */
 
-        // Perform reduction across intermediates from other cores if this is the reduction core
+        // do reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
-            // cb_out_accumulate_im should contain o_1 (output from FA of itself's core)
-            // cb_prev_max and cb_prev_sum should contain m_1 and l_1 (max and sum of logits of itself's core)
-
+            // cb_out_accumulate_im should contain o_1
+            // cb_prev_max and cb_prev_sum should contain m_1 and l_1
             if (k_chunk_end - k_chunk_start < k_num_chunks) {
-                // This indicates that there are computes done by other workers.
-                // We need to wait for them and send to reducer's compute
-                // Iterate through each worker
-
+                // This indicates that there are computes done by other workers. Needs to wait for them and send to
+                // reducer's compute
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    // OUT_ACC_2 <- WORKER_OUT
                     move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
-
-                    // PREV_SUM_2 <- WORKER_SUM
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
-
-                    // CUR_MAX = max(PREV_MAX, WORKER_MAX)
                     max_block<vector_mode>(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
 
-                    // EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
-                    // PREV_SUM_2 *= EXP_MAX_DIFF_2
+                    // l = torch.exp(m_2 - m) * l_2 + torch.exp(m_1 - m) * l_1
+
+                    /// l1 = torch.exp((m_2 - m) * scale) * l_2
                     sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
                     mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
 
-                    /// EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
-                    // PREV_SUM *= EXP_MAX_DIFF
+                    /// l2 = torch.exp((m_1 - m)  * scale) * l_1
                     sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
-                    /// CUR_SUM = PREV_SUM_2 + PREV_SUM
+                    /// l = l1 + l2
                     add_block(cb_prev_sum_2, cb_prev_sum, cb_cur_sum, Sq_chunk_t);
 
-                    // OUT_ACC_2 *= EXP_MAX_DIFF
-                    // OUT_ACC *= EXP_MAX_DIFF_2
                     mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
                     mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
 
-                    // OUT_ACC = OUT_ACC + OUT_ACC_2
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
 
-                    // PREV_MAX <- CUR_MAX
-                    // PREV_SUM <- CUR_SUM
+                    // copy tiles
                     cb_pop_front(cb_prev_max, Sq_chunk_t);
                     cb_pop_front(cb_m_in, Sq_chunk_t);
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
             }
+            /* cb_cur_sum = 1.0 / cb_cur_sum */
 
-            /* CUR_SUM = 1.0 / CUR_SUM */
-            cb_push_back(cb_cur_sum, Sq_chunk_t);
-            reconfig_data_format(cb_cur_sum, cb_cur_sum);
-            pack_reconfig_data_format(cb_cur_sum);
-            recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
+            reconfig_data_format(cb_prev_sum, cb_prev_sum);  // DEBUG
+            pack_reconfig_data_format(cb_prev_sum);
+            recip_block_inplace<vector_mode>(cb_prev_sum, Sq_chunk_t);
 
-            /* OUT_ACC *= CUR_SUM */
-            reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);
+            /* cb_out_accumulate_im *= cb_prev_sum */
+            reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
-            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
+            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_prev_sum, Sq_chunk_t, vDHt);
             pack_reconfig_data_format(cb_out_final);
 
-            // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
-                // Conditionally use pack_untilize or untilize
                 if constexpr (use_pack_untilize) {
                     pack_untilize_init<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
                 } else {
@@ -518,15 +473,12 @@ void MAIN {
                 cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
                 cb_push_back(cb_out_final, out_chunk_tiles);
             } else {
-                // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
             }
-            // Free up cb_prev_max after K chunks
+            // free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
         }
     }
-
-    // Free up cb_q_in after Q chunks
     cb_pop_front(cb_q_in, q_chunk_tiles);
 }
 }  // namespace NAMESPACE
