@@ -16,9 +16,9 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
         (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (4, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (4, [1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (4, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (4, [1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (4, [1, 1, 32, 768], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (2, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (2, [1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (2, [1, 1, 32, 768], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
     ],
 )
 @pytest.mark.parametrize(
@@ -44,7 +44,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
         (False, 10),
     ],
     ids=[
-        "check",
+        "non-trace",
     ],
 )
 @pytest.mark.parametrize(
@@ -79,6 +79,8 @@ def test_rs_nightly(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    if ttnn.get_num_devices() < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
     submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_reduce_scatter_impl(

@@ -15,10 +15,9 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [
         (4, [1, 1, 128, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (2, [1, 1, 256, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
-    ids=[
-        "sd35_spatial",
-    ],
+    ids=["4_device_test", "2_device_test"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
@@ -77,6 +76,8 @@ def test_all_gather_nightly(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    if ttnn.get_num_devices() < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
     submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_all_gather_impl(
