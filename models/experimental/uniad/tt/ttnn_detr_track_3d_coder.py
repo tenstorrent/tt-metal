@@ -137,7 +137,7 @@ class TtDETRTrack3DCoder(TtBaseBBoxCoder):
 
             boxes3d = ttnn.from_torch(boxes3d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
             scores = ttnn.from_torch(scores, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-            labels = ttnn.from_torch(labels, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            labels = ttnn.from_torch(labels, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=self.device)
             track_scores = ttnn.from_torch(
                 track_scores, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
             )
