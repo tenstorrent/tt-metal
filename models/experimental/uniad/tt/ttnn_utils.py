@@ -573,7 +573,7 @@ class Instances:
             else:
                 item = slice(item, None, len(self))
 
-        ret = Instances(self._image_size)
+        ret = Instances(self._image_size, ttnn_device=self.device)
         for k, v in self._fields.items():
             # if index by torch.BoolTensor
             if k == "kalman_models" and isinstance(item, torch.Tensor):
@@ -605,7 +605,7 @@ class Instances:
         raise NotImplementedError("`Instances` object is not iterable!")
 
     @staticmethod
-    def cat(instance_lists: List["Instances"]) -> "Instances":
+    def cat(instance_lists: List["Instances"], device=None) -> "Instances":
         """
         Args:
             instance_lists (list[Instances])
@@ -620,7 +620,7 @@ class Instances:
         image_size = instance_lists[0].image_size
         for i in instance_lists[1:]:
             assert i.image_size == image_size
-        ret = Instances(image_size)
+        ret = Instances(image_size, ttnn_device=device)
         for k in instance_lists[0]._fields.keys():
             values = [i.get(k) for i in instance_lists]
             v0 = values[0]
