@@ -117,8 +117,18 @@ jobs:
           echo $default_demo_tests | jq
           requested_demo_tests=$default_demo_tests
 
-          echo "[info] requested-models: ${{ toJSON(inputs.requested-models) }}"
-          echo "[info] run-perf-tests: ${{ inputs.run-perf-tests }}"
+          requested_models=${{ toJSON(inputs.requested-models) }}
+          echo "[info] requested-models: $requested_models"
+          run_perf_tests=${{ inputs.run-perf-tests }}
+          echo "[info] run-perf-tests: $run_perf_tests"
+
+          if [[ "$requested_models" != "all" ]]; then
+            requested_demo_tests=$(jq --argjson requested_models "$requested_models" '[.[] | select(.name | IN($requested_models[]))]' <<< "$requested_demo_tests")
+            echo "[info] after filtering for requested models: ${requested_demo_tests"
+          fi
+
+          # Check that we have a valid test list that's not empty
+          echo "$requested_demo_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
 
           echo "demo-tests=$(echo $requested_demo_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
