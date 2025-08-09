@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <vector>
 #include <map>
-#include <tt-metalium/control_plane.hpp>
+#include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
@@ -20,6 +20,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -105,7 +107,7 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 }
 
 void create_kernel(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::Program& program_handle,
     const std::string& kernel_src,
     const CoreCoord& logical_core,
@@ -125,7 +127,7 @@ void create_kernel(
 
     for (const auto& [start_address, num_bytes] : addresses_to_clear) {
         std::vector<uint32_t> zero_vec((num_bytes / sizeof(uint32_t)), 0);
-        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, start_address, zero_vec);
+        tt::tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], logical_core, start_address, zero_vec);
     }
 }
 
@@ -133,7 +135,7 @@ void create_mux_kernel(
     const TestParams& test_params,
     const MuxTestConfig& mux_test_config,
     const DrainerTestConfig& drainer_test_config,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::Program& program_handle) {
     auto mux_kernel_config = mux_test_config.mux_kernel_config;
     auto drainer_kernel_config = drainer_test_config.drainer_kernel_config;
@@ -197,7 +199,7 @@ void create_mux_kernel(
     std::vector<uint32_t> mux_fabric_connection_rt_args;
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
         sender_worker_adapter_spec,
-        device->id(),
+        mesh_device->get_devices()[0]->id(),
         {mux_logical_core},
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
@@ -210,12 +212,12 @@ void create_mux_kernel(
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
-        device, program_handle, mux_kernel_src, mux_logical_core, mux_ct_args, mux_rt_args, addresses_to_clear);
+        mesh_device, program_handle, mux_kernel_src, mux_logical_core, mux_ct_args, mux_rt_args, addresses_to_clear);
 }
 
 void create_drainer_kernel(
     const DrainerTestConfig& drainer_test_config,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::Program& program_handle) {
     auto drainer_kernel_config = drainer_test_config.drainer_kernel_config;
     auto drainer_logical_core = drainer_test_config.drainer_logical_core;
@@ -249,7 +251,7 @@ void create_drainer_kernel(
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
-        device,
+        mesh_device,
         program_handle,
         drainer_kernel_src,
         drainer_logical_core,
@@ -263,7 +265,7 @@ void create_worker_kernel(
     const WorkerTestConfig& worker_test_config,
     const MuxTestConfig& mux_test_config,
     const DrainerTestConfig& drainer_test_config,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::Program& program_handle) {
     auto mux_kernel_config = mux_test_config.mux_kernel_config;
     auto channel_type = worker_test_config.channel_type;
@@ -317,7 +319,7 @@ void create_worker_kernel(
         std::make_pair(worker_memory_map->local_buffer_index_address, noc_address_padding_bytes)};
 
     create_kernel(
-        device,
+        mesh_device,
         program_handle,
         worker_kernel_src,
         worker_test_config.worker_logical_core,
@@ -380,19 +382,23 @@ int main(int argc, char** argv) {
     for (unsigned int id = 0; id < num_devices; id++) {
         all_device_ids.push_back(id);
     }
-    std::map<chip_id_t, tt::tt_metal::IDevice*> devices = tt::tt_metal::detail::CreateDevices(all_device_ids);
+    // for now, just use one MeshDevice for running benchmarks
+    auto mesh_device_map = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+        all_device_ids,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1 /* num_command_queues */,
+        tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
 
-    // for now, just use one device for running benchmarks
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto mesh_id = control_plane.get_user_physical_mesh_ids()[0];
-    chip_id_t logical_chip_id = 0;
-    auto physical_chip_id =
-        control_plane.get_physical_chip_id_from_fabric_node_id(tt::tt_fabric::FabricNodeId(mesh_id, logical_chip_id));
-    tt::tt_metal::IDevice* device = devices.at(physical_chip_id);
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device = mesh_device_map.at(0 /* chip_id */);
+    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     std::vector<CoreCoord> worker_logical_cores;
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = mesh_device->compute_with_storage_grid_size();
     for (auto i = 0; i < grid_size.x; i++) {
         for (auto j = 0; j < grid_size.y; j++) {
             worker_logical_cores.push_back(CoreCoord({i, j}));
@@ -404,14 +410,15 @@ int main(int argc, char** argv) {
     CoreCoord drainer_logical_core = worker_logical_cores[1];
 
     auto worker_cores_offset = grid_size.y;
-    auto core_range_virtual_start = device->worker_core_from_logical_core(worker_logical_cores[worker_cores_offset]);
-    auto core_range_virtual_end = device->worker_core_from_logical_core(worker_logical_cores.back());
+    auto core_range_virtual_start =
+        mesh_device->worker_core_from_logical_core(worker_logical_cores[worker_cores_offset]);
+    auto core_range_virtual_end = mesh_device->worker_core_from_logical_core(worker_logical_cores.back());
     uint32_t mcast_encoding = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
         core_range_virtual_start.x, core_range_virtual_start.y, core_range_virtual_end.x, core_range_virtual_end.y);
     uint32_t num_mcast_dests = worker_logical_cores.size() - grid_size.y;
 
     const uint32_t l1_unreserved_base_address =
-        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         test_params.num_full_size_channels,
@@ -423,7 +430,7 @@ int main(int argc, char** argv) {
     MuxTestConfig mux_test_config = {
         .mux_kernel_config = &mux_kernel_config,
         .mux_logical_core = mux_logical_core,
-        .mux_virtual_core = device->worker_core_from_logical_core(mux_logical_core),
+        .mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core),
     };
 
     auto drainer_kernel_config = tt::tt_fabric::FabricMuxConfig(
@@ -436,18 +443,18 @@ int main(int argc, char** argv) {
     DrainerTestConfig drainer_test_config = {
         .drainer_kernel_config = &drainer_kernel_config,
         .drainer_logical_core = drainer_logical_core,
-        .drainer_virtual_core = device->worker_core_from_logical_core(drainer_logical_core),
+        .drainer_virtual_core = mesh_device->worker_core_from_logical_core(drainer_logical_core),
     };
 
     auto worker_memory_map = create_worker_memory_map(l1_unreserved_base_address);
 
-    create_mux_kernel(test_params, mux_test_config, drainer_test_config, device, program);
+    create_mux_kernel(test_params, mux_test_config, drainer_test_config, mesh_device.get(), program);
 
-    create_drainer_kernel(drainer_test_config, device, program);
+    create_drainer_kernel(drainer_test_config, mesh_device.get(), program);
 
     // keep the receiver noc xy encoding same for all workers, wont matter since we are not committing any
     // packets into receiver's L1
-    CoreCoord default_receiver_virtual_core = device->worker_core_from_logical_core(worker_logical_cores.back());
+    CoreCoord default_receiver_virtual_core = mesh_device->worker_core_from_logical_core(worker_logical_cores.back());
     uint32_t default_receiver_noc_xy_encoding = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
         default_receiver_virtual_core.x, default_receiver_virtual_core.y);
 
@@ -465,7 +472,8 @@ int main(int argc, char** argv) {
             .mcast_encoding = i == 0 ? std::make_optional(mcast_encoding) : std::nullopt,
             .num_mcast_dests = i == 0 ? std::make_optional(num_mcast_dests) : std::nullopt,
         };
-        create_worker_kernel(test_params, worker_test_config, mux_test_config, drainer_test_config, device, program);
+        create_worker_kernel(
+            test_params, worker_test_config, mux_test_config, drainer_test_config, mesh_device.get(), program);
     }
 
     auto header_only_channel_worker_offset = worker_cores_offset + test_params.num_full_size_channels;
@@ -482,14 +490,17 @@ int main(int argc, char** argv) {
             .mcast_encoding = std::nullopt,
             .num_mcast_dests = std::nullopt,
         };
-        create_worker_kernel(test_params, worker_test_config, mux_test_config, drainer_test_config, device, program);
+        create_worker_kernel(
+            test_params, worker_test_config, mux_test_config, drainer_test_config, mesh_device.get(), program);
     }
 
     log_info(tt::LogTest, "Launching programs");
-    tt::tt_metal::CommandQueue& cq = device->command_queue();
-    tt::tt_metal::EnqueueProgram(cq, program, false);
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
     log_info(tt::LogTest, "Waiting for workers to complete");
+    auto device = mesh_device->get_devices()[0];
     size_t num_active_workers = test_params.num_full_size_channels + test_params.num_header_only_channels;
     for (size_t i = worker_cores_offset; i < worker_cores_offset + num_active_workers; i++) {
         CoreCoord core = worker_logical_cores[i];
@@ -518,11 +529,7 @@ int main(int argc, char** argv) {
         device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termiation_signal);
 
     log_info(tt::LogTest, "Waiting for programs");
-    tt::tt_metal::Finish(cq);
-
-    tt::tt_metal::detail::CloseDevices(devices);
-    tt::tt_fabric::SetFabricConfig(
-        tt::tt_fabric::FabricConfig::DISABLED, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::distributed::Finish(cq);
 
     log_info(tt::LogTest, "Collecting results");
 
@@ -536,6 +543,12 @@ int main(int argc, char** argv) {
             (((uint64_t)worker_status[TT_FABRIC_CYCLES_INDEX + 1]) << 32) | worker_status[TT_FABRIC_CYCLES_INDEX];
         max_elapsed_cycles = std::max(max_elapsed_cycles, worker_cycles);
     }
+
+    for (auto& [_, unit_mesh_device] : mesh_device_map) {
+        unit_mesh_device->close();
+    }
+    tt::tt_fabric::SetFabricConfig(
+        tt::tt_fabric::FabricConfig::DISABLED, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
     size_t total_bytes_sent =
         (test_params.num_full_size_channels * test_params.buffer_size_bytes_full_size_channel +
