@@ -35,9 +35,10 @@ enum class ClusterType : std::uint8_t {
     P150 = 7,                    // Blackhole single card, ethernet enabled
     P150_X2 = 8,                 // 2 Blackhole single card, ethernet connected
     P150_X4 = 9,                 // 4 Blackhole single card, ethernet connected
-    SIMULATOR_WORMHOLE_B0 = 10,  // Simulator Wormhole B0
-    SIMULATOR_BLACKHOLE = 11,    // Simulator Blackhole
-    N300_2x2 = 12,               // 2 N300 cards, ethernet connected to form 2x2
+    P150_X8 = 10,                // 8 Blackhole single card, ethernet connected
+    SIMULATOR_WORMHOLE_B0 = 11,  // Simulator Wormhole B0
+    SIMULATOR_BLACKHOLE = 12,    // Simulator Blackhole
+    N300_2x2 = 13,               // 2 N300 cards, ethernet connected to form 2x2
 };
 
 /**

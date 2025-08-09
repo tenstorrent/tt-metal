@@ -2691,6 +2691,31 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_blackhole(
                 }
             }
             break;
+        case tt::ClusterType::P150_X8:
+            if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+                if (fabric_mode == FabricTestMode::HalfRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                } else if (fabric_mode == FabricTestMode::FullRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
+                } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                    // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
+                } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                }
+            } else {
+                if (fabric_mode == FabricTestMode::HalfRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                } else if (fabric_mode == FabricTestMode::FullRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
+                } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                    // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
+                } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                }
+            }
+            break;
         // the other BH cluster type P150_X2 only has 2 devices, not suitable for ring.
         default: break;
     }
