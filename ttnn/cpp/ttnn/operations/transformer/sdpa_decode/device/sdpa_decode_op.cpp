@@ -140,8 +140,14 @@ void ScaledDotProductAttentionDecode::validate(
                 "Expect cur_pos to be ROW_MAJOR, got {}",
                 cur_pos_tensor.layout());
             const auto cur_pos_shape = cur_pos_tensor.padded_shape();
-            TT_FATAL(
-                cur_pos_shape[0] == B, "cur_pos must have batch size equal to Q, got {} and {}", cur_pos_shape[0], B);
+
+            if (!cur_pos_tensor.is_sharded()) {
+                TT_FATAL(
+                    cur_pos_shape[-1] == B,
+                    "cur_pos must have batch size equal to Q, got {} and {}",
+                    cur_pos_shape[0],
+                    B);
+            }
         }
 
         TT_FATAL(optional_input_tensors.at(1).has_value(), "Must have page_table tensor for paged attention");

@@ -273,28 +273,44 @@ def run_llama3_demo(
 
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
+    # Defining core grids
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
     logger.info("Starting decode...")
-    # Initial positions
+    # Create initial current position tensors
+    is_cur_pos_sharded = True
     decoding_pos = [start_pos] * batch_size
-    current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
-
+    current_pos_dram = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+    if is_cur_pos_sharded:
+        current_pos_sram = torch.tensor([[decoding_pos[b] for b in range(batch_size)]] * sub_core_grids.num_cores())
+        cur_pos_shard_spec = ttnn.ShardSpec(
+            sub_core_grids, (1, batch_size // mesh_device.shape[1]), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        cur_pos_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+        )
     current_pos_tensor = ttnn.from_torch(
-        current_pos,
-        device=mesh_device,
+        current_pos_sram if is_cur_pos_sharded else current_pos_dram,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
-
     logger.info("Current pos tensor done")
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
+    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos_dram, return_rot_idxs=True)
 
     logger.info("Rot mats done")
+
+    # Move the cur pos tensor to device
+    current_pos_tensor = current_pos_tensor.to(mesh_device, cur_pos_memory_config)
 
     # Prepare the encoded prompts for the decode input
     tt_out_tok = ttnn.from_torch(
@@ -304,12 +320,6 @@ def run_llama3_demo(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    sub_core_grids = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-        ]
     )
 
     # Compile
@@ -339,7 +349,7 @@ def run_llama3_demo(
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            sub_core_grids=sub_core_grids,
         )
         ttnn.plus_one(
             rot_mat_idxs,
@@ -375,7 +385,7 @@ def run_llama3_demo(
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            sub_core_grids=sub_core_grids,
         )
         ttnn.plus_one(
             rot_mat_idxs,
@@ -387,11 +397,11 @@ def run_llama3_demo(
 
     # Reset the decoding position for the proper run of the model
     current_pos_reset = ttnn.from_torch(
-        current_pos,
+        current_pos_sram if is_cur_pos_sharded else current_pos_dram,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -406,7 +416,7 @@ def run_llama3_demo(
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos_dram, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     profiler.end(f"capture_trace")

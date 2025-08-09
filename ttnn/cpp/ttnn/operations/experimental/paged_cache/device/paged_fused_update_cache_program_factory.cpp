@@ -101,7 +101,9 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
     uint32_t index_stick_size = 0;
     tt::DataFormat index_data_format = tt::DataFormat::Int32;
     bool index_is_dram = true;
+    Buffer* index_buffer_ptr = nullptr;
     if (use_index_tensor) {
+        index_buffer_ptr = update_idxs_tensor.value().is_sharded() ? update_idxs_tensor.value().buffer() : nullptr;
         index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
         index_tensor_tile_size = tt_metal::detail::TileSize(index_data_format);
@@ -215,7 +217,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         program, all_cores_bb, 0);  // used for share cache for signaling when the cache is ready to be read
 
     if (use_index_tensor) {
-        create_cb(cb_index_id, program, all_cores_bb, index_tensor_tile_size, 1, index_data_format);
+        create_cb(cb_index_id, program, all_cores_bb, index_stick_size, 1, index_data_format, index_buffer_ptr);
     }
 
     if (is_paged_cache) {
@@ -564,8 +566,10 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     const uint32_t log2_page_size = 0;
     uint32_t index_stick_size = 0;
     tt::DataFormat index_data_format = tt::DataFormat::Int32;
+    Buffer* index_buffer_ptr = nullptr;
     bool index_is_dram = true;
     if (use_index_tensor) {
+        index_buffer_ptr = update_idxs_tensor.value().is_sharded() ? update_idxs_tensor.value().buffer() : nullptr;
         index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
         index_tensor_tile_size = tt_metal::detail::TileSize(index_data_format);
@@ -584,14 +588,11 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     bool page_table_is_dram = true;
     if (is_paged_cache) {
         const auto& page_table_tensor = page_table.value();
-
         block_size = cache_tensor1.padded_shape()[2];
         block_size_t = block_size / TILE_HEIGHT;
         max_blocks_per_seq = page_table_tensor.padded_shape()[1];
         page_table_stick_size = page_table_tensor.padded_shape()[-1] * page_table_tensor.element_size();
-
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
-
         page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
 
@@ -683,7 +684,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         program, all_cores_bb, 0);  // used for share cache for signaling when the cache is ready to be read
 
     if (use_index_tensor) {
-        create_cb(cb_index_id, program, all_cores_bb, index_tensor_tile_size, 1, index_data_format);
+        create_cb(cb_index_id, program, all_cores_bb, index_stick_size, 1, index_data_format, index_buffer_ptr);
     }
 
     if (is_paged_cache) {
