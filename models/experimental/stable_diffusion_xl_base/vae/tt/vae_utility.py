@@ -40,47 +40,15 @@ def get_DRAM_GN_config(module_path, idx):
 def get_DRAM_conv_config(module_path, idx):
     if module_path is None:
         if idx == 1:
-            slice_type = None
-            num_slices = 1
-        else:
-            slice_type = ttnn.Conv2dSliceWidth
-            num_slices = 16
+            return None
     elif "mid_block" in module_path:
-        slice_type = None
-        num_slices = 1
+        return None
     else:
         parts = module_path.split(".")
         block_id = int(parts[parts.index("up_blocks") + 1])
-
-        slice_type = ttnn.Conv2dSliceWidth
-
-        if "upsamplers" in module_path:
-            if block_id == 0:
-                num_slices = 2
-            elif block_id == 1:
-                num_slices = 8
-            elif block_id == 2:
-                num_slices = 16
-            else:
-                num_slices = 32
-        else:
-            if block_id == 0:
-                num_slices = 1
-            elif block_id == 1:
-                num_slices = 2
-            elif block_id == 2:
-                if idx == 1:
-                    num_slices = 8
-                else:
-                    num_slices = 4
-            else:
-                num_slices = 32
-    slice_config = (
-        ttnn.Conv2dSliceConfig(
-            slice_type=slice_type,
-            num_slices=num_slices,
-        )
-        if num_slices > 1 and slice_type is not None
-        else None
+        if "upsamplers" not in module_path and block_id == 0:
+            return None
+    slice_type = ttnn.Conv2dSliceWidth
+    return ttnn.Conv2dSliceConfig(
+        slice_type=slice_type,
     )
-    return slice_config
