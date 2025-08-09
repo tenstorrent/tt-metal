@@ -10,7 +10,7 @@ import ttnn
 
 from models.experimental.uniad.reference.motion_head import MotionHead
 from models.experimental.uniad.reference import utils
-from models.experimental.uniad.tests.pcc.test_tt_motion_transformer_decoder import custom_preprocessor_motion_decoder
+from models.experimental.uniad.tests.pcc.test_ttnn_motion_transformer_decoder import custom_preprocessor_motion_decoder
 from models.experimental.uniad.tt.ttnn_motion_head import TtMotionHead
 from models.experimental.uniad.tt import ttnn_utils
 from tests.ttnn.utils_for_testing import assert_with_pcc
