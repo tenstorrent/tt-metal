@@ -12,22 +12,12 @@ from models.experimental.uniad.tt.ttnn_utils import Instances as TtInstances
 from models.experimental.uniad.tt.ttnn_head import TtBEVFormerTrackHead
 from models.experimental.uniad.tt.ttnn_resnet import TtResNet
 from models.experimental.uniad.tt.ttnn_fpn import TtFPN
-
 from models.experimental.uniad.tt.ttnn_runtime_tracker_base import TtRuntimeTrackerBase
-
 from models.experimental.uniad.tt.ttnn_query_interaction import TtQueryInteractionModule
-
-# from models.experimental.uniad.reference.query_interaction_module import QueryInteractionModule
-
 from models.experimental.uniad.tt.ttnn_memory_bank import TtMemoryBank
-
-# from models.experimental.uniad.reference.memory_bank import MemoryBank
-# from models.experimental.uniad.reference.detr_track_3d_coder import DETRTrack3DCoder
 from models.experimental.uniad.tt.ttnn_detr_track_3d_coder import TtDETRTrack3DCoder
 from models.experimental.uniad.tt.ttnn_planning_head import TtPlanningHeadSingleMode
 from models.experimental.uniad.tt.ttnn_pan_segformer_head import TtPansegformerHead
-
-# from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
 from models.experimental.uniad.tt.ttnn_motion_head import TtMotionHead
 from models.experimental.uniad.tt.ttnn_occ_head import TtOccHead
 
@@ -100,10 +90,6 @@ class TtUniAD:
         self.device = device
 
         if pts_bbox_head:
-            # pts_train_cfg = train_cfg.pts if train_cfg else None
-            # pts_bbox_head.update(train_cfg=pts_train_cfg)
-            # pts_test_cfg = test_cfg.pts if test_cfg else None
-            # pts_bbox_head.update(test_cfg=pts_test_cfg)
             self.pts_bbox_head = TtBEVFormerTrackHead(
                 parameters=parameters.pts_bbox_head,
                 device=device,
@@ -159,46 +145,19 @@ class TtUniAD:
                 avg_down=False,
                 frozen_stages=4,
                 conv_cfg=None,
-                # norm_cfg={"type": "BN2d", "requires_grad": False},
-                # norm_eval=True,
                 dcn={"type": "DCNv2", "deform_groups": 1, "fallback_on_stride": False},
                 stage_with_dcn=(False, False, True, True),
-                # plugins=None,
-                # with_cp=False,
-                # zero_init_residual=True,
                 pretrained=None,
                 init_cfg=None,
             )
         if img_neck is not None:
             self.img_neck = TtFPN(
-                conv_args=self.parameters.img_neck["model_args"],
-                conv_pth=self.parameters.img_neck,
-                device=device
-                # in_channels=[512, 1024, 2048],
-                # out_channels=256,
-                # num_outs=4,
+                conv_args=self.parameters.img_neck["model_args"], conv_pth=self.parameters.img_neck, device=device
             )
 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
 
-        # if pretrained is None:
-        #     img_pretrained = None
-        #     pts_pretrained = None
-        # elif isinstance(pretrained, dict):
-        #     img_pretrained = pretrained.get("img", None)
-        #     pts_pretrained = pretrained.get("pts", None)
-        # else:
-        #     raise ValueError(f"pretrained should be a dict, got {type(pretrained)}")
-
-        # if self.with_img_backbone:
-        #     if img_pretrained is not None:
-        #         warnings.warn("DeprecationWarning: pretrained is a deprecated " "key, please consider using init_cfg.")
-        #         self.img_backbone.init_cfg = dict(type="Pretrained", checkpoint=img_pretrained)
-
-        # -------------- mvx complte
-
-        # self.grid_mask = GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         self.use_grid_mask = False
         self.fp16_enabled = False
         self.embed_dims = embed_dims
@@ -207,19 +166,7 @@ class TtUniAD:
         self.vehicle_id_list = vehicle_id_list
         self.pc_range = pc_range
         self.queue_length = queue_length
-        # if freeze_img_backbone:
-        #     if freeze_bn:
-        #         self.img_backbone.eval()
-        #     for param in self.img_backbone.parameters():
-        #         param.requires_grad = False
 
-        # if freeze_img_neck:
-        #     if freeze_bn:
-        #         self.img_neck.eval()
-        #     for param in self.img_neck.parameters():
-        #         param.requires_grad = False
-
-        # temporal
         self.video_test_mode = video_test_mode
         assert self.video_test_mode
 
@@ -240,7 +187,6 @@ class TtUniAD:
         )  # hyper-param for removing inactive queries
 
         self.query_interact = TtQueryInteractionModule(
-            # qim_args,
             dim_in=embed_dims,
             hidden_dim=embed_dims,
             dim_out=embed_dims,
@@ -249,7 +195,6 @@ class TtUniAD:
             device=device,
         )
 
-        # {'type': 'DETRTrack3DCoder', 'post_center_range': [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0], 'pc_range': [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0], 'max_num': 300, 'num_classes': 10, 'score_threshold': 0.0, 'with_nms': False, 'iou_thres': 0.3}
         self.bbox_coder = TtDETRTrack3DCoder(
             post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
             pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
@@ -262,7 +207,6 @@ class TtUniAD:
         )
 
         self.memory_bank = TtMemoryBank(
-            # mem_args,
             dim_in=embed_dims,
             hidden_dim=embed_dims,
             dim_out=embed_dims,
@@ -271,7 +215,6 @@ class TtUniAD:
             device=device,
         )
         self.mem_bank_len = 0 if self.memory_bank is None else self.memory_bank.max_his_length
-        # self.criterion = build_loss(loss_cfg)
         self.test_track_instances = None
         self.l2g_r_mat = None
         self.l2g_t = None
@@ -322,12 +265,7 @@ class TtUniAD:
             }
             self.occ_head = TtOccHead(
                 device=device,
-                # grid_conf=occflow_grid_conf,
                 ignore_index=255,
-                # bev_proj_dim=256,
-                # bev_proj_nlayers=4,
-                # Transformer
-                # attn_mask_thresh=0.3,
             )
         if motion_head:
             self.motion_head = TtMotionHead(
@@ -419,16 +357,6 @@ class TtUniAD:
         return self.forward_test(img=img, img_metas=[[dummy_metas]])
 
     def __call__(self, return_loss=True, **kwargs):
-        """Calls either forward_train or forward_test depending on whether
-        return_loss=True.
-        Note this setting will change the expected inputs. When
-        `return_loss=True`, img and img_metas are single-nested (i.e.
-        torch.Tensor and list[dict]), and when `resturn_loss=False`, img and
-        img_metas should be double nested (i.e.  list[torch.Tensor],
-        list[list[dict]]), with the outer list indicating test time
-        augmentations.
-        """
-
         if return_loss:
             return self.forward_train(**kwargs)
         else:
@@ -586,7 +514,6 @@ class TtUniAD:
         track_instances.query = query
 
         track_instances.output_embedding = ttnn.zeros((num_queries, dim // 2), dtype=ttnn.bfloat16, device=self.device)
-        # obj_idxes = torch.full((num_queries,), -1, dtype=torch.long)
         track_instances.obj_idxes = ttnn.full((901,), -1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=self.device)
         track_instances.matched_gt_idxes = ttnn.full((num_queries,), -1, dtype=ttnn.int32, device=self.device)
         track_instances.disappear_time = ttnn.zeros((num_queries,), dtype=ttnn.int32, device=self.device)
@@ -625,7 +552,6 @@ class TtUniAD:
         """only support bs=1 and sequential input"""
 
         bs = img.shape[0]
-        # img_metas = img_metas[0]
 
         """ init track instances for first frame """
         if self.test_track_instances is None or img_metas[0]["scene_token"] != self.scene_token:
@@ -743,13 +669,11 @@ class TtUniAD:
             track_scores=track_instances.scores,
             obj_idxes=track_instances.obj_idxes,
         )
-        # bboxes_dict = self.bbox_coder.decode(bbox_dict, with_mask=with_mask)[0]
         bboxes_dict = self.bbox_coder.decode(bbox_dict, with_mask=with_mask, img_metas=img_metas)[0]
         bboxes = bboxes_dict["bboxes"]
         # bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
         bboxes = img_metas[0]["box_type_3d"](bboxes, 9)
-        # for i in bboxes_dict.keys():
-        #     bboxes_dict[i] = ttnn.to_torch(bboxes_dict[i])
+
         labels = bboxes_dict["labels"]
         scores = bboxes_dict["scores"]
         bbox_index = bboxes_dict["bbox_index"]
@@ -878,7 +802,6 @@ class TtUniAD:
         track_scores = ttnn.to_torch(ttnn.sigmoid(output_classes[-1, 0, :])).max(dim=-1).values
         # each track will be assigned an unique global id by the track base.
         track_instances.scores = ttnn.from_torch(track_scores, device=self.device, layout=ttnn.TILE_LAYOUT)
-        # track_instances.track_scores = track_scores  # [300]
         track_instances.pred_logits = output_classes[-1, 0]  # [300, num_cls]
         track_instances.pred_boxes = output_coords[-1, 0]  # [300, box_dim]
         track_instances.output_embedding = query_feats[-1][0]  # [300, feat_dim]
@@ -910,91 +833,20 @@ class TtUniAD:
         out.update(self.select_active_track_query(track_instances, active_index, img_metas))
         out.update(self.select_sdc_track_query(track_instances[track_instances.obj_idxes == -2], img_metas))
 
-        # from models.experimental.uniad.tt.ttnn_utils import Instances as TtInstances
-        # tt_track_instances = TtInstances((1, 1))
-        # tt_track_instances.ref_pts = ttnn.from_torch(track_instances.ref_pts, device=self.device)
-        # tt_track_instances.query = ttnn.from_torch(track_instances.query, device=self.device, layout=ttnn.TILE_LAYOUT)
-        # tt_track_instances.output_embedding = ttnn.from_torch(track_instances.output_embedding, dtype=ttnn.bfloat16, device=self.device)
-        # tt_track_instances.obj_idxes = ttnn.from_torch(track_instances.obj_idxes, device=self.device)
-        # tt_track_instances.scores = ttnn.from_torch(track_instances.scores, device=self.device)
-        # tt_track_instances.save_period = ttnn.from_torch(track_instances.save_period, device=self.device, layout=ttnn.TILE_LAYOUT)
-        # tt_track_instances.mem_padding_mask = track_instances.mem_padding_mask
-        # print("track_instances.mem_padding_mask",track_instances.mem_padding_mask)
-        # print("tt_track_instances.mem_padding_mask",tt_track_instances.mem_padding_mask)
-        # tt_track_instances.mem_bank = ttnn.from_torch(track_instances.mem_bank, dtype=ttnn.bfloat16, device=self.device)
-
-        # track_instances.mem_bank = track_instances.mem_bank
-
-        # Converting the above track_instances to torch.
-        # tt_track_instances = TtInstances((1, 1),ttnn_device=self.device)
-        # tt_track_instances.ref_pts = track_instances.ref_pts
-        # tt_track_instances.query = track_instances.query
-        # tt_track_instances.output_embedding = track_instances.output_embedding
-        # tt_track_instances.scores = track_instances.scores
-        # tt_track_instances.save_period =     track_instances.save_period
-        # track_instances.mem_padding_mask = track_instances.mem_padding_mask.to(dtype=torch.bool)
-        # tt_track_instances.mem_bank = ttnn.from_torch(track_instances.mem_bank, dtype=ttnn.bfloat16, device=self.device)
         track_instances.mem_padding_mask = ttnn.to_torch(track_instances.mem_padding_mask).to(dtype=torch.bool)
         """ update with memory_bank """
         if self.memory_bank is not None:
             track_instances = self.memory_bank(track_instances)
-
-        # track_instances=Instances((1, 1))
-        # track_instances.ref_pts = ttnn.to_torch(tt_track_instances.ref_pts).to(dtype=torch.float)
-        # track_instances.query = ttnn.to_torch(tt_track_instances.query).to(dtype=torch.float)
-        # track_instances.output_embedding = ttnn.to_torch(tt_track_instances.output_embedding).to(dtype=torch.float)
-        # track_instances.obj_idxes = ttnn.to_torch(tt_track_instances.obj_idxes)
-        # track_instances.scores = ttnn.to_torch(tt_track_instances.scores).to(dtype=torch.float)
-        # track_instances.save_period = ttnn.to_torch(tt_track_instances.save_period)
-        # track_instances.mem_padding_mask = tt_track_instances.mem_padding_mask
-        # track_instances.mem_bank = ttnn.to_torch(tt_track_instances.mem_bank).to(dtype=torch.float)
 
         """  Update track instances using matcher """
         tmp = {}
         tmp["init_track_instances"] = self._generate_empty_tracks()
         tmp["track_instances"] = track_instances
 
-        # tmp_ttnn = {}
-        # tmp_ttnn["init_track_instances"] = TtInstances((1, 1), ttnn_device=self.device)
-        # tmp_ttnn["track_instances"] = TtInstances((1, 1), ttnn_device=self.device)
-
-        # tmp_ttnn["init_track_instances"].ref_pts = ttnn.from_torch(
-        #     tmp["init_track_instances"].ref_pts, device=self.device
-        # )
-        # tmp_ttnn["init_track_instances"].query = ttnn.from_torch(
-        #     tmp["init_track_instances"].query, device=self.device, layout=ttnn.TILE_LAYOUT
-        # )
-        # tmp_ttnn["init_track_instances"].output_embedding = ttnn.from_torch(
-        #     tmp["init_track_instances"].output_embedding, device=self.device
-        # )
-        # tmp_ttnn["init_track_instances"].obj_idxes = ttnn.from_torch(
-        #     tmp["init_track_instances"].obj_idxes, device=self.device
-        # )
-
-        # tmp_ttnn["track_instances"].ref_pts = ttnn.from_torch(tmp["track_instances"].ref_pts, device=self.device)
-        # tmp_ttnn["track_instances"].query = ttnn.from_torch(
-        #     tmp["track_instances"].query, device=self.device, layout=ttnn.TILE_LAYOUT
-        # )
-        # tmp_ttnn["track_instances"].output_embedding = ttnn.from_torch(
-        #     tmp["track_instances"].output_embedding, device=self.device
-        # )
-        # tmp_ttnn["track_instances"].obj_idxes = ttnn.from_torch(
-        #     tmp["track_instances"].obj_idxes.to(dtype=torch.long), device=self.device
-        # )
-        # tmp["init_track_instances"]["mem_padding_mask"]=ttnn.from_torch(tmp["init_track_instances"]["mem_padding_mask"],device=self.device,layout=ttnn.TILE_LAYOUT,dtype=ttnn.int32)
-
         tmp["track_instances"].mem_padding_mask = ttnn.from_torch(
             tmp["track_instances"].mem_padding_mask, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
         )
         out_track_instances = self.query_interact(tmp)
-        # out_track_instances.mem_padding_mask=ttnn.to_torch(out_track_instances.mem_padding_mask).to(dtype=torch.bool)
-
-        # out_track_instances = tmp["init_track_instances"]
-
-        # out_track_instances.ref_pts = ttnn.to_torch(tt_out_track_instances.ref_pts)
-        # out_track_instances.query = ttnn.to_torch(tt_out_track_instances.query)
-        # out_track_instances.output_embedding = ttnn.to_torch(tt_out_track_instances.output_embedding)
-        # out_track_instances.obj_idxes = ttnn.to_torch(tt_out_track_instances.obj_idxes)
 
         out["track_instances_fordet"] = track_instances
         out["track_instances"] = out_track_instances
@@ -1002,21 +854,6 @@ class TtUniAD:
         return out
 
     def _det_instances2results(self, instances, results, img_metas):
-        """
-        Outs:
-        active_instances. keys:
-        - 'pred_logits':
-        - 'pred_boxes': normalized bboxes
-        - 'scores'
-        - 'obj_idxes'
-        out_dict. keys:
-            - boxes_3d (torch.Tensor): 3D boxes.
-            - scores (torch.Tensor): Prediction scores.
-            - labels_3d (torch.Tensor): Box labels.
-            - attrs_3d (torch.Tensor, optional): Box attributes.
-            - track_ids
-            - tracking_score
-        """
         # filter out sleep querys
         if instances.pred_logits.shape[0] == 0:
             return [None]

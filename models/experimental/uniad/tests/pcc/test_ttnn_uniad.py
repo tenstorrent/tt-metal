@@ -14,7 +14,7 @@ from models.experimental.uniad.reference.utils import LiDARInstance3DBoxes
 from models.experimental.uniad.tt.ttnn_utils import TtLiDARInstance3DBoxes
 import copy
 
-from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_model_parameters_perception_transformer
+from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_model_parameters_uniad
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -389,7 +389,7 @@ def test_uniad_reference(device, reset_seeds):
     ttnn_img_metas = copy.deepcopy(img_metas)
     ttnn_img_metas[0][0]["box_type_3d"] = TtLiDARInstance3DBoxes
 
-    parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
+    parameters = create_uniad_model_parameters_uniad(reference_model, device)
 
     ttnn_model = TtUniAD(
         parameters,
