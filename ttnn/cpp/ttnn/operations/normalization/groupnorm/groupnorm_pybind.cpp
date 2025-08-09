@@ -174,7 +174,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 core_grid (CoreGrid, optional): Defaults to `None`.
                 inplace (bool, optional): Defaults to `False`.
-                chunk_size (int, optional): Defaults to `ttnn.constants.TILE_HW`.
+                chunk_size (int, optional): Defaults to `ttnn.constants.TILE_HW`. Should be TILE_HW <= chunk_size <= 16*TILE_HW
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
 
             Returns:

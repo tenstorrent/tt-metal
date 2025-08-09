@@ -591,19 +591,27 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape):
     [
         (1, 640, 128, 128),
         # (1, 960, 128, 128),
-        # (1, 128, 1024, 1024),
-        # (1, 256, 1024, 1024),
-        # (1, 256, 515, 512),
+        # # SDXL VAE
+        # (1, 256, 1024, 1024), # Hang (up to 8k chunk)
+        # (1, 256, 512, 512), # Hang (upto 2k chunk)
         # (1, 512, 128, 128),
         # (1, 512, 256, 256),
-        # (1, 512, 512, 512),
+        # (1, 512, 512, 512), # Hang (upto 4k chunk)
+        # (1, 512, 64, 64),
+        # (1, 256, 256, 256),
+        # (1, 128, 512, 512),
+        # (1, 128, 1024, 1024),
+        # # Extra tests
+        # (1, 32, 1024, 1024),
+        # (1, 64, 1024, 1024), # Hang (upto 2k chunk)
+        # (1, 128, 1024, 1024), # Hang (upto 4k chunk)
     ],
 )
 @pytest.mark.parametrize("num_groups", [32])
 @pytest.mark.parametrize("grid_size", [None])  # , ttnn.CoreGrid(y=8, x=8)])
 @pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])  # , ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("chunk_size", [2048])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])  # , ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("chunk_size", [4096])  # 2048
 # TODO(nsoraba): Add compute_kernel_config and sharded_mem_config
 # TODO(nsoraba): Add validations for input tensor
 # TODO(nsoraba): Add support for padding when not multiple of 32 (is it needed?)
@@ -616,28 +624,46 @@ def test_sdxl_group_norm_v3(device, input_shape, num_groups, grid_size, dtype, l
         input_shape, dtype=torch.float32 if dtype == ttnn.DataType.FLOAT32 else torch.bfloat16
     )
 
+    N, C, H, W = input_shape
+
     # Execute torch group_norm
-    torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
+
+    torch_golden_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
+    torch_golden_output_tensor = torch_golden_output_tensor.permute(0, 2, 3, 1).view(N, 1, H * W, C)
+
+    torch_input_permute_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, H * W, C)
 
     # Generate ttnn tensor
-    tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
+    tt_input_permute_tensor = ttnn.from_torch(
+        torch_input_permute_tensor,
         dtype=dtype,
         layout=layout,
         device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    tt_input_tensor = ttnn.permute(tt_input_permute_tensor, (0, 3, 1, 2))
+    ttnn.deallocate(tt_input_permute_tensor)
+
     # Execute ttnn group_norm
-    tt_output_tensor = ttnn.group_norm_v3(
+    tt_output_permute_tensor = ttnn.group_norm_v3(
         tt_input_tensor,
         num_groups=num_groups,
         core_grid=grid_size,
         chunk_size=chunk_size,
+        inplace=True,
     )
+    # ttnn.deallocate(tt_input_tensor)
 
-    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    tt_output_tensor = ttnn.permute(tt_output_permute_tensor, (0, 2, 3, 1))
+    torch_actual_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_input_tensor, tt_output_tensor, 0.999)
+    ttnn.deallocate(tt_input_tensor)
+    ttnn.deallocate(tt_output_permute_tensor)
+    ttnn.deallocate(tt_output_tensor)
+
+    assert_with_pcc(torch_golden_output_tensor, torch_actual_output_tensor, 0.999)
+    assert torch.allclose(torch_golden_output_tensor, torch_actual_output_tensor, atol=1e-3)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)

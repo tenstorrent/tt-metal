@@ -69,10 +69,18 @@ operation::ProgramWithCallbacks groupnorm_v3(
     tt::tt_metal::CreateCircularBuffer(program, cores_used, dst_cb_config);
 
     const uint32_t mean_cb_index = tt::CBIndex::c_2;
-    const uint32_t mean_cb_size = tt::tt_metal::detail::TileSize(gamma_beta_cb_data_format);
+    const uint32_t mean_cb_size = tt::tt_metal::detail::TileSize(in_data_format);
     const auto mean_cb_config = tt::tt_metal::CircularBufferConfig(mean_cb_size, {{mean_cb_index, in_data_format}})
                                     .set_page_size(mean_cb_index, mean_cb_size);
     tt::tt_metal::CreateCircularBuffer(program, cores_used, mean_cb_config);
+
+    // Create scaler cb
+    const uint32_t scaler_cb_index = tt::CBIndex::c_3;
+    const uint32_t scaler_cb_size = tt::tt_metal::detail::TileSize(in_data_format);
+    const auto scaler_cb_config =
+        tt::tt_metal::CircularBufferConfig(scaler_cb_size, {{scaler_cb_index, in_data_format}})
+            .set_page_size(scaler_cb_index, scaler_cb_size);
+    tt::tt_metal::CreateCircularBuffer(program, cores_used, scaler_cb_config);
 
     const auto N = a.logical_shape()[0];
     const auto C = a.logical_shape()[1];
@@ -130,7 +138,8 @@ operation::ProgramWithCallbacks groupnorm_v3(
                  N,  // num_batches
                  mean_cb_index,
                  dst_cb_index,
-                 dst_tiles_per_page},
+                 dst_tiles_per_page,
+                 scaler_cb_index},
             .defines = {}});
 
     auto writer_kernel = CreateKernel(
@@ -149,6 +158,7 @@ operation::ProgramWithCallbacks groupnorm_v3(
                     pages_per_group,
                     pages_per_batch,
                     N,  // num_batches
+                    scaler_cb_index,
                 },
             .defines = {}});
 

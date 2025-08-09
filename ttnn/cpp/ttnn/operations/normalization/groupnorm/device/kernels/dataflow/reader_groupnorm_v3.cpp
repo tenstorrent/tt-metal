@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint_tile.h"
 
 void kernel_main() {
     // Runtime args
