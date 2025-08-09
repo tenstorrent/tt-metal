@@ -25,7 +25,7 @@
 namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
-struct AllGatherSP {
+struct AllGatherParams {
     std::vector<IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
@@ -36,7 +36,7 @@ struct AllGatherSP {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
 
-    AllGatherSP(
+    AllGatherParams(
         std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,
@@ -59,7 +59,7 @@ struct AllGatherSP {
 
 struct LlamaAllGatherMatmulAsync {
     /* All Gather Replicate Params */
-    const ttnn::AllGatherSP all_gather_sp_async_struct;
+    const ttnn::AllGatherParams all_gather_params;
 
     /* Matmul Params */
     const operations::matmul::Matmul matmul_struct;
@@ -171,7 +171,7 @@ Tensor llama_all_gather_matmul_async(
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 
 LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
-    const ttnn::AllGatherSP& all_gather_replicate_async_struct,
+    const ttnn::AllGatherParams& all_gather_params,
     const operations::matmul::Matmul& matmul_struct,
     const std::vector<IDevice*>& devices);
 
