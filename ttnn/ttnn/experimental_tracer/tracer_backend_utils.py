@@ -283,7 +283,10 @@ class AtenMaxPool2dWithIndices(WrappedOperation):
 @dataclass
 @register_operation("torch.ops.aten.view")
 class AtenView(WrappedOperation):
-    pass
+    @property
+    def ops(self) -> int:
+        """View operations have zero computational cost - they only reshape tensor metadata."""
+        return 0
 
 
 @dataclass
@@ -402,7 +405,10 @@ class AtenSoftmax(WrappedOperation):
 class AtenTransposeInt(WrappedOperation):
     """Represents the transpose.int operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Transpose operations have zero computational cost - they only reorder dimensions."""
+        return 0
 
 
 @dataclass
@@ -424,7 +430,16 @@ class AtenDivTensor(WrappedOperation):
 class AtenSiluInplace(WrappedOperation):
     """Represents the silu_ operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for in-place SiLU activation function."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # SiLU operation: x * sigmoid(x)
+            # Operations: exp, add, div, mul = 4 operations per element
+            return num_elements * 4
+        return super().ops
 
 
 @dataclass
@@ -474,7 +489,10 @@ class AtenClone(WrappedOperation):
 class AtenPermute(WrappedOperation):
     """Represents the permute operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Permute operations have zero computational cost - they only reorder dimensions."""
+        return 0
 
 
 @dataclass
@@ -513,7 +531,10 @@ class AtenBmm(WrappedOperation):
 class AtenExpand(WrappedOperation):
     """Represents the expand operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Expand operations have zero computational cost - they broadcast without copying data."""
+        return 0
 
 
 @dataclass
@@ -521,7 +542,10 @@ class AtenExpand(WrappedOperation):
 class AtenUnsafeView(WrappedOperation):
     """Represents the _unsafe_view operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Unsafe view operations have zero computational cost - they only reshape tensor metadata."""
+        return 0
 
 
 @dataclass
@@ -529,7 +553,10 @@ class AtenUnsafeView(WrappedOperation):
 class AtenSliceTensor(WrappedOperation):
     """Represents the slice.Tensor operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Slice operations have zero computational cost - they only create tensor views."""
+        return 0
 
 
 @dataclass
@@ -537,7 +564,10 @@ class AtenSliceTensor(WrappedOperation):
 class AtenSplitWithSizes(WrappedOperation):
     """Represents the split_with_sizes operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Split with sizes operations have zero computational cost - they only create tensor views."""
+        return 0
 
 
 @dataclass
@@ -545,7 +575,10 @@ class AtenSplitWithSizes(WrappedOperation):
 class AtenSplitTensor(WrappedOperation):
     """Represents the split.Tensor operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Split tensor operations have zero computational cost - they only create tensor views."""
+        return 0
 
 
 @dataclass
@@ -567,7 +600,10 @@ class AtenNativeLayerNorm(WrappedOperation):
 class AtenUnsqueeze(WrappedOperation):
     """Represents the unsqueeze operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Unsqueeze operations have zero computational cost - they only add dimensions."""
+        return 0
 
 
 @dataclass
@@ -575,7 +611,16 @@ class AtenUnsqueeze(WrappedOperation):
 class AtenGelu(WrappedOperation):
     """Represents the gelu operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for GELU activation function."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # GELU: x * 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
+            # Approximation: ~8 operations per element
+            return num_elements * 8
+        return super().ops
 
 
 @dataclass
@@ -583,7 +628,15 @@ class AtenGelu(WrappedOperation):
 class AtenReluInplace(WrappedOperation):
     """Represents the relu_ operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for in-place ReLU activation function."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # ReLU: max(0, x) - 1 comparison operation per element
+            return num_elements
+        return super().ops
 
 
 @dataclass
@@ -591,7 +644,17 @@ class AtenReluInplace(WrappedOperation):
 class AtenConstantPadNd(WrappedOperation):
     """Represents the constant_pad_nd operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate operations for constant padding."""
+        output_shapes = self.output_shapes
+        input_shapes = self.input_shapes
+        if output_shapes and input_shapes:
+            output_elements = output_shapes[0].numel()
+            input_elements = input_shapes[0].numel()
+            # Operations for padding (copying + filling)
+            return output_elements - input_elements
+        return super().ops
 
 
 @dataclass
@@ -599,7 +662,10 @@ class AtenConstantPadNd(WrappedOperation):
 class AtenSqueezeDim(WrappedOperation):
     """Represents the squeeze.dim operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Squeeze operations have zero computational cost - they only remove dimensions."""
+        return 0
 
 
 @dataclass
@@ -623,7 +689,15 @@ class AtenMm(WrappedOperation):
 class AtenLinalgVectorNorm(WrappedOperation):
     """Represents the linalg_vector_norm operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for vector norm computation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Vector norm: sqrt(sum(x^2)) = square, sum, sqrt = ~3 operations per element
+            return num_elements * 3
+        return super().ops
 
 
 @dataclass
@@ -631,7 +705,15 @@ class AtenLinalgVectorNorm(WrappedOperation):
 class AtenClampMin(WrappedOperation):
     """Represents the clamp_min operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for minimum clamping operation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Clamp min: max(x, min_value) = 1 comparison per element
+            return num_elements
+        return super().ops
 
 
 @dataclass
@@ -639,7 +721,15 @@ class AtenClampMin(WrappedOperation):
 class AtenMaxDim(WrappedOperation):
     """Represents the max.dim operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for max reduction along a dimension."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Max reduction: N-1 comparisons for N elements
+            return max(num_elements - 1, 0)
+        return super().ops
 
 
 @dataclass
@@ -647,7 +737,15 @@ class AtenMaxDim(WrappedOperation):
 class AtenRelu(WrappedOperation):
     """Represents the relu operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for ReLU activation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # ReLU: max(0, x) = 1 comparison per element
+            return num_elements
+        return super().ops
 
 
 @dataclass
@@ -655,7 +753,11 @@ class AtenRelu(WrappedOperation):
 class AtenAsStridedInplace(WrappedOperation):
     """Represents the as_strided_ operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for as_strided operation."""
+        # As strided is a view operation - no computation, only metadata change
+        return 0
 
 
 @dataclass
@@ -663,7 +765,15 @@ class AtenAsStridedInplace(WrappedOperation):
 class AtenRoll(WrappedOperation):
     """Represents the roll operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for roll operation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Roll is essentially a copy operation
+            return num_elements
+        return super().ops
 
 
 @dataclass
@@ -671,7 +781,15 @@ class AtenRoll(WrappedOperation):
 class AtenLeakyReluInplace(WrappedOperation):
     """Represents the leaky_relu_ operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for leaky ReLU activation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Leaky ReLU: max(x, α*x) = comparison + conditional multiplication = ~2 ops per element
+            return num_elements * 2
+        return super().ops
 
 
 @dataclass
@@ -679,7 +797,15 @@ class AtenLeakyReluInplace(WrappedOperation):
 class AtenSoftplus(WrappedOperation):
     """Represents the softplus operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for softplus activation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Softplus: log(1 + exp(x)) = exp + add + log = ~3 ops per element
+            return num_elements * 3
+        return super().ops
 
 
 @dataclass
@@ -741,7 +867,15 @@ class AtenSilu(WrappedOperation):
 class AtenCopyInplace(WrappedOperation):
     """Represents the copy_ operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for copy operation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Copy is a memory operation, but we count as 1 op per element
+            return num_elements
+        return super().ops
 
 
 @dataclass
@@ -749,7 +883,19 @@ class AtenCopyInplace(WrappedOperation):
 class AtenAdaptiveMaxPool2d(WrappedOperation):
     """Represents the adaptive_max_pool2d operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for adaptive max pooling 2D."""
+        input_shapes = self.input_shapes
+        output_shapes = self.output_shapes
+        if input_shapes and output_shapes:
+            input_elements = input_shapes[0].numel()
+            output_elements = output_shapes[0].numel()
+            # Max pooling: comparisons within pooling windows
+            # Approximate as input_elements / output_elements comparisons per output element
+            pool_size = input_elements // output_elements if output_elements > 0 else 1
+            return output_elements * max(pool_size - 1, 0)
+        return super().ops
 
 
 @dataclass
@@ -757,7 +903,11 @@ class AtenAdaptiveMaxPool2d(WrappedOperation):
 class AtenUnbindInt(WrappedOperation):
     """Represents the unbind.int operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for unbind operation."""
+        # Unbind is a view operation - splits tensor along dimension into sequence
+        return 0
 
 
 @dataclass
@@ -765,7 +915,15 @@ class AtenUnbindInt(WrappedOperation):
 class AtenClamp(WrappedOperation):
     """Represents the clamp operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for clamp operation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Clamp: min(max(x, min_val), max_val) = 2 comparisons per element
+            return num_elements * 2
+        return super().ops
 
 
 @dataclass
@@ -773,7 +931,11 @@ class AtenClamp(WrappedOperation):
 class AtenSelectInt(WrappedOperation):
     """Represents the select.int operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for select operation."""
+        # Select is a view operation - extracts slice along dimension
+        return 0
 
 
 @dataclass
@@ -781,7 +943,16 @@ class AtenSelectInt(WrappedOperation):
 class AtenTopk(WrappedOperation):
     """Represents the topk operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for top-k operation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Top-k requires sorting or selection: O(n log k) comparisons
+            # Approximating as 3 * num_elements for conservative estimate
+            return num_elements * 3
+        return super().ops
 
 
 @dataclass
@@ -789,7 +960,15 @@ class AtenTopk(WrappedOperation):
 class AtenGridSampler2d(WrappedOperation):
     """Represents the grid_sampler_2d operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for grid sampler 2D."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # Grid sampling involves interpolation: ~4 ops per output element
+            return num_elements * 4
+        return super().ops
 
 
 @dataclass
@@ -797,7 +976,15 @@ class AtenGridSampler2d(WrappedOperation):
 class AtenSumDimIntList(WrappedOperation):
     """Represents the sum.dim_IntList operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for sum reduction along dimensions."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Sum reduction: N-1 additions for N elements
+            return max(num_elements - 1, 0)
+        return super().ops
 
 
 @dataclass
@@ -805,7 +992,15 @@ class AtenSumDimIntList(WrappedOperation):
 class AtenRsubScalar(WrappedOperation):
     """Represents the rsub.Scalar operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for reverse scalar subtraction."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Reverse subtraction: scalar - tensor = 1 operation per element
+            return num_elements
+        return super().ops
 
 
 @dataclass
@@ -813,7 +1008,15 @@ class AtenRsubScalar(WrappedOperation):
 class AtenStack(WrappedOperation):
     """Represents the stack operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for stack operation."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # Stack is essentially a copy operation into new tensor
+            return num_elements
+        return super().ops
 
 
 @dataclass
@@ -821,7 +1024,15 @@ class AtenStack(WrappedOperation):
 class AtenIndexTensor(WrappedOperation):
     """Represents the index.Tensor operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for tensor indexing operation."""
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            # Indexing is essentially a gather operation
+            return num_elements
+        return super().ops
 
 
 @dataclass
@@ -829,7 +1040,15 @@ class AtenIndexTensor(WrappedOperation):
 class AtenLog(WrappedOperation):
     """Represents the log operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for logarithm operation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Natural logarithm: 1 transcendental operation per element
+            return num_elements
+        return super().ops
 
 
 @dataclass
@@ -837,7 +1056,15 @@ class AtenLog(WrappedOperation):
 class AtenHardtanhInplace(WrappedOperation):
     """Represents the hardtanh_ operation."""
 
-    pass
+    @property
+    def ops(self) -> int:
+        """Calculate FLOPs for hardtanh activation."""
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            # Hardtanh: clamp(x, min_val, max_val) = 2 comparisons per element
+            return num_elements * 2
+        return super().ops
 
 
 @dataclass
