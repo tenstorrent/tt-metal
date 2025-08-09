@@ -13,6 +13,23 @@
 
 namespace tt::tt_fabric::linear::experimental {
 
+template <size_t num_send_dir>
+FORCE_INLINE void open_connections(
+    tt::tt_fabric::WorkerToFabricEdmSender (&client_interfaces)[num_send_dir], size_t& rt_arg_idx) {
+    for (size_t i = 0; i < num_send_dir; i++) {
+        client_interfaces[i] =
+            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_arg_idx);
+        client_interfaces[i].open();
+    }
+}
+
+template <size_t num_send_dir>
+FORCE_INLINE void close_connections(tt::tt_fabric::WorkerToFabricEdmSender (&client_interfaces)[num_send_dir]) {
+    for (size_t i = 0; i < num_send_dir; i++) {
+        client_interfaces[i].close();
+    }
+}
+
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
