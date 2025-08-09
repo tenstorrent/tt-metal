@@ -193,8 +193,6 @@ void __attribute__((noinline)) Application(void) {
                 }
 
                 if (disable_consecutive_zero_reads >= kDisableConsecutiveZeroThreshold) {
-                    mailboxes->go_message.signal = RUN_MSG_DONE;
-                    // Track if we could not return back to _start
                     return;
                 }
             } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
