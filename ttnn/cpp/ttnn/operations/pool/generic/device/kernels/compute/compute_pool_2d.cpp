@@ -32,11 +32,14 @@ void MAIN {
 
     constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(13);
+    constexpr uint32_t in_idx_cb_id_0 = get_compile_time_arg_val(9);
+    constexpr uint32_t in_idx_cb_id_1 = get_compile_time_arg_val(10);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(11);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(12);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(14);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(15);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(16);
 
     constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
     constexpr bool is_partial_tile = in_c < 32;
