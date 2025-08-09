@@ -169,6 +169,11 @@ void __attribute__((noinline)) Application() {
     // This flag must be set to 1 before launching this firmware
     gEnableFwFlag[0] = 1;
 
+    // Require multiple consecutive observations of disable before honoring it to filter
+    // out occasional stale PCIe writes.
+    constexpr uint32_t kDisableConsecutiveZeroThreshold = 2048;  // tune as needed
+    uint32_t disable_consecutive_zero_reads = 0;
+
     while (1) {
         // Wait...
         WAYPOINT("GW");
@@ -178,10 +183,20 @@ void __attribute__((noinline)) Application() {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (!ignore_disable_until_first_go && gEnableFwFlag[0] != 1) {
-                mailboxes->go_message.signal = RUN_MSG_DONE;
-                // Track if we could not return back to _start
-                return;
+            if (!ignore_disable_until_first_go) {
+                if (gEnableFwFlag[0] != 1) {
+                    // Count consecutive observations of disable request
+                    disable_consecutive_zero_reads++;
+                } else {
+                    // Any observation of enable breaks the streak
+                    disable_consecutive_zero_reads = 0;
+                }
+
+                if (disable_consecutive_zero_reads >= kDisableConsecutiveZeroThreshold) {
+                    mailboxes->go_message.signal = RUN_MSG_DONE;
+                    // Track if we could not return back to _start
+                    return;
+                }
             } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
@@ -210,6 +225,8 @@ void __attribute__((noinline)) Application() {
             ignore_disable_until_first_go = false;
             gEnableFwFlag[0] = 1;
             __asm__ volatile("fence");
+            // Start fresh for the next idle period
+            disable_consecutive_zero_reads = 0;
         }
 
         {

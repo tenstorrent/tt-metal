@@ -243,6 +243,16 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
 
         return run == RUN_MSG_DONE;
     };
+
+    if (dispatch_core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+        uint64_t metal_launch_flag_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
+            dispatch_core_type, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
+        std::vector<uint32_t> metal_launch_flag_val =
+            read_hex_vec_from_core(chip_id, core, metal_launch_flag_addr, sizeof(uint32_t));
+        log_warning(
+            tt::LogMetal, "Device {}: {} Metal launch flag: {:#x}", chip_id, core.str(), metal_launch_flag_val[0]);
+    }
+
     return get_mailbox_is_done(go_msg_addr);
 }
 
