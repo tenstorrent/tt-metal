@@ -81,6 +81,7 @@ void process_send_side(
     BufferIndex& current_chunk_ack_index,
     OpenChunksCbT& open_chunks_cb,
     SendPoolT& send_pool,
+    size_t& unacked_sends,
     size_t& messages_sent,
     size_t& messages_acked,
     size_t messages_to_send,
@@ -96,23 +97,24 @@ void process_send_side(
         uint64_t end_cycles;
         if (can_release_chunk) {  // 22 cycles!??!?! (44 -> 22 if I don't include the branch condition in the timing)
 
-            start_cycles = eth_read_wall_clock();
+            // start_cycles = eth_read_wall_clock();
             auto chunk = open_chunks_cb.pop();  // avg 7.3 cycles
-            end_cycles = eth_read_wall_clock();
+            // end_cycles = eth_read_wall_clock();
             send_pool.return_chunk(chunk);  // 16 cycles
             current_chunk_ack_index = BufferIndex{0};
         }
         sender_mark_ack_processed();
         if (can_release_chunk) {
             timing_stats->release_count++;
-            timing_stats->total_release_cycles += (end_cycles - start_cycles);
+            // timing_stats->total_release_cycles += (end_cycles - start_cycles);
         }
         messages_acked++;
+        unacked_sends--;
     }
 
     // Try to send from current chunk
-    if (!eth_txq_is_busy() && messages_sent < messages_to_send && !open_chunks_cb.is_empty() &&
-        current_chunk_slot_index < CHUNK_N_PKTS) {
+    if (!eth_txq_is_busy() && unacked_sends < RX_N_PKTS && messages_sent < messages_to_send &&
+        !open_chunks_cb.is_empty() && current_chunk_slot_index < CHUNK_N_PKTS) {
         auto current_buffer = open_chunks_cb.peek_front();
 
         // Fill packet data
@@ -130,6 +132,7 @@ void process_send_side(
         messages_sent++;
 
         sender_view_rx_buf_wr_ptr.increment();
+        unacked_sends++;
     }
 
     // Acquire new chunk if current chunk is full
@@ -137,11 +140,11 @@ void process_send_side(
         current_chunk_slot_index = BufferIndex{0};
         // Acquire new chunk - measure timing
         auto new_chunk = send_pool.get_free_chunk();
-        uint64_t start_cycles = eth_read_wall_clock();
+        // uint64_t start_cycles = eth_read_wall_clock();
         open_chunks_cb.push(new_chunk);
-        uint64_t end_cycles = eth_read_wall_clock();
+        // uint64_t end_cycles = eth_read_wall_clock();
 
-        timing_stats->total_acquire_cycles += (end_cycles - start_cycles);
+        // timing_stats->total_acquire_cycles += (end_cycles - start_cycles);
         timing_stats->acquire_count++;
     }
 }
@@ -211,7 +214,7 @@ void kernel_main() {
 #endif
 
     ChannelBufferPointer<RX_N_PKTS> sender_view_rx_buf_wr_ptr;
-
+    size_t unacked_sends = 0;
     {
         DeviceZoneScopedN("FABRIC-ELASTIC-CHANNELS-TEST");
 
@@ -227,6 +230,7 @@ void kernel_main() {
                     current_chunk_ack_index,
                     open_chunks_cb,
                     send_pool,
+                    unacked_sends,
                     messages_sent,
                     messages_acked,
                     total_messages_target,

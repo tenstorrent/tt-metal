@@ -35,6 +35,8 @@
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
 using namespace tt;
 using namespace tt::test_utils;
 
@@ -66,8 +68,10 @@ public:
     }
     ~N300TestDevice() {
         if (device_open) {
+            log_info(tt::LogTest, "Tearing down devices");
             TearDown();
         }
+        log_info(tt::LogTest, "Tearing down devices complete");
     }
 
     void TearDown() {
@@ -302,15 +306,15 @@ void run_test(
     uint32_t total_messages_sent = config.total_messages;
     auto total_cycles = stats0.total_test_cycles;
     auto test_seconds = (double)total_cycles / 1000000000;
-    double throughput_msgs_per_sec = (double)total_messages_sent * 1000000.0 / test_seconds;
+    double throughput_msgs_per_sec = (double)total_messages_sent / test_seconds;
     double throughput_bytes_per_sec = throughput_msgs_per_sec * config.message_size;
-    double throughput_mbps = throughput_bytes_per_sec / (1024.0 * 1024.0);
+    double throughput_GB_s = throughput_bytes_per_sec / 1e9;
     log_info(tt::LogTest, "Total_cycles: {}", total_cycles);
 
     log_info(tt::LogTest, "Performance Metrics:");
     log_info(tt::LogTest, "  Total messages sent: {}", total_messages_sent);
     log_info(tt::LogTest, "  Throughput: {:.2f} messages/second", throughput_msgs_per_sec);
-    log_info(tt::LogTest, "  Throughput: {:.2f} MB/s", throughput_mbps);
+    log_info(tt::LogTest, "  Throughput: {:.2f} GB/s", throughput_GB_s);
 }
 
 int main(int argc, char** argv) {
@@ -395,5 +399,6 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    log_info(tt::LogTest, "Test completed successfully");
     return success ? 0 : -1;
 }
