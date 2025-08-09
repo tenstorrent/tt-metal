@@ -287,18 +287,7 @@ protected:
 };
 
 using UnitMeshCQSingleCardBufferFixture = UnitMeshCQSingleCardFixture;
-
-// left in for subdevice testing
-class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
-protected:
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices(90000000);
-    }
-};
+class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
 
 class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};
 
