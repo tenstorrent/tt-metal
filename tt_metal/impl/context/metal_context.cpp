@@ -247,7 +247,7 @@ MetalContext::MetalContext() {
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.
-    std::atexit([]() { MetalContext::instance().~MetalContext(); });
+    // std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
 distributed::multihost::DistributedContext& MetalContext::get_distributed_context() {

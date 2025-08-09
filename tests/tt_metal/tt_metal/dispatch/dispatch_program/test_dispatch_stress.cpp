@@ -20,6 +20,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
+#include "context/metal_context.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -150,6 +151,8 @@ TEST(DispatchStress, TensixRunManyTimes) {
 
         // Close all devices
         tt::tt_metal::detail::CloseDevices(reserved_devices_);
+
+        tt::tt_metal::MetalContext::instance().teardown();
     }
 }
 
