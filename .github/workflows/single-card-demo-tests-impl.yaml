@@ -111,7 +111,7 @@ jobs:
           set -euo pipefail
 
           echo "[info] Outputing default values"
-          default_demo_tests=${{ toJSON(matrix.default-demo-tests) }}
+          default_demo_tests='${{ toJSON(matrix.default-demo-tests) }}'
           echo $default_demo_tests
           echo "[info] Outputing default values via jq"
           echo $default_demo_tests | jq
