@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Union
 
 import torch
+from loguru import logger
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration as Ref_Qwen2_5_VLForConditionalGeneration,
 )
@@ -137,8 +138,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, tt_data_parallel=1):
-        optimizations, max_seq_len = get_platform_specific_optimizations(hf_config.name_or_path)
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
+        optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_config.name_or_path)
+        if max_seq_len > max_seq_len_native:
+            logger.info(
+                f"max_seq_len {max_seq_len} is not supported for {hf_config.name_or_path}, using {max_seq_len_native} instead"
+            )
+            max_seq_len = max_seq_len_native
         model_args, model, page_table, kv_cache = initialize_vllm_text_transformer(
             hf_config,
             mesh_device,
