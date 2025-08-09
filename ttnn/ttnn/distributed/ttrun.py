@@ -274,8 +274,8 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
 
     # Validate program executable exists
     program_path = Path(program[0])
-    # if not program_path.exists() and not shutil.which(program[0]):
-    #     raise click.ClickException(f"Program not found: {program[0]}")
+    if not program_path.exists() and not shutil.which(program[0]):
+        raise click.ClickException(f"Program not found: {program[0]}")
 
     # Build MPI command
     mpi_cmd = build_mpi_command(config, program, mpi_args)
