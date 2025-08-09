@@ -32,6 +32,12 @@ target_sources(
             common/types/ccl_types_device.hpp
             common/uops/ccl_command_device.hpp
             common/uops/ccl_command.hpp
+            common/interpreter_backends/kernel_common/algorithms.hpp
+            common/interpreter_backends/kernel_common/io_descriptors.hpp
+            common/kernels/command_processor.hpp
+            common/kernels/ccl_send_reader_two_input.cpp
+            common/kernels/ccl_send.cpp
+            common/kernels/ccl_wait_completion.cpp
     PRIVATE
         # Common
         ccl_op_fusion.cpp
