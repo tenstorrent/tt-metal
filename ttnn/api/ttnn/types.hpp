@@ -41,6 +41,7 @@ static constexpr auto TILE_LAYOUT = Layout::TILE;
 
 using tt::tt_metal::StorageType;
 static constexpr auto DEVICE_STORAGE_TYPE = StorageType::DEVICE;
+static constexpr auto HOST_STORAGE_TYPE = StorageType::HOST;
 
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
