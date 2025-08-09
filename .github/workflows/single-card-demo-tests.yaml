@@ -2,6 +2,15 @@ name: "(Single-card) Demo tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      requested-models:
+        description: "List of requested models as JSON array. Default is 'all'"
+        default: "all"
+        type: string
+      run-perf-tests:
+        description: "Run perf variants"
+        type: boolean
+        default: true
   schedule:
     - cron: "0 */6 * * 1,2,3,4,5"
     - cron: "0 */4 * * 0,6"
@@ -15,3 +24,5 @@ jobs:
       build-artifact-name: TTMetal_build_any_22.04_amd64_x86_64-linux-clang-17-libstdcpp
       wheel-artifact-name: eager-dist-cp310-ubuntu-22.04-any
       arch: wormhole_b0
+      requested-models: ${{ inputs.requested-models || 'all' }}
+      run-perf-tests: ${{ inputs.run-perf-tests || true }}
