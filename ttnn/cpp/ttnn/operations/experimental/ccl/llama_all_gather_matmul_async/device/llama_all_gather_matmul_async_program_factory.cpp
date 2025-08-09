@@ -406,7 +406,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
             const auto& intermediate = input_tensors[1];
             const auto& aggregated = input_tensors[2];
 
-            auto semaphore = static_cast<const ttnn::AllGatherReplicateAsync*>(operation)->semaphore;
+            auto semaphore = static_cast<const ttnn::AllGatherSP*>(operation)->semaphore;
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
 

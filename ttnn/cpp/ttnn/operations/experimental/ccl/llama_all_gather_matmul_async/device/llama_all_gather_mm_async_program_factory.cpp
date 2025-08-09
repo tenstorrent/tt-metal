@@ -461,7 +461,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
             const auto& intermediate = input_tensors[2];
             const auto& aggregated = output_tensors[0];
 
-            auto semaphore = static_cast<const ttnn::AllGatherReplicateAsync*>(operation)->semaphore;
+            auto semaphore = static_cast<const ttnn::AllGatherSP*>(operation)->semaphore;
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
 

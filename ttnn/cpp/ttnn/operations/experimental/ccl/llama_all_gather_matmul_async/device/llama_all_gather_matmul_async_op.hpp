@@ -26,14 +26,14 @@ namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
 
-enum class AllGatherReplicateAsyncVersion {
+enum class AllGatherSPVersion {
     GENERIC = 0,
     MINIMAL_INTERLEAVED_32 = 1,
     LLAMA_MINIMAL_SHARDED = 2,
     MINIMAL_INTERLEAVED_ANY = 3,
 };
 
-struct AllGatherReplicateAsync {
+struct AllGatherSP {
     std::vector<IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
@@ -44,7 +44,7 @@ struct AllGatherReplicateAsync {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
 
-    AllGatherReplicateAsync(
+    AllGatherSP(
         std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,
@@ -94,12 +94,12 @@ struct AllGatherReplicateAsync {
         const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 
-    AllGatherReplicateAsyncVersion select_version(const Tensor& input_tensor) const;
+    AllGatherSPVersion select_version(const Tensor& input_tensor) const;
 };
 
 struct LlamaAllGatherMatmulAsync {
     /* All Gather Replicate Params */
-    const ttnn::AllGatherReplicateAsync all_gather_replicate_async_struct;
+    const ttnn::AllGatherSP all_gather_replicate_async_struct;
 
     /* Matmul Params */
     const operations::matmul::Matmul matmul_struct;
@@ -228,7 +228,7 @@ Tensor llama_all_gather_matmul_async(
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 
 LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
-    const ttnn::AllGatherReplicateAsync& all_gather_replicate_async_struct,
+    const ttnn::AllGatherSP& all_gather_replicate_async_struct,
     const operations::matmul::Matmul& matmul_struct,
     const std::vector<IDevice*>& devices);
 

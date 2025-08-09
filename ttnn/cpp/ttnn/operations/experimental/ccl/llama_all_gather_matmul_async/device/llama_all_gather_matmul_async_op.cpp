@@ -10,8 +10,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn {
-/*AllGatherReplicateAsync Implementation starts here*/
-void AllGatherReplicateAsync::validate(const std::vector<Tensor>& input_tensors) const {
+/*AllGatherSP Implementation starts here*/
+void AllGatherSP::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
@@ -93,8 +93,7 @@ void AllGatherReplicateAsync::validate(const std::vector<Tensor>& input_tensors)
     // TODO: Add validation for output_mem_config
 }
 
-std::vector<ttnn::TensorSpec> AllGatherReplicateAsync::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> AllGatherSP::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& intermediate_tensor = input_tensors[1];
     auto shape = intermediate_tensor.padded_shape();  // TODO: Replace with logical_shape()
 
@@ -106,12 +105,12 @@ std::vector<ttnn::TensorSpec> AllGatherReplicateAsync::compute_output_specs(
         TensorLayout(intermediate_tensor.dtype(), intermediate_tensor.tensor_spec().page_config(), output_mem_config))};
 }
 
-std::vector<Tensor> AllGatherReplicateAsync::create_output_tensors(
+std::vector<Tensor> AllGatherSP::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
 }
 
-AllGatherReplicateAsyncVersion AllGatherReplicateAsync::select_version(const Tensor& input_tensor) const {
+AllGatherSPVersion AllGatherSP::select_version(const Tensor& input_tensor) const {
     auto input_tensor_shape = input_tensor.padded_shape();
     auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
     auto input_tensor_page_layout = input_tensor.layout();
@@ -156,7 +155,7 @@ AllGatherReplicateAsyncVersion AllGatherReplicateAsync::select_version(const Ten
             log_trace(
                 tt::LogOp,
                 "Matching conditions for Llama post binary mult+silu, using LLAMA_MINIMAL_SHARDED implementation");
-            return AllGatherReplicateAsyncVersion::LLAMA_MINIMAL_SHARDED;
+            return AllGatherSPVersion::LLAMA_MINIMAL_SHARDED;
         }
 
         // Check for llama post SDPA case
@@ -170,7 +169,7 @@ AllGatherReplicateAsyncVersion AllGatherReplicateAsync::select_version(const Ten
             output_mem_config.shard_spec()->shape[0] == 32 && output_mem_config.shard_spec()->shape[1] == 128 &&
             input_shard_num_cores == 8 && output_shard_num_cores == 32) {
             log_trace(tt::LogOp, "Matching conditions for Llama post SDPA, using LLAMA_MINIMAL_SHARDED implementation");
-            return AllGatherReplicateAsyncVersion::LLAMA_MINIMAL_SHARDED;
+            return AllGatherSPVersion::LLAMA_MINIMAL_SHARDED;
         }
 
         // Check for llama rms norm case
@@ -185,14 +184,14 @@ AllGatherReplicateAsyncVersion AllGatherReplicateAsync::select_version(const Ten
             output_shard_num_cores == 1) {
             log_trace(
                 tt::LogOp, "Matching conditions for Llama rms norm case, using LLAMA_MINIMAL_SHARDED implementation");
-            return AllGatherReplicateAsyncVersion::LLAMA_MINIMAL_SHARDED;
+            return AllGatherSPVersion::LLAMA_MINIMAL_SHARDED;
         }
     }
     log_trace(tt::LogOp, "Using generic implementation");
-    return AllGatherReplicateAsyncVersion::GENERIC;
+    return AllGatherSPVersion::GENERIC;
 }
 
-tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherReplicateAsync::create_mesh_workload(
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherSP::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -202,11 +201,11 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherReplicateAsync::crea
         });
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllGatherReplicateAsync::create_program_at(
+tt::tt_metal::operation::ProgramWithCallbacks AllGatherSP::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
-    AllGatherReplicateAsyncVersion version = select_version(input_tensors[0]);
+    AllGatherSPVersion version = select_version(input_tensors[0]);
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     if (this->cluster_axis.has_value()) {
@@ -240,7 +239,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherReplicateAsync::create_pr
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     switch (version) {
-        case AllGatherReplicateAsyncVersion::LLAMA_MINIMAL_SHARDED:
+        case AllGatherSPVersion::LLAMA_MINIMAL_SHARDED:
         default:
             log_trace(
                 tt::LogOp,
@@ -263,10 +262,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherReplicateAsync::create_pr
     }
 }
 
-tt::tt_metal::operation::Hash AllGatherReplicateAsync::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
+tt::tt_metal::operation::Hash AllGatherSP::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    AllGatherReplicateAsyncVersion version = select_version(input_tensors[0]);
+    AllGatherSPVersion version = select_version(input_tensors[0]);
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     // Input tensor
@@ -282,7 +280,7 @@ tt::tt_metal::operation::Hash AllGatherReplicateAsync::compute_program_hash(
     auto intermediate_memory_config = input_tensors[1].memory_config();
 
     uint32_t semaphore_address = this->semaphore.address();
-    return tt::tt_metal::operation::hash_operation<AllGatherReplicateAsync>(
+    return tt::tt_metal::operation::hash_operation<AllGatherSP>(
         this->dim,
         this->num_links,
         this->ring_size,
@@ -299,7 +297,7 @@ tt::tt_metal::operation::Hash AllGatherReplicateAsync::compute_program_hash(
         intermediate_memory_config);
 }
 
-/*AllGatherReplicateAsync Implementation ends here*/
+/*AllGatherSP Implementation ends here*/
 
 /* LlamaAllGatherMatmulAsync Implementation starts here*/
 void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
@@ -407,10 +405,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
-    ttnn::AllGatherReplicateAsyncVersion version =
-        this->all_gather_replicate_async_struct.select_version(input_tensors[0]);
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     if (this->all_gather_replicate_async_struct.cluster_axis.has_value()) {
@@ -442,43 +437,34 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
             }
         }
     }
-    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
-    switch (version) {
-        case ttnn::AllGatherReplicateAsyncVersion::LLAMA_MINIMAL_SHARDED:
-        default:
-            log_trace(
-                tt::LogOp,
-                "Detected all gather replicate specialized shape. all_gather_replicate_async_sharded is called");
-            return llama_all_gather_mm_async_sharded(
-                input_tensors[0],   // in0
-                input_tensors[1],   // in1
-                input_tensors[2],   // intermediate_tensor
-                output_tensors[0],  // aggregated_tensor (now output)
-                output_tensors[1],  // mm output tensor
-                target_device,
-                forward_device,
-                backward_device,
-                this->all_gather_replicate_async_struct.dim,
-                this->all_gather_replicate_async_struct.num_links,
-                this->all_gather_replicate_async_struct.ring_size,
-                device_index,
-                this->all_gather_replicate_async_struct.topology,
-                this->all_gather_replicate_async_struct.semaphore,
-                this->all_gather_replicate_async_struct.sub_device_id,
-                // MM params
-                this->matmul_struct.compute_kernel_config.value(),
-                this->matmul_struct.program_config.value(),
-                this->matmul_struct.global_cb);
-    }
+    return llama_all_gather_mm_async_sharded(
+        input_tensors[0],   // in0
+        input_tensors[1],   // in1
+        input_tensors[2],   // intermediate_tensor
+        output_tensors[0],  // aggregated_tensor (now output)
+        output_tensors[1],  // mm output tensor
+        target_device,
+        forward_device,
+        backward_device,
+        this->all_gather_replicate_async_struct.dim,
+        this->all_gather_replicate_async_struct.num_links,
+        this->all_gather_replicate_async_struct.ring_size,
+        device_index,
+        this->all_gather_replicate_async_struct.topology,
+        this->all_gather_replicate_async_struct.semaphore,
+        this->all_gather_replicate_async_struct.sub_device_id,
+        // MM params
+        this->matmul_struct.compute_kernel_config.value(),
+        this->matmul_struct.program_config.value(),
+        this->matmul_struct.global_cb);
 }
 
 tt::tt_metal::operation::Hash LlamaAllGatherMatmulAsync::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    ttnn::AllGatherReplicateAsyncVersion version =
-        this->all_gather_replicate_async_struct.select_version(input_tensors[0]);
+    ttnn::AllGatherSPVersion version = this->all_gather_replicate_async_struct.select_version(input_tensors[0]);
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     // Input tensor
@@ -529,7 +515,7 @@ namespace ccl {
 namespace {
 
 ttnn::LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
-    const ttnn::AllGatherReplicateAsync& all_gather_replicate_async_struct,
+    const ttnn::AllGatherSP& all_gather_replicate_async_struct,
     const operations::matmul::Matmul& matmul_struct,
     const std::vector<IDevice*>& devices) {
     return ttnn::LlamaAllGatherMatmulAsync{all_gather_replicate_async_struct, matmul_struct, devices};
@@ -576,7 +562,7 @@ Tensor llama_all_gather_matmul_async_impl(
     std::vector<std::optional<Tensor>> optional_output_tensors = {};
     optional_output_tensors.push_back(intermediate_tensor);
 
-    ttnn::AllGatherReplicateAsync all_gather_struct = ttnn::AllGatherReplicateAsync{
+    ttnn::AllGatherSP all_gather_struct = ttnn::AllGatherSP{
         {},
         gather_dim,
         num_preferred_links.has_value() ? num_preferred_links.value() : 1,
