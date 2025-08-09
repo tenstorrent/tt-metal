@@ -176,8 +176,6 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: 16847523376
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
@@ -185,8 +183,6 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: 16847523376
       - name: Check for invalid performance + civ2-compatible combination
         if: ${{ matrix.test-group.performance && matrix.test-group.civ2-compatible }}
         run: |

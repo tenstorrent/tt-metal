@@ -16,13 +16,22 @@ on:
     - cron: "0 */4 * * 0,6"
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
   single-card-demo-tests:
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:
-      docker-image: "ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:3a6f3289447c0320d0d176a087255518186f1fc5"
-      build-artifact-name: TTMetal_build_any_22.04_amd64_x86_64-linux-clang-17-libstdcpp
-      wheel-artifact-name: eager-dist-cp310-ubuntu-22.04-any
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       arch: wormhole_b0
       requested-models: ${{ inputs.requested-models || 'all' }}
       # Using || true after is dangerous since that will always be passed in if first value is falsy
