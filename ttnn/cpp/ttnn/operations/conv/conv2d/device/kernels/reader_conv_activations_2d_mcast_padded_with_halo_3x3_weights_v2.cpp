@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -84,30 +85,20 @@ void kernel_main() {
     constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(25);
     constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
 
-    uint32_t i = 0;
-    uint32_t noop = get_arg_val<uint32_t>(i);
-    i += 1;
-
-    if (noop) {
-        return;
-    }
-
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_row_major_bfloat16>();
     }
 
-    uint32_t act_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_dest_noc_end_x = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_dest_noc_end_y = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_sender_id = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_sender_noc_x = get_arg_val<uint32_t>(i);
-    i += 1;
+    uint32_t i = 0;
+    uint32_t act_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_dest_noc_end_x = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_dest_noc_end_y = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_sender_id = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
+    const bool is_receiver_core = get_arg_val<uint32_t>(i++) > 0;
+    const uint32_t num_dest_2 = act_mcast_num_dests + (is_receiver_core ? 0 : 1);
+    const uint32_t dst_num_cores_2 = act_mcast_num_cores + (is_receiver_core ? 0 : 1);
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
@@ -205,6 +196,7 @@ void kernel_main() {
             }
 
             noc_async_read_barrier();
+
             cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
             reader_offset += window_outer_offset;
@@ -216,14 +208,13 @@ void kernel_main() {
                 cb_reserve_back(cb_id_act, act_block_num_tiles);
                 if (act_w_outer_i == act_mcast_sender_id) {
                     // MCAST SENDER: send entire tilized input to other cores in column
-                    // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e.
-                    // its value should be act_mcast_num_dests), then reset the semaphore_addr value back to zero for
-                    // the next block
-                    noc_semaphore_wait(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_dests);
+                    // wait until all act mcast destinations have atomically incremented the act semaphore_addr
+                    // (i.e. its value should be act_mcast_num_dests), then reset the semaphore_addr value back to
+                    // zero for the next block
+                    noc_semaphore_wait(act_mcast_sender_semaphore_addr_ptr, num_dest_2);
                     noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
@@ -236,15 +227,15 @@ void kernel_main() {
                         tilized_act_start_address,
                         act_multicast_data_addr,
                         act_mcast_sender_size_bytes,
-                        act_mcast_num_cores + 1,
+                        dst_num_cores_2 + 1,
                         true);
 
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
-                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
-                    // (using NOC_CMD_STATIC_VC).
+                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and
+                    // same vc even though cmd bufs are different Also, this only works because we are setting VCs
+                    // statically (using NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
-                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may
-                    // not be sent in order they are issued
+                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and
+                    // may not be sent in order they are issued
                     noc_async_writes_flushed();
 #endif
 
@@ -252,10 +243,14 @@ void kernel_main() {
                     noc_semaphore_set_multicast_loopback_src(
                         act_mcast_sender_semaphore_valid_addr,
                         act_mcast_receiver_semaphore_noc_addr,
-                        act_mcast_num_cores + 1);
+                        dst_num_cores_2 + 1);
 
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                } else {
+                    for (int i; i < 1000000; i++) {
+                        asm volatile("nop");
+                    }
+                    DPRINT << "MCAST IS DONE    " << ENDL();
+                } else if (is_receiver_core) {
                     // MCAST RECEIVER: receive entire tilized input from sender core
                     // Set act semaphore value to INVALID
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
@@ -280,10 +275,19 @@ void kernel_main() {
                 }
                 cb_push_back(cb_id_act, act_block_num_tiles);
             }  // act_w_num_outer
+
+            DPRINT << "Pop tilized data" << ENDL();
             cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
 #endif
         }
         start_reader_idx = reader_idx;
     }
-    noc_async_write_barrier();
+
+    // DPRINT << "ACT KERNEL ALMOST DONE" << ENDL();
+    // noc_async_write_barrier();
+
+    // if (is_receiver_core) {
+    //   noc_async_write_barrier();
+    // }
+    DPRINT << "ACT KERNEL DONE" << ENDL();
 }

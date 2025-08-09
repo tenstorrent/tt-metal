@@ -95,7 +95,6 @@ static Tensor pool2d_invoke(
                 channels,
                 output_shape[1],
                 output_shape[2],
-                channels,
                 tt::constants::TILE_WIDTH,
                 input_tensor.device()->compute_with_storage_grid_size(),
                 ShardOrientation::ROW_MAJOR,

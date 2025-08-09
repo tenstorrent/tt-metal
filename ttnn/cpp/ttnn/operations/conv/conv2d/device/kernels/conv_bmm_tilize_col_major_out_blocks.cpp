@@ -15,9 +15,8 @@
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
 #endif
-
+#include "debug/dprint_pages.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-
 #define DEBUG_PRINT 0
 
 #ifdef SPLIT_READER
@@ -105,6 +104,7 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
     constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
     constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(27);
+    constexpr bool check_skip_compute = get_compile_time_arg_val(28);
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -131,6 +131,11 @@ void MAIN {
     constexpr bool split_reader = false;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
 #endif
+
+    bool skip_compute = false;
+    if constexpr (check_skip_compute) {
+        skip_compute = (bool)get_arg_val<uint32_t>(0);
+    }
 
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -209,7 +214,23 @@ void MAIN {
                 }
 
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
+                // DPRINT_UNPACK(tt::compute::common::print_full_tile(mm_in0_cb_id, 0));
+                //  ckernel::tensix_sync();
+                //  for (int i; i < 1000000; i++) {
+                //      DPRINT_UNPACK(DPRINT << "HELLO" << ENDL());
+                //  }
+                uint32_t in0_index_subblock_offset = 0;
+                if constexpr (check_skip_compute) {
+                    if (skip_compute) {
+                        DPRINT << "SKIP COMPUTE: " << in0_block_w_i << ENDL();
+                        // goto skip_compute_label;
+                        cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
+                        continue;
+                    }
+                }
+
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
+                // DPRINT_UNPACK(tt::compute::common::print_full_tile(in1_cb_id, 0));
 
                 if (last_out) {
 #if defined PACK_RELU and not defined FUSE_BIAS
@@ -224,7 +245,6 @@ void MAIN {
 #ifdef PACKER_L1_ACC
                 pack_reconfig_data_format(curr_matmul_out_cb);
 #endif
-                uint32_t in0_index_subblock_offset = 0;
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
@@ -377,6 +397,9 @@ void MAIN {
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
                 UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+            }
+            if (skip_compute) {
+                continue;
             }
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
