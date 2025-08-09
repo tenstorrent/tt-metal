@@ -25,15 +25,13 @@ void kernel_main() {
     const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
     const uint32_t HtWt = Ht * Wt;
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto src_args = TensorAccessorArgs<0>();
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr uint32_t onetile = 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
+    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 
     const uint32_t tiles_per_n = C * HtWt;
     const uint32_t tiles_per_d = N * tiles_per_n;
