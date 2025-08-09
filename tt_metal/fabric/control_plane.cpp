@@ -1202,7 +1202,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     bool valid_src =
         this->is_local_mesh(src_fabric_node_id.mesh_id) and host_local_coord_range.contains(src_mesh_coord);
     // Fabric Route will terminate at the exit node if the host does not own the destination node. i.e. dest is not on a
-    // mesh or coordinte range owned by the host.
+    // mesh or coordinate range owned by the host.
     bool end_route_at_exit_node =
         ((dst_fabric_node_id.mesh_id != src_fabric_node_id.mesh_id) and
          !(this->is_local_mesh(dst_fabric_node_id.mesh_id)) and (host_local_coord_range.contains(dst_mesh_coord)));
@@ -1251,13 +1251,18 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
             route.push_back({src_fabric_node_id, next_chan_id});
         }
 
-        auto dst_mesh_coord = this->routing_table_generator_->mesh_graph->chip_to_coordinate(
-            dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
-        if (this->is_local_mesh(src_mesh_id) and host_local_coord_range.contains(dst_mesh_coord)) {
+        auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+        auto next_eth_core = soc_desc.get_eth_core_for_channel(next_chan_id, CoordSystem::LOGICAL);
+        // Check if this link routes to a different host. If so, the connected link cannot be directly queried.
+        // The fabric route will end at the current chip, since it must be an exit node or an edge chip.
+        if (!this->is_intermesh_eth_link(physical_chip_id, CoreCoord(next_eth_core.x, next_eth_core.y))) {
             std::tie(src_fabric_node_id, src_chan_id) =
                 this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
             route.push_back({src_fabric_node_id, src_chan_id});
         } else {
+            // Verify that the remote eth link could not be queried because the current node is an exit node or
+            // edge chip of the local mesh.
             TT_ASSERT(
                 end_route_at_exit_node or end_route_at_edge_of_local_mesh,
                 "ControlPlane: route between {} and {} should not end at exit node or try to exit local mesh",
