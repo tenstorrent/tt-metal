@@ -81,7 +81,8 @@ def test_matmul(test_name, formats, dest_acc, math_fidelity, transpose, throttle
         src_B_golden,  # needs to be transposed and tilized
         formats.output_format,
         math_fidelity,
-        input_dimensions=input_dimensions,
+        input_A_dimensions=input_dimensions,
+        input_B_dimensions=input_dimensions,
     )
     # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
     golden_tensor = (
@@ -100,13 +101,6 @@ def test_matmul(test_name, formats, dest_acc, math_fidelity, transpose, throttle
     tilized_B = tilize_block(
         src_B, dimensions=input_dimensions, stimuli_format=formats.input_format
     )
-    res_address = write_stimuli_to_l1(
-        tilized_A.flatten(),
-        tilized_B.flatten(),
-        formats.input_format,
-        formats.input_format,
-        tile_count=tile_cnt,
-    )
 
     test_config = {
         "formats": formats,
@@ -114,11 +108,22 @@ def test_matmul(test_name, formats, dest_acc, math_fidelity, transpose, throttle
         "dest_acc": dest_acc,
         "math_fidelity": math_fidelity,
         "tile_cnt": tile_cnt,
-        "input_dimensions": input_dimensions,
+        "input_A_dimensions": input_dimensions,
+        "input_B_dimensions": input_dimensions,
         "unpack_transpose_faces": transpose.value,
         "unpack_transpose_within_face": transpose.value,  # matmul transposes both faces and within faces, there is no option for one or the other
         "throttle": throttle,
     }
+
+    res_address = write_stimuli_to_l1(
+        test_config,
+        tilized_A.flatten(),
+        tilized_B.flatten(),
+        formats.input_format,
+        formats.input_format,
+        tile_count_A=tile_cnt,
+        tile_count_B=tile_cnt,
+    )
 
     run_test(test_config)
 

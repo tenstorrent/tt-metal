@@ -41,6 +41,7 @@ from helpers.utils import passed_test
 def test_matmul_unpack_tilize(test_name, formats, dest_acc, math_fidelity):
 
     torch_format = format_dict[formats.output_format]
+    input_dimensions = [32, 32]
 
     src_A, src_B, tile_cnt = generate_stimuli(
         formats.input_format, formats.input_format
@@ -48,24 +49,36 @@ def test_matmul_unpack_tilize(test_name, formats, dest_acc, math_fidelity):
 
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = tilize(
-        generate_golden(src_A, src_B, formats.output_format, math_fidelity)
+        generate_golden(
+            src_A,
+            src_B,
+            formats.output_format,
+            math_fidelity,
+            input_A_dimensions=input_dimensions,
+            input_B_dimensions=input_dimensions,
+        )
     )
     golden_tensor = golden_tensor.to(torch_format)
 
-    res_address = write_stimuli_to_l1(
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-    )
-    buffer_dest_address = 0x1E000
     test_config = {
         "formats": formats,
         "testname": test_name,
         "dest_acc": dest_acc,
+        "input_A_dimensions": input_dimensions,
+        "input_B_dimensions": input_dimensions,
         "math_fidelity": math_fidelity,
         "L1_to_L1_iterations": 2,
     }
+
+    res_address = write_stimuli_to_l1(
+        test_config,
+        src_A,
+        src_B,
+        formats.input_format,
+        formats.input_format,
+        tile_count_A=tile_cnt,
+        tile_count_B=tile_cnt,
+    )
 
     run_test(test_config)
 

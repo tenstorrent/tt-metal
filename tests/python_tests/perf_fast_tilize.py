@@ -83,19 +83,26 @@ def test_fast_tilize_perf(
         input_format, input_format, input_dimensions=input_dimensions
     )
 
-    res_address = write_stimuli_to_l1(
-        src_A, src_B, input_format, input_format, tile_count=tile_cnt
-    )
-
     formats = InputOutputFormat(input_format, output_format)
 
     test_config = {
         "formats": formats,
         "testname": TEST_NAME,
         "tile_cnt": input_height * input_width,
-        "input_dimensions": input_dimensions,
+        "input_A_dimensions": input_dimensions,
+        "input_B_dimensions": input_dimensions,
         "dest_acc": fp32_dest,
     }
+
+    res_address = write_stimuli_to_l1(
+        test_config,
+        src_A,
+        src_B,
+        input_format,
+        input_format,
+        tile_count_A=tile_cnt,
+        tile_count_B=tile_cnt,
+    )
 
     results = perf_benchmark(test_config, [PerfRunType.L1_TO_L1], 2)
     update_report(report, test_config, results)

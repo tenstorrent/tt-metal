@@ -116,10 +116,6 @@ def eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop):
         mathop, src_A, formats.output_format, dest_acc, formats.input_format
     )
 
-    res_address = write_stimuli_to_l1(
-        src_A, src_B, formats.input_format, formats.input_format, tile_count=tile_cnt
-    )
-
     unpack_to_dest = (
         formats.input_format.is_32_bit()
         and dest_acc
@@ -129,11 +125,23 @@ def eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop):
         "formats": formats,
         "testname": test_name,
         "dest_acc": dest_acc,
+        "input_A_dimensions": input_dimensions,
+        "input_B_dimensions": input_dimensions,
         "mathop": mathop,
         "approx_mode": approx_mode,
         "unpack_to_dest": unpack_to_dest,
         "tile_cnt": tile_cnt,
     }
+
+    res_address = write_stimuli_to_l1(
+        test_config,
+        src_A,
+        src_B,
+        formats.input_format,
+        formats.input_format,
+        tile_count_A=tile_cnt,
+        tile_count_B=tile_cnt,
+    )
 
     run_test(test_config)
 

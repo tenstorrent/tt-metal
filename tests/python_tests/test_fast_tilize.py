@@ -76,17 +76,24 @@ def test_fast_tilize(test_name, formats, dest_acc, dimensions):
     generate_golden = get_golden_generator(TilizeGolden)
     golden_tensor = generate_golden(src_A, input_dimensions, formats.output)
 
-    res_address = write_stimuli_to_l1(
-        src_A, src_B, formats.input, formats.input, tile_count=tile_cnt
-    )
-
     test_config = {
         "formats": formats,
         "testname": test_name,
         "tile_cnt": tile_cnt,
-        "input_dimensions": input_dimensions,
+        "input_A_dimensions": input_dimensions,
+        "input_B_dimensions": input_dimensions,
         "dest_acc": dest_acc,
     }
+
+    res_address = write_stimuli_to_l1(
+        test_config,
+        src_A,
+        src_B,
+        formats.input,
+        formats.input,
+        tile_count_A=tile_cnt,
+        tile_count_B=tile_cnt,
+    )
 
     run_test(test_config)
 

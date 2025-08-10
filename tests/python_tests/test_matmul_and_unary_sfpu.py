@@ -96,7 +96,12 @@ def test_matmul_and_unary_sfpu(
 
     generate_matmul_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_matmul_golden(
-        src_A, src_B, formats.output_format, math_fidelity
+        src_A,
+        src_B,
+        formats.output_format,
+        math_fidelity,
+        input_A_dimensions=input_dimensions,
+        input_B_dimensions=input_dimensions,
     )
     golden_tensor = tilize(golden_tensor, formats.output_format)
 
@@ -106,22 +111,27 @@ def test_matmul_and_unary_sfpu(
     )
     golden_tensor = golden_tensor.to(torch_format)
 
-    res_address = write_stimuli_to_l1(
-        tilize(src_A, formats.input_format),
-        tilize(src_B, formats.input_format),
-        formats.input_format,
-        formats.input_format,
-    )
-
     test_config = {
         "formats": formats,
         "testname": test_name,
         "dest_acc": dest_acc,
+        "input_A_dimensions": input_dimensions,
+        "input_B_dimensions": input_dimensions,
         "math_fidelity": math_fidelity,
         "approx_mode": approx_mode,
         "mathop": mathop,
         "L1_to_L1_iterations": 2,  # This is a fused test does two runs of L1-L1, result tensor from first run (matmul) is used as input for second run (sfpu operation)
     }
+
+    res_address = write_stimuli_to_l1(
+        test_config,
+        tilize(src_A, formats.input_format),
+        tilize(src_B, formats.input_format),
+        formats.input_format,
+        formats.input_format,
+        tile_count_A=tile_cnt,
+        tile_count_B=tile_cnt,
+    )
 
     run_test(test_config)
 

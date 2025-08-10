@@ -5,11 +5,8 @@ import os
 from enum import Enum
 from pathlib import Path
 
-from ttexalens.tt_exalens_lib import (
-    read_word_from_device,
-)
-
 from .device import run_elf_files, wait_for_tensix_operations_finished
+from .dimensions import validate_tile_dimensions
 from .format_arg_mapping import (
     FPU_BINARY_OPERATIONS,
     REDUCE_OPERATIONS,
@@ -17,7 +14,6 @@ from .format_arg_mapping import (
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     DestAccumulation,
-    L1BufferLocations,
     MathFidelity,
     MathOperation,
     StochasticRounding,
@@ -210,10 +206,10 @@ def generate_build_header(
     header_content.append("// Multi-tile test configuration")
     header_content.append(f"constexpr int TILE_CNT = {tile_cnt};")
 
-    # Unpack an result buffer addresses arrays generations
-    buffer_A_address = read_word_from_device("0,0", L1BufferLocations.srcA.value)
-    buffer_B_address = read_word_from_device("0,0", L1BufferLocations.srcB.value)
-    result_buffer_address = read_word_from_device("0,0", L1BufferLocations.Result.value)
+    # Unpack + result buffer addresses arrays generations
+    buffer_A_address = test_config.get("buffer_A_address", 0x1A000)
+    buffer_B_address = test_config.get("buffer_B_address", 0x1B000)
+    result_buffer_address = test_config.get("result_buffer_address", 0x1C000)
 
     buffer_A_array = []
     buffer_B_array = []
@@ -251,9 +247,15 @@ def generate_build_header(
         "#endif\n"
     )
 
-    input_dimensions = test_config.get("input_dimensions", [32, 32])
-    block_ct_dim = input_dimensions[1] // 32
-    block_rt_dim = input_dimensions[0] // 32
+    input_A_dimensions = test_config.get("input_A_dimensions", [32, 32])
+    input_B_dimensions = test_config.get("input_B_dimensions", [32, 32])
+
+    num_rows = 32
+    num_cols = 32
+    validate_tile_dimensions(input_A_dimensions[0], num_cols)
+    validate_tile_dimensions(input_B_dimensions[1], num_rows)
+    block_rt_dim = input_A_dimensions[0] // num_cols
+    block_ct_dim = input_B_dimensions[1] // num_rows
 
     header_content.extend(
         [
@@ -263,6 +265,16 @@ def generate_build_header(
             "#endif",
         ]
     )
+
+    # Add matrix multiplication tile dimensions if they exist
+    if "rt_dim" in test_config:
+        header_content.append(f"constexpr uint32_t RT_DIM = {test_config['rt_dim']};")
+    if "ct_dim" in test_config:
+        header_content.append(f"constexpr uint32_t CT_DIM = {test_config['ct_dim']};")
+    if "kt_dim" in test_config:
+        header_content.append(f"constexpr uint32_t KT_DIM = {test_config['kt_dim']};")
+
+    header_content.append("")
 
     if perf_run_type := test_config.get("perf_run_type"):
         header_content.append("")
