@@ -43,12 +43,43 @@ void bind_normalization_softmax_operation(py::module& module) {
                 * :attr:`memory_config`: the memory configuration for the output tensor. If not provided, the memory configuration of the input tensor is used.
                 * :attr:`compute_kernel_config`: the compute kernel configuration for the op. If not provided, the default configuration of the op is used.
 
-            Example:
+            Note:
+              Supported data types and layouts by tensor:
 
-                >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-                >>> output = ttnn.softmax(tensor, -1)
-                >>> print(output[0, 0, 0, :3])
-                ttnn.Tensor([ 0.0310059, 0.0310059, 0.0310059], dtype=bfloat16 )
+              .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16, FLOAT32, BFLOAT8_B
+                  - TILE
+
+              .. list-table:: mask (optional)
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16, BFLOAT8_B
+                  - TILE, ROW_MAJOR
+
+              .. list-table:: output_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - matches input_tensor dtype
+                  - TILE
+
+            Limitations:
+              - All tensors must be on-device.
+              - Unsharded inputs are interleaved; sharded runs require M and K to be divisible by TILE_WIDTH.
+              - If a mask is provided:
+                - If sharded: mask must have identical padded shape to input.
+                - If unsharded and ROW_MAJOR: last padded dim must be TILE_WIDTH; broadcast dims must be 1 except the last two; padded last two dims must align to input's width tiles and TILE_WIDTH.
+
+            Example:
+                tensor = ttnn.zeros((1, 1, 64, 32), dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+                output = ttnn.softmax(tensor, -1)
         )doc";
 
     using OperationType = decltype(ttnn::softmax);
@@ -90,7 +121,39 @@ void bind_normalization_scale_mask_softmax_operation(py::module& module) {
                 * :attr:`is_causal_mask`: determines whether the mask tensor is causal or not. If not provided, non-causal mask will be used.
                 * :attr:`compute_kernel_config`: the compute kernel configuration for the op. If not provided, the default configuration of the op is used.
 
-            Example:
+            Note:
+              Supported data types and layouts by tensor:
+
+              .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16, FLOAT32, BFLOAT8_B
+                  - TILE
+
+              .. list-table:: mask
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16, BFLOAT8_B
+                  - TILE, ROW_MAJOR
+
+              .. list-table:: output_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - matches input_tensor dtype
+                  - TILE
+
+            Limitations:
+              - All tensors must be on-device
+              - Mask broadcasting: for unsharded ROW_MAJOR mask, intermediate dims except the last two must be 1; last dim must equal TILE_WIDTH; width (in tiles) must align to input.
+              - Sharded inputs require TILE layout mask with identical padded shape to input.
+              - Internal block size constraints on width-in-tiles may restrict in-place variants for very large widths.
+
 
         )doc";
 
@@ -135,7 +198,32 @@ void bind_normalization_softmax_in_place_operation(py::module& module) {
                 * :attr:`program_config`: the program configuration for op. If not provided, SoftmaxDefaultProgramConfig is used.
                 * :attr:`compute_kernel_config`: the compute kernel configuration for the op. If not provided, the default configuration of the op is used.
 
+            Note:
+              Supported data types and layouts by tensor:
+
+              .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16, FLOAT32, BFLOAT8_B
+                  - TILE
+
+              .. list-table:: output_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - matches input_tensor dtype
+                  - TILE
+
+            Limitations:
+              - In-place variant is disabled for very wide tensors (when CBs would consume more than 90% of L1) and will fall back to standard softmax.
+
             Example:
+                shape = [1, 1, 32, 32]
+                input_tensor = ttnn.rand(shape, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+                output_tensor = ttnn.softmax_in_place(input_tensor)
 
         )doc";
 
@@ -173,7 +261,35 @@ void bind_normalization_scale_mask_softmax_in_place_operation(py::module& module
                 * :attr:`program_config`: the program configuration for op. If not provided, SoftmaxDefaultProgramConfig is used.
                 * :attr:`compute_kernel_config`: the compute kernel configuration for the op. If not provided, the default configuration of the op is used.
 
-            Example:
+            Note:
+              Supported data types and layouts by tensor:
+
+              .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16, FLOAT32, BFLOAT8_B
+                  - TILE
+
+              .. list-table:: mask
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16, BFLOAT8_B
+                  - TILE, ROW_MAJOR
+
+              .. list-table:: output_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - matches input_tensor dtype
+                  - TILE
+
+            Limitations:
+              - Mask constraints and width block-size limitations are the same as for the non-in-place scale_mask_softmax variant.
 
         )doc";
 
@@ -218,7 +334,39 @@ void bind_normalization_scale_causal_mask_hw_dims_softmax_in_place_operation(py:
                 * :attr:`program_config`: the program configuration for op. If not provided, SoftmaxDefaultProgramConfig is used.
                 * :attr:`compute_kernel_config`: the compute kernel configuration for the op. If not provided, the default configuration of the op is used.
 
-            Example:
+            Note:
+              Supported data types and layouts by tensor:
+
+              .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16, FLOAT32, BFLOAT8_B
+                  - TILE
+
+              .. list-table:: mask
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16, BFLOAT8_B
+                  - TILE
+
+              .. list-table:: output_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - matches input_tensor
+                  - TILE
+
+            Limitations:
+              - All tensors must be on-device.
+              - Requires sharded input and a sharded softmax program config.
+              - Mask must not be sharded.
+              - Scale must be provided.
+
 
         )doc";
 
