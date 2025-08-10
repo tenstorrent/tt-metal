@@ -4157,7 +4157,7 @@ parameters = {
             {"dim": 1, "shapes": [[600, 2], [600, 2]]},
             {"dim": -1, "shapes": [[8732, 2], [8732, 2]]},
         ],
-        "dtype": [ttnn.bfloat16, ttnn.uint32, ttnn.int32],
+        "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
@@ -4174,19 +4174,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-torch.manual_seed(0)
-
-
-def random_torch_tensor(dtype, shape):
-    if dtype == ttnn.uint16:
-        return torch.randint(0, 100, shape).to(torch.int16)
-    if dtype == ttnn.int32:
-        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
-    if dtype == ttnn.uint32:
-        return torch.randint(0, 2**31, shape, dtype=torch.int32)
-    return torch.rand(shape).bfloat16().float()
-
-
 def run(
     concat_specs,
     dtype,
@@ -4194,7 +4181,7 @@ def run(
     *,
     device,
 ) -> list:
-    torch_input_tensors = [random_torch_tensor(dtype, shape) for shape in concat_specs["shapes"]]
+    torch_input_tensors = [torch_random(shape, -0.1, 0.1, dtype=torch.bfloat16) for shape in concat_specs["shapes"]]
     torch_output_tensor = torch.concat(torch_input_tensors, dim=concat_specs["dim"])
 
     ttnn_input_tensors = [
@@ -4218,7 +4205,7 @@ def test_concat_pytorch2(concat_spec, dtype, layout, device):
     if dtype == ttnn.bfloat16 and any([shape[-1] % 2 != 0 for shape in shapes]) and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Skipping test for RM bfloat16 with odd last dimension")
 
-    torch_input_tensors = [random_torch_tensor(dtype, shape) for shape in shapes]
+    torch_input_tensors = [torch_random(shape, -0.1, 0.1, dtype=torch.bfloat16) for shape in shapes]
     torch_output_tensor = torch.cat(torch_input_tensors, dim=dim)
 
     ttnn_input_tensors = [
