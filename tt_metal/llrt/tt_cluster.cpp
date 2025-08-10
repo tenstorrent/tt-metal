@@ -38,6 +38,8 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/intermesh_constants.hpp"
+#include <unistd.h>
 #include "tt_metal/llrt/tlb_config.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/hugepage.h>
@@ -1330,6 +1332,35 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
             }
         }
     }
+}
+
+const std::unordered_map<chip_id_t, uint64_t>& Cluster::get_unique_chip_ids() const {
+    char hostname[HOST_NAME_MAX + 1];
+    gethostname(hostname, sizeof(hostname));
+    if (chip_id_to_unique_id_.empty()) {
+        // if (this->get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_) ==
+        // tt::tt_metal::ClusterType::GALAXY) {
+        chip_id_to_unique_id_ = this->cluster_desc_->get_chip_unique_ids();
+        // } else {
+        //     uint64_t local_board_id = 0;
+        //     auto local_board_id_addr =
+        //         tt_metal::MetalContext::instance().hal().get_dev_addr(
+        //             tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO)
+        //             +
+        //         tt_fabric::intermesh_constants::LOCAL_BOARD_ID_OFFSET;
+        //     for (const auto& chip_id : this->user_exposed_chip_ids()) {
+        //         auto eth_chan = *(cluster_desc_->get_active_eth_channels(chip_id).begin());
+        //         auto eth_core = this->get_virtual_eth_core_from_channel(chip_id, eth_chan);
+        //         this->read_core(
+        //             &local_board_id,
+        //             sizeof(uint64_t),
+        //             tt_cxy_pair(chip_id, eth_core.x, eth_core.y),
+        //             local_board_id_addr);
+        //         chip_id_to_unique_id_.insert({chip_id, local_board_id});
+        //     }
+        // }
+    }
+    return chip_id_to_unique_id_;
 }
 
 std::uint32_t Cluster::get_ubb_asic_id(chip_id_t physical_chip_id) const {

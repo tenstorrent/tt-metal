@@ -46,11 +46,15 @@ target_sources(
         serialization/intermesh_link_table.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
+        physical_system_descriptor.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
-set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs)
+set(FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/exit_node_connection.fbs
+)
 
 # Collect all generated headers
 set(GENERATED_FBS_HEADERS)

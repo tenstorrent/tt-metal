@@ -79,6 +79,7 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
+        yaml-cpp::yaml-cpp
 )
 add_executable(test_system_health)
 
