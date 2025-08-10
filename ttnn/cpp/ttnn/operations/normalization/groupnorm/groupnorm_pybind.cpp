@@ -90,8 +90,9 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
               - For the :attr:`input_mask`, C must match the number of groups, H must match a tile's height, and W must be a multiple of a tile's width.
               - :attr:`inplace` is not supported for TILE-layout inputs and requires input and output layouts to be identical.
               - When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.
+              - Width-sharding is not supported (use height or block sharding)
 
-            Example:
+              Example:
                 tile_size = 32
                 N, C, H, W = 1, 480, 1, 64
                 grid_size = ttnn.CoreGrid(y=1, x=1)
