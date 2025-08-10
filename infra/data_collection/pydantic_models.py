@@ -7,7 +7,7 @@ Definition of the pydantic models used for data production.
 """
 
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Union, Tuple
 
 from enum import Enum
 from pydantic import BaseModel, Field, model_validator
@@ -402,6 +402,27 @@ class PerfMetric(BaseModel):
     metric_value: Optional[float] = Field(description="Metric value.")
 
 
+class TestVector(BaseModel):
+    """
+    A test vector is a set of test paramters and their values.
+    """
+
+    param_name: str = Field(description="Test parameter name.")
+
+    # Agreed with the data producers to avoid additional nested structures here.
+    # Test parameter values can be a single value, a list, or a tuple of values (tuples serialize as lists in JSON)
+    param_value: Union[
+        int,
+        float,
+        str,
+        List[Union[int, float, str]],
+        Tuple[Union[int, float, str], ...],
+    ] = Field(description="Test parameter value.")
+
+    class Config:
+        frozen = True
+
+
 class OpTest(BaseModel):
     """
     One flattened record for a op test (sweeps or unit test) testcase/vector execution result.
@@ -435,7 +456,7 @@ class OpTest(BaseModel):
     )
 
     # Original vector contents (sanitized/normalized for JSON)
-    original_vector_data: Dict[str, Any] = Field(description="Original test vector contents.")
+    test_vector: set[TestVector] = Field(description="Original test vector contents.")
 
 
 class OpRun(BaseModel):
