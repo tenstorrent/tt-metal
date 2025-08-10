@@ -24,7 +24,7 @@
 #include <stdint.h>
 
 extern "C" [[gnu::section(".start")]]
-void _start() {
+void _start(uint32_t) {
     extern uint32_t __kernel_data_lma[];
     do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 

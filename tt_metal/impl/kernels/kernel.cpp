@@ -590,7 +590,8 @@ void EthernetKernel::read_binaries(IDevice* device) {
         });
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
-    log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);
+    log_info(
+        LogLoader, "ERISC={}, name={}, size={} (bytes) load type = {}", erisc_id, this->name(), binary_size, load_type);
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }

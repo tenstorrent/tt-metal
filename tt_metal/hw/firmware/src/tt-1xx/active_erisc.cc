@@ -256,9 +256,9 @@ void __attribute__((noinline)) Application(void) {
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
-            DPRINT << "Enables = " << (uint32_t)enables << ENDL();
+            (reinterpret_cast<volatile uint32_t*>(0x20000))[0] = 0xbaba;
 
-            // run_subordinate_eriscs(enables);
+            run_subordinate_eriscs(enables);
 
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
@@ -267,15 +267,16 @@ void __attribute__((noinline)) Application(void) {
                     static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
-                DPRINT << "Primary GO at " << HEX() << kernel_lma << ENDL();
+                // DPRINT << "Primary GO at " << HEX() << kernel_lma << ENDL();
                 reinterpret_cast<void (*)()>(kernel_lma)();
                 WAYPOINT("D");
             }
 
-            // wait_subordinate_eriscs();
+            wait_subordinate_eriscs();
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed

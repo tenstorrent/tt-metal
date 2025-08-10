@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 35
+        default: 10
       docker-image:
         required: true
         type: string
@@ -103,11 +103,17 @@ jobs:
           apt-get update && apt-get install -y pciutils
           echo "LSPCI -vv output:"
           sudo lspci -d 1e52: -vvv
+          pip install git+https://github.com/tenstorrent/tt-exalens
+          tt-exalens --use-noc1 --commands "go -l e0,11; noc status; x"
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           mkdir -p generated/test_reports
           ${{ matrix.test-group.cmd }}
+      - name: Print Noc Counters
+        if: ${{ failure() }}
+        run: |
+          tt-exalens --commands "go -l e0,11; noc status; x"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

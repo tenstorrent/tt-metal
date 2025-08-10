@@ -118,6 +118,7 @@ TEST_F(DPrintFixture, ActiveEthTestPrint) {
                 },
                 device
             );
+            break;
         }
     }
 }

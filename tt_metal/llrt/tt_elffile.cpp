@@ -509,7 +509,7 @@ void ElfFile::Impl::XIPify() {
         // be out of bounds (and probably fail),
         // but we kind of want that anyway
         if (ELF32_R_TYPE((&reloc)[1].r_info) != R_RISCV_RELAX) {
-            log_debug(tt::LogLLRuntime, "{}: Relocation at {} is not relaxed", path_, reloc.r_offset);
+            log_info(tt::LogLLRuntime, "{}: Relocation at {} is not relaxed", path_, reloc.r_offset);
         }
     };
 
@@ -625,7 +625,7 @@ void ElfFile::Impl::XIPify() {
                         break;
                     }
                     // Emit dynamic reloc
-                    log_debug(
+                    log_info(
                         tt::LogLLRuntime, "{}: emitting dynamic R_RISCV_32 relocation at {}", path_, reloc.r_offset);
                     address_t value = (symbol->st_value + reloc.r_addend - GetSegments().front().address);
                     Write32(section, reloc.r_offset, value);
@@ -723,7 +723,7 @@ void ElfFile::Impl::XIPify() {
                 // translate hi
                 check_relaxed(*hi_reloc);
                 uint32_t insn = Read32(section, hi_reloc->r_offset);
-                log_debug(
+                log_info(
                     tt::LogLLRuntime,
                     "{}: translating {} at {} to {}",
                     path_,
@@ -750,7 +750,7 @@ void ElfFile::Impl::XIPify() {
                     bool is_form_i = type == (kind == PCREL ? R_RISCV_PCREL_LO12_I : R_RISCV_LO12_I);
                     check_relaxed(*lo_reloc);
                     uint32_t insn = Read32(section, lo_reloc->r_offset);
-                    log_debug(
+                    log_info(
                         tt::LogLLRuntime,
                         "{}: translating R_RISCV{}_LO12 at {} to R_RISCV{}_LO12",
                         path_,

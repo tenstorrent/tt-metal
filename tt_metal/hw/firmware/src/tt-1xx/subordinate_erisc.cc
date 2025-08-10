@@ -128,7 +128,7 @@ int main() {
         uint32_t kernel_lma =
             kernel_config_base +
             mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[PROCESSOR_TYPE_INDEX];
-        DPRINT << "Subordinate GO at " << HEX() << kernel_lma << ENDL();
+        // DPRINT << "Subordinate GO at " << HEX() << kernel_lma << ENDL();
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");

@@ -184,7 +184,7 @@ bool test_load_write_read_risc_binary(
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr = tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
-
+        log_info(tt::LogLLRuntime, "Writing to address {:#x} -> {:#x} on core {}", addr, relo_addr, core.str());
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });

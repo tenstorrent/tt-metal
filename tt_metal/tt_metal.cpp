@@ -750,10 +750,16 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
                 log_info(
                     tt::LogMetal,
-                    "Writing launch msg. Enables = {:#x} {} {}",
+                    "Writing launch msg. Enables = {:#x} {} {} {} {} {} {} {} {}",
                     msg->kernel_config.enables,
                     core_type,
-                    logical_core.str());
+                    logical_core.str(),
+                    physical_core.str(),
+                    msg->kernel_config.kernel_text_offset[0],
+                    msg->kernel_config.kernel_text_offset[1],
+                    msg->kernel_config.kernel_text_offset[2],
+                    msg->kernel_config.kernel_text_offset[3],
+                    msg->kernel_config.kernel_text_offset[4]);
 
                 tt::llrt::write_launch_msg_to_core(
                     device->id(),

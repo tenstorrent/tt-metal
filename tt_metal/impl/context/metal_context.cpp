@@ -935,7 +935,8 @@ void MetalContext::initialize_firmware(
                             BuildEnvManager::get_instance()
                                 .get_firmware_build_state(device_id, core_type_idx, processor_class, eriscv_id)
                                 .get_target_out_path("");
-                        const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        const ll_api::memory& binary_mem =
+                            llrt::get_risc_binary(fw_path, ll_api::memory::Loading::DISCRETE);
                         uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(
                             tt::LogMetal,
