@@ -241,8 +241,8 @@ struct Attribute final {
     ~Attribute() { this->destruct(); }
 
 private:
-    alignas(ALIGNMENT) void* pointer = nullptr;
     alignas(ALIGNMENT) storage_t type_erased_storage{};
+    alignas(ALIGNMENT) void* pointer = nullptr;
 
     void (*delete_storage)(storage_t&) = nullptr;
     void* (*copy_storage)(storage_t& storage, const void*) = nullptr;
