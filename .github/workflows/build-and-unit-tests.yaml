@@ -104,7 +104,7 @@ jobs:
           echo "LSPCI -vv output:"
           sudo lspci -d 1e52: -vvv
           pip install git+https://github.com/tenstorrent/tt-exalens
-          tt-exalens --use-noc1 --commands "go -l e0,11; noc status; x"
+          tt-exalens --use-noc1 --commands "go -l e0,4; noc status; x"
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
@@ -113,7 +113,7 @@ jobs:
       - name: Print Noc Counters
         if: ${{ failure() }}
         run: |
-          tt-exalens --commands "go -l e0,11; noc status; x"
+          tt-exalens --use-noc1 --commands "go -l e0,4; noc status; x"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
