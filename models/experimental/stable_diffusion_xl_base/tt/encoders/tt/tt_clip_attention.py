@@ -25,6 +25,9 @@ class TtClipAttention(nn.Module):
         self.head_dim = hidden_size // num_attention_heads
         self.scale = self.head_dim**-0.5
 
+        # analyze all weights
+        # analyze_state_dict(state_dict, "CLIP Attention Model")
+
         q_weights = state_dict[f"{module_path}.q_proj.weight"].unsqueeze(0).unsqueeze(0)
         q_bias = state_dict[f"{module_path}.q_proj.bias"]
         k_weights = state_dict[f"{module_path}.k_proj.weight"].unsqueeze(0).unsqueeze(0)
