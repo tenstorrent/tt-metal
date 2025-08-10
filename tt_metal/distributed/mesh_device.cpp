@@ -578,7 +578,9 @@ bool MeshDevice::close() {
     ZoneScoped;
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
-    ReadMeshDeviceProfilerResults(*this, ProfilerReadState::LAST_FD_READ);
+    if (this->is_initialized()) {
+        ReadMeshDeviceProfilerResults(*this, ProfilerReadState::LAST_FD_READ);
+    }
 
     // TODO #20966: Remove these calls
     for (auto device : view_->get_devices()) {

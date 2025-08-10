@@ -48,9 +48,7 @@ def set_env_vars(**kwargs):
         "doSync": "TT_METAL_PROFILER_SYNC=1 ",
         "doDispatchCores": "TT_METAL_DEVICE_PROFILER_DISPATCH=1 ",
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
-        "dispatchFromWorker": "TT_TEST_USE_WORKER_DISPATCH=1 ",
         "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
-        "dispatchFromEth": "TT_TEST_USE_ETH_DISPATCH=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -82,21 +80,13 @@ def run_device_profiler_test(
     slowDispatch=False,
     doSync=False,
     doDispatchCores=False,
-    dispatchFromWorker=False,
-    dispatchFromEth=False,
 ):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
     if testName:
         testCommand = testName
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(
-        slowDispatch=slowDispatch,
-        doSync=doSync,
-        doDispatchCores=doDispatchCores,
-        dispatchFromWorker=dispatchFromWorker,
-        dispatchFromEth=dispatchFromEth,
-    )
+    envVars = set_env_vars(slowDispatch=slowDispatch, doSync=doSync, doDispatchCores=doDispatchCores)
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
     print()
     logger.info(f"Running: {testCommand}")
@@ -258,17 +248,16 @@ def test_dispatch_cores():
         assert len(statTypesSet) == 0
 
     verify_stats(
-        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True, dispatchFromWorker=True),
+        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=150,
     )
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
-            dispatchFromWorker=True,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -276,10 +265,9 @@ def test_dispatch_cores():
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
-            dispatchFromWorker=True,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -290,7 +278,6 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
             setupAutoExtract=False,
             doDispatchCores=True,
-            dispatchFromWorker=True,
         ),
         statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
         allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
@@ -303,10 +290,9 @@ def test_dispatch_cores():
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 840, 1430, 1660, 2320], "Ethernet CQ Prefetch": [572, 4030]}
     devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
-        dispatchFromEth=True,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
@@ -323,10 +309,9 @@ def test_ethernet_dispatch_cores():
                 ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
     devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
-        dispatchFromEth=True,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
@@ -603,14 +588,81 @@ def test_fabric_event_profiler_1d_multicast():
 
         assert (
             fabric_event_count == expected_output["FABRIC_EVENT_COUNT"]
-        ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {EXPECTED_FABRIC_EVENT_COUNT}"
+        ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
+
+
+@skip_for_blackhole()
+def test_fabric_event_profiler_fabric_mux():
+    # test that current device has a valid fabric API connection
+    sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    sanity_check_test_name = "Fabric1DFixture.TestUnicastConnAPI"
+    sanity_check_succeeded = run_gtest_profiler_test(
+        sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
+    )
+    if not sanity_check_succeeded:
+        logger.info("Device does not have testable fabric connections, skipping ...")
+        return
+
+    # if device supports fabric API, test fabric event profiler
+    test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    tests = ["Fabric1DMuxFixture.TestFabricMuxTwoChipVariantWithNocTracing"]
+    expected_outputs = [
+        {"FABRIC_EVENT_COUNT": 400},
+    ]
+
+    for test_name, expected_output in zip(tests, expected_outputs):
+        nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+        try:
+            not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
+            assert not_skipped, f"gtest command '{test_bin}' was skipped unexpectedly"
+        except subprocess.CalledProcessError as e:
+            ret_code = e.returncode
+            assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
+
+        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
+        assert os.path.isfile(
+            expected_cluster_coords_file
+        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
+
+        noc_trace_files = glob.glob(f"{PROFILER_LOGS_DIR}/noc_trace_dev[0-9]_ID[0-9].json")
+
+        fabric_event_count = 0
+        for trace_file in noc_trace_files:
+            with open(trace_file, "r") as nocTraceJson:
+                try:
+                    noc_trace_data = json.load(nocTraceJson)
+                except json.JSONDecodeError:
+                    raise ValueError(f"noc trace file '{trace_file}' is not a valid JSON file")
+
+                assert isinstance(noc_trace_data, list), f"noc trace file '{trace_file}' format is incorrect"
+                assert len(noc_trace_data) > 0, f"noc trace file '{trace_file}' is empty"
+                for event in noc_trace_data:
+                    assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
+                    if event.get("type", "").startswith("FABRIC_"):
+                        fabric_event_count += 1
+                        assert event.get("fabric_send", None) is not None
+
+                        fabric_send_metadata = event.get("fabric_send", None)
+                        assert fabric_send_metadata.get("eth_chan", None) is not None
+                        assert fabric_send_metadata.get("start_distance", None) is not None
+                        assert fabric_send_metadata.get("range", None) is not None
+                        assert fabric_send_metadata.get("fabric_mux", None) is not None
+
+                        fabric_mux_metadata = fabric_send_metadata.get("fabric_mux", None)
+                        assert fabric_mux_metadata.get("x", None) is not None
+                        assert fabric_mux_metadata.get("y", None) is not None
+                        assert fabric_mux_metadata.get("noc", None) is not None
+
+        assert (
+            fabric_event_count == expected_output["FABRIC_EVENT_COUNT"]
+        ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
 
 
 def test_sub_device_profiler():
     ARCH_NAME = os.getenv("ARCH_NAME")
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
-        "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms",
+        "UnitMeshCQSingleCardFixture.TensixTestSubDeviceBasicPrograms",
     )
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
