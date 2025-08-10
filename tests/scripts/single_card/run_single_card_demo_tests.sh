@@ -317,7 +317,7 @@ run_yolov7_demo() {
 
 run_yolov6l_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov6l/demo/demo.py --timeout 600
+  pytest --disable-warnings models/demos/yolov6l/demo/demo.py
 
 }
 
@@ -329,15 +329,13 @@ run_yolov6l_perf() {
 
 # }
 
-run_yolov6l_demo() {
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov6l/demo/demo.py
-
-}
 
 run_yolov12x_demo() {
 
-  pytest -n auto --disable-warnings  models/demos/yolov12x/demo/demo.py --timeout 600
+  pytest --disable-warnings models/demos/yolov12x/demo/demo.py
+
+  pytest --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov12x[device_params0-tt_model] --timeout 600
+
 
 }
 
