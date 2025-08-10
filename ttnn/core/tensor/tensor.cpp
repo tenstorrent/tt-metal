@@ -152,6 +152,13 @@ Tensor Tensor::from_span(
     std::optional<ttnn::QueueId> cq_id,
     T pad_value) {
     ZoneScoped;
+    fprintf(
+        stderr,
+        "Tensor::from_span(XXX): size %zu shape [%u %u] %s\n",
+        buffer.size(),
+        spec.logical_shape()[0],
+        spec.logical_shape()[1],
+        enchantum::to_string(spec.data_type()).data());
     return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
 }
 
@@ -406,16 +413,22 @@ void Tensor::print() const { tensor_ops::tensor_print(*this); }
 
 Tensor Tensor::pad(
     const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const {
+    fprintf(stderr, "++ Calling pad\n");
     return tensor_ops::tensor_pad(*this, output_padded_shape, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const {
+    fprintf(stderr, "++ Calling unpad\n");
     return tensor_ops::tensor_unpad(*this, output_tensor_start, output_tensor_end);
 }
 
-Tensor Tensor::pad_to_tile(float pad_value) const { return tensor_ops::tensor_pad_to_tile(*this, pad_value); }
+Tensor Tensor::pad_to_tile(float pad_value) const {
+    fprintf(stderr, "++ Calling pad_to_tile\n");
+    return tensor_ops::tensor_pad_to_tile(*this, pad_value);
+}
 
 Tensor Tensor::unpad_from_tile(const ttnn::Shape& output_tensor_shape) const {
+    fprintf(stderr, "++ Calling unpad_from_tile\n");
     return tensor_ops::tensor_unpad_from_tile(*this, output_tensor_shape);
 }
 
@@ -476,6 +489,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
+    fprintf(stderr, "create_device_tensor -> allocate_tensor_on_device\n");
     output = allocate_tensor_on_device(tensor_spec, mesh_device);
     output = tt::tt_metal::set_tensor_id(output);
 
