@@ -16,6 +16,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 
+#include <string_view>
+
 namespace ttnn {
 
 namespace operations {
@@ -24,6 +26,13 @@ namespace core {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
+
+void print_tensor_info(const ttnn::Tensor& t, std::string_view name) {
+    fprintf(stderr, "Tensor %s:", name.data());
+    fprintf(stderr, " logical [%u %u]", t.logical_shape()[0], t.logical_shape()[1]);
+    fprintf(stderr, " padded [%u %u]", t.padded_shape()[0], t.padded_shape()[1]);
+    fprintf(stderr, " logical vol %lu physical vol %lu\n", t.logical_volume(), t.physical_volume());
+}
 
 bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     auto tile = tensor.tensor_spec().tile();
@@ -44,6 +53,12 @@ Tensor to_layout_impl(
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
+    fprintf(
+        stderr,
+        "ttnn::to_layout: %s -> %s\n",
+        enchantum::to_string(tensor_arg.layout()).data(),
+        enchantum::to_string(layout).data());
+    print_tensor_info(tensor_arg, "input of to_layout_impl");
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
