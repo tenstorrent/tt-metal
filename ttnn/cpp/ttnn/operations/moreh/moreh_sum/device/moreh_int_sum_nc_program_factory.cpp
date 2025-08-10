@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -80,8 +81,10 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
             {tt::CBIndex::c_16, out0_t},       // output
         });
 
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input))};
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/reader_moreh_sum_nc.cpp";
     const auto writer_kernel_file =

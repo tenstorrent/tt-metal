@@ -7,6 +7,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include "moreh_mean_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -77,10 +78,12 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     bfloat16 bfloat_scaler_value(scaler);
     auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input)), packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(packed_scaler_value);
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(CBIndex::c_16), static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(CBIndex::c_16)};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     if (do_mask_w) {
