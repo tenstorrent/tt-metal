@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple, TypedDict
 
 import pytest
 
+from helpers.dimensions import generate_matmul_dimension_combinations
 from helpers.log_utils import add_to_format_log
 
 from .format_arg_mapping import DestAccumulation
@@ -202,3 +203,40 @@ def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]
         )
         for tuple in formats
     ]
+
+
+def generate_format_aware_matmul_combinations(formats_list):
+    """
+    Generate matmul dimension combinations that respect format specific / datum size and dest register constraints.
+
+    Key rules:
+    1. Format outliers (Float16_b->Float16, Bfp8_b->Float16) MUST use dest_acc=Yes
+    2. When dest_acc=Yes: max 4 tiles (32-bit dest register)
+    3. When dest_acc=No: max 8 tiles (16-bit dest register)
+
+    Args:
+        formats_list: List of InputOutputFormat combinations
+
+    Returns:
+        List of tuples: (format, dest_acc, dimensions)
+    """
+
+    combinations = []
+
+    for fmt in formats_list:
+        if is_dest_acc_needed(fmt):
+            # Format outliers: C++ will force dest_acc --> Yes, so test both cases
+            max_tiles = 4
+            for dest_acc in [DestAccumulation.No, DestAccumulation.Yes]:
+                dimensions = generate_matmul_dimension_combinations(max_tiles)
+                for dims in dimensions:
+                    combinations.append((fmt, dest_acc, dims))
+        else:
+            # Normal formats: test both dest accumulation modes
+            for dest_acc in [DestAccumulation.No, DestAccumulation.Yes]:
+                max_tiles = 8 if dest_acc == DestAccumulation.No else 4
+                dimensions = generate_matmul_dimension_combinations(max_tiles)
+                for dims in dimensions:
+                    combinations.append((fmt, dest_acc, dims))
+
+    return combinations

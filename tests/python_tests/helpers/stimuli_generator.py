@@ -12,7 +12,7 @@ def flatten_list(sublists):
 
 
 def generate_random_face(
-    stimuli_format=DataFormat.Float16_b, const_value=1, const_face=False
+    stimuli_format=DataFormat.Float16_b, const_value=1, const_face=False, sfpu=True
 ):
     size = 256
     if stimuli_format != DataFormat.Bfp8_b:
@@ -26,9 +26,11 @@ def generate_random_face(
                 srcA_face = (
                     torch.ones(size, dtype=format_dict[stimuli_format]) * const_value
                 )
-            else:  # random for both faces
-                srcA_face = torch.rand(size, dtype=format_dict[stimuli_format]) + 0.1
-
+            else:
+                # random for both faces
+                srcA_face = torch.rand(size, dtype=format_dict[stimuli_format])
+                if sfpu:
+                    srcA_face += 0.1
     else:
 
         integer_part = torch.randint(0, 3, (size,))
@@ -47,10 +49,11 @@ def generate_random_face_ab(
     const_face=False,
     const_value_A=1,
     const_value_B=2,
+    sfpu=True,
 ):
     return generate_random_face(
-        stimuli_format_A, const_value_A, const_face
-    ), generate_random_face(stimuli_format_B, const_value_B, const_face)
+        stimuli_format_A, const_value_A, const_face, sfpu
+    ), generate_random_face(stimuli_format_B, const_value_B, const_face, sfpu)
 
 
 def generate_stimuli(
@@ -60,6 +63,7 @@ def generate_stimuli(
     const_face=False,
     const_value_A=1,
     const_value_B=1,
+    sfpu=True,
 ):
 
     srcA = []
@@ -69,7 +73,12 @@ def generate_stimuli(
 
     for _ in range(4 * tile_cnt):
         face_a, face_b = generate_random_face_ab(
-            stimuli_format_A, stimuli_format_B, const_face, const_value_A, const_value_B
+            stimuli_format_A,
+            stimuli_format_B,
+            const_face,
+            const_value_A,
+            const_value_B,
+            sfpu,
         )
         srcA.extend(face_a.tolist())
         srcB.extend(face_b.tolist())

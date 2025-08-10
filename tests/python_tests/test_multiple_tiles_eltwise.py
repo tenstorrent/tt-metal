@@ -60,23 +60,27 @@ def test_multiple_tiles(
     golden_tensor = generate_golden(
         mathop, src_A, src_B, formats.output_format, math_fidelity
     )
-    res_address = write_stimuli_to_l1(
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        "0,0",
-        tile_count=tile_cnt,
-    )
 
     test_config = {
         "formats": formats,
         "testname": test_name,
         "dest_acc": dest_acc,
+        "input_A_dimensions": input_dimensions,
+        "input_B_dimensions": input_dimensions,
         "mathop": mathop,
         "math_fidelity": math_fidelity,
         "tile_cnt": tile_cnt,
     }
+
+    res_address = write_stimuli_to_l1(
+        test_config,
+        src_A,
+        src_B,
+        formats.input_format,
+        formats.input_format,
+        tile_count_A=tile_cnt,
+        tile_count_B=tile_cnt,
+    )
 
     run_test(test_config)
 

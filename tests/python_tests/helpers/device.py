@@ -21,9 +21,7 @@ from helpers.chip_architecture import get_chip_architecture
 
 from .format_arg_mapping import (
     DestAccumulation,
-    L1BufferLocations,
     Mailbox,
-    format_tile_sizes,
 )
 from .format_config import DataFormat, FormatConfig
 from .pack import (
@@ -66,9 +64,16 @@ def collect_results(
     address: int = 0x1C000,
     core_loc: str = "0,0",
     sfpu: bool = False,
+    tile_dimensions=[32, 32],
 ):
+    # Calculate tile elements based on tile dimensions instead of hardcoding 1024
+    tile_elements = tile_dimensions[0] * tile_dimensions[1]
 
-    read_bytes_cnt = format_tile_sizes[formats.output_format] * tile_count
+    # Calculate bytes needed based on format and actual tile size
+    read_bytes_cnt = (
+        formats.output_format.num_bytes_per_tile(tile_elements) * tile_count
+    )
+
     read_data = read_from_device(core_loc, address, num_bytes=read_bytes_cnt)
     res_from_L1 = unpack_res_tiles(read_data, formats, tile_count=tile_count, sfpu=sfpu)
     return res_from_L1
@@ -115,69 +120,92 @@ def run_elf_files(testname, core_loc="0,0"):
 
 
 def write_stimuli_to_l1(
+    test_config,
     buffer_A,
     buffer_B,
-    stimuli_A_format,
-    stimuli_B_format,
+    stimuli_A_format: DataFormat,
+    stimuli_B_format: DataFormat,
+    tile_count_A: int = 1,
+    tile_count_B: int = None,
     core_loc="0,0",
-    tile_count=1,
 ):
+    """
+    Write matmul stimuli to L1 with different matrix sizes.
+
+    Args:
+        test_config: Used to store addresses of A B and Result
+        buffer_A: Flattened tensor data for matrix A
+        buffer_B: Flattened tensor data for matrix B
+        stimuli_A_format: DataFormat for matrix A
+        stimuli_B_format: DataFormat for matrix B
+        tile_count_A: Number of tiles in matrix A
+        tile_count_B: Number of tiles in matrix B
+        core_loc: Core location string
+
+    Returns:
+        int: Address where result will be stored
+    """
 
     TILE_ELEMENTS = 1024
 
-    TILE_SIZE_A = format_tile_sizes.get(stimuli_A_format, 2048)
-    TILE_SIZE_B = format_tile_sizes.get(stimuli_A_format, 2048)
-
-    # beginning addresses of srcA, srcB and result buffers in L1
+    # Calculate L1 addresses
+    tile_size_A_bytes = stimuli_A_format.num_bytes_per_tile(TILE_ELEMENTS)
+    tile_size_B_bytes = stimuli_B_format.num_bytes_per_tile(TILE_ELEMENTS)
     buffer_A_address = 0x1A000
-    buffer_B_address = 0x1A000 + TILE_SIZE_A * tile_count
-    result_buffer_address = buffer_B_address + TILE_SIZE_B * tile_count
+    buffer_B_address = buffer_A_address + tile_size_A_bytes * tile_count_A
+    result_buffer_address = buffer_B_address + tile_size_B_bytes * tile_count_B
 
-    write_to_device(
-        core_loc, L1BufferLocations.srcA.value, buffer_A_address.to_bytes(4, "little")
-    )
-    write_to_device(
-        core_loc, L1BufferLocations.srcB.value, buffer_B_address.to_bytes(4, "little")
-    )
-    write_to_device(
-        core_loc,
-        L1BufferLocations.Result.value,
-        result_buffer_address.to_bytes(4, "little"),
-    )
-
-    for i in range(tile_count):
-
-        start_index = TILE_ELEMENTS * i
-        end_index = start_index + TILE_ELEMENTS
-
-        # if end_index > len(buffer_A) or end_index > len(buffer_B):
-        #     raise IndexError("Buffer access out of bounds")
-
-        buffer_A_tile = buffer_A[start_index:end_index]
-        buffer_B_tile = buffer_B[start_index:end_index]
-
+    # Helper function to get packer
+    def get_packer(data_format):
         packers = {
-            DataFormat.Bfp8_b: pack_bfp8_b,
             DataFormat.Float16: pack_fp16,
             DataFormat.Float16_b: pack_bfp16,
             DataFormat.Float32: pack_fp32,
+            DataFormat.Bfp8_b: pack_bfp8_b,
             DataFormat.Int32: pack_int32,
             DataFormat.UInt32: pack_uint32,
             DataFormat.UInt16: pack_uint16,
             DataFormat.Int8: pack_int8,
             DataFormat.UInt8: pack_uint8,
         }
+        return packers.get(data_format)
 
-        pack_function_A = packers.get(stimuli_A_format)
-        pack_function_B = packers.get(stimuli_B_format)
+    pack_function_A = get_packer(stimuli_A_format)
+    pack_function_B = get_packer(stimuli_B_format)
 
-        write_to_device(core_loc, buffer_A_address, pack_function_A(buffer_A_tile))
-        write_to_device(core_loc, buffer_B_address, pack_function_B(buffer_B_tile))
+    if not pack_function_A or not pack_function_B:
+        raise ValueError(
+            f"Unsupported data formats: {stimuli_A_format.name}, {stimuli_B_format.name}"
+        )
 
-        buffer_A_address += TILE_SIZE_A
-        buffer_B_address += TILE_SIZE_B
+    def write_matrix(buffer, tile_count, pack_function, base_address, tile_size):
+        addresses = []
+        packed_data_list = []
 
-    return result_buffer_address  # return address where result will be stored
+        for i in range(tile_count):
+            start_idx = TILE_ELEMENTS * i
+            tile_data = buffer[start_idx : start_idx + TILE_ELEMENTS]
+            packed_data = pack_function(tile_data)
+
+            addresses.append(base_address + i * tile_size)
+            packed_data_list.append(packed_data)
+
+        for addr, data in zip(addresses, packed_data_list):
+            write_to_device(core_loc, addr, data)
+
+    write_matrix(
+        buffer_A, tile_count_A, pack_function_A, buffer_A_address, tile_size_A_bytes
+    )
+    write_matrix(
+        buffer_B, tile_count_B, pack_function_B, buffer_B_address, tile_size_B_bytes
+    )
+
+    # Set buffer addresses in device to be defined in build header
+    test_config["buffer_A_address"] = buffer_A_address
+    test_config["buffer_B_address"] = buffer_B_address
+    test_config["result_buffer_address"] = result_buffer_address
+
+    return result_buffer_address
 
 
 def get_result_from_device(
