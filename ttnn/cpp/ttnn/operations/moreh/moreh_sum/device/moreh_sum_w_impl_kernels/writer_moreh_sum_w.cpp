@@ -10,15 +10,13 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
 
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto dst_args = TensorAccessorArgs<1>();
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
