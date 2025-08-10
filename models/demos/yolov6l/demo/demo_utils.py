@@ -287,6 +287,10 @@ def postprocess(preds, img, orig_imgs, batch, names, conf=0.25, max_det=300):
 
     results = []
     for pred, orig_img, img_path in zip(preds, orig_imgs, batch[0]):
+        if pred.numel() == 0:
+            # If not prediction for a image
+            results.append(Results(orig_img, path=img_path, names=names, boxes=torch.full((1, 6), -1)))
+            continue
         pred[:, :4] = rescale(img.shape[2:], pred[:, :4], orig_img.shape)
         results.append(Results(orig_img, path=img_path, names=names, boxes=pred))
 
