@@ -135,11 +135,6 @@ static void test_sems_across_core_types(
             SetRuntimeArgs(program, tensix_kernel, tensix_core, tensix_rtas);
             fixture->RunProgram(device, program);
 
-            log_info(tt::LogTest, "Hanging now on purpose");
-            while (true) {
-                __asm__ volatile ("nop");
-                ;
-            }
         }
     }
 }

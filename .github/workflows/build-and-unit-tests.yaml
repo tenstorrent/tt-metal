@@ -43,9 +43,10 @@ jobs:
           #   cmd: ./build/test/tt_metal/unit_tests_data_movement
           - name: debug_tools and device and dispatch
             cmd: |
+              tt-smi -r
               ./build/test/tt_metal/unit_tests_debug_tools
               ./build/test/tt_metal/unit_tests_device
-              TT_METAL_DPRINT_CORES=all TT_METAL_DPRINT_ETH_CORES=all ./build/test/tt_metal/unit_tests_dispatch
+              ./build/test/tt_metal/unit_tests_dispatch
           # - name: llk
           #   cmd: ./build/test/tt_metal/unit_tests_llk
           # - name: FD2
