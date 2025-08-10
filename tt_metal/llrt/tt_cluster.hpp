@@ -106,9 +106,8 @@ public:
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
-    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
-        return this->cluster_desc_->get_chip_unique_ids();
-    }
+    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const;
+
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
 
     chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
@@ -417,6 +416,7 @@ private:
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
+    mutable std::unordered_map<chip_id_t, uint64_t> chip_id_to_unique_id_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     tt::tt_metal::ClusterType cluster_type_ = tt::tt_metal::ClusterType::INVALID;

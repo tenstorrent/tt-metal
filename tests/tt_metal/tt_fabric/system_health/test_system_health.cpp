@@ -251,7 +251,9 @@ TEST(Cluster, ReportSystemHealth) {
     ss << "Found " << unique_chip_ids.size() << " chips in cluster:" << std::endl;
 
     auto cluster_type = cluster.get_cluster_type();
-
+    for (auto& [chip, unique_id] : cluster.get_unique_chip_ids()) {
+        std::cout << "Chip ID: " << chip << ", Unique ID: " << unique_id << std::endl;
+    }
     std::vector<std::string> unexpected_system_states;
     for (const auto& [chip_id, unique_chip_id] : unique_chip_ids) {
         const auto& soc_desc = cluster.get_soc_desc(chip_id);
