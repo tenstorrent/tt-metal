@@ -51,6 +51,13 @@ tt::stl::hash::hash_t RandDeviceOperation::compute_program_hash(
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
+void print_tensor_info(const ttnn::Tensor& t, std::string_view name) {
+    fprintf(stderr, "Tensor %s:", name.data());
+    fprintf(stderr, " logical [%u %u]", t.logical_shape()[0], t.logical_shape()[1]);
+    fprintf(stderr, " padded [%u %u]", t.padded_shape()[0], t.padded_shape()[1]);
+    fprintf(stderr, " logical vol %lu physical vol %lu\n", t.logical_volume(), t.physical_volume());
+}
+
 std::tuple<RandDeviceOperation::operation_attributes_t, RandDeviceOperation::tensor_args_t> RandDeviceOperation::invoke(
     const ttnn::Shape& shape,
     const DataType dtype,
@@ -60,9 +67,12 @@ std::tuple<RandDeviceOperation::operation_attributes_t, RandDeviceOperation::ten
     const float from,
     const float to,
     const uint32_t seed) {
+    fprintf(stderr, "RandDeviceOperation::invoke: [%u %u]\n", shape[0], shape[1]);
     auto output_tensor = create_device_tensor(
         ttnn::TensorSpec(shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
         std::addressof(device));
+    fprintf(stderr, "RandDeviceOperation::invoke: finished create_device_tensor\n");
+    print_tensor_info(output_tensor, "pre-alloc output tensor for RandDeviceOperation::invoke");
 
     return {
         operation_attributes_t{shape, dtype, layout, memory_config, std::addressof(device), from, to, seed},
