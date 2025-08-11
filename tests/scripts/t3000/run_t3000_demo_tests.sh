@@ -108,6 +108,11 @@ run_t3000_qwen25_vl_tests() {
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
 
+  # Enable TT_METAL_WATCHER for debugging/monitoring
+  export TT_METAL_WATCHER=5
+  export TT_METAL_WATCHER_APPEND=1
+  export TT_METAL_WATCHER_NOINLINE=1
+
   # Qwen2.5-VL-32B
   qwen25_vl_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-32B-Instruct/
   # Qwen2.5-VL-72B
