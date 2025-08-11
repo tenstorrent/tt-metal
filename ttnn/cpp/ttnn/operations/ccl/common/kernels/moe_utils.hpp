@@ -477,15 +477,18 @@ inline void send_init_semaphore_to_configured_targets(
     uint32_t device_end_idx = NumDevices;
     uint32_t device_stride = 1;
 
-    // if constexpr (Axis == ReplicateGroup::COLS) {
-    //     device_begin_idx = LinearizedSrcMeshCoord % MeshCols;
-    //     device_end_idx = device_begin_idx + MeshRows * MeshCols;
-    //     device_stride = MeshCols;
-    // } else if constexpr (Axis == ReplicateGroup::ROWS) {
-    //     device_begin_idx = LinearizedSrcMeshCoord / MeshCols;
-    //     device_end_idx = device_begin_idx + MeshCols;
-    //     device_stride = 1;
-    // }
+    constexpr uint32_t row = LinearizedSrcMeshCoord / MeshCols;
+    constexpr uint32_t col = LinearizedSrcMeshCoord % MeshCols;
+
+    if constexpr (Axis == ReplicateGroup::COLS) {
+        device_begin_idx = col;
+        device_end_idx = col + MeshRows * MeshCols;
+        device_stride = MeshCols;
+    } else if constexpr (Axis == ReplicateGroup::ROWS) {
+        device_begin_idx = row * MeshCols;
+        device_end_idx = row * MeshCols + MeshCols;
+        device_stride = 1;
+    }
 
     for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
         if (device_idx == LinearizedSrcMeshCoord) {
