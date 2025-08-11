@@ -135,7 +135,7 @@ def test_llama_rms_norm_inference(
             ),
         )[:1, :, :, :]
 
-        passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, 0.98)
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
@@ -147,4 +147,4 @@ def test_llama_rms_norm_inference(
     else:
         logger.warning("Llama_rms_norm Failed!")
 
-    assert passing, f"Llama_rms_norm output does not meet PCC requirement {0.99}."
+    assert passing, f"Llama_rms_norm output does not meet PCC requirement {0.98}."

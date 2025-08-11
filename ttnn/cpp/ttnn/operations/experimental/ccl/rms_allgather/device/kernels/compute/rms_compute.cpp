@@ -278,7 +278,7 @@ void MAIN {
     index_h_offset = 0;
     index_subblock_w_offset = 0;
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        cb_wait_front(cb_im, (j + 1) * subblock_w);
+        cb_wait_front(cb_im, subblock_w);
         cb_reserve_back(cb_out, subblock_w);
         tile_regs_acquire();
         for (uint32_t w = 0; w < subblock_w; w++) {
