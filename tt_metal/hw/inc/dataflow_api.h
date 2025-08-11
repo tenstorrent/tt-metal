@@ -159,7 +159,10 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  * tiles visible to the consumer. Writing of the tiles and pushing is separated
  * to allow the producer to: 1) write the tile data to the CB via multiple
  * writes of sub-tiles 2) modify tiles (or sub-tiles) by random access of the
- * valid section of the CB
+ * valid section of the CB.
+ *
+ * Important note: CB total size must be an even multiple of the argument passed to this call, and each push to a CB
+ * should have the same number of pages.
  *
  * Return value: None
  *

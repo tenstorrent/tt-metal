@@ -113,6 +113,9 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
  * cb pointers are not synchronized across threads. Per circular buffer index, only have one thread push tiles
  * to update the write pointer
  *
+ * Important note: CB total size must be an even multiple of the argument passed to this call, and each push to a CB should
+ * have the same number of pages.
+ *
  * Return value: None
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
