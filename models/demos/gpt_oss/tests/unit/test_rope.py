@@ -33,15 +33,12 @@ def hf_config():
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mode, seq_len",
-    [
-        ("decode", 32),
-    ],
+    "seq_len",
+    [1, 32, 64, 128, 512, 1024],
 )
 def test_rope_op(
     mesh_device,
     device_params,
-    mode,
     seq_len,
     hf_config,
 ):
