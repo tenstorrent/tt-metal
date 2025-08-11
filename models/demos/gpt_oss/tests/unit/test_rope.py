@@ -7,20 +7,11 @@ import torch
 from transformers import AutoConfig
 
 import ttnn
-
-# from models.demos.gpt_oss.tt.rope import GptOssRotaryEmbedding as GptOssRotaryEmbeddingTT
 from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssRotaryEmbedding, apply_rotary_pos_emb
+from models.demos.gpt_oss.tt.rope import ApplyRotaryPosEmb
+from tests.ttnn.utils_for_testing import comp_pcc
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (4, 8)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
-    indirect=True,
-)
 @pytest.fixture
 def hf_config():
     """Load GPT-OSS config for testing"""
@@ -36,18 +27,72 @@ def hf_config():
     ],
 )
 def test_rope_op(
-    mesh_device,
+    device,
     mode,
     seq_len,
     hf_config,
 ):
+    mesh_device = device
     position_ids = torch.arange(seq_len).unsqueeze(0)
 
     RopeEmbeddings = GptOssRotaryEmbedding(hf_config)
     torch_inputs = torch.randn(1, seq_len, hf_config.hidden_size)
     cos, sin = RopeEmbeddings(torch_inputs, position_ids)
-    TP = 1
-    q_torch = torch.randn(hf_config.num_attention_heads // TP, seq_len, hf_config.head_dim)
-    k_torch = torch.randn(hf_config.num_attention_heads // TP, seq_len, hf_config.head_dim)
+    q_torch = torch.randn(1, hf_config.num_attention_heads, seq_len, hf_config.head_dim)
+    k_torch = torch.randn(1, hf_config.num_key_value_heads, seq_len, hf_config.head_dim)
 
     q_rope_torch, k_rope_torch = apply_rotary_pos_emb(q_torch, k_torch, cos, sin)
+
+    q_tt = ttnn.from_torch(
+        q_torch,
+        device=mesh_device,
+        # Shard along the num_attention_heads dimension
+        # mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -2)),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    k_tt = ttnn.from_torch(
+        k_torch,
+        device=mesh_device,
+        # Shard along the num_key_value_heads dimension
+        # mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -2)),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    cos_tt = ttnn.from_torch(
+        cos,
+        device=mesh_device,
+        # mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, None)),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    sin_tt = ttnn.from_torch(
+        sin,
+        device=mesh_device,
+        # mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, None)),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    apply_rope = ApplyRotaryPosEmb(hf_config)
+
+    q_tt_rotated = apply_rope(q_tt, cos_tt, sin_tt)
+    k_tt_rotated = apply_rope(k_tt, cos_tt, sin_tt)
+
+    # q_tt_rotated_torch = ttnn.to_torch(q_tt_rotated, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -2)))[0]
+    # k_tt_rotated_torch = ttnn.to_torch(k_tt_rotated, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -2)))[0]
+    q_tt_rotated_torch = ttnn.to_torch(q_tt_rotated)
+    k_tt_rotated_torch = ttnn.to_torch(k_tt_rotated)
+
+    passing, pcc_message = comp_pcc(q_tt_rotated_torch, q_rope_torch)
+    assert passing, f"q_tt_rotated_torch: {pcc_message}"
+    passing, pcc_message = comp_pcc(k_tt_rotated_torch, k_rope_torch)
+    assert passing, f"k_tt_rotated_torch: {pcc_message}"
+
+    breakpoint()
