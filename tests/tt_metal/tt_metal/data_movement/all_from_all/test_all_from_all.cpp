@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -49,11 +50,18 @@ struct AllFromAllConfig {
 /// @param device The device on which the test is executed.
 /// @param test_config Configuration of the test, defined by a specific struct.
 /// @return Status of the test execution (e.g., success or failure).
-bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const AllFromAllConfig& test_config) {
     /* ================ SETUP ================ */
 
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Initialize core sets //
     /*
@@ -90,7 +98,7 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
 
     vector<uint32_t> sub_worker_coordinates = {};
     for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
-        CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);
+        CoreCoord sub_worker_core = mesh_device->worker_core_from_logical_core(sub_logical_core);
         sub_worker_coordinates.push_back(sub_worker_core.x);
         sub_worker_coordinates.push_back(sub_worker_core.y);
     }
@@ -100,7 +108,7 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
 
     // Obtain L1 Address for Storing Data
 
-    L1AddressInfo core_l1_info = unit_tests::dm::get_l1_address_and_size(device, {0, 0});
+    L1AddressInfo core_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, {0, 0});
     uint32_t sub_l1_base_address = core_l1_info.base_address;
     uint32_t mst_l1_base_address = sub_l1_base_address + bytes_per_transaction;
 
@@ -127,7 +135,7 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
 
     // Create kernels
     auto requestor_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/all_from_all/kernels/requestor.cpp",
         mst_logical_core_set,
         DataMovementConfig{
@@ -138,12 +146,12 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
     // Run-time Arguments for kernels
     vector<uint32_t> requestor_runtime_args = sub_worker_coordinates;
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-        SetRuntimeArgs(program, requestor_kernel, mst_logical_core, requestor_runtime_args);
+        SetRuntimeArgs(program_, requestor_kernel, mst_logical_core, requestor_runtime_args);
     }
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     /* ================ RUNNING THE PROGRAM ================ */
 
@@ -162,7 +170,7 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
     }
 
     // LAUNCH PROGRAM
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     vector<uint32_t> packed_output;
 
@@ -189,7 +197,7 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
 
 void directed_ideal_test(
     tt::ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
@@ -233,7 +241,7 @@ void directed_ideal_test(
 
 void packet_sizes_test(
     tt::ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& mesh_devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
@@ -243,7 +251,7 @@ void packet_sizes_test(
     NOC noc_id = NOC::NOC_1;
 
     auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
-        unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        unit_tests::dm::compute_physical_constraints(arch_, mesh_devices_.at(0));
 
     /* Running the Test */
 
@@ -282,13 +290,13 @@ void packet_sizes_test(
 
             // Run
             for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                EXPECT_TRUE(run_dm(mesh_devices_.at(id), test_config));
             }
         }
     }
 }
 
-void virtual_channels_test(ARCH arch_, vector<IDevice*>& devices_, uint32_t num_devices_, uint32_t test_case_id) {
+void virtual_channels_test(ARCH arch_, vector<std::shared_ptr<distributed::MeshDevice>>& devices_, uint32_t num_devices_, uint32_t test_case_id) {
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
@@ -344,7 +352,7 @@ void virtual_channels_test(ARCH arch_, vector<IDevice*>& devices_, uint32_t num_
 
 void custom_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
@@ -380,7 +388,7 @@ void custom_test(
 
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        EXPECT_TRUE(run_dm(mesh_devices_.at(id), test_config));
     }
 }
 
@@ -398,7 +406,7 @@ TO-DO:
 /* ======== DIRECTED IDEAL ======== */
 
 /* ======== All from All ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     if (arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
@@ -420,7 +428,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
 
 /* ======== PACKET SIZES ======== */
 
-TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
     if (arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
@@ -442,7 +450,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
 }
 
 /* ======== 2x2 to 1x1 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
     uint32_t test_case_id = 312;
 
     /* Parameters */
@@ -458,7 +466,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
 }
 
 /* ======== 4x4 to 1x1 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
     uint32_t test_case_id = 313;
 
     /* Parameters */
@@ -474,7 +482,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
 }
 
 /* ======== 1x1 to 2x2 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
     uint32_t test_case_id = 314;
 
     /* Parameters */
@@ -490,7 +498,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
 }
 
 /* ======== 1x1 to 4x4 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
     uint32_t test_case_id = 315;
 
     /* Parameters */
@@ -506,7 +514,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
 }
 
 /* ======== 2x2 to 2x2 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
     uint32_t test_case_id = 316;
 
     /* Parameters */
