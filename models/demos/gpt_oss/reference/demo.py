@@ -13,7 +13,7 @@ from models.demos.gpt_oss.reference.hf_utils import (
 )
 
 local_model_path = "models/demos/gpt_oss/reference"
-local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/localdev/avora/gpt-oss-20b-BF16")
+local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
 
 def main():
