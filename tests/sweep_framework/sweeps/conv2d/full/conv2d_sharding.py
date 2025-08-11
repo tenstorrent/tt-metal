@@ -26,7 +26,6 @@ TIMEOUT = 30
 # output_layout
 # has_bias
 # enable_act_double_buffer
-# enable_split_reader
 
 # Keeping rest of the params constant as they do not affect sharding
 # Batches
@@ -61,7 +60,6 @@ parameters = {
         "output_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "has_bias": [True, False],
         "enable_act_double_buffer": [True, False],
-        "enable_split_reader": [True, False],
         # Parameters-to-check ends
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],
@@ -91,7 +89,6 @@ def run(
     output_layout,
     has_bias,
     enable_act_double_buffer,
-    enable_split_reader,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -114,7 +111,6 @@ def run(
         output_layout,
         has_bias,
         enable_act_double_buffer,
-        enable_split_reader,
         activations_dtype,
         weights_dtype,
         math_fidelity,

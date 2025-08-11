@@ -22,7 +22,6 @@ class TtYOLOv7Conv2D:
         dtype=ttnn.bfloat8_b,
         num_cores_nhw=None,
         is_reshape=False,
-        enable_split_reader=True,
         enable_act_double_buffer=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -52,7 +51,6 @@ class TtYOLOv7Conv2D:
         )
         self.num_cores_nhw = num_cores_nhw
         self.is_reshape = is_reshape
-        self.enable_split_reader = enable_split_reader
         self.enable_act_double_buffer = enable_act_double_buffer
 
     def __call__(self, device, input_tensor):
@@ -61,7 +59,6 @@ class TtYOLOv7Conv2D:
             activation=self.activation,
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
-            enable_split_reader=self.enable_split_reader,
             enable_act_double_buffer=True
             if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
             else self.enable_act_double_buffer,
