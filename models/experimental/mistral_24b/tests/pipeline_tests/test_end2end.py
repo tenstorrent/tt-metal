@@ -208,7 +208,14 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
 
 
 def run_generation_exactly_like_test_end2end(
-    vision_model, text_model, processed_inputs, model_args, page_table=None, paged_attention_config=None, max_gen_len=20
+    vision_model,
+    text_model,
+    processed_inputs,
+    model_args,
+    page_table=None,
+    paged_attention_config=None,
+    max_gen_len=20,
+    repetition_ngram_size=3,
 ):
     """Run generation following the EXACT pattern from test_end2end.py."""
     input_ids = processed_inputs["input_ids"]
@@ -280,7 +287,7 @@ def run_generation_exactly_like_test_end2end(
 
     current_pos = torch.tensor([decoding_pos[0]])
     out_tok = prefilled_token
-    generation_length = 100
+    generation_length = max_gen_len
 
     results = []
 
@@ -305,6 +312,19 @@ def run_generation_exactly_like_test_end2end(
         token_id = out_tok[0].item()
         decoded_token = model_args.tokenizer.decode([token_id])
         logger.info(f"Generated token {iteration}: ID={token_id}, text='{decoded_token}'")
+
+        # Stop if EOS detected
+        if token_id == model_args.tokenizer.eos_token_id:
+            logger.info("EOS token detected, stopping generation.")
+            break
+
+        # Stop if repetition detected (n-gram)
+        if len(all_outputs[0]) >= repetition_ngram_size * 2:
+            last_ngram = tuple(all_outputs[0][-repetition_ngram_size:])
+            for i in range(len(all_outputs[0]) - repetition_ngram_size):
+                if tuple(all_outputs[0][i : i + repetition_ngram_size]) == last_ngram:
+                    logger.info(f"Detected {repetition_ngram_size}-gram repetition, stopping.")
+                    break
 
         # Create result object
         result = type("TokenResult", (), {"token": token_id, "text": decoded_token})()
@@ -487,7 +507,7 @@ def test_e2e_vision_text_pipeline(
     # Run generation following EXACT test_end2end.py pattern
     logger.info("Running generation following EXACT test_end2end.py pattern...")
     results = run_generation_exactly_like_test_end2end(
-        vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=10
+        vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=600
     )
 
     # Validate results
