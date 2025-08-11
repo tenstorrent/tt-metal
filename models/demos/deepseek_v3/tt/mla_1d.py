@@ -29,18 +29,18 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     sub_state_dicts,
 )
 from models.demos.deepseek_v3.utils.run_config import (
-    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.utility_functions import nearest_y
 
 
-class MLA1D(AbstractModule):
+class MLA1D(SharedStateAddOn, AbstractModule):
     """
     Multi-Latent Attention Module for 1D tensor parallelism.
     """
@@ -918,7 +918,6 @@ class MLA1D(AbstractModule):
             "kvpe_cache": tt_cache,
             **ccl_states_prefill,
             **ccl_states_decode,
-            MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
 
     @classmethod
