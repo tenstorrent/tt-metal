@@ -138,11 +138,12 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
+        logger.info(f"tt_output_torch shape: {tt_output_torch.shape}")
         logger.info("Qwen MLP Done")
 
         tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
-        reference_output = reference_model(torch_input[:, :, :1, : model_args.dim])
+        reference_output = reference_model(torch_input[:, :, :1, : model_args.dim].to(torch.bfloat16))
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

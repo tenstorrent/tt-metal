@@ -182,6 +182,7 @@ class TT_CCL:
         - SAMPLING_VALUES: (1, 1, 32, 256)
         - SAMPLING_INDICES: (1, 1, 32, 256)
         - BINARY_MUL: (1, 1, 32, 3584)
+        - W2_AR: (1, 1, 32, 1280)
 
         """
 
@@ -267,6 +268,15 @@ class TT_CCL:
             )
         )
         persistent_buffers["BINARY_MUL"] = tt_buffer
+
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, self.max_batch_size, 1280)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+        )
+        persistent_buffers["W2_AR"] = tt_buffer
 
         return persistent_buffers
 
@@ -726,7 +736,6 @@ class TT_CCL:
         persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
             self.reduce_scatter_buffer_idx[cluster_axis]
         ]
-        breakpoint()
         w1_out, w3_out, ttnn_tensor_out = ttnn.experimental.llama_rs_matmul(
             matmul_input,
             matmul_weightA,

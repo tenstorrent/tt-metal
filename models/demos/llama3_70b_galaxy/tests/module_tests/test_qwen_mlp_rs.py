@@ -48,7 +48,7 @@ def test_qwen_mlp_rs(mesh_device):
 
     # 512 = 4 devices * 4 pages per packet * 32 tile_width
     persistent_interim_buffers = ttnn.from_torch(  # We need to be able to fit 2*3840 into the second dimension
-        torch.zeros((*(8, 4), 32, 3840)),
+        torch.zeros((*(8, 4), 32, 3200)),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
@@ -57,7 +57,7 @@ def test_qwen_mlp_rs(mesh_device):
     )
 
     persistent_output_buffers = ttnn.from_torch(
-        torch.zeros((*(8, 4), 32, 3840 // 4)),
+        torch.zeros((*(8, 4), 32, 3200 // 4)),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
@@ -67,7 +67,7 @@ def test_qwen_mlp_rs(mesh_device):
 
     w1_out = ttnn.from_torch(
         torch.randn(
-            (1, 1, 32, 3840),
+            (1, 1, 32, 3200),
         ),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
@@ -79,7 +79,7 @@ def test_qwen_mlp_rs(mesh_device):
 
     # w1_out = ttnn.to_memory_config(w1_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     w1_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
-        input_tensor=w1_out,  # [1, 1, 32, 3840]
+        input_tensor=w1_out,  # [1, 1, 32, 3200]
         persistent_output_buffers=[persistent_interim_buffers, persistent_output_buffers],
         dim=3,
         multi_device_global_semaphore=global_semaphores,
