@@ -309,8 +309,6 @@ def run_multi_core_matmul_1d(
     in0 = torch.randn(in0_shape)
     in1 = torch.randn(in1_shape)
 
-    extra_torch_entries = 0
-    current_entries_count = device.num_program_cache_entries()
     in0_t = ttnn.from_torch(
         in0,
         device=device,
@@ -325,7 +323,6 @@ def run_multi_core_matmul_1d(
         dtype=in1_dtype,
         memory_config=in1_sharded_mem_config,
     )
-    extra_torch_entries += device.num_program_cache_entries() - current_entries_count
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=storage_grid,
@@ -380,7 +377,7 @@ def run_multi_core_matmul_1d(
     assert passing
 
     # Check program cache
-    assert device.num_program_cache_entries() - extra_torch_entries == 1  # Only 1 op
+    assert device.num_program_cache_entries() == 1  # Only 1 op
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")

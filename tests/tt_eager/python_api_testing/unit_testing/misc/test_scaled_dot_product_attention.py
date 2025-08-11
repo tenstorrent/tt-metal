@@ -34,18 +34,7 @@ def fa_rand(*shape):
 
 
 def run_test_sdpa_tt(
-    device,
-    b,
-    nh,
-    nkv,
-    s,
-    d,
-    q_chunk_size,
-    k_chunk_size,
-    dtype,
-    use_high_precision_compute=False,
-    rmse_threshold=None,
-    extra_torch_entries=[0],
+    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute=False, rmse_threshold=None
 ):
     torch.manual_seed(1234)
 
@@ -75,11 +64,9 @@ def run_test_sdpa_tt(
     K = fa_rand(b, nkv, s, d)
     V = fa_rand(b, nkv, s, d)
 
-    current_entries_count = device.num_program_cache_entries()
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
-    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q, tt_K, tt_V, is_causal=True, program_config=program_config, compute_kernel_config=compute_kernel_config
     )
@@ -347,13 +334,10 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
 
-    extra_torch_entries = [0]
     for _ in range(2):
-        run_test_sdpa_tt(
-            device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, extra_torch_entries=extra_torch_entries
-        )
+        run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 
-    assert device.num_program_cache_entries() - extra_torch_entries[0] == 1
+    assert device.num_program_cache_entries() == 1
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")

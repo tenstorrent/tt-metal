@@ -359,13 +359,11 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
 def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
-    extra_torch_entries = 0
     for _ in range(2):
         run_slice_rm_sharded(device, n, c, h, w)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        current_entries_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -373,9 +371,7 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        extra_torch_entries += device.num_program_cache_entries() - current_entries_count
-
-    assert device.num_program_cache_entries() - extra_torch_entries == 3
+    assert device.num_program_cache_entries() == 3
 
 
 @pytest.mark.parametrize("n", [16])
@@ -413,18 +409,15 @@ def slice_test(
     in_mem_config,
     out_mem_config,
     dtype,
-    extra_torch_entries=[0],
 ):
     if dtype == ttnn.float32:
         torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.float)
     else:
         torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
-    current_entries_count = device.num_program_cache_entries()
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
     )
-    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     tt_output_tensor = ttnn.slice(tt_input_tensor, output_tensor_start, output_tensor_end, memory_config=out_mem_config)
 
@@ -500,8 +493,6 @@ def test_run_slice_test(
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
-    extra_torch_entries = [0]
-
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.ROW_MAJOR_LAYOUT,
         input_tensor_shape_0,
@@ -511,12 +502,11 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
-        extra_torch_entries=extra_torch_entries,
     )
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
-    assert num_cache_entries - extra_torch_entries[0] == 1
+    assert num_cache_entries == 1
 
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.ROW_MAJOR_LAYOUT,
@@ -527,13 +517,12 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
-        extra_torch_entries=extra_torch_entries,
     )
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
     # different width for row major
-    assert num_cache_entries - extra_torch_entries[0] == 2
+    assert num_cache_entries == 2
 
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.TILE_LAYOUT,
@@ -544,10 +533,9 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
-        extra_torch_entries=extra_torch_entries,
     )
     # change from RM to TILE
-    assert num_cache_entries - extra_torch_entries[0] == 3
+    assert num_cache_entries == 3
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
@@ -561,10 +549,9 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
-        extra_torch_entries=extra_torch_entries,
     )
     # CACHE HIT
-    assert num_cache_entries - extra_torch_entries[0] == 4
+    assert num_cache_entries == 4
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
@@ -1255,7 +1242,6 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
     ttnn_input = ttnn.from_torch(
         torch_input, device=device, layout=layout, dtype=input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    assert_with_pcc(torch_input, torch.Tensor(ttnn_input.to_list()), 1)
     parallel_config = ttnn.SlidingWindowParallelConfig(
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, shard_orientation=orientation
     )
@@ -1276,9 +1262,8 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         )
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = ttnn.to_torch(this_ttnn_output)
-        assert_with_pcc(output, torch.Tensor(this_ttnn_output.to_list()), 1)
         output = torch.reshape(output, this_torch_output.shape)
-        torch.testing.assert_close(this_torch_output, output, atol=1e-2, rtol=1e-2)
+        assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize(

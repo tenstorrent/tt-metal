@@ -325,7 +325,6 @@ def run_test_sdpa_decode_single_iter(
     sub_core_grids=None,
     override_q_chunk_size=None,
     override_k_chunk_size=None,
-    extra_torch_entries=[0],
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
@@ -374,10 +373,8 @@ def run_test_sdpa_decode_single_iter(
     K = fa_rand(b, nkv, s, d)
     V = fa_rand(b, nkv, s, d)
 
-    current_entries_count = device.num_program_cache_entries()
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
-    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     start_indices = [s // 2 for _ in range(b)] if start_indices is None else start_indices
     max_start_idx = max(start_indices)
@@ -418,7 +415,6 @@ def run_test_sdpa_decode_single_iter(
 
     Q = fa_rand(1, b, nh, d)
 
-    current_entries_count = device.num_program_cache_entries()
     tt_Q = ttnn.as_tensor(
         Q[:, :, :nh],
         device=device,
@@ -426,7 +422,6 @@ def run_test_sdpa_decode_single_iter(
         layout=ttnn.TILE_LAYOUT,
         memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
     )
-    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
     if causal:
         if cur_pos_tensor:
             start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
@@ -452,7 +447,6 @@ def run_test_sdpa_decode_single_iter(
                 memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
             )
     else:
-        current_entries_count = device.num_program_cache_entries()
         tt_mask = ttnn.as_tensor(
             attn_mask.transpose(1, 2).contiguous(),
             device=device,
@@ -460,7 +454,6 @@ def run_test_sdpa_decode_single_iter(
             layout=ttnn.TILE_LAYOUT,
             memory_config=dram_memcfg,
         )
-        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
         tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_Q,
             tt_K,
@@ -1253,14 +1246,12 @@ def test_sdpa_decode_perf(device):
 def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
     ttnn.device.DisablePersistentKernelCache()
 
-    extra_torch_entries = [0]
     dummy_tensors = []
     for i in range(2):
         # generate random start indices from 0 to s-1
         start_indices = np.random.randint(0, s - 1, b).tolist()
         start_indices[0] = s - 1
 
-        current_entries_count = device.num_program_cache_entries()
         dummy_tensors.append(
             ttnn.as_tensor(
                 torch.zeros(32, 32),
@@ -1287,8 +1278,6 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
                 ),
             )
         )
-        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
-
         run_test_sdpa_decode_single_iter(
             device,
             b,
@@ -1303,7 +1292,6 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
             sharded_out=False,
             start_indices=start_indices,
             cur_pos_tensor=True,
-            extra_torch_entries=extra_torch_entries,
         )
         run_test_sdpa_decode_single_iter(
             device,
@@ -1319,7 +1307,6 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
             sharded_out=False,
             start_indices=start_indices,
             cur_pos_tensor=False,
-            extra_torch_entries=extra_torch_entries,
         )
         run_test_sdpa_decode_single_iter(
             device,
@@ -1335,7 +1322,6 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
             sharded_out=True,
             start_indices=start_indices,
             cur_pos_tensor=False,
-            extra_torch_entries=extra_torch_entries,
         )
         run_test_sdpa_decode_single_iter(
             device,
@@ -1351,10 +1337,9 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
             sharded_out=True,
             start_indices=start_indices,
             cur_pos_tensor=True,
-            extra_torch_entries=extra_torch_entries,
         )
 
-    assert device.num_program_cache_entries() - extra_torch_entries[0] == 4
+    assert device.num_program_cache_entries() == 4
 
 
 def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttnn.bfloat16):

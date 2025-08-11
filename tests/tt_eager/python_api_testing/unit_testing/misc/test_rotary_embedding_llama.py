@@ -129,7 +129,6 @@ def run_test_rotary_embedding_llama(
     max_seq_len,
     datatype=ttnn.bfloat16,
     fuse_qk=False,
-    extra_torch_entries=[0],
 ):
     # Prepare input
     torch.manual_seed(0)
@@ -241,14 +240,12 @@ def run_test_rotary_embedding_llama(
                 for _ in range(len(inp))
             ]
 
-        current_entries_count = device.num_program_cache_entries()
         tt_inp = [
             ttnn.from_torch(
                 x, device=device, dtype=datatype, memory_config=input_mem_configs[i], layout=ttnn.TILE_LAYOUT
             )
             for i, x in enumerate(inp)
         ]
-        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
         tt_inp += [cos, sin]  # Append cos and sin to the input list
     else:
         cos, sin = compute_gather_cos_sin(
@@ -258,14 +255,10 @@ def run_test_rotary_embedding_llama(
         )
 
         tt_inp = [inp[0], inp[1], cos, sin]
-        current_entries_count = device.num_program_cache_entries()
         tt_inp = [ttnn.from_torch(i, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT) for i in tt_inp]
-        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     tt_out = tt_model(*tt_inp)
-    current_entries_count = device.num_program_cache_entries()
     tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
-    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     if mode == "decode":
         tt_out = [x.transpose(1, 2) for x in tt_out]
@@ -564,24 +557,13 @@ def test_rotary_embedding_llama_with_program_cache(
     mode = "decode" if seq_len == 1 else "prefill"
 
     cache_tensors = []
-    extra_torch_entries = [0]
     for _ in range(3):
         run_test_rotary_embedding_llama(
-            device,
-            batch,
-            seq_len,
-            pcc,
-            n_heads,
-            n_kv_heads,
-            head_dim,
-            max_seq_len,
-            datatype,
-            extra_torch_entries=extra_torch_entries,
+            device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype
         )
 
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.randn(1, 1, 32, 32)
-        current_entries_count = device.num_program_cache_entries()
         test_tensor = (
             ttnn.Tensor(
                 inp.reshape(-1).tolist(),
@@ -592,7 +574,6 @@ def test_rotary_embedding_llama_with_program_cache(
             .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
-        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
         cache_tensors.append(test_tensor)
 
@@ -603,7 +584,7 @@ def test_rotary_embedding_llama_with_program_cache(
         if batch % ttnn.TILE_SIZE != 0:
             num_ops += 1  # slice
 
-    assert device.num_program_cache_entries() - extra_torch_entries[0] == num_ops
+    assert device.num_program_cache_entries() == num_ops
 
 
 def apply_rotary_emb_qk_real(

@@ -498,7 +498,6 @@ def test_quantization_per_tensor_program_cache(device, input_dtype):
 
     num_program_cache_entries_list = []
 
-    extra_torch_entries = 0
     for dim in [1, 2, 3, 4]:
         for i in range(5):
             # Each iteration gets completely different input tensors, quant ranges, etc.
@@ -507,9 +506,7 @@ def test_quantization_per_tensor_program_cache(device, input_dtype):
             scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -120 + i, 121 - i)
             scale_r, zero_point_r = calculate_scale_zero_point_per_tensor(input_tr, -50 - i, 42 + i)
 
-            current_entries_count = device.num_program_cache_entries()
             input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-            extra_torch_entries += device.num_program_cache_entries() - current_entries_count
             quantized_tt = ttnn.quantize(input_tt, scale, zero_point)
             requantized_tt = ttnn.requantize(quantized_tt, scale, zero_point, scale_r, zero_point_r)
             derequantized_tt = ttnn.dequantize(requantized_tt, scale_r, zero_point_r, dtype=input_dtype)
@@ -518,7 +515,7 @@ def test_quantization_per_tensor_program_cache(device, input_dtype):
             check_pcc(input_tr, result_tr, False)
             check_match_ratio(input_tr, result_tr, input_dtype)
 
-            num_program_cache_entries_list.append(device.num_program_cache_entries() - extra_torch_entries)
+            num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     assert num_program_cache_entries_list[0] > 0
     assert max(num_program_cache_entries_list) == min(num_program_cache_entries_list)

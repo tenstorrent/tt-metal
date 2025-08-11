@@ -66,26 +66,10 @@ def create_input_and_weight_tensors(input_width, num_devices, seed, mean, std):
     return torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks
 
 
-def from_torch_without_count(extra_torch_entries, count_device, *args, **kwargs):
-    current_entries_count = count_device.num_program_cache_entries()
-    result = ttnn.from_torch(*args, **kwargs)
-    extra_torch_entries[0] += count_device.num_program_cache_entries() - current_entries_count
-    return result
-
-
 def create_tt_tensors(
-    torch_chunk,
-    device,
-    df,
-    core_grid,
-    input_width,
-    is_weight=False,
-    grid_offset=ttnn.CoreCoord(0, 0),
-    extra_torch_entries=[0],
+    torch_chunk, device, df, core_grid, input_width, is_weight=False, grid_offset=ttnn.CoreCoord(0, 0)
 ):
-    tt_tensor = from_torch_without_count(
-        extra_torch_entries,
-        device,
+    tt_tensor = ttnn.from_torch(
         torch_chunk,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -234,12 +218,8 @@ def run_pre_allgather_layernorm(
             input_width, num_devices, seed + 100, mean, std
         )
 
-    extra_torch_entries = [0]
-
     for d in range(num_devices):
-        tt_input_tensor = create_tt_tensors(
-            torch_input_chunks[d], device, input_df, core_grid, input_width, extra_torch_entries=extra_torch_entries
-        )
+        tt_input_tensor = create_tt_tensors(torch_input_chunks[d], device, input_df, core_grid, input_width)
         if fuse_residual:
             tt_residual_input_tensor = create_tt_tensors(
                 torch_residual_input_chunks[d], device, input_df, core_grid, input_width
@@ -288,7 +268,7 @@ def run_pre_allgather_layernorm(
                 tt_ex2, torch_ex2, atol=max_atol_ex2
             ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
 
-    assert device.num_program_cache_entries() - extra_torch_entries[0] == 2, "Program cache not working as expected"
+    assert device.num_program_cache_entries() == 2, "Program cache not working as expected"
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 

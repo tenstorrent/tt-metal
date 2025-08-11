@@ -177,10 +177,8 @@ def test_sort_program_cache(shape, dim, descending, device):
 
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype)
-    extra_torch_entries = 0
-    current_entries_count = device.num_program_cache_entries()
+
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-    extra_torch_entries += device.num_program_cache_entries() - current_entries_count
     torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
 
     test_iterations = 3
@@ -199,9 +197,9 @@ def test_sort_program_cache(shape, dim, descending, device):
         ttnn.synchronize_device(device)
     cache_entries = device.num_program_cache_entries()
     device.disable_and_clear_program_cache()
-    assert (
-        cache_entries - extra_torch_entries == 1
-    ), "Expected only one program cache entry for sort operation, but found {}".format(cache_entries)
+    assert cache_entries == 1, "Expected only one program cache entry for sort operation, but found {}".format(
+        cache_entries
+    )
 
 
 @pytest.mark.parametrize(

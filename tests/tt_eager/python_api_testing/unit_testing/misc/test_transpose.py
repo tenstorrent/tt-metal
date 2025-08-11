@@ -421,13 +421,11 @@ def run_transpose_hw_rm_program_cache(device, n, c, h, w):
 @pytest.mark.parametrize("h", [8])
 @pytest.mark.parametrize("w", [256])
 def test_transpose_hw_rm_with_program_cache(device, n, c, h, w):
-    extra_torch_entries = 0
     for _ in range(2):
         run_transpose_hw_rm_program_cache(device, n, c, h, w)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        current_entries_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -435,9 +433,7 @@ def test_transpose_hw_rm_with_program_cache(device, n, c, h, w):
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        extra_torch_entries += device.num_program_cache_entries() - current_entries_count
-
-    assert device.num_program_cache_entries() - extra_torch_entries == 1
+    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
@@ -517,13 +513,11 @@ def run_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
 def test_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
-    extra_torch_entries = 0
     for _ in range(2):
         run_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        current_entries_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -531,8 +525,7 @@ def test_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        extra_torch_entries += device.num_program_cache_entries() - current_entries_count
-    assert device.num_program_cache_entries() - extra_torch_entries == 3
+    assert device.num_program_cache_entries() == 3
 
 
 @pytest.mark.parametrize("n", [16])

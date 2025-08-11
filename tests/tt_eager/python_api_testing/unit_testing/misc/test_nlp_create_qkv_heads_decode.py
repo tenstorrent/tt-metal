@@ -392,9 +392,7 @@ def test_create_heads_with_slice(
     torch.manual_seed(0)
     batch_offset_tensor = torch.tensor([batch_offset], dtype=torch.int32)
     # convert to tt tensor
-    current_entries_count = device.num_program_cache_entries()
     batch_offset_tensor_tt = ttnn.from_torch(batch_offset_tensor, device=device, layout=ttnn.TILE_LAYOUT)
-    extra_torch_entries = device.num_program_cache_entries() - current_entries_count
 
     for i in range(3):
         # multiple loops to test program caching
@@ -410,7 +408,7 @@ def test_create_heads_with_slice(
         )
     # BH does s2i and i2s inside of to_device and from_device as device ops
     expected_entries = 1
-    assert device.num_program_cache_entries() - extra_torch_entries == expected_entries
+    assert device.num_program_cache_entries() == expected_entries
 
 
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")

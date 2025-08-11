@@ -97,11 +97,7 @@ def test_embedding_bw_with_program_cache(
     weights_shape = (num_embeddings, embedding_dim)
     grad_shape = (1, 1, batch_size * seq_len, embedding_dim)
 
-    # Do not count from entries that come from the `from_torch` conversion steps
-    extra_torch_entries = 0
-
     for _ in range(2):
-        current_entries_count = device.num_program_cache_entries()
         input_index = torch.randint(0, num_embeddings, input_shape)
         input_tensor = ttnn.from_torch(input_index, dtype=input_dtype, device=device)
 
@@ -110,13 +106,9 @@ def test_embedding_bw_with_program_cache(
 
         grad_data = torch.randn(grad_shape, requires_grad=True)
         grad_tensor = ttnn.from_torch(grad_data, dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        extra_torch_entries += device.num_program_cache_entries() - current_entries_count
 
         tt_output_tensor_on_device = ttnn.embedding_bw(input_tensor, weights_ttnn, grad_tensor, dtype=output_dtype)
-
-        current_entries_count = device.num_program_cache_entries()
         tt_output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
-        extra_torch_entries += device.num_program_cache_entries() - current_entries_count
 
         # PyTorch reference
         weights.retain_grad()
@@ -129,4 +121,4 @@ def test_embedding_bw_with_program_cache(
         logger.debug(comp_out)
         assert comp_pass
 
-    assert device.num_program_cache_entries() - extra_torch_entries == 1
+    assert device.num_program_cache_entries() == 1
