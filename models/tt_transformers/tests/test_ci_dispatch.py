@@ -16,7 +16,7 @@ from models.utility_functions import hf_model_weights_to_tt_cache_path, skip_for
     [
         "meta-llama/Llama-3.2-1B-Instruct",
         "meta-llama/Llama-3.2-3B-Instruct",
-        "meta-llama/Llama-3.2-8B-Instruct",
+        "meta-llama/Llama-3.1-8B-Instruct",
         "meta-llama/Llama-3.2-11B-Vision-Instruct",
         "mistralai/Mistral-7B-Instruct-v0.3",
     ],
