@@ -29,6 +29,18 @@ public:
         other.container_ = nullptr;
     }
 
+    HandoffHandle& operator=(HandoffHandle<Container> &&other) noexcept {
+        if (this != &other) {
+            if (container_ && release_callback_) {
+                release_callback_(container_);
+            }
+            container_ = std::move(other.container_);
+            release_callback_ = std::move(other.release_callback_);
+            other.container_ = nullptr;
+        }
+        return *this;
+    }
+
     HandoffHandle(const HandoffHandle<Container> &) = delete;
     HandoffHandle &operator=(const HandoffHandle<Container> &) = delete;
 
