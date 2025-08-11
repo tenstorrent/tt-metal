@@ -263,10 +263,10 @@
     "ShardedToInterleavedDeviceOperation_1": {
       "op_name": "ShardedToInterleavedDeviceOperation_1",
       "kernel_duration": 1002.19375,
-      "op_to_op": 988.4666666666667,
+      "op_to_op": 1849.0,
       "non-overlapped-dispatch-time": 2205.4285714285716,
       "kernel_duration_relative_margin": 0.2,
-      "op_to_op_duration_relative_margin": 0.5,
+      "op_to_op_duration_relative_margin": 0.6,
       "dispatch_duration_relative_margin": 0.5
     },
     "TopK_0": {

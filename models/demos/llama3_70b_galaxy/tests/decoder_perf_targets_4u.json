@@ -125,11 +125,11 @@
             "op_name": "PagedUpdateCache",
             "kernel_duration": 5097.290088383838,
             "op_to_op": 853.2727272727273,
-            "first_to_last_start": 241.22222222222223,
+            "first_to_last_start": 140.82323232323233,
             "non-overlapped-dispatch-time": 4601.383333333333,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
-            "first_to_last_start_relative_margin": 0.35,
+            "first_to_last_start_relative_margin": 1.0,
             "dispatch_duration_relative_margin": 0.2
         },
         "RMSAllGather_0": {
