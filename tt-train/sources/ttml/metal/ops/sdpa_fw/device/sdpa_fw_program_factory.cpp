@@ -36,7 +36,7 @@ constexpr auto kValueCbIndex = tt::CBIndex::c_2;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_3;
 constexpr auto kIntermediateCbIndex = tt::CBIndex::c_4;
 constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
-constexpr auto kTransposeKeyCbIndex = tt::CBIndex::c_6;  // used for transposing key tiles
+constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // used for transposing key tiles
 constexpr auto kTempAccumCbIndex = tt::CBIndex::c_7;     // used for accumulating results
 
 constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // used for holding max value during reduce
@@ -237,13 +237,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Ht_);
 
     auto cb_intermediate = create_circular_buffer(
-        program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kIntermediateTiles);
+        program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
 
     auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_transposed_key = create_circular_buffer(
-        program, all_cores, kTransposeKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
+    auto cb_mat_mul_reduce = create_circular_buffer(
+        program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
     auto cb_temp_accum = create_circular_buffer(
         program, all_cores, kTempAccumCbIndex, data_format, bfloat16_single_tile_size_bytes, kTempAccumTiles);
@@ -265,13 +265,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
     auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
 
     auto cb_cur_mm_out = create_circular_buffer(
-        program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
 
     auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
+        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
+
+    auto cb_mm_result_holder = create_circular_buffer(
+        program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, Wt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

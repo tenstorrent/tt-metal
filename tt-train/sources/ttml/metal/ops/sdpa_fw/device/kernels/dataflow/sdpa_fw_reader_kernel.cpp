@@ -32,14 +32,12 @@ void kernel_main() {
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
+    constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_6;
 
     // [Debug]: all next cb used for debug here
     constexpr uint32_t cb_temp_accum = tt::CBIndex::c_7;
     constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;  // used to store previous max value
     constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;   // used to store current max value
-
-    //[DEBUG] TODO: remove this
-    constexpr uint32_t cb_transpose_key = tt::CBIndex::c_6;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);  // (d / TILE_W)
@@ -76,6 +74,7 @@ void kernel_main() {
 
     generate_tile_with_bfloat16_value(
         cb_reduction_scaler, one);  // generate tile with bfloat16 value 1.0 for reduction scaler
+    generate_matmul_row_reduce_tile(cb_matmul_reduce);  // generate tile for matmul row reduce
 
     const float scaler = uint32_to_float(scaler_bits);
     const float minus_one = uint32_to_float(minus_one_bits);

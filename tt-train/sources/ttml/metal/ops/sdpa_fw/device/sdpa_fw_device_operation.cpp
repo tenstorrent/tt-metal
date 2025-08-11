@@ -55,7 +55,7 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
             output_specs.push_back(tensor_args.preallocated_intermediate->tensor_spec());
         } else {
             auto shape = tensor_args.query.logical_shape();
-            shape[-1] = 32U;  // intermediate is a scalar per row
+            shape[-1] = 1U;  // intermediate is a scalar per row
             output_specs.emplace_back(
                 shape,
                 tt::tt_metal::TensorLayout(

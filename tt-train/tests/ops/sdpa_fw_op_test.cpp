@@ -242,17 +242,19 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
     auto exp_qk_scaled = ttnn::exp(qk_scaled_sub_max);
     // auto intm_result = ttnn_fixed::matmul(exp_qk_scaled, value, /*transpose_a=*/false, /*transpose_b=*/false);
     auto sum_exp = ttnn::sum(exp_qk_scaled, /* dim */ 3, /* keepdim */ true);
-    
+    auto recip_sum_exp = ttnn::reciprocal(sum_exp);
+    auto interm_mm_result = ttnn_fixed::matmul(exp_qk_scaled, value, /*transpose_a=*/false, /*transpose_b=*/false);
+
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
 
     auto attention_qkv = ttnn_fixed::matmul(attention_weights, value, /*transpose_a=*/false, /*transpose_b=*/false);
-    return {attention_qkv, exp_qk_scaled};
+    return {attention_qkv, recip_sum_exp};
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     using namespace ttml;
 
-    const uint32_t B = 1U, H = 1U, S = 32U, d = 32U;
+    const uint32_t B = 1U, H = 1U, S = 128U, d = 768U;
     const float dropout_prob = 0.8F;
 
     std::random_device rd;
@@ -263,14 +265,14 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     xt::xarray<float> attn_mask_tensor = xt::ones<float>({B, H, S, S});
     // xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
 
-    for (uint32_t b = 0; b < B; ++b) {
-        for (uint32_t i = 0; i < S; ++i) {
-            for (uint32_t j = 0; j < d; ++j) {
-                query_tensor(b, 0, i, j) = static_cast<float>(1U);
-                key_tensor(b, 0, i, j) = static_cast<float>(1U);
-            }
-        }
-    }
+    // for (uint32_t b = 0; b < B; ++b) {
+    //     for (uint32_t i = 0; i < S; ++i) {
+    //         for (uint32_t j = 0; j < d; ++j) {
+    //             query_tensor(b, 0, i, j) = static_cast<float>(1U);
+    //             key_tensor(b, 0, i, j) = static_cast<float>(1U);
+    //         }
+    //     }
+    // }
     // std::cout << '\n';
     // for (uint32_t i = 0; i < d; ++i) {
     //     std::cout << key_tensor(0, 0, 64, i) << ' ';
@@ -296,7 +298,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
 
     assert((result_xtensor.shape() == expected_result.shape()));
     assert((baseline_result_xtensor.shape() == expected_result.shape()));
-    assert((interm_xtensor.shape() == baseline_interm_xtensor.shape()));
 
     // float mse_result = compute_mse(expected_result, result_xtensor);
     // float mse_baseline = compute_mse(expected_result, baseline_result_xtensor);
@@ -315,26 +316,30 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
             //               << baseline_result_xtensor(0, 0, i, j) << '\n';
             // }
 
-            // if (std::abs(actual_value - baseline_value) >= 2e-2F + std::abs(baseline_value) * 3e-2F) {
-            //     std::cout << "Mismatch at (" << i << ", " << j << "): "
-            //               << "baseline " << baseline_value << ", got " << actual_value << '\n';
-            // }
+            if (std::abs(actual_value - baseline_value) >= 2e-2F + std::abs(baseline_value) * 3e-2F) {
+                std::cout << "Mismatch at (" << i << ", " << j << "): "
+                          << "baseline " << baseline_value << ", got " << actual_value << '\n';
+            }
         }
     }
-    if (return_intermediates) {
-        for(size_t i = 0; i < S; ++i) {
-            float expected_interm_value = baseline_interm_xtensor(0, 0, i, 0);
-            float actual_interm_value = interm_xtensor(0, 0, i, 0);
+    EXPECT_TRUE(xt::allclose(result_xtensor, baseline_result_xtensor, 3e-1F, 1e-2F));
 
-            if (std::abs(actual_interm_value - expected_interm_value) >= 1e-2F + std::abs(expected_interm_value) * 1e-2F) {
-                std::cout << "Mismatch in intermediate at (" << i << ", 0): "
-                          << "expected " << expected_interm_value << ", got " << actual_interm_value << '\n';
+    if (return_intermediates) {
+        assert((interm_xtensor.shape() == baseline_interm_xtensor.shape()));
+        for(size_t i = 0; i < S; ++i) {
+            for (size_t j = 0; j < 1U /*d*/; ++j) {
+                float expected_interm_value = baseline_interm_xtensor(0, 0, i, j);
+                float actual_interm_value = interm_xtensor(0, 0, i, j);
+
+                if (std::abs(actual_interm_value - expected_interm_value) >= 1e-2F + std::abs(expected_interm_value) * 3e-2F) {
+                    std::cout << "Mismatch in intermediate at (" << i << ", " << j << "): "
+                              << "expected " << expected_interm_value << ", got " << actual_interm_value << '\n';
+                }
             }
         }
 
-        EXPECT_TRUE(xt::allclose(interm_xtensor, baseline_interm_xtensor, 1e-2F, 1e-2F));
+        EXPECT_TRUE(xt::allclose(interm_xtensor, baseline_interm_xtensor, 3e-2F, 1e-2F));
     }
-    EXPECT_TRUE(xt::allclose(result_xtensor, baseline_result_xtensor, 3e-1F, 1e-2F));
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQK_Batch) {
@@ -391,41 +396,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQK_Batch) {
     // mesh_devices->disable_and_clear_program_cache();
 
     const size_t test_count = 100U;
-    using Clock = std::chrono::high_resolution_clock;
-
-    // auto temp_res = ttml::metal::sdpa_fw(query, key, value, attn_mask, dropout_prob, false);
-    // auto baseline_temp_res = ttnn_fixed::matmul(query, key, false, true);
-
-    // for (const auto& device_id : device_ids) {
-    //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
-    // }
-
-    // auto op_start = Clock::now();
-    // for (size_t i = 0; i < test_count; ++i) {
-    //     temp_res = ttml::metal::sdpa_fw(query, key, value, std::nullopt, dropout_prob, false);
-    // }
-    // for (const auto& device_id : device_ids) {
-    //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
-    // }
-    // // xt::xarray<float> temp_res_xtensor = core::to_xtensor(temp_res[0].value());
-    // auto op_end = Clock::now();
-
-    // auto ttnn_matmul_start = Clock::now();
-    // for (size_t i = 0; i < test_count; ++i) {
-    //     baseline_temp_res = ttnn_fixed::matmul(query, key, false, true);
-    //     // xt::xarray<float> baseline_temp_res_xtensor = core::to_xtensor(baseline_temp_res);
-    // }
-    // for (const auto& device_id : device_ids) {
-    //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
-    // }
-    // // xt::xarray<float> baseline_temp_res_xtensor = core::to_xtensor(baseline_temp_res);
-    // auto ttnn_matmul_end = Clock::now();
-
-    // std::chrono::duration<float, std::milli> duration = op_end - op_start;
-    // std::chrono::duration<float, std::milli> ttnn_duration = ttnn_matmul_end - ttnn_matmul_start;
-
-    // std::cout << "Our MatMul: " << duration.count() << " ms\n";
-    // std::cout << "Reference : " << ttnn_duration.count() << " ms\n";
 
     auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, dropout_prob, false);
     auto matmul_result = ttnn_fixed::matmul(query, key, false, true);
