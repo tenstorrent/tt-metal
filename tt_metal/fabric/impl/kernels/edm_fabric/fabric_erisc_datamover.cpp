@@ -756,7 +756,7 @@ FORCE_INLINE void forward_to_downstream_edm(
 #if defined(FABRIC_2D)
 // DIRECTIONS variadic arg is kept last for auto-deduction of type
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS, eth_chan_directions... DIRECTIONS>
-FORCE_INLINE void forward_to_downstream_edms(
+void forward_to_downstream_edms(
     DownstreamDirections<DIRECTIONS...>,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
@@ -788,7 +788,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool process_mask_for_chec
     using eth_chan_directions::SOUTH;
     using eth_chan_directions::WEST;
 
-    switch (mask & 0xF) {
+    switch (mask) {
         case LowLatencyMeshRoutingFields::NOOP: return true;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             return check_space_in_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
@@ -853,7 +853,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
     using eth_chan_directions::SOUTH;
     using eth_chan_directions::WEST;
 
-    switch (mask & 0xF) {
+    switch (mask) {
         case LowLatencyMeshRoutingFields::NOOP: return;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
