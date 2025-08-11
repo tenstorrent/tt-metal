@@ -21,6 +21,10 @@ from transformers.cache_utils import Cache
 
 GRAPH_STACK = None
 
+TAG_TRACEDTENSOR = "TRACEDTENSOR"
+
+TracedTensor = Any
+
 
 def enable_tracing():
     global GRAPH_STACK
@@ -316,7 +320,7 @@ def create_input_tensor(
 
 def preprocess_args_and_kwargs(*function_args, **function_kwargs) -> Any:
     def preprocess_arg(arg: Any) -> Any:
-        if isinstance(arg, TracedTensor):
+        if hasattr(arg, TAG_TRACEDTENSOR):
             return arg
         elif isinstance(arg, torch.Tensor):
             return create_input_tensor(arg)
@@ -334,7 +338,7 @@ def preprocess_args_and_kwargs(*function_args, **function_kwargs) -> Any:
 
 def get_input_tensors(object):
     input_tensors = []
-    if isinstance(object, TracedTensor):
+    if hasattr(object, TAG_TRACEDTENSOR):
         input_tensors.append(object)
     elif isinstance(object, (list, tuple)):
         for element in object:
@@ -381,7 +385,7 @@ def get_arg_name_value_pairs(function, *, function_args, function_kwargs):
 
     def process_arg_value(arg_value):
         nonlocal input_tensor_index
-        if isinstance(arg_value, TracedTensor):
+        if hasattr(arg_value, TAG_TRACEDTENSOR):
             output = InputTensorIndex(index=input_tensor_index)
             input_tensor_index += 1
             return output
@@ -433,7 +437,7 @@ def preprocess_return_value(return_value):
         ),
     ):
         pass
-    elif isinstance(return_value, TracedTensor):
+    elif hasattr(return_value, TAG_TRACEDTENSOR):
         output_tensors.append(return_value)
     elif isinstance(return_value, torch.Tensor):
         output_tensors.append(create_input_tensor(return_value))
@@ -461,7 +465,7 @@ def preprocess_return_value(return_value):
 
 
 def postprocess_return_value(return_value, output_tensors):
-    if isinstance(return_value, TracedTensor):
+    if hasattr(return_value, TAG_TRACEDTENSOR):
         output_tensor, *_ = output_tensors
         output_tensors.pop(0)
         return output_tensor
@@ -490,11 +494,13 @@ def postprocess_return_value(return_value, output_tensors):
         return return_value
 
 
-class TracedTensor:
-    ...
+# class TracedTensor:
+#    ...
 
 
-class TracedTorchTensor(torch.Tensor, TracedTensor):
+class TracedTorchTensor(torch.Tensor):
+    TRACEDTENSOR = None  # tag as an alternative to multiple inheritance
+
     @staticmethod
     def __new__(
         cls: Any,
@@ -625,7 +631,7 @@ def create_module_input(name, tensor: torch.Tensor) -> TracedTensor:
 
 def convert_to_module_args_and_kwargs(module, *function_args, **function_kwargs) -> Any:
     def preprocess_arg(name: str, arg: Any) -> Any:
-        if isinstance(arg, TracedTensor):
+        if hasattr(arg, TAG_TRACEDTENSOR):
             output = create_module_input(name, arg)
             return output
         elif isinstance(arg, torch.nn.Parameter):
@@ -1082,7 +1088,7 @@ def flatten_graph(graph) -> nx.MultiDiGraph:
 
 def process_output(output):
     output_tensors = []
-    if isinstance(output, TracedTensor):
+    if hasattr(output, TAG_TRACEDTENSOR):
         output_tensors.append(output)
     elif isinstance(output, (tuple, list)):
         for value in output:
