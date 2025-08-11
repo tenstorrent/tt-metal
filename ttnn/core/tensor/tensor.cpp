@@ -66,7 +66,11 @@ Tensor create_tensor_from_row_major_data(
 
 Tensor::Tensor(
     HostBuffer buffer, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(std::move(buffer), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
+    Tensor(std::move(buffer), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {
+    if (!this->tensor_id.has_value()) {
+        this->assign_id();
+    }
+}
 
 Tensor::Tensor(
     HostBuffer buffer,
@@ -89,10 +93,17 @@ Tensor::Tensor(
             "only matmul op and ccl all-gather currently supports the customized tile shape: {}",
             tile->get_tile_shape());
     }
+    if (!this->tensor_id.has_value()) {
+        this->assign_id();
+    }
 }
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
-    Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), ReplicateTensor{}, TensorTopology{}) {}
+    Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), ReplicateTensor{}, TensorTopology{}) {
+    if (!this->tensor_id.has_value()) {
+        this->assign_id();
+    }
+}
 
 Tensor::Tensor(
     Storage storage,
@@ -118,10 +129,15 @@ void Tensor::init(
         device_storage != nullptr && device_storage->mesh_buffer != nullptr) {
         mesh_device_ = device_storage->mesh_buffer->device();
     }
+
+    assign_id();
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
     this->tensor_id = other.tensor_id;
+    if (!this->tensor_id.has_value()) {
+        this->assign_id();
+    }
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = other.tensor_attributes;
     }
@@ -131,6 +147,9 @@ Tensor& Tensor::operator=(const Tensor& other) {
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = std::move(other.tensor_id);
+    if (!this->tensor_id.has_value()) {
+        this->assign_id();
+    }
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
@@ -139,6 +158,9 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
 }
 
 Tensor::Tensor(const Tensor& other) : tensor_id(other.tensor_id), tensor_attributes(other.tensor_attributes) {
+    if (!this->tensor_id.has_value()) {
+        this->assign_id();
+    }
     this->mesh_device_ = other.mesh_device_;
 }
 
@@ -777,6 +799,16 @@ Tensor set_tensor_id(const Tensor& tensor) {
     auto output = tensor;
     output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
     return output;
+};
+
+void Tensor::assign_id() {
+    if (not GraphTracker::instance().is_enabled()) {
+        return;
+    }
+    if (this->tensor_id.has_value()) {
+        log_warning(tt::LogTTNN, "Calling assign_id on a tensor that already has an id!");
+    }
+    this->tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
 };
 
 Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
