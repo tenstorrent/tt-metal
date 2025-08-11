@@ -5,15 +5,11 @@ import os
 
 import torch
 
-from models.demos.gpt_oss.reference.hf_utils import (
-    convert_bf16_to_fp32,
-    load_model_uninitialized,
-    load_model_weights,
-    load_tokenizer,
-)
+from models.demos.gpt_oss.reference.hf_utils import get_state_dict, load_model_uninitialized, load_tokenizer
 
 local_model_path = "models/demos/gpt_oss/reference"
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+torch_state_dict_path = os.path.join(local_weights_path, "torch_state_dict.pt")
 
 
 def main():
@@ -31,8 +27,7 @@ def main():
 
         # Load the model weights
         print("Loading model weights")
-        weights_dict = load_model_weights(local_weights_path)
-        weights_dict = convert_bf16_to_fp32(weights_dict)
+        weights_dict = get_state_dict(local_weights_path, dtype=torch.float32)  # prefix="model.layers.0.self_attn."
 
         model.load_state_dict(weights_dict, strict=True)
         print("Model weights loaded successfully")
