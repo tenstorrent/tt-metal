@@ -225,7 +225,7 @@ void kernel_main() {
                     dest_mesh_id,
                     global_noc_semaphore_addr,
                     1,
-                    false);
+                    true);
             }
         }
     }

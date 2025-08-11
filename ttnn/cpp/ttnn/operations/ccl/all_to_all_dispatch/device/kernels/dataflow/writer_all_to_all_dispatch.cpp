@@ -326,7 +326,7 @@ void kernel_main() {
                         (int)indices_size_per_core,
                         alignment,
                         1,
-                        false);
+                        true);
                 } else {
                     fabric_send_chip_unicast_noc_unicast_with_semaphore<
                         src_chip_id,
@@ -343,7 +343,7 @@ void kernel_main() {
                         (int)indices_size_per_core,
                         alignment,
                         1,
-                        false);
+                        true);
                 }
             }
         }
