@@ -45,6 +45,8 @@ def reference_sdpa(Q, K, V, S, sm_scale, sliding_window=0):
     ],
 )
 def test_sdpa(device, num_tokens, nh, nkv, dim, sliding_window, num_iters, reset_seeds):
+    device.disable_and_clear_program_cache()  # FIXME: Removing this causes a hang after a few iterations (GH Issue )
+
     dtype = ttnn.bfloat16
 
     q, k, v = None, None, None
@@ -90,8 +92,6 @@ def test_sdpa(device, num_tokens, nh, nkv, dim, sliding_window, num_iters, reset
         tt_mask = ttnn.from_torch(mask, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
 
         # TT output
-        # if n >= 5:
-        #     breakpoint()
         tt_out, tt_cache = tt_sdpa(tt_q, tt_k, tt_v, tt_sink, sm_scale=sm_scale, tt_mask=tt_mask, tt_cache=tt_cache)
         tt_out_torch = ttnn.to_torch(tt_out)
 
@@ -107,21 +107,3 @@ def test_sdpa(device, num_tokens, nh, nkv, dim, sliding_window, num_iters, reset
         all_passing = all_passing and passed
 
     assert all_passing, "Test failed: Outputs do not match"
-
-
-def test_reshape_hang_repro(device, reset_seeds):
-    input_shape = [1, 1, 64, 64]
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-
-    # reference_out = torch_input.reshape(1, 1, -1)
-    temps = []
-
-    for i in range(10000):
-        logger.info(f"Running reshape iteration {i}")
-        tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_out = ttnn.reshape(tt_input, [1, 1, 4096])
-
-        temps.append(ttnn.from_torch(torch.ones(32, 128)))
-
-        tt_out_torch = ttnn.to_torch(tt_out)
-        torch_input = tt_out_torch.view(1, 1, 64, 64)  # Reshape back to original shape for next iteration

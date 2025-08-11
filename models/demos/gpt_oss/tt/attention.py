@@ -89,10 +89,7 @@ def sdpa(
         #     breakpoint()
         out = ttnn.slice(out, [0, kv_len - num_tokens, 0, 0], [1, kv_len, nh, dim])  # (1, num_tokens, nh, dim)
 
-    out = ttnn.permute(out, [1, 2, 0, 3])
+    # FIXME: This reshape hangs after a few iterations (GH Issue)
+    out = ttnn.reshape(out, [num_tokens, dim * nh])
 
-    # [1, 1, 64, 64] -> [1, 4096]
-    out_ = ttnn.reshape(out, [1, 1, num_tokens, dim * nh])
-    ttnn.deallocate(out)
-
-    return out_, tt_cache
+    return out, tt_cache
