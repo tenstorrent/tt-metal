@@ -167,8 +167,7 @@ class Transformer(LightweightModule):
         """
         host_inputs = self.prepare_decode_inputs_host(*inputs)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
-        transformed_device_inputs = self.transform_decode_inputs_device(*device_inputs)
-        return transformed_device_inputs
+        return device_inputs
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """
@@ -217,24 +216,22 @@ class Transformer(LightweightModule):
             )
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def transform_decode_inputs_device(self, tokens, current_pos, rope_idxs, page_table=None):
+    def _transform_decode_inputs_device(self, tokens):
         """
         Inputs are ttnn tensors on device. This function applies any on-device
         transformations which should happen before forward decode.
         For example: tilize, reshape, shard.
         Return transformed device tensors
 
-        Get rope sin/cos
         Embed tokens
         """
-        tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(
             tt_tokens,
             self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
-        return tt_tokens, current_pos, tt_rot_mats, page_table
+        return tt_tokens
 
     def concat_device_output(self, tt_out):
         """
@@ -300,11 +297,25 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
+    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
+        # ttnn.ne currently requires the input to be in TILE_LAYOUT
+        current_pos_tiled = ttnn.to_layout(current_pos, layout=ttnn.TILE_LAYOUT)
+        # Update only active positions (current_pos != -1)
+        predicate = ttnn.ne(current_pos_tiled, -1)
+        result = ttnn.where(
+            predicate,
+            ttnn.add(current_pos_tiled, 1),
+            current_pos_tiled,
+        )
+        ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), current_pos)
+
+        ttnn.plus_one(rot_mat_idxs)
+
     def ttnn_decode_forward(
         self,
         x,
         current_pos,
-        rot_mats,
+        rot_mat_idxs,
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
@@ -313,8 +324,11 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        x_embed = self._transform_decode_inputs_device(x)
+
         tt_logits = self.forward(
-            x,
+            x_embed,
             current_pos,
             rot_mats=rot_mats,
             mode="decode",
@@ -339,10 +353,15 @@ class Transformer(LightweightModule):
 
         if argmax_on_device:
             tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
-        else:
+
+            # Update device tensors for the next iteration
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+
+            # Update input tokens with sampled tokens for the next iteration
+            ttnn.copy(tt_logits.reshape(x.shape), x)
+        elif not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            if not self.args.is_galaxy:
-                tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits
 

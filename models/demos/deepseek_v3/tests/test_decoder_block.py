@@ -148,8 +148,15 @@ def test_forward_pass(
         ccl=ccl,
     )
 
+    # Create a new model shared state
+    model_shared_state = DecoderBlockClass.create_shared_state(
+        hf_config,
+        mesh_device,
+        is_padding_layer=is_padding_layer,
+    )
+
     # Create run config
-    run_config = create_run_config(model_config, weight_config, model_state)
+    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     ############################
     ### TTNN inputs

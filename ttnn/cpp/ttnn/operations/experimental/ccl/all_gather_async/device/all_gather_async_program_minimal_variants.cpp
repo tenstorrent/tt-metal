@@ -415,9 +415,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 }
                 if (fuse_op) {
                     if (dir) {
-                        fused_op_signaler_forward->push_all_gather_fused_op_rt_args(reader_rt_args, 1, 0, 1);
+                        fused_op_signaler_forward->push_all_gather_fused_op_rt_args(
+                            reader_rt_args,
+                            num_workers_per_direction * num_links,
+                            worker + link * num_workers_per_direction,
+                            1);
                     } else {
-                        fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_rt_args, 1, 0, 0);
+                        fused_op_signaler_backward->push_all_gather_fused_op_rt_args(
+                            reader_rt_args,
+                            num_workers_per_direction * num_links,
+                            worker + link * num_workers_per_direction,
+                            0);
                     }
                 }
 
@@ -502,7 +510,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
                 }
                 if (fuse_op) {
-                    fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_rt_args, 1, 0, 1);
+                    fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
+                        writer_rt_args,
+                        num_workers_per_direction * num_links,
+                        worker + link * num_workers_per_direction,
+                        1);
                 }
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
             }
