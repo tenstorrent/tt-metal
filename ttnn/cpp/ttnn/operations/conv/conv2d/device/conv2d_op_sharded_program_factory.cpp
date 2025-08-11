@@ -176,7 +176,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
-    bool enable_split_reader,
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram) {
@@ -293,10 +292,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     const bool is_conv_1d_depthwise_conv =
         is_1d_deptwise_conv(groups, ashape[3], output_channels, filter_w, ashape[2], has_bias);
-    if ((block_sharded || is_conv_1d_depthwise_conv) && enable_split_reader) {
-        enable_split_reader = false;
-        log_warning(tt::LogOp, "Split reader is not supported for block sharded or 1d depthwise conv");
-    }
+
+    const bool enable_split_reader =
+        is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles);
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -620,7 +618,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
         .enable_act_double_buffer = enable_act_double_buffer,
         .enable_weights_double_buffer = enable_weights_double_buffer,
-        .enable_split_reader = enable_split_reader,
         .enable_activation_reuse = enable_activation_reuse};
     std::vector<CBInfo> cb_info = get_cb_info(
         compute_kernel_config,
@@ -715,7 +712,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             enable_split_reader,
             input_cores);
     }
-
 
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)dilation_h,

@@ -90,5 +90,8 @@ void allocate_cbs(
 const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);
 CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);
 
+bool is_split_reader_supported(
+    TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles);
+
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv
