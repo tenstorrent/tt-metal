@@ -233,7 +233,7 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_longer.json",  # input_prompts
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
             True,  # instruct mode
             32,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -250,7 +250,7 @@ def create_tt_model(
             False,  # print_outputs
         ),
         (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_longer.json",  # input_prompts
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
             True,  # instruct mode
             32,  # repeat_batches
             128 * 1024,  # max_seq_len
