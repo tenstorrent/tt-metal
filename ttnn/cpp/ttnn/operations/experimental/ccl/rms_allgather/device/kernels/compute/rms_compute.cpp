@@ -53,7 +53,8 @@ void MAIN {
 
     constexpr uint32_t num_blocks_second_stage_reduction = num_blocks_first_stage + num_blocks_second_stage - 1;
 
-    volatile uint32_t subblock_w_volatile = subblock_w_const;
+    // Avoid volatile and runtime branch on subblock sizing; this lets the compiler fold indexes
+    constexpr uint32_t subblock_w = subblock_w_const;
 
     const uint32_t num_reduce_tiles_per_block_h =
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
@@ -66,10 +67,7 @@ void MAIN {
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-
     constexpr uint32_t cb_x2 = cb_x;  // x^2
-
-    const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
     int index_subblock_w_offset = 0;
     int index_h_offset = 0;
@@ -80,8 +78,8 @@ void MAIN {
     binary_op_init_common(cb_in0, cb_in1, cb_in);
     reconfig_data_format(cb_in0, cb_in1);
     pack_reconfig_data_format(cb_in);
-    reconfig_data_format(cb_in0, cb_in1);
     add_tiles_init(cb_in0, cb_in1);
+
     cb_reserve_back(cb_in, num_tiles_per_block);
     index_subblock_w_offset = 0;
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -100,26 +98,29 @@ void MAIN {
     }
     index_h_offset += block_w;
     cb_push_back(cb_in, num_tiles_per_block);
-    cb_wait_front(cb_in, num_tiles_per_block);
+
+    // Keep formats aligned for the square that follows
     pack_reconfig_data_format(cb_in, cb_x2);
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #else
     binary_op_init_common(cb_in, cb_in, cb_x2);
 #endif
 
-    // X^2
+    // === X^2 (compute) ======================================================
     mul_tiles_init(cb_in, cb_in);
     index_h_offset = 0;
     cb_reserve_back(cb_x2, num_tiles_per_block);
     index_subblock_w_offset = 0;
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
         tile_regs_acquire();
+#pragma unroll 2
         for (uint32_t w = 0; w < subblock_w; w++) {
             index = w + index_subblock_w_offset + index_h_offset;
             mul_tiles(cb_in, cb_in, index, index, w);
         }
         tile_regs_commit();
         tile_regs_wait();
+#pragma unroll 2
         for (uint32_t i = 0; i < subblock_w; i++) {
             pack_tile(i, cb_x2);
         }
@@ -129,22 +130,21 @@ void MAIN {
     index_h_offset += block_w;
     cb_push_back(cb_x2, num_tiles_per_block);
 
-    // E(x^2)
+    // === E(x^2) reduction ===================================================
+    // Hoist waits; do a single reservation for the output
     reconfig_data_format_srca(cb_in, cb_x2);
     reconfig_data_format_srcb(cb_in, cb_scaler);
 
     cb_wait_front(cb_x2, num_tiles_per_block);
     cb_wait_front(cb_scaler, 1);
 
-    cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
-
+    cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2)
     reduce_init(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     tile_regs_acquire();
     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
         reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
     }
-
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(dst0, cb_ex_partial2);
@@ -154,33 +154,29 @@ void MAIN {
     cb_pop_front(cb_x2, num_tiles_per_block);
     cb_push_back(cb_ex_partial2, 1);
 
-    // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
+    // === Global reduce ======================================================
     if constexpr (is_allgather_worker) {
         const uint32_t num_tiles_per_allgather_worker = get_arg_val<uint32_t>(1);
         const bool use_two_stage_reduce = get_arg_val<uint32_t>(2) == 1;
         const bool is_second_stage_reader = get_arg_val<uint32_t>(3) == 1;
-        uint32_t num_blocks_reduce;
-        num_blocks_reduce = (is_second_stage_reader) ? num_blocks_second_stage_reduction : num_blocks_first_stage;
+        const uint32_t num_blocks_reduce =
+            (is_second_stage_reader) ? (num_blocks_second_stage_reduction) : (num_blocks_first_stage);
+
         const uint32_t cb_reduction_out =
-            (!use_two_stage_reduce or is_second_stage_reader) ? cb_to_allgather_writer : cb_ex2;
+            (!use_two_stage_reduce || is_second_stage_reader) ? cb_to_allgather_writer : cb_ex2;
+
         cb_wait_front(cb_scaler_global, 1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
         reduce_init(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         cb_reserve_back(cb_reduction_out, num_tiles_per_allgather_worker);
 
-        for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
+        for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             tile_regs_acquire();
-            for (uint32_t w = 0; w < num_blocks_reduce;
-                 w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
+            // Interleaved SUM(X) / SUM(X^2); keep one commit per row to reduce fences
+            for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external2, 1);
-                reduce_tile(
-                    cb_ex_external2,
-                    cb_scaler_global,
-                    0,
-                    scaler0,
-                    0);  // E(x) and E(x^2) interleaved so we reduce each one into
-                         // different dest reg
+                reduce_tile(cb_ex_external2, cb_scaler_global, 0, scaler0, 0);
                 cb_pop_front(cb_ex_external2, 1);
             }
             tile_regs_commit();
@@ -198,15 +194,11 @@ void MAIN {
     constexpr uint32_t post_dst0 = 0;
     constexpr uint32_t post_scaler0 = 0;
     binary_op_init_common(cb_stats, post_cb_scaler_global, cb_var);
-    index_subblock_w_offset = 0;
-    index_h_offset = 0;
-    index = 0;
 
-    constexpr uint32_t cb_outgamma = cb_out;
     if constexpr (is_allgather_worker) {
         const bool enable_sqrt = get_arg_val<uint32_t>(4) == 1;
         if (enable_sqrt) {
-            uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
+            const uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
             cb_reserve_back(cb_var, 1);
             cb_wait_front(post_cb_scaler_global, 1);
             reduce_init(cb_stats, post_cb_scaler_global, cb_var);
@@ -236,7 +228,6 @@ void MAIN {
             add_tiles_init(cb_var, cb_eps);
             tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, post_dst0);
-            tile_regs_wait();
             sqrt_tile_init();
             sqrt_tile(post_dst0);
             recip_tile_init();
@@ -251,33 +242,34 @@ void MAIN {
             cb_push_back(cb_stats_reduced, 1);
         }
     }
+
+    // === (x - Ex) * inv_std  -> cb_im  (subblock streaming) ================
     pack_reconfig_data_format(cb_im);
-    // (x - Ex) * 1/[sqrt(Var + eps)]
     reconfig_data_format(cb_xmm, cb_ex_global);
     mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
     index_h_offset = 0;
-    cb_reserve_back(cb_im, num_tiles_per_block);
+
     index_subblock_w_offset = 0;
     cb_wait_front(cb_ex_global, 1);
+    // Reserve only a subblock at a time so the next stage can start earlier
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
+        cb_reserve_back(cb_im, subblock_w);
         tile_regs_acquire();
         for (uint32_t w = 0; w < subblock_w; w++) {
             index = w + index_subblock_w_offset + index_h_offset;
             mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
         }
         tile_regs_commit();
-
         tile_regs_wait();
         for (uint32_t i = 0; i < subblock_w; i++) {
             pack_tile(i, cb_im);
         }
         tile_regs_release();
-
         index_subblock_w_offset += subblock_w;
+        cb_push_back(cb_im, subblock_w);  // make tiles visible to the next stage earlier
     }
     index_h_offset += block_w;
     cb_pop_front(cb_ex_global, 1);
-    cb_push_back(cb_im, num_tiles_per_block);
 
     cb_pop_front(cb_xmm, num_tiles_per_block);
     cb_wait_front(cb_im, num_tiles_per_block);
@@ -287,9 +279,9 @@ void MAIN {
     mul_bcast_rows_init_short(cb_im, cb_gamma);
     cb_wait_front(cb_gamma, block_w);
     index_h_offset = 0;
-    cb_reserve_back(cb_outgamma, num_tiles_per_block);
     index_subblock_w_offset = 0;
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
+        cb_reserve_back(cb_out, subblock_w);
         tile_regs_acquire();
         for (uint32_t w = 0; w < subblock_w; w++) {
             index = w + index_subblock_w_offset;
@@ -298,11 +290,11 @@ void MAIN {
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_outgamma);
+            pack_tile(i, cb_out);
         }
         tile_regs_release();
         index_subblock_w_offset += subblock_w;
-        cb_push_back(cb_outgamma, subblock_w);
+        cb_push_back(cb_out, subblock_w);
     }
     index_h_offset += block_w;
     cb_pop_front(cb_im, num_tiles_per_block);

@@ -144,7 +144,7 @@ void kernel_main() {
                                                         multicast_data_noc | l1_read_addr_ex_global,
                                                         single_tile_size_bytes,
                                                         num_blocks,
-                                                        false);
+                                                        true);
                                                     noc_async_write_barrier();
                                                 };
     cb_wait_front(cb_stats_reduced, 1);
