@@ -117,7 +117,7 @@ run_tg_sentence_bert_tests() {
 
     exit 1
   fi
-} 
+}
 
 run_tg_sd35_demo_tests() {
   fail=0
