@@ -5,11 +5,15 @@
 | Release | Release Date |
 |---------|--------------|
 | 0.61.0  | ETA Aug 13, 2025 |
-| [0.60.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.0) | Jul 16, 2025 |
+| [0.60.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.0) | Jul 16, 2025 |            
 | [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 |
 | [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 |
 | [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
 | [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025 |
+
+## 2025 Release Schedule
+
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/2025_Release_Schedule.png)
 
 ## LLMs
 
