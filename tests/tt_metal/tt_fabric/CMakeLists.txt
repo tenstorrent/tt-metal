@@ -117,3 +117,41 @@ target_link_libraries(
         test_common_libs
 )
 target_sources(test_fabric_1d_bw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test_fabric_edm.cpp)
+
+# ---- Bench: unicast ----
+add_executable(
+    bench_unicast
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/bench_unicast_main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/run_unicast_once.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/common/perf_helpers.cpp
+)
+
+target_link_libraries(
+    bench_unicast
+    PRIVATE
+        tt_metal
+        fabric
+        gtest
+        test_common_libs
+)
+
+add_dependencies(bench_unicast tt_metal)
+
+target_include_directories(
+    bench_unicast
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+)
+
+set_target_properties(
+    bench_unicast
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
