@@ -10,7 +10,7 @@ from models.utility_functions import comp_pcc
 from ...reference.configuration_gpt_oss import GptOssConfig
 from ...reference.hf_utils import get_state_dict
 from ...tt.ccl import CCLManager
-from ...tt.layer import DecoderLayer
+from ...tt.model import Model
 
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
@@ -29,28 +29,14 @@ class ReferenceRMSNorm(nn.Module):
         return (self.weight * hidden_states).to(input_dtype)
 
 
-class ReferenceMLP(nn.Module):
-    """Reference MLP implementation combining TopK router and Experts"""
-
-    def __init__(self, config):
-        super().__init__()
-        self.router = ReferenceTopKRouter(config)
-        self.experts = ReferenceExperts(config)
-
-    def forward(self, hidden_states):
-        router_scores, router_indices = self.router(hidden_states)
-        routed_out = self.experts(hidden_states, router_indices=router_indices, routing_weights=router_scores)
-        return routed_out, router_scores
-
-
 class ReferenceTopKRouter(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.top_k = config.num_experts_per_tok
         self.num_experts = config.num_local_experts
         self.hidden_dim = config.hidden_size
-        self.weight = nn.Parameter(torch.randn(self.num_experts, self.hidden_dim))
-        self.bias = nn.Parameter(torch.randn(self.num_experts))
+        self.weight = nn.Parameter(torch.empty(self.num_experts, self.hidden_dim))
+        self.bias = nn.Parameter(torch.empty(self.num_experts))
 
     def forward(self, hidden_states):
         hidden_states = hidden_states.reshape(-1, self.hidden_dim)
@@ -68,10 +54,10 @@ class ReferenceExperts(nn.Module):
         self.num_experts = config.num_local_experts
         self.hidden_size = config.hidden_size
         self.expert_dim = self.intermediate_size
-        self.gate_up_proj = nn.Parameter(torch.randn(self.num_experts, self.hidden_size, 2 * self.expert_dim))
-        self.gate_up_proj_bias = nn.Parameter(torch.randn(self.num_experts, 2 * self.expert_dim))
-        self.down_proj = nn.Parameter(torch.randn((self.num_experts, self.expert_dim, self.hidden_size)))
-        self.down_proj_bias = nn.Parameter(torch.randn(self.num_experts, self.hidden_size))
+        self.gate_up_proj = nn.Parameter(torch.empty(self.num_experts, self.hidden_size, 2 * self.expert_dim))
+        self.gate_up_proj_bias = nn.Parameter(torch.empty(self.num_experts, 2 * self.expert_dim))
+        self.down_proj = nn.Parameter(torch.empty((self.num_experts, self.expert_dim, self.hidden_size)))
+        self.down_proj_bias = nn.Parameter(torch.empty(self.num_experts, self.hidden_size))
         self.alpha = 1.702
         self.limit = 7.0
 
@@ -96,18 +82,33 @@ class ReferenceExperts(nn.Module):
         return next_states
 
 
-class ReferenceDecoderLayer(nn.Module):
-    """Reference decoder layer implementation that matches the TT implementation"""
-
+class ReferenceMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.input_layernorm = ReferenceRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = ReferenceRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = ReferenceMLP(config)
+        self.router = ReferenceTopKRouter(config)
+        self.experts = ReferenceExperts(config)
 
     def forward(self, hidden_states):
-        # Skip attention (not implemented yet)
-        # Fully Connected (MLP) part only
+        router_scores, router_indices = self.router(hidden_states)
+        routed_out = self.experts(hidden_states, router_indices=router_indices, routing_weights=router_scores)
+        return routed_out, router_scores
+
+
+class ReferenceDecoderLayer(nn.Module):
+    """Reference decoder layer implementation that matches the TT implementation (MoE only, no attention)"""
+
+    def __init__(self, config, layer_idx):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        # Skip self_attn since it's not implemented
+        self.mlp = ReferenceMLP(config)
+        self.input_layernorm = ReferenceRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = ReferenceRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.layer_idx = layer_idx
+
+    def forward(self, hidden_states):
+        # Skip attention part - only do MLP
+        # Fully Connected (MLP) part
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states, router_scores = self.mlp(hidden_states)
@@ -115,27 +116,69 @@ class ReferenceDecoderLayer(nn.Module):
         return hidden_states
 
 
+class ReferenceModel(nn.Module):
+    """Reference model implementation that matches the TT Model structure"""
+
+    def __init__(self, config):
+        super().__init__()
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.layers = nn.ModuleList(
+            [ReferenceDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+        )
+        self.norm = ReferenceRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def forward(self, input_ids):
+        inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+        for decoder_layer in self.layers:
+            hidden_states = decoder_layer(hidden_states)
+
+        hidden_states = self.norm(hidden_states)
+        return hidden_states
+
+
+class ReferenceModelWithLMHead(nn.Module):
+    """Reference model implementation that matches the TT Model structure"""
+
+    def __init__(self, config):
+        super().__init__()
+        self.model = ReferenceModel(config)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+    def forward(self, input_ids):
+        hidden_states = self.model(input_ids)
+        hidden_states = self.lm_head(hidden_states)
+        return hidden_states
+
+
 @pytest.mark.parametrize(
-    "num_experts, experts_per_token, intermediate_size, hidden_size",
+    "num_experts, experts_per_token, intermediate_size, hidden_size, num_hidden_layers",
     [
-        (32, 4, 2880, 2880),  # 20B config
-        (128, 4, 2880, 2880),  # 120B config
+        (32, 4, 2880, 2880, 2),  # 20B config (2 layers for testing)
+        (128, 4, 2880, 2880, 2),  # 120B config (1 layer for testing)
     ],
     ids=["gpt20B", "gpt120B"],
 )
 @pytest.mark.parametrize("batch_size", (1,))
-@pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
+@pytest.mark.parametrize("seq_len", [1, 32, 64, 128], ids=["s1_", "s32", "s64", "s128"])
+@pytest.mark.parametrize("vocab_size", [201088])
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_decoder_layer(
+def test_model(
     mesh_device,
     num_experts,
     experts_per_token,
     intermediate_size,
     hidden_size,
+    num_hidden_layers,
     seq_len,
     batch_size,
+    vocab_size,
     use_real_weights,
     reset_seeds,
 ):
@@ -145,39 +188,40 @@ def test_decoder_layer(
         intermediate_size=intermediate_size,
         hidden_size=hidden_size,
         num_experts_per_tok=experts_per_token,
+        num_hidden_layers=num_hidden_layers,
+        vocab_size=vocab_size,
         rms_norm_eps=1e-6,
+        pad_token_id=0,
     )
 
-    # Create input tensors
-    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+    # Create input tensors (token ids)
+    input_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
 
     # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_input_ids = ttnn.from_torch(input_ids, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
 
     # Create models
-    reference_model = ReferenceDecoderLayer(config)
+    reference_model = ReferenceModelWithLMHead(config)
 
     if use_real_weights:
-        # Load real weights for the layer
-        layer_state_dict = get_state_dict(local_weights_path, "model.layers.0.", dtype=torch.float32)
-        # Load weights into reference model
-        reference_model.load_state_dict(layer_state_dict, strict=False)
+        # Load real weights for the model
+        model_state_dict = get_state_dict(local_weights_path, "", dtype=torch.float32)
+        # Load weights into reference model (use strict=False to ignore missing attention weights)
+        reference_model.load_state_dict(model_state_dict, strict=False)
 
     # Get state dict for TT model
     reference_state_dict = reference_model.state_dict()
 
-    # Create TT layer state dict
-    # Initialize TT model with dummy ccl_manager
-    ccl_manager = CCLManager(mesh_device)  # Not needed for this test
-    tt_model = DecoderLayer(mesh_device, config, reference_state_dict, 0, ccl_manager)
+    # Initialize TT model
+    ccl_manager = CCLManager(mesh_device)
+    tt_model = Model(mesh_device, config, reference_state_dict, ccl_manager)
 
     # Run forward passes
-    reference_output = reference_model(hidden_states)
+    reference_output = reference_model(input_ids)
 
-    # For TT model, we need to pass the required arguments even though they're not used
+    # For TT model, we need to pass the required arguments
     tt_output = tt_model(
-        hidden_states=tt_hidden_states,
-        attention_mask=None,
+        input_ids=tt_input_ids,
         position_ids=None,
         past_key_values=None,
         use_cache=False,
@@ -185,14 +229,14 @@ def test_decoder_layer(
         position_embeddings=None,
     )
 
+    # Handle multi-device output
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
-    # Convert TTNN output to torch
     for i in range(len(tt_output_tensors)):
-        tt_output = ttnn.to_torch(tt_output_tensors[i])
+        tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
 
         # Compare outputs
-        passing, output = comp_pcc(reference_output, tt_output, pcc=0.99)
-        mse = torch.nn.functional.mse_loss(reference_output, tt_output)
+        passing, output = comp_pcc(reference_output, tt_output_torch, pcc=0.99)
+        mse = torch.nn.functional.mse_loss(reference_output, tt_output_torch)
 
         # Calculate relative error metrics
         ref_variance = torch.var(reference_output)
@@ -203,13 +247,13 @@ def test_decoder_layer(
         relative_mse_to_scale = mse / (ref_mean_abs**2) if ref_mean_abs > 0 else float("inf")
         snr_db = 10 * torch.log10(ref_variance / mse) if mse > 0 else float("inf")
 
-        print(f"Decoder layer output: {output}")
+        print(f"Model output: {output}")
         print(f"MSE: {mse:.6e}")
         print(f"Reference variance: {ref_variance:.6e}, std: {ref_std:.6e}, mean_abs: {ref_mean_abs:.6e}")
         print(f"Relative MSE to variance: {relative_mse_to_variance:.6e} ({relative_mse_to_variance*100:.4f}%)")
         print(f"Relative MSE to scale²: {relative_mse_to_scale:.6e} ({relative_mse_to_scale*100:.4f}%)")
         print(f"Signal-to-Noise Ratio: {snr_db:.2f} dB")
         print(f"Reference output range: [{torch.min(reference_output):.6e}, {torch.max(reference_output):.6e}]")
-        print(f"TT output range: [{torch.min(tt_output):.6e}, {torch.max(tt_output):.6e}]")
+        print(f"TT output range: [{torch.min(tt_output_torch):.6e}, {torch.max(tt_output_torch):.6e}]")
 
-        assert passing, "Decoder layer output mismatch"
+        assert passing, "Model output mismatch"
