@@ -284,7 +284,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
     }
 }
 
-TEST_F(MeshDispatchFixture, DISABLED_ActiveEthDRAMLoopbackSingleCore) {
+TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {
@@ -303,7 +303,8 @@ TEST_F(MeshDispatchFixture, DISABLED_ActiveEthDRAMLoopbackSingleCore) {
     };
 
     for (auto mesh_device : devices_) {
-        for (auto active_eth_core : mesh_device->get_active_ethernet_cores(true)) {
+        auto device = mesh_device->get_devices()[0];
+        for (auto active_eth_core : device->get_active_ethernet_cores(true)) {
             log_info(tt::LogTest, "Active Eth Loopback. Logical core {}", active_eth_core.str());
             dram_test_config.core_range = {active_eth_core, active_eth_core};
             ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
@@ -311,7 +312,7 @@ TEST_F(MeshDispatchFixture, DISABLED_ActiveEthDRAMLoopbackSingleCore) {
     }
 }
 
-TEST_F(MeshDispatchFixture, DISABLED_IdleEthDRAMLoopbackSingleCore) {
+TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {
@@ -330,7 +331,8 @@ TEST_F(MeshDispatchFixture, DISABLED_IdleEthDRAMLoopbackSingleCore) {
     };
 
     for (auto mesh_device : devices_) {
-        for (auto idle_eth_core : mesh_device->get_inactive_ethernet_cores()) {
+        auto device = mesh_device->get_devices()[0];
+        for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
             unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config);
