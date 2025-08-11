@@ -32,10 +32,10 @@ def rand_permutations(shape, dim, dtype):
 
 
 @pytest.mark.parametrize(
-    "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout",
+    "input_shape, dim, index_shape, source_shape, input_dtype, index_dtype, layout",
     [
-        ([1], 0, [1], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
-        ([100], 0, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
+        ([1], 0, [1], [1], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
+        ([100], 0, [80], [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
         ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
         ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
         ([2, 2, 2, 2, 2, 2, 2, 2], -1, [2, 2, 2, 2, 2, 2, 2, 2], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
@@ -64,7 +64,7 @@ def rand_permutations(shape, dim, dtype):
         # ([2, 10, 151936], -1, [2, 10, 151936], ttnn.float32, ttnn.uint32, ttnn.Layout.TILE),
     ],
 )
-def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device):
+def test_scatter_spec(input_shape, dim, index_shape, source_shape, input_dtype, index_dtype, layout, device):
     torch.manual_seed(0)
     torch_dtype = select_torch_dtype(input_dtype)
     torch_index_dtype = select_torch_dtype(index_dtype)

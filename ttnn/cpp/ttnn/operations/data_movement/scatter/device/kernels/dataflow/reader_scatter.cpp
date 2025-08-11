@@ -102,7 +102,8 @@ void kernel_main() {
     const uint32_t input_and_output_chunk_size = get_arg_val<uint32_t>(5);
     // for the inner index/source loop (DRAM accesses per stick per single input/output loop: index_row_elem_num /
     // 76800)
-    const uint32_t index_and_source_chunk_size = get_arg_val<uint32_t>(6);
+    const uint32_t index_chunk_size = get_arg_val<uint32_t>(6);
+    const uint32_t source_chunk_size = get_arg_val<uint32_t>(7);
 
     const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address, ctas.input_stick_size_bytes);
     const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address, ctas.index_stick_size_bytes);
@@ -131,11 +132,12 @@ void kernel_main() {
             copy_input_to_output<input_std_type>(ctas.input_cb, ctas.output_cb, input_chunk_length);
 
             // second phase: load index and source data chunk-by-chunk and scatter
-            for (uint32_t index_offset = 0; index_offset < ctas.index_stick_size;
-                 index_offset += index_and_source_chunk_size) {
+            for (uint32_t index_offset = 0, source_offset = 0; index_offset < ctas.index_stick_size;
+                 index_offset += index_chunk_size, source_offset += source_chunk_size) {
                 // if stick is chunked, the last chunk is usually smaller
-                const uint32_t index_chunk_length =
-                    std::min(ctas.index_stick_size - index_offset, index_and_source_chunk_size);
+                const uint32_t index_chunk_length = std::min(ctas.index_stick_size - index_offset, index_chunk_size);
+                const uint32_t source_chunk_length =
+                    std::min(ctas.source_stick_size - source_offset, source_chunk_size);
                 load_to_cb(
                     ctas.index_cb,
                     index_addr_gtor,
@@ -145,8 +147,8 @@ void kernel_main() {
                 load_to_cb(
                     ctas.source_cb,
                     source_addr_gtor,
-                    index_offset * sizeof(input_std_type),
-                    index_chunk_length * sizeof(input_std_type),
+                    source_offset * sizeof(input_std_type),
+                    source_chunk_length * sizeof(input_std_type),
                     stick_id);
                 cb_wait_front(ctas.index_cb, ONE_PAGE);
                 cb_wait_front(ctas.source_cb, ONE_PAGE);
