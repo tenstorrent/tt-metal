@@ -116,7 +116,6 @@ private:
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
-    std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
     uint32_t trace_buffers_size_ = 0;
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
@@ -126,6 +125,9 @@ private:
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
+
+    void mark_allocations_unsafe();
+    void mark_allocations_safe();
 
     // Returns the devices in row-major order for the new mesh shape
     std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
@@ -197,15 +199,6 @@ public:
     SystemMemoryManager& sysmem_manager() override;
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
-    // Trace APIs
-    void begin_trace(uint8_t cq_id, uint32_t tid) override;
-    void end_trace(uint8_t cq_id, uint32_t tid) override;
-
-    // TODO: `block_on_worker_thread` can be removed once we remove multi-threaded async dispatch
-    void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) override;
-    void release_trace(uint32_t tid) override;
-    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
-
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
@@ -214,9 +207,6 @@ public:
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
-
-    // Light Metal
-    void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
 
     bool using_slow_dispatch() const override;
     bool using_fast_dispatch() const override;
@@ -271,7 +261,7 @@ public:
     std::vector<IDevice*> get_devices() const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
-    tt_fabric::FabricNodeId get_device_fabric_node_id(const MeshCoordinate& coord) const;
+    tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
 

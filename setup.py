@@ -293,7 +293,6 @@ class CMakeBuild(build_ext):
             "api/tt-metalium/circular_buffer_constants.h",
             "api/tt-metalium/constants.hpp",
             "api/tt-metalium/dev_msgs.h",
-            "api/tt-metalium/fabric_host_interface.h",
             "api/tt-metalium/fabric_edm_types.hpp",
             "api/tt-metalium/fabric_edm_packet_header.hpp",
             "api/tt-metalium/edm_fabric_counters.hpp",
@@ -308,7 +307,7 @@ class CMakeBuild(build_ext):
             "include/**/*",
             "kernels/**/*",
             "third_party/tt_llk/**/*",
-            "tools/profiler/*",
+            "tools/profiler/**/*",
             "soc_descriptors/*.yaml",
         ]
         copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)

@@ -10,7 +10,7 @@
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
-#include <fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 
 using namespace tt::tt_fabric;
@@ -600,7 +600,7 @@ struct fvc_inbound_push_state_t {
             advance_remote_wrptr(1, remote_wrptr_direction);
             advance_out_rdptr<fvc_mode>(1);
             uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
-            noc_inline_dw_write<true, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
             *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
             uint32_t words_available = packet_words_remaining;
@@ -642,7 +642,7 @@ struct fvc_inbound_push_state_t {
         noc_async_write_one_packet(get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
         advance_remote_wrptr(1, direction);
         uint64_t push_addr = get_noc_addr_helper(mcast_router_noc_xy[direction], router_push_addr);
-        noc_inline_dw_write<true, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
         *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
     }
 
@@ -771,7 +771,7 @@ struct fvc_inbound_push_state_t {
         advance_remote_wrptr(1);
         advance_out_rdptr<fvc_mode>(1);
         uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
-        noc_inline_dw_write<true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        noc_inline_dw_write<InlineWriteDst::DEFAULT>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
         *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t words_available = packet_words_remaining;

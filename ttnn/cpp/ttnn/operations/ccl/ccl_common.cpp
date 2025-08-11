@@ -149,6 +149,18 @@ std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
     return devices;
 }
 
+std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards) {
+    std::vector<IDevice*> devices;
+    devices.reserve(tensor_shards.size());
+    for (const auto& tensor : tensor_shards) {
+        TT_FATAL(
+            tensor.mesh_device()->shape().mesh_size() == 1,
+            "Running a CCL over individual tensor shards requires the shards to be allocated on unit-meshes.");
+        devices.push_back(tensor.mesh_device()->get_device(MeshCoordinate(0, 0)));
+    }
+    return devices;
+}
+
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     const uint32_t num_devices,
@@ -339,11 +351,10 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     }
 }
 
-template <typename EDMBuilder>
-tt::tt_metal::KernelHandle generate_edm_kernel_impl(
+static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     Program& program,
     const IDevice* device,
-    const EDMBuilder& edm_builder,
+    const ccl::EriscDatamoverBuilder& edm_builder,
     const std::string& kernel_path,
     const CoreCoord& eth_core,
     tt::tt_metal::DataMovementProcessor risc_id,
@@ -383,23 +394,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     return eth_sender_kernel;
 }
 
-tt::tt_metal::KernelHandle generate_edm_kernel(
-    Program& program,
-    const IDevice* device,
-    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
-    const CoreCoord& eth_core,
-    const tt::tt_metal::DataMovementProcessor risc_id,
-    tt::tt_metal::NOC noc_id) {
-    return generate_edm_kernel_impl(
-        program,
-        device,
-        edm_builder,
-        "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
-        eth_core,
-        risc_id,
-        noc_id,
-        tt::tt_metal::KernelBuildOptLevel::O3);
-}
+
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,

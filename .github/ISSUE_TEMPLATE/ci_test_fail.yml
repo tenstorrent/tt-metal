@@ -26,7 +26,7 @@ body:
     attributes:
       label: "Path to Test in Repo"
       description: "Relative file path in the repo where the test is defined"
-      placeholder: "e.g., models/demos/llama3_subdevices/demo/demo_decode.py"
+      placeholder: "e.g., models/demos/llama3_70b_galaxy/demo/demo_decode.py"
     validations:
       required: true
 

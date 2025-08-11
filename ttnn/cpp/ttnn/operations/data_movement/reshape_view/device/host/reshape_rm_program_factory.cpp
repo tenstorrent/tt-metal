@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
 #include <optional>
@@ -86,17 +87,14 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     bool dest_page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(dest_page_size_bytes);
     uint32_t dest_page_pow_2 = dest_page_is_pow_2 ? (std::uint32_t)std::log2(dest_page_size_bytes) : 0;
     std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)src0_is_dram,
         (std::uint32_t)(source_page_size_bytes % 64 == 0) ? 1 : 0,
         (std::uint32_t)(source_page_size_bytes % 16 == 0) ? 1 : 0,
         src0_cb_index,
         src1_cb_index,
         source_page_size_bytes,
-        dest_page_size_bytes,
-        source_page_is_pow_2,
-        source_page_pow_2,
-        dest_page_is_pow_2,
-        dest_page_pow_2};
+        dest_page_size_bytes};
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

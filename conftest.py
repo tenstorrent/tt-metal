@@ -21,11 +21,9 @@ from datetime import datetime
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_dispatch_core_type, get_updated_device_params
+from tests.scripts.common import get_updated_device_params
 
 # Constants for device configurations
-GALAXY_NUM_DEVICES = 32
-TG_NUM_PCIE_DEVICES = 4
 SIX_U_NUM_PCIE_DEVICES = 32
 
 
@@ -55,9 +53,8 @@ def is_single_card_n300(device):
     import ttnn
 
     num_pcie = ttnn.GetNumPCIeDevices()
-    num_devices = ttnn.GetNumAvailableDevices()
-    # N150 has 1 chip; N300 has 2 chips (1 pcie); T3000 has 8 chips (4 pcie)
-    return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
+
+    return num_pcie == 1 and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.N300
 
 
 @pytest.fixture(scope="function")
@@ -73,25 +70,24 @@ def galaxy_type():
 def is_galaxy():
     import ttnn
 
-    num_devices = ttnn.GetNumAvailableDevices()
-    # Galaxy systems have 32 devices
-    return num_devices == GALAXY_NUM_DEVICES
+    return (
+        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+        or ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
+    )
 
 
 # TODO: Remove this when TG clusters are deprecated.
 def is_6u():
     import ttnn
 
-    # 6U has 32 PCIe devices
-    return is_galaxy() and ttnn.GetNumPCIeDevices() == SIX_U_NUM_PCIE_DEVICES
+    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
 
 
 # TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn
 
-    # TG has 4 PCIe devices
-    return is_galaxy() and ttnn.GetNumPCIeDevices() == TG_NUM_PCIE_DEVICES
+    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
 
 
 def first_available_tg_device():
@@ -446,7 +442,7 @@ def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormho
     mesh_device_ids = [device_ids[pcie_id], device_ids[pcie_id + 4]]
     mesh_shape = ttnn.MeshShape(1, 2)
     mesh_device = ttnn.open_mesh_device(
-        mesh_shape, mesh_device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params
+        mesh_shape, mesh_device_ids, dispatch_core_type=ttnn.device.DispatchCoreType.WORKER, **device_params
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -537,6 +533,39 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
         **updated_device_params,
     )
 
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
+    ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
+def p150_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    import ttnn
+
+    if ttnn.get_num_devices() not in [1, 2, 4, 8]:
+        pytest.skip()
+
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
+    set_fabric(fabric_config)
+    if ttnn.get_num_devices() == 8:
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(4, 2),
+            **updated_device_params,
+        )
+    else:
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
+            **updated_device_params,
+        )
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 

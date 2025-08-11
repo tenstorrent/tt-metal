@@ -404,26 +404,6 @@ def test_unary_exp_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_exp2_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.exp2(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.exp2(in_data)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_unary_expm1_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
@@ -1107,3 +1087,25 @@ def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "param",
+    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9, float("inf"), float("-inf"), float("nan")},
+)
+def test_unary_celu(input_shapes, param, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    output_tensor = ttnn.celu(input_tensor, alpha=param)
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    golden_tensor = golden_function(in_data, alpha=param)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

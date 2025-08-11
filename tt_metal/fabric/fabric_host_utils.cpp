@@ -9,7 +9,6 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/assert.hpp>
-#include <magic_enum/magic_enum.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
@@ -67,6 +66,7 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         forwarding_channels =
             control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
     } else {
+        // TODO: not going to work for Big Mesh
         const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
         const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
         // for 1D check if each port has an active connection to the dst_chip_id

@@ -26,10 +26,18 @@ jobs:
             runs-on: ["cloud-virtual-machine", "N300", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=bench.json
-              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py bench.json
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json
+              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py pgm_bench.json
             timeout: 15
-            # Allan Liu
+          - name: "WH N300 dispatch bandwidth nightly"
+            arch: wormhole_b0
+            runs-on: ["cloud-virtual-machine", "N300", "in-service"]
+            run-args: |
+              mkdir -p generated/test_reports
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json
+              # We shouldn't fail the job for now as this benchmark is not yet stable
+              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json || true
+            timeout: 15
     name: ${{ matrix.test-group.name }}
     env:
       LOGURU_LEVEL: INFO
@@ -86,5 +94,12 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           path: |
-            bench.json
+            pgm_bench.json
           prefix: "pgm_benchmarks_json_"
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            buffer_bench.json
+          prefix: "buffer_benchmarks_json_"

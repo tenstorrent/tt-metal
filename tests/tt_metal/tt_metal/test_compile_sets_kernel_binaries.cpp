@@ -4,7 +4,7 @@
 
 #include <errno.h>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdint.h>
 #include <sys/types.h>
 #include <tt-metalium/device_pool.hpp>
@@ -148,9 +148,7 @@ int main(int argc, char** argv) {
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::DevicePool::initialize(
-            ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, tt_metal::DispatchCoreConfig{});
-        auto devices = tt::DevicePool::instance().get_all_active_devices();
+        auto devices = tt::tt_metal::detail::CreateDevices(ids);
         std::vector<tt_metal::Program> programs;
         // kernel->binaries() returns 32B aligned binaries
         std::map<uint32_t, std::vector<ll_api::memory const*>> compute_binaries;
@@ -223,8 +221,8 @@ int main(int argc, char** argv) {
 
             std::vector<std::thread> ths;
             ths.reserve(num_devices);
-            uint32_t dm_class_idx = magic_enum::enum_integer(tt_metal::HalProcessorClassType::DM);
-            uint32_t compute_class_idx = magic_enum::enum_integer(tt_metal::HalProcessorClassType::COMPUTE);
+            uint32_t dm_class_idx = enchantum::to_underlying(tt_metal::HalProcessorClassType::DM);
+            uint32_t compute_class_idx = enchantum::to_underlying(tt_metal::HalProcessorClassType::COMPUTE);
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];
                 auto& program = new_programs[i];
@@ -312,10 +310,7 @@ int main(int argc, char** argv) {
                 th.join();
             }
         }
-        for (auto dev : devices) {
-            pass &= tt_metal::CloseDevice(dev);
-        }
-
+        tt::tt_metal::detail::CloseDevices(devices);
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message

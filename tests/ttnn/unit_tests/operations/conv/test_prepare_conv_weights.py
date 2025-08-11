@@ -8,6 +8,7 @@ import torch
 import pytest
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
+from models.utility_functions import skip_for_blackhole
 
 
 def prepare_conv_weights_func(
@@ -73,7 +74,6 @@ def prepare_conv_weights_func(
         weights_dtype=weights_dtype,
         enable_act_double_buffer=False,
         enable_split_reader=False,
-        enable_subblock_padding=False,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
@@ -350,7 +350,6 @@ def test_prepare_bias(
         weights_dtype=ttnn.bfloat16,
         enable_act_double_buffer=False,
         enable_split_reader=False,
-        enable_subblock_padding=False,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
@@ -421,6 +420,7 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
+@skip_for_blackhole("#26435: Not fully tested on Blackhole")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, kernel, stride, padding, dilation, act_block_h_override",
@@ -428,7 +428,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
     (
         (2, 64,   64,   384,   64,    SliceHeight,   6, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ),
         (1, 32,   32,   1024,  1024,  SliceWidth,    4, (5, 5), (1, 1), (0, 0), (1, 1),  32,      ),
-        (1, 64,   128,  992,   992,   SliceWidth,   64, (2, 2), (1, 1), (0, 0), (1, 1),  32 * 4,  ),
+        (1, 64,   128,  992,   992,   SliceWidth,   64, (2, 2), (1, 1), (0, 0), (1, 1),  32 * 2,  ),
     )
     # fmt: on
 )

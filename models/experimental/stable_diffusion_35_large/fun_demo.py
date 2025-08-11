@@ -12,7 +12,7 @@ import pytest
 import ttnn
 
 from .tt.fun_pipeline import TtStableDiffusion3Pipeline
-from .tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager
+from .tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager, create_vae_parallel_config
 
 
 @pytest.mark.parametrize(
@@ -32,7 +32,7 @@ from .tt.parallel_config import StableDiffusionParallelManager, EncoderParallelM
     "mesh_device, cfg, sp, tp, topology, num_links",
     [
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
@@ -42,7 +42,7 @@ from .tt.parallel_config import StableDiffusionParallelManager, EncoderParallelM
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 20000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
 @pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
@@ -62,7 +62,11 @@ def test_sd3(
     no_prompt,
     model_location_generator,
     traced,
+    galaxy_type,
 ) -> None:
+    if galaxy_type == "4U":
+        pytest.skip("4U is not supported for this test")
+
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
     tp_factor, tp_axis = tp
@@ -81,17 +85,29 @@ def test_sd3(
     )
 
     # HACK: reshape submesh device 0 from 2D to 1D
+    encoder_device = parallel_manager.submesh_devices[0]
+
     if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
+        # If reshaping, vae_device must be on submesh 0. That means T5 can't fit, so disable it.
+        vae_device = parallel_manager.submesh_devices[0]
+        enable_t5_text_encoder = False
+
         cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
         assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
-        print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
-        parallel_manager.submesh_devices[0].reshape(ttnn.MeshShape(1, 4))
+        print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP")
+        encoder_device.reshape(ttnn.MeshShape(1, 4))
+    else:
+        # vae_device can only be on submesh 1 if submesh is not getting reshaped.
+        vae_device = parallel_manager.submesh_devices[1]
+        enable_t5_text_encoder = True
+
     encoder_parallel_manager = EncoderParallelManager(
-        parallel_manager.submesh_devices[0],
+        encoder_device,
         topology,
         mesh_axis=1,  # 1x4 submesh, parallel on axis 1
         num_links=num_links,
     )
+    vae_parallel_manager = create_vae_parallel_config(vae_device, parallel_manager)
     # HACK: reshape submesh device 0 from 1D to 2D
     parallel_manager.submesh_devices[0].reshape(
         ttnn.MeshShape(*parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
@@ -102,13 +118,16 @@ def test_sd3(
     else:
         guidance_cond = 1
 
+    print(f"T5 enabled: {enable_t5_text_encoder}")
+
     pipeline = TtStableDiffusion3Pipeline(
         checkpoint_name=f"stabilityai/stable-diffusion-3.5-{model_name}",
         mesh_device=mesh_device,
-        enable_t5_text_encoder=True,  # submesh_devices[0].get_num_devices() >= 4,
+        enable_t5_text_encoder=enable_t5_text_encoder,
         guidance_cond=guidance_cond,
         parallel_manager=parallel_manager,
         encoder_parallel_manager=encoder_parallel_manager,
+        vae_parallel_manager=vae_parallel_manager,
         height=image_h,
         width=image_w,
         model_location_generator=model_location_generator,

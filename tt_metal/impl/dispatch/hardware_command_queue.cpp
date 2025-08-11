@@ -592,53 +592,6 @@ void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_e
     }
 }
 
-void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
-    ZoneScopedN("HWCommandQueue_enqueue_trace");
-
-    auto trace_inst = this->device_->get_trace(trace_id);
-    auto descriptor = trace_inst->desc;
-    auto buffer = trace_inst->buffer;
-    uint32_t num_sub_devices = descriptor->sub_device_ids.size();
-
-    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (auto sub_device_id : descriptor->sub_device_ids) {
-        auto& sub_device = sub_device_cq_owner[*sub_device_id];
-        sub_device.take_ownership(sub_device_id, this->id_);
-    }
-
-    auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(num_sub_devices);
-
-    trace_dispatch::TraceDispatchMetadata dispatch_md(
-        cmd_sequence_sizeB,
-        descriptor->descriptors,
-        descriptor->sub_device_ids,
-        buffer->page_size(),
-        buffer->num_pages(),
-        buffer->address());
-
-    trace_dispatch::issue_trace_commands(
-        device_,
-        device_->sysmem_manager(),
-        dispatch_md,
-        id_,
-        this->expected_num_workers_completed_,
-        virtual_enqueue_program_dispatch_core_);
-
-    // Reset the prefetcher cache manager, since trace capture modifies the state on host for subsequent non-trace
-    // programs
-    this->reset_prefetcher_cache_manager();
-
-    trace_dispatch::update_worker_state_post_trace_execution(
-        trace_inst->desc->descriptors,
-        this->cq_shared_state_->worker_launch_message_buffer_state,
-        this->config_buffer_mgr_,
-        this->expected_num_workers_completed_);
-
-    if (blocking) {
-        this->finish(trace_inst->desc->sub_device_ids);
-    }
-}
-
 void HWCommandQueue::read_completion_queue() {
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
@@ -671,31 +624,23 @@ void HWCommandQueue::read_completion_queue() {
                 }
 
                 std::visit(
-                    [&](auto&& read_descriptor) {
-                        using T = std::decay_t<decltype(read_descriptor)>;
-                        if constexpr (std::is_same_v<T, ReadBufferDescriptor>) {
+                    ttsl::overloaded{
+                        [&, this](const ReadBufferDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadData");
                             buffer_dispatch::copy_completion_queue_data_into_user_space(
-                                read_descriptor,
-                                mmio_device_id,
-                                channel,
-                                this->id_,
-                                this->manager_,
-                                this->exit_condition_);
-                        } else if constexpr (std::is_same_v<T, ReadEventDescriptor>) {
+                                read_descriptor, mmio_device_id, channel, id_, manager_, exit_condition_);
+                        },
+                        [&, this](ReadEventDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadEvent");
                             event_dispatch::read_events_from_completion_queue(
-                                read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
-                        } else if constexpr (std::is_same_v<T, ReadCoreDataDescriptor>) {
+                                read_descriptor, mmio_device_id, channel, id_, manager_);
+                        },
+                        [&, this](const ReadCoreDataDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadCoreData");
                             device_dispatch::read_core_data_from_completion_queue(
-                                read_descriptor,
-                                mmio_device_id,
-                                channel,
-                                this->id_,
-                                this->manager_,
-                                this->exit_condition_);
-                        }
+                                read_descriptor, mmio_device_id, channel, id_, manager_, exit_condition_);
+                        },
+                        [](std::monostate) {},
                     },
                     read_descriptor);
             }
@@ -774,10 +719,12 @@ void HWCommandQueue::allocate_trace_programs() {
         auto sub_device_index = *sub_device_id;
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
-            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
+            num_workers +=
+                calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
         }
         if (program.runs_on_noc_unicast_only_cores()) {
-            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
+            num_workers +=
+                calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
 
         const auto updated_worker_counts =
@@ -826,12 +773,13 @@ void HWCommandQueue::record_end() {
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
-            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
-
+            num_workers +=
+                calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
         }
         if (program.runs_on_noc_unicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
-            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
+            num_workers +=
+                calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
         // May be changed below if clear count is needed
         this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;

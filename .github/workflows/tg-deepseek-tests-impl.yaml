@@ -43,7 +43,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691

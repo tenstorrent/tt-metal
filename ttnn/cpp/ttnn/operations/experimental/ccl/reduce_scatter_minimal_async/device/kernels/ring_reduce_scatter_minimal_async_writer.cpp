@@ -12,6 +12,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
@@ -257,7 +258,6 @@ void kernel_main() {
 
                         // Will have more cases once scatter-write supports more than 2 distinct addresses
                         switch (tiles_to_put_in_current_packet) {
-#ifdef ARCH_WORMHOLE
                             case 2: {
                                 uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
                                 pages_read_in_row++;
@@ -280,18 +280,16 @@ void kernel_main() {
 
                                 scatter_write_and_advance_local_read_address_for_fabric<
                                     fabric_mux_num_buffers_per_channel>(
-                                    remote_noc0_dest_noc_addr_tile_one,
-                                    remote_noc0_dest_noc_addr_tile_two,
+                                    intermediate_addrgen,
+                                    tile_one_id,
+                                    tile_two_id,
                                     pkt_hdr,
                                     mux_connection_handle,
-                                    l1_read_addr,
-                                    intermediate_page_size,
-                                    intermediate_page_size);
+                                    l1_read_addr);
                                 tiles_read += 2;
                                 tiles_read_in_current_direction += 2;
                                 break;
                             }
-#endif
                             case 1:
                             default: {
                                 uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
@@ -305,7 +303,8 @@ void kernel_main() {
                                     get_noc_addr(tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                                 write_and_advance_local_read_address_for_fabric<fabric_mux_num_buffers_per_channel>(
-                                    remote_noc0_dest_noc_addr,
+                                    intermediate_addrgen,
+                                    tile_id,
                                     pkt_hdr,
                                     mux_connection_handle,
                                     l1_read_addr,

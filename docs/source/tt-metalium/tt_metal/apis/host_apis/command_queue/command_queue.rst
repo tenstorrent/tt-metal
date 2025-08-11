@@ -11,12 +11,6 @@ CommandQueue
   EnqueueWaitForEvent
   EventQuery
   EventSynchronize
-  BeginTraceCapture
-  EndTraceCapture
-  ReplayTrace
-  ReleaseTrace
-  EnqueueTrace
-  LoadTrace
   LightMetalBeginCapture
   LightMetalEndCapture
   Finish

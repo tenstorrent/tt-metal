@@ -84,7 +84,7 @@ tt_metal/tools/mem_bench @nhuang-tt # should be moved to tests micro benchmark?
 tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT
 tt_metal/tools/watcher_dump/ @pgkeller
 tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
-tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
+tt_metal/tools/profiler/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 
@@ -224,9 +224,9 @@ models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
 models/demos/wormhole @uaydonat @yieldthought @cglagovichTT
 models/demos/t3000 @uaydonat @yieldthought @cglagovichTT
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT
-models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
+models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat
-models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
+models/demos/qwen25_vl @gwangTT @yieldthought @uaydonat
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat
@@ -239,7 +239,7 @@ models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/t3000/sentence_bert @atupe-tt @tenstorrent/cse-developer-ttnn
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
-models/demos/whisper @skhorasganiTT @uaydonat
+models/demos/whisper @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat @yieldthought @cglagovichTT
 models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @mradosavljevicTT
@@ -248,7 +248,7 @@ models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-dev
 models/demos/ufld_v2 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/demos/vgg_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn
-models/experimental/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
+models/demos/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/demos/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
 models/experimental/grok @yieldthought @uaydonat
 models/demos/wormhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
@@ -272,7 +272,8 @@ models/demos/yolov7 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
 models/demos/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/segmentation_evaluation @tenstorrent/cse-developer-ttnn
-models/experimental/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/demos/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
@@ -280,6 +281,7 @@ models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
 docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT
+docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @pgkeller @abhullar-tt @rtawfik01 @vvukomanovicTT @atatuzunerTT
 
 # misc
 dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra

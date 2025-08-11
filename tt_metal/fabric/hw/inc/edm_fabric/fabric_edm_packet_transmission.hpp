@@ -166,7 +166,7 @@ FORCE_INLINE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write<false, true>(
+            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
                 dest_address,
                 value,
                 0xF,

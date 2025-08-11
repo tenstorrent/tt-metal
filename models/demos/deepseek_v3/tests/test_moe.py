@@ -10,19 +10,19 @@ import ttnn
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.utility_functions import comp_pcc
+from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, get_model_config, run_module_forward
 
 
 @pytest.fixture
 def reference_model(hf_config):
     """Get the actual DeepSeek MLP model using local implementation."""
     torch.manual_seed(5)
+    torch.use_deterministic_algorithms(True)
     # Note : Running Reference MoE without shared experts
     hf_config.n_shared_experts = None
-    return DeepseekV3MoE(hf_config)
+    return DeepseekV3MoE(hf_config).eval()
 
 
 @pytest.mark.parametrize(
@@ -35,7 +35,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
-        ("decode", 32),
+        ("decode", 128),
         ("prefill", 2048),
     ],
 )
@@ -46,6 +46,7 @@ def test_forward_pass(
     hf_config,
     tmp_path,
     mesh_device,
+    ccl,
 ):
     """Test forward pass against reference model."""
     batch_size = 1
@@ -54,26 +55,28 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Create input tensor
-    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size)
+    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
 
     # Reference forward pass
-    reference_output = reference_model(torch_input)
+    reference_model.eval()
+    reference_model.to(torch.bfloat16)
+    with torch.no_grad():
+        reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
     weight_config = MoE.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
 
-    # Generate appropriate config
-    ccl = CCL1D(hf_config, mesh_device)
-    if mode == "prefill":
-        model_config = MoE.prefill_model_config(hf_config, mesh_device, ccl, batch_size=seq_len, seq_len=1)
-    else:
-        model_config = MoE.decode_model_config(hf_config, mesh_device, ccl, batch_size=seq_len)
+    # Generate appropriate config using utility function
+    model_config = get_model_config(MoE, mode, hf_config, mesh_device)
 
-    # Create a new model state
-    model_state = MoE.create_state(hf_config, mesh_device)
+    # Create a new model state with CCL
+    model_state = MoE.create_state(hf_config, mesh_device, ccl)
+
+    # Create a new model shared state
+    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
 
     # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, model_state)
+    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     # Convert input to TTNN, DP=4 and Replicated
     tt_input = ttnn.from_torch(
@@ -85,40 +88,30 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass
-    if mode == "prefill":
-        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-        tt_output = MoE.forward_prefill(tt_input, run_config)
-        expected_output_memory_config = run_config["output_memory_config"]
-    else:
-        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-        tt_output = MoE.forward_decode(tt_input, run_config)
-        expected_output_memory_config = run_config["output_memory_config"]
+    # TTNN forward pass using utility function
+    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    tt_output = run_module_forward(MoE, mode, tt_input, run_config)
 
     # Verify output memory config matches expected
+    expected_output_memory_config = run_config["output_memory_config"]
     actual_output_memory_config = tt_output.memory_config()
     assert (
         actual_output_memory_config == expected_output_memory_config
-    ), f"TopK experts weights memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+    ), f"MoE output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-    )[0]
-
-    # Compare outputs
-    logger.info(f"Mode: {mode}, Seq len: {seq_len}")
-
-    pcc_required = 0.98  # Slightly lower due to bfloat conversions
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-
-    logger.info(f"MoE output PCC: {pcc_message}")
-    # TODO: test PCC using real weights, currently failing due to topk mismatch
-    # assert passing, f"MoE output does not meet PCC requirement {pcc_required}: {pcc_message}"
+    )
 
     # Cleanup
+    ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_output)
+
+    # Compare outputs using utility function
+    logger.info(f"Mode: {mode}, Seq len: {seq_len}")
+    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
 
 
 if __name__ == "__main__":

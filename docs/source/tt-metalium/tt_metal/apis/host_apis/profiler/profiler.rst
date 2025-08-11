@@ -2,4 +2,4 @@ Profiler
 ========
 
 .. toctree::
-  DumpMeshDeviceProfileResults
+  ReadMeshDeviceProfilerResults

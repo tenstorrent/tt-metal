@@ -19,10 +19,18 @@ class YOLOv10PerformantRunner:
         resolution=(640, 640),
         torch_input_tensor=None,
         use_pretrained_weight=True,
+        mesh_mapper=None,
+        weights_mesh_mapper=None,
+        mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
         self.torch_input_tensor = torch_input_tensor
+
+        self.mesh_mapper = mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.mesh_composer = mesh_composer
+
         self.runner_infra = YOLOv10PerformanceRunnerInfra(
             device,
             device_batch_size,
@@ -32,6 +40,9 @@ class YOLOv10PerformantRunner:
             resolution=resolution,
             torch_input_tensor=self.torch_input_tensor,
             use_pretrained_weight=use_pretrained_weight,
+            mesh_mapper=mesh_mapper,
+            weights_mesh_mapper=weights_mesh_mapper,
+            mesh_composer=mesh_composer,
         )
 
         (
@@ -90,14 +101,10 @@ class YOLOv10PerformantRunner:
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
-        # TODO: Add in place support to ttnn to_memory_config
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.device)
-
-        ttnn_output_tensor = self.runner_infra.output_tensor
-        return ttnn_output_tensor  # get_model_result(ttnn_output_tensor, self.resolution)
+        return self.runner_infra.output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor

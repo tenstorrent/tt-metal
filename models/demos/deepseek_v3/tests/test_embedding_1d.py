@@ -41,7 +41,7 @@ def test_embedding_forward_pass(
     seq_len,
     generate_reference_io,
     tmp_path,
-    mesh_row,
+    mesh_device,
     model_path,
 ):
     module_path = "model.embed_tokens"
@@ -58,21 +58,19 @@ def test_embedding_forward_pass(
         reference_output = reference_model(torch_input)
     else:
         state_dict = load_state_dict(model_path, module_path)
-        torch_input, reference_output = load_reference_io_tensors_for_module(mode, module_path, seq_len)
-        torch_input.unsqueeze_(0)
-        reference_output.unsqueeze_(0)
+        torch_input, reference_output = load_reference_io_tensors_for_module(mode, module_path, seq_len, 1)
 
     # Generate module configs and state
-    weight_config = Embedding1D.convert_weights(hf_config, state_dict, tmp_path, mesh_row)
-    model_config = get_model_config(Embedding1D, mode, hf_config, mesh_row)
-    model_state = Embedding1D.create_state(hf_config, mesh_row)
+    weight_config = Embedding1D.convert_weights(hf_config, state_dict, tmp_path, mesh_device)
+    model_config = get_model_config(Embedding1D, mode, hf_config, mesh_device)
+    model_state = Embedding1D.create_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert input to TTNN
     tt_input_ids = ttnn.from_torch(
         torch_input,
-        device=mesh_row,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_row),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -85,11 +83,11 @@ def test_embedding_forward_pass(
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_row,
-            dims=(-2, -1),
-            mesh_shape=tuple(mesh_row.shape),
+            mesh_device,
+            dims=(0, -1),
+            mesh_shape=tuple(mesh_device.shape),
         ),
-    )
+    )[:1, ...]
 
     # Cleanup
     ttnn.deallocate(tt_input_ids)
