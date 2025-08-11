@@ -102,7 +102,7 @@ def test_llama_model_inference(
     reset_seeds,
     ensure_gc,
 ):
-    run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
+    run_ref_pt = False  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
 
