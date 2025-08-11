@@ -24,6 +24,77 @@
 
 namespace tt::tt_fabric {
 
+namespace {
+
+// Computes BFS distance map from a start chip to all reachable chips using the provided adjacency map.
+std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
+    chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map) {
+    std::unordered_map<chip_id_t, std::uint32_t> dist;
+    std::queue<chip_id_t> q;
+    dist[start_chip] = 0;
+    q.push(start_chip);
+
+    while (!q.empty()) {
+        auto cur = q.front();
+        q.pop();
+
+        auto it = adjacency_map.find(cur);
+        if (it != adjacency_map.end()) {
+            for (auto nbr : it->second) {
+                if (dist.find(nbr) == dist.end()) {
+                    dist[nbr] = dist.at(cur) + 1;
+                    q.push(nbr);
+                }
+            }
+        }
+    }
+    return dist;
+}
+
+void create_1d_mesh_view_with_dfs(
+    const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map,
+    chip_id_t start_chip,
+    uint32_t num_chips,
+    std::vector<chip_id_t>& path) {
+    std::unordered_set<chip_id_t> visited;
+    visited.insert(start_chip);
+
+    path.reserve(num_chips);
+    path.push_back(start_chip);
+
+    // Internal recursive helper function
+    std::function<bool(chip_id_t)> dfs = [&](chip_id_t current_chip) -> bool {
+        if (path.size() == num_chips) {
+            return true;
+        }
+
+        auto it = adjacency_map.find(current_chip);
+        if (it == adjacency_map.end()) {
+            return false;  // No neighbors
+        }
+
+        for (chip_id_t nbr : it->second) {
+            if (visited.find(nbr) == visited.end()) {
+                path.push_back(nbr);
+                visited.insert(nbr);
+
+                if (dfs(nbr)) {
+                    return true;
+                }
+
+                // Backtrack
+                path.pop_back();
+                visited.erase(nbr);
+            }
+        }
+        return false;  // No valid path found from this node
+    };
+
+    dfs(start_chip);
+}
+
+}  // namespace
+
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config);
 }
@@ -283,65 +354,15 @@ IntraMeshAdjacencyMap build_mesh_adjacency_map(
     return topology_info;
 }
 
-// Computes BFS distance map from a start chip to all reachable chips using the provided adjacency map.
-std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
-    chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map) {
-    std::unordered_map<chip_id_t, std::uint32_t> dist;
-    std::queue<chip_id_t> q;
-    dist[start_chip] = 0;
-    q.push(start_chip);
-
-    while (!q.empty()) {
-        auto cur = q.front();
-        q.pop();
-
-        auto it = adjacency_map.find(cur);
-        if (it != adjacency_map.end()) {
-            for (auto nbr : it->second) {
-                if (dist.find(nbr) == dist.end()) {
-                    dist[nbr] = dist.at(cur) + 1;
-                    q.push(nbr);
-                }
-            }
-        }
-    }
-    return dist;
-}
-
 std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info) {
-    // For 1D meshes, we expect exactly 2 corners (the endpoints)
-    TT_FATAL(
-        topology_info.corners.size() == 2, "Expected 2 corners for 1D mesh, got {}.", topology_info.corners.size());
+    // For consistency across invocations on the same machine always start the DFS on the chip with the lowest id.
+    auto first_chip = std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first;
 
-    std::vector<chip_id_t> physical_chip_ids(topology_info.ns_size * topology_info.ew_size);
-    std::fill(physical_chip_ids.begin(), physical_chip_ids.end(), static_cast<chip_id_t>(-1));
-
-    // Place the first corner (closest to chip 0) at index 0
-    chip_id_t first_corner = topology_info.corners[0];
-    physical_chip_ids[0] = first_corner;
-
-    // Place the second corner at the last index
-    chip_id_t second_corner = topology_info.corners[1];
-    physical_chip_ids[physical_chip_ids.size() - 1] = second_corner;
-
-    // Fill in the middle chips using BFS distances
-    auto dist_from_first = compute_distances(first_corner, topology_info.adjacency_map);
-
-    for (const auto& [chip, distance] : dist_from_first) {
-        if (chip != first_corner && chip != second_corner) {
-            // For 1D mesh, distance directly corresponds to the index
-            size_t idx = static_cast<size_t>(distance);
-            TT_FATAL(idx < physical_chip_ids.size(), "Index {} out of bounds for 1D mesh.", idx);
-            TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}.", idx);
-            physical_chip_ids[idx] = chip;
-        }
-    }
-
-    // Verify all chips are mapped
-    for (std::uint32_t i = 0; i < physical_chip_ids.size(); ++i) {
-        TT_FATAL(physical_chip_ids[i] != static_cast<chip_id_t>(-1), "1D mesh embedding incomplete at index {}.", i);
-    }
-
+    // This vector contains a 1D view of devices in the mesh, constructed using DFS. This works since we are using a
+    // mesh topology which guarantees connectivity.
+    std::vector<chip_id_t> physical_chip_ids;
+    create_1d_mesh_view_with_dfs(
+        topology_info.adjacency_map, first_chip, topology_info.ns_size * topology_info.ew_size, physical_chip_ids);
     return physical_chip_ids;
 }
 
