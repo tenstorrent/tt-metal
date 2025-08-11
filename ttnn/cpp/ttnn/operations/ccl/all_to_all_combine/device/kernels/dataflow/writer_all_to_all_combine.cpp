@@ -69,9 +69,21 @@ void kernel_main() {
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
     constexpr uint8_t replicate_group_devices =
         num_devices / (replicate_axis == ReplicateGroup::COLS ? mesh_cols : mesh_rows);
+    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
+    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
+
+    constexpr uint32_t device_begin_idx = REPLICATE_GROUP_AXIS == 0 ? col : row * mesh_cols;
+    constexpr uint32_t device_end_idx =
+        (REPLICATE_GROUP_AXIS == 0)
+            ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
+            : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
+    constexpr uint32_t device_stride = REPLICATE_GROUP_AXIS == 0 ? mesh_cols : 1;
 #else
     constexpr ReplicateGroup replicate_axis = ReplicateGroup::NONE;
     constexpr uint8_t replicate_group_devices = num_devices;
+    constexpr uint32_t device_begin_idx = 0;
+    constexpr uint32_t device_end_idx = num_devices;
+    constexpr uint32_t device_stride = 1;
 #endif
 
     constexpr uint32_t Replicate_Group = (replicate_axis == ReplicateGroup::NONE)   ? mesh_rows * mesh_cols
@@ -202,7 +214,7 @@ void kernel_main() {
     }
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
     // "multicast" semaphore increment to let other devices know we are done
-    for(uint32_t device_idx=0;device_idx < num_devices;++device_idx){
+    for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
         const auto & dest_chip_id = dest_chip_ids[device_idx];
 
         if (device_idx == linearized_mesh_coord) {

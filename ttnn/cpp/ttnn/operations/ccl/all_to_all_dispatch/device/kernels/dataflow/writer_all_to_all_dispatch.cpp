@@ -125,12 +125,27 @@ void kernel_main() {
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
-    constexpr uint32_t dispatch_index =
-        axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
+    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
+    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
+
+    constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
+    // Based on cluster axis, we only need to dispatch to the devices that are along the axis
+    // If ReplicateGroup is COLs/AXIS is 1, then we dispatch alonw the ROW, and vice versa
+    // For ReplicateGroup COLs/AXIS is 1, the device_begin_idx is the start of the row, and the device_end_idx is the
+    // end of the row For ReplicateGroup ROWs/AXIS is 0, the device_begin_idx is the start of the column, and the
+    // device_end_idx is the end of the column
+    constexpr uint32_t device_begin_idx = AXIS == 0 ? col : row * mesh_cols;
+    constexpr uint32_t device_end_idx =
+        (AXIS == 0) ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
+                    : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
+    constexpr uint32_t device_stride = AXIS == 0 ? mesh_cols : 1;
 #else
     constexpr ReplicateGroup axis = ReplicateGroup::NONE;
     constexpr uint32_t dispatch_devices = num_devices;
     constexpr uint32_t dispatch_index = linearized_mesh_coord;
+    constexpr uint32_t device_begin_idx = 0;
+    constexpr uint32_t device_end_idx = num_devices;
+    constexpr uint32_t device_stride = 1;
 #endif
 
     auto output_addr_gen = get_interleaved_addr_gen<output_is_dram, output_page_size>(output_tensor_address);
@@ -184,7 +199,7 @@ void kernel_main() {
 
             // find the devices that the expert lives on and dispatch the input tokens to them
             // if there is no tensor parallelism, then the token will only be sent to one device
-            for (uint32_t d = 0; d < num_devices; d++) {
+            for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
                 if (devices_for_expert[d] == 1 &&
                     send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
                     send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] = 1;
@@ -250,7 +265,7 @@ void kernel_main() {
                 base_indices_addr + ((local_token - token_start_idx) * aligned_indices_page_size);
 
             // dispatch the metadata to all other devices
-            for (uint32_t d = 0; d < num_devices; d++) {
+            for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
                 if (d == linearized_mesh_coord) {
                     // dispatch the metadata to the current device and increment the local copy of the semaphore
                     detail::dispatch_metadata_local_device(
@@ -304,7 +319,7 @@ void kernel_main() {
         uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + (dispatch_index * indices_size) +
                                                  (token_start_idx * aligned_indices_page_size);
 
-        for (uint32_t d = 0; d < num_devices; d++) {
+        for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
             if (d == linearized_mesh_coord) {
                 // dispatch the metadata to the local device
                 detail::dispatch_input_local_device_flushed(
