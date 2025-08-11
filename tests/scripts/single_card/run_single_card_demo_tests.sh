@@ -191,7 +191,7 @@ run_squeezebert_func() {
 
 run_efficientnet_b0_func(){
 
-  pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py
+  pytest models/experimental/efficientnetb0/demo/demo.py; fail+=$?
 
 }
 run_roberta_func() {
