@@ -81,7 +81,7 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // otherwise we can reduce 8 tiles at a time.
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 2 : (is_avg_pool && is_large_kernel) ? 4 : 8;
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     static_assert(in_c % TILE_WIDTH == 0 || in_c == 16, "in_c must be a multiple of TILE_WIDTH or 16");
     constexpr uint32_t in_ntiles_c = in_c / TILE_WIDTH;
@@ -247,19 +247,20 @@ void kernel_main() {
     uint32_t scalar_value = 0;
 
     constexpr uint32_t window_size_hw = window_h * window_w;
-    constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
+    constexpr uint32_t face_r_dim = window_size_hw < 16 && !return_indices ? window_size_hw : 16;
     constexpr bool is_partial_tile = in_c < 32;
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile                                           ? 1
-                                                 : (max_sticks_for_reduction < 32 || window_size_hw <= 16) ? 2
-                                                                                                           : 4;
+    constexpr uint32_t num_faces_in_input_tile =
+        is_partial_tile                                                              ? 1
+        : (max_sticks_for_reduction < 32 || window_size_hw <= 16 && !return_indices) ? 2
+                                                                                     : 4;
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
     // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
-    constexpr bool need_to_initialize_in_cb = remaining_elems && face_r_dim == 16 &&
-                                              (num_faces_in_input_tile == 4 || is_partial_tile) &&
-                                              interm_reduction_chunks <= multi_buffering_factor;
+    constexpr bool need_to_initialize_in_cb = return_indices || remaining_elems && face_r_dim == 16 &&
+                                                                    (num_faces_in_input_tile == 4 || is_partial_tile) &&
+                                                                    interm_reduction_chunks <= multi_buffering_factor;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
@@ -272,7 +273,7 @@ void kernel_main() {
             cb_wait_front(clear_value_cb_id, 1);
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
-        if constexpr (!is_avg_pool || !is_large_kernel) {
+        if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
         }
     }
