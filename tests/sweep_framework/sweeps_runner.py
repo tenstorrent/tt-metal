@@ -3,18 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+from contextlib import contextmanager
 import sys
 import os
 import pathlib
-import enlighten
 import importlib
 import datetime as dt
+from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+import ttnn
 from multiprocessing import Process
 from faster_fifo import Queue
 from queue import Empty
 import builtins
-from framework.statuses import VectorValidity, TestStatus
 import framework.tt_smi_util as tt_smi_util
+from elasticsearch import Elasticsearch, NotFoundError
+from framework.device_fixtures import default_device
+from framework.elastic_config import *
+from framework.serialize import *
+from framework.statuses import VectorValidity, TestStatus
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
 from framework.serialize import deserialize
@@ -166,7 +173,7 @@ def get_devices(test_module):
 
 
 def gather_single_test_perf(device, test_passed):
-    if device.get_num_devices() > 1:
+    if device is None or device.get_num_devices() > 1:
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     # Read profiler data from device
@@ -255,17 +262,24 @@ def get_github_pipeline_id() -> Optional[int]:
         return None
 
 
-def run(test_module, input_queue, output_queue, config: SweepsConfig):
-    device_generator = get_devices(test_module)
+@contextmanager
+def device_context(test_module, output_queue):
     try:
-        device, device_name = next(device_generator)
-        logger.info(f"Opened device configuration, {device_name}.")
+        yield from get_devices(test_module)
     except AssertionError as e:
         output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
+    finally:
         return
-    try:
-        while True:
-            test_vector = input_queue.get(block=True, timeout=1)
+
+
+def run(test_module, input_queue, output_queue, config: SweepsConfig):
+    with device_context(test_module, output_queue) as (device, device_name):
+        while True:            
+            try:
+                test_vector = input_queue.get(block=True, timeout=1)
+            except Empty:
+                logger.info("Test suite complete")
+                return            
             test_vector = deserialize_vector_structured(test_vector)
             try:
                 results = test_module.run(**test_vector, device=device)
@@ -276,6 +290,7 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
                     status, message = results
                     e2e_perf = None
             except Exception as e:
+                # logger.exception(e)
                 status, message = False, str(e)
                 e2e_perf = None
             if config.measure_device_perf:
@@ -284,12 +299,6 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
                 output_queue.put([status, message, e2e_perf, perf_result])
             else:
                 output_queue.put([status, message, e2e_perf, None])
-    except Empty as e:
-        try:
-            # Run teardown in mesh_device_fixture
-            next(device_generator)
-        except StopIteration:
-            logger.info(f"Closed device configuration, {device_name}.")
 
 
 def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
@@ -320,7 +329,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
 
-        validity = deserialize(test_vector["validity"])
+        validity =  deserialize(test_vector["validity"]).split(".")[-1]
 
         if validity == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
@@ -393,6 +402,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                         p.join()
                     p = None
                     reset_util.reset()
+                    reload_ttnn()
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
@@ -427,6 +437,8 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     break
                 else:
                     logger.info("Continuing with remaining tests in suite despite timeout.")
+                    p = Process(target=run, args=(test_module, input_queue, output_queue))
+                    p.start()
                     # Continue to the next test vector without breaking
 
         # Add the original test vector data to the result
@@ -799,10 +811,6 @@ if __name__ == "__main__":
 
     # Parse modules for running specific tests
     module_names = get_module_names(config)
-
-    from ttnn import *
-    from framework.serialize import *
-    from framework.device_fixtures import default_device
 
     run_sweeps(
         module_names,
