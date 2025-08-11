@@ -70,9 +70,6 @@ struct OpConfig {
         DEQUANT,
         MAXIMUM,
         MINIMUM,
-        LOGICAL_AND,
-        LOGICAL_OR,
-        LOGICAL_XOR,
         XLOGY
     };
 
