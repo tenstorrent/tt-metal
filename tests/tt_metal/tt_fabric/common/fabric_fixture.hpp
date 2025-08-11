@@ -217,6 +217,16 @@ void RunTest2DMCastEWConnAPI(
     uint32_t direct_right_hops,
     uint32_t direct_left_hops);
 
+void RunTest2DMCastEWMirrorConnAPI(
+    BaseFabricFixture* fixture,
+    RoutingDirection trunk_dir,
+    uint32_t trunk_hops,
+    uint32_t branch_east_hops,
+    uint32_t branch_west_hops,
+    uint32_t direct_right_hops,
+    uint32_t direct_left_hops,
+    bool with_mirror);
+
 void RunTestChipMCast1D(
     BaseFabricFixture* fixture,
     RoutingDirection dir,

@@ -247,7 +247,6 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N1E6W) { RunTest2DMCastConnAP
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N6E1W) { RunTest2DMCastConnAPI(this, RoutingDirection::N, 2, 6, 1); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N1E6W) { RunTest2DMCastConnAPI(this, RoutingDirection::N, 3, 1, 6); }
-
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N6E1W) { RunTest2DMCastConnAPI(this, RoutingDirection::N, 3, 6, 1); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastEWConnAPI_1S1E1W1R1L) {
@@ -314,6 +313,17 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastEWConnAPI_1N1E2W1R1L) {
     RunTest2DMCastEWConnAPI(this, RoutingDirection::N, 1, 1, 2, 1, 1);
 }
 
+TEST_F(NightlyFabric2DFixture, Test2DMCastEWMirrorConnAPI_NoMirror){
+    RunTest2DMCastEWMirrorConnAPI(this, RoutingDirection::S, 1, 1, 1, 1, 1, false);
+}
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastEWMirrorConnAPI_Mirror){
+    RunTest2DMCastEWMirrorConnAPI(this, RoutingDirection::S, 1, 1, 1, 1, 1, true);
+}
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastEWMirrorConnAPI_OneToAll){
+    RunTest2DMCastEWMirrorConnAPI(this, RoutingDirection::N, 1, 2, 1, 2, 1, true);
+}
 // 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
 
