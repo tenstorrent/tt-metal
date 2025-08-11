@@ -75,10 +75,6 @@ struct Conv2dConfig {
     // This will increase perf, but it will take more L1 space.
     bool full_inner_dim = false;
 
-    // Only for height sharding.
-    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true, otherwise it will just be ignored
-    bool enable_split_reader = true;
-
     // Re-use input tensor storage when creating output tensor
     bool in_place = false;
 
@@ -120,7 +116,6 @@ struct Conv2dConfig {
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "full_inner_dim",
-        "enable_split_reader",
         "in_place",
         "enable_kernel_stride_folding");
     auto attribute_values() const {
@@ -140,7 +135,6 @@ struct Conv2dConfig {
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->full_inner_dim),
-            std::cref(this->enable_split_reader),
             std::cref(this->in_place),
             std::cref(this->enable_kernel_stride_folding));
     }
@@ -225,7 +219,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
-    bool enable_split_reader,
     bool full_inner_dim);
 
 // new micro op
@@ -244,7 +237,6 @@ struct OptimizedConvNew {
     bool enable_act_double_buffer;
     bool enable_weights_double_buffer;
     bool full_inner_dim;
-    bool enable_split_reader;
     uint32_t pre_op_l1_allocation_size_bytes{};
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
@@ -261,8 +253,7 @@ struct OptimizedConvNew {
         const DeviceComputeKernelConfig compute_kernel_config,
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
-        bool full_inner_dim,
-        bool enable_split_reader) :
+        bool full_inner_dim) :
         output_channels(output_channels),
         groups(groups),
         sliding_window_config(sliding_window_config),
@@ -277,8 +268,7 @@ struct OptimizedConvNew {
         compute_kernel_config(compute_kernel_config),
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
-        full_inner_dim(full_inner_dim),
-        enable_split_reader(enable_split_reader) {}
+        full_inner_dim(full_inner_dim) {}
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -307,8 +297,7 @@ struct OptimizedConvNew {
         "dtype",
         "input_tensor_shape",
         "enable_act_double_buffer",
-        "enable_weights_double_buffer",
-        "enable_split_reader");
+        "enable_weights_double_buffer");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -323,8 +312,7 @@ struct OptimizedConvNew {
             std::cref(this->dtype),
             std::cref(this->input_tensor_shape),
             std::cref(this->enable_act_double_buffer),
-            std::cref(this->enable_weights_double_buffer),
-            std::cref(this->enable_split_reader));
+            std::cref(this->enable_weights_double_buffer));
     }
 };
 
@@ -345,8 +333,7 @@ Tensor optimized_conv_new(
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
-    bool full_inner_dim = false,
-    bool enable_split_reader = true);
+    bool full_inner_dim = false);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
