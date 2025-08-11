@@ -675,7 +675,8 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
         // log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
-        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+        // this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+        this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, chip_id, core_coord, addr);
     }
 
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
