@@ -571,14 +571,14 @@ ttnn::Tensor ReshardOperation::invoke(
                 page_stride_vector.size());
             rt_config_map_1[core] = runtime_args_1;
         }
-        bool rt_gt_256 = false;
+        bool rt_gt_341 = false;
         for (const auto& [core, rt_args] : rt_config_map_0) {
-            if (rt_args.size() > 256 || rt_config_map_1[core].size() > 256) {
-                rt_gt_256 = true;
+            if (rt_args.size() > 341 || rt_config_map_1[core].size() > 341) {
+                rt_gt_341 = true;
                 break;
             }
         }
-        if (rt_gt_256) {
+        if (rt_gt_341) {
             auto runtime_args_tensor_0 = construct_per_core_host_tensor(rt_config_map_0);
             auto runtime_args_tensor_1 = construct_per_core_host_tensor(rt_config_map_1);
 
@@ -591,9 +591,7 @@ ttnn::Tensor ReshardOperation::invoke(
         }
     }
     // deallocate the intermediate tensor used to generate rt args
-    output_tensor.deallocate();
-    return operation::run(
-               ReshardDeviceOperation{.output_mem_config = memory_config}, inputs, {}, {optional_output_tensor})
+    return operation::run(ReshardDeviceOperation{.output_mem_config = memory_config}, inputs, {}, {output_tensor})
         .at(0);
 }
 

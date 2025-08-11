@@ -221,7 +221,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const std::vector<Ten
 
     tt::tt_metal::KernelHandle kernel_id_0;
     tt::tt_metal::KernelHandle kernel_id_1;
-    bool rt_gt_256 = false;
+    bool rt_gt_341 = false;
 
     std::unordered_map<CoreCoord, std::vector<detail::PageStride>> output_core_to_page_range_pair;
     if (input.buffer()->page_size() != output.buffer()->page_size()) {
@@ -266,14 +266,14 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const std::vector<Ten
         rt_config_map_1[core] = runtime_args_1;
     }
     for (const auto& [core, rt_args] : rt_config_map_0) {
-        if (rt_args.size() > 256 || rt_config_map_1[core].size() > 256) {
-            rt_gt_256 = true;
+        if (rt_args.size() > 341 || rt_config_map_1[core].size() > 341) {
+            rt_gt_341 = true;
             break;
         }
     }
     CBHandle cb_rt_args_0 = 0;
     CBHandle cb_rt_args_1 = 0;
-    if (rt_gt_256) {
+    if (rt_gt_341) {
         const auto& device_runtime_args_0 = inputs.at(1);
         const auto& device_runtime_args_1 = inputs.at(2);
         constexpr uint32_t rt_args_cb_index_0 = 17;
@@ -342,7 +342,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const std::vector<Ten
         }
     }
     auto override_runtime_arguments_callback =
-        [kernel_id_0, kernel_id_1, rt_gt_256, cb_dst0, cb_rt_args_0, cb_rt_args_1, grid, cores](
+        [kernel_id_0, kernel_id_1, rt_gt_341, cb_dst0, cb_rt_args_0, cb_rt_args_1, grid, cores](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -353,7 +353,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const std::vector<Ten
             uint32_t input_addr = input.buffer()->address();
             auto& runtime_args_0_by_core = GetRuntimeArgs(program, kernel_id_0);
             auto& runtime_args_1_by_core = GetRuntimeArgs(program, kernel_id_1);
-            if (rt_gt_256 == false) {
+            if (!rt_gt_341) {
                 for (auto core : cores) {
                     auto& runtime_args_0 = runtime_args_0_by_core[core.x][core.y];
                     auto& runtime_args_1 = runtime_args_1_by_core[core.x][core.y];
