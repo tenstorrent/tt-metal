@@ -40,7 +40,6 @@ target_sources(
             common/kernels/ccl_wait_completion.cpp
     PRIVATE
         # Common
-        erisc_datamover_builder_helper.cpp
         ccl_op_fusion.cpp
         ccl_common.cpp
         ccl_host_datastructures.cpp
