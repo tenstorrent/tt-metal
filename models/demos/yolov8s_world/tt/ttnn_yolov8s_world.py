@@ -37,7 +37,6 @@ class TtConv:
         width_shard=False,
         act_blocks=False,
         enable_act_double_buffer=True,
-        enable_split_reader=True,
         reshard_if_not_optimal=True,
         batch_size=1,
         conv_math_fidelity=None,
@@ -59,7 +58,6 @@ class TtConv:
         self.width_shard = width_shard
         self.act_blocks = act_blocks
         self.enable_act_double_buffer = enable_act_double_buffer
-        self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
         self.reshape_tensor = reshape_tensor
@@ -78,7 +76,6 @@ class TtConv:
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
-            enable_split_reader=self.enable_split_reader,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,

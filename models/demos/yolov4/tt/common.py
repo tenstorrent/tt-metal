@@ -28,7 +28,6 @@ class Conv:
             deallocate_activation=conv_param.deallocate_activation,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
-            enable_split_reader=True if conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else False,
             output_layout=ttnn.TILE_LAYOUT,
         )
         config_override = None

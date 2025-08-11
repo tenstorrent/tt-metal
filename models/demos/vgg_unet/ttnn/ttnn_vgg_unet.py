@@ -60,7 +60,6 @@ class Conv:
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
             enable_act_double_buffer=conv_param.enable_act_double_buffer,
-            enable_split_reader=conv_param.enable_split_reader,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         config_override = None
