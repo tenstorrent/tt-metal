@@ -225,7 +225,8 @@ void kernel_main() {
                                 input_token_read_addr,
                                 output_token_write_addr,
                                 (int)output_page_size,
-                                alignment);
+                                alignment,
+                                Polarity::POSITIVE);
                         } else {
                             fabric_send_chip_unicast_noc_unicast<
                                 src_chip_id,
@@ -289,7 +290,8 @@ void kernel_main() {
                             (int)metadata_page_size,
                             alignment,
                             1,
-                            true);
+                            true,
+                            Polarity::POSITIVE);
                     } else {
                         fabric_send_chip_unicast_noc_unicast_with_semaphore<
                             src_chip_id,
@@ -341,7 +343,8 @@ void kernel_main() {
                         (int)indices_size_per_core,
                         alignment,
                         1,
-                        true);
+                        true,
+                        Polarity::POSITIVE);
                 } else {
                     fabric_send_chip_unicast_noc_unicast_with_semaphore<
                         src_chip_id,

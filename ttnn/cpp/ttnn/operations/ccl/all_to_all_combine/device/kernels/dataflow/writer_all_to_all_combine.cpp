@@ -180,7 +180,8 @@ void kernel_main() {
                             src_data_l1_ptr,
                             output_noc_addr,
                             data_size_bytes,
-                            alignment);
+                            alignment,
+                            Polarity::POSITIVE);
                     } else {
                         const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
                         fabric_send_chip_unicast_noc_unicast<
@@ -226,7 +227,14 @@ void kernel_main() {
                     linearized_mesh_coord,
                     topology,
                     mesh_rows,
-                    mesh_cols>(fabric_connections, packet_headers[1], device_idx, global_noc_semaphore_addr, 1, true);
+                    mesh_cols>(
+                    fabric_connections,
+                    packet_headers[1],
+                    device_idx,
+                    global_noc_semaphore_addr,
+                    1,
+                    true,
+                    Polarity::POSITIVE);
             } else {
                 const auto& dest_mesh_id = dest_mesh_ids[device_idx];
                 const auto& dest_chip_id = dest_chip_ids[device_idx];
