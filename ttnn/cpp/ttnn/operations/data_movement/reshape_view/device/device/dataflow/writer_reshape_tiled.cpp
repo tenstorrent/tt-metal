@@ -26,19 +26,21 @@ void kernel_main() {
     constexpr bool is_bfp8 = get_compile_time_arg_val(6);
     constexpr uint32_t tiles_per_row = get_compile_time_arg_val(7);
     constexpr bool last_is_two_facelines = get_compile_time_arg_val(8);
-    constexpr auto output_args = TensorAccessorArgs<9>();
+    constexpr uint32_t faceline_row = get_compile_time_arg_val(9);
+    constexpr uint32_t faceline_size = get_compile_time_arg_val(10);
+    constexpr uint32_t exp_cb_idx = get_compile_time_arg_val(11);
+    constexpr uint32_t exponents_size = get_compile_time_arg_val(12);
+    constexpr auto output_args = TensorAccessorArgs<13>();
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr, Tile_size_bytes);
 
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
-    constexpr uint32_t faceline_size = 256;
-    constexpr uint32_t faceline_row = 16;
-    constexpr uint32_t exponents_size = 64;
+
     cb_reserve_back(cb_id_working, 1);
     const uint32_t working_write_addr = get_write_ptr(cb_id_working);
     for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
-        uint8_t exp_buffer[exponents_size] = {0};  // for bfloat8_b exponents
+        const uint32_t exp_ptr_addr = get_write_ptr(exp_cb_idx);
         bool last_tile = ((output_page_idx + 1) % tiles_per_row == 0);
         bool two_facelines = (last_tile && last_is_two_facelines) || !last_tile;
         cb_wait_front(cb_id_mapping, 1);
@@ -78,6 +80,7 @@ void kernel_main() {
 
             if (is_bfp8) {
                 volatile tt_l1_ptr uint8_t* input_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(input_base_addr);
+                volatile tt_l1_ptr uint8_t* exp_buffer = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(exp_ptr_addr);
                 uint32_t subtile_id = input_page_offset / faceline_size;
                 uint32_t row_id = (input_page_offset % faceline_size) / faceline_row;
                 uint32_t output_row_id = (faceline_ctr / 2) % faceline_row;
@@ -100,7 +103,7 @@ void kernel_main() {
 
         if (is_bfp8) {
             // copy exponents for bfloat8_b
-            memmove((void*)working_write_addr, (const void*)&exp_buffer[0], exponents_size);
+            memmove((void*)working_write_addr, (const void*)exp_ptr_addr, exponents_size);
         }
 
         const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
