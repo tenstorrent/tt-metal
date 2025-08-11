@@ -50,7 +50,11 @@
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
 #include "ttnn/operations/experimental/where/where_pybind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_pybind.hpp"
+<<<<<<< HEAD
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_pybind.hpp"
+=======
+#include "ttnn/operations/experimental/isin/isin_pybind.hpp"
+>>>>>>> 38d09e42905 (26437: unique)
 
 namespace py = pybind11;
 
@@ -120,7 +124,11 @@ void py_module(py::module& module) {
 
     operations::experimental::ternary::detail::bind_where(module);
 
+<<<<<<< HEAD
     minimal_matmul::detail::py_bind_minimal_matmul(module);
+=======
+    isin::detail::bind_isin_operation(module);
+>>>>>>> 38d09e42905 (26437: unique)
 }
 
 }  // namespace ttnn::operations::experimental
