@@ -364,8 +364,8 @@ class TtQwenModelArgs(TtModelArgs):
                         1,
                         1,
                         32,
-                        self.dim_per_tp // 8,
-                    ),  # (1, 1, 32, 2048 // num_cores_ln) originally
+                        1536 // num_cores_ln,
+                    ),
                     core_grid=ttnn.CoreRangeSet(
                         {
                             core_range,
@@ -1018,7 +1018,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
             self.model_config["MUL_IN_MEMCFG"] = ttnn.create_sharded_memory_config(
                 # shape=(32, 3584 // 28),  # Use padded K
-                shape=(32, 3200 // 28),  # Use padded K
+                shape=(32, 3840 // 28),  # Use padded K
                 core_grid=mul_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,

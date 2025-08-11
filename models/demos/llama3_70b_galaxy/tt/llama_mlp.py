@@ -159,7 +159,7 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
-        # Workaround for Qwen model for now, in the future hopefully all llama CCLs will eb directly compatible
+        # Workaround for Qwen model for now, in the future hopefully all llama CCLs will be directly compatible
         if not self.args.qk_norm:
             w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
                 x,
@@ -204,8 +204,8 @@ class TtLlamaMLP(LightweightModule):
                 global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
             )
-            w1_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
-                input_tensor=w1_out,  # [1, 1, 32, 3840]
+            w1_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(  # [1, 1, 32, 800]
+                input_tensor=w1_out,  # [1, 1, 32, 3200]
                 persistent_output_buffers=[
                     self.persistent_interim_w1_w3_rs_buffers,
                     self.persistent_output_w1_w3_rs_buffers,
@@ -233,8 +233,8 @@ class TtLlamaMLP(LightweightModule):
 
             ttnn.deallocate(x)
 
-            w3_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
-                w3_out,
+            w3_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(  # [1, 1, 32, 800]
+                w3_out,  # [1, 1, 32, 3200]
                 persistent_output_buffers=[
                     self.persistent_interim_w1_w3_rs_buffers,
                     self.persistent_output_w1_w3_rs_buffers,
@@ -248,7 +248,7 @@ class TtLlamaMLP(LightweightModule):
             )
             ttnn.deallocate(w3_out)
 
-        ff1ff3 = ttnn.mul(
+        ff1ff3 = ttnn.mul(  # [1, 1, 32, 800]
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
@@ -259,7 +259,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
-        w2_in = self.tt_ccl.line_all_gather(
+        w2_in = self.tt_ccl.line_all_gather(  # [1, 1, 1, 3200]
             ff1ff3,
             dim=3,
             cluster_axis=1,
@@ -271,7 +271,7 @@ class TtLlamaMLP(LightweightModule):
 
         ttnn.deallocate(ff1ff3)
 
-        w2_out = ttnn.linear(
+        w2_out = ttnn.linear(  # [1, 1, 1, 1280]
             w2_in,
             self.w2,  # [1, 1, 3200, 1280]
             compute_kernel_config=self.args.compute_kernel_config_hifi2,
@@ -284,7 +284,7 @@ class TtLlamaMLP(LightweightModule):
         )
 
         if not self.args.qk_norm:
-            w2_out_reduced = self.tt_ccl.line_all_reduce(
+            w2_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 1, 2048]
                 w2_out,
                 cluster_axis=0,
                 num_links=self.model_config["GALAXY_NUM_LINKS"],
@@ -292,7 +292,14 @@ class TtLlamaMLP(LightweightModule):
                 use_optimal_ccl_for_llama=True,
             )
         else:
-            w2_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
+            # w2_out_reduced = self.tt_ccl.line_all_reduce( # [1, 1, 1, 2048]
+            #     w2_out,
+            #     cluster_axis=0,
+            #     num_links=self.model_config["GALAXY_NUM_LINKS"],
+            #     memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+            #     use_optimal_ccl_for_llama=True,
+            # )
+            w2_out_rs = ttnn.experimental.reduce_scatter_minimal_async(  # [1, 1, 32, 320]
                 input_tensor=w2_out,
                 persistent_output_buffers=[self.persistent_interim_w2_rs_buffers, self.persistent_output_w2_rs_buffers],
                 dim=3,
@@ -301,6 +308,14 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
                 topology=self.model_config["CCL_TOPOLOGY"],
                 cluster_axis=1,
+            )
+            w2_out_reduced = self.tt_ccl.line_all_gather(
+                w2_out_rs,
+                dim=3,
+                cluster_axis=0,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                buffer_key="W2_AR",
             )
         ttnn.deallocate(w2_out)
 
