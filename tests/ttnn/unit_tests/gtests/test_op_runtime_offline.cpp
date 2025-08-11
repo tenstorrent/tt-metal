@@ -60,10 +60,26 @@ protected:
 
 public:
     static const ttnn::TensorSpec m_interleaved_1_3_1024_1024_tiled;
+    static const ttnn::TensorSpec m_interleaved_32_512_512_0_tiled;
+    static const ttnn::TensorSpec m_interleaved_2048_2048_0_0_tiled;
 };
 
 const ttnn::TensorSpec TTNNFixtureWithOfflineModel::m_interleaved_1_3_1024_1024_tiled = ttnn::TensorSpec(
     ttnn::Shape({1, 3, 1024, 1024}),
+    tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+        ttnn::L1_MEMORY_CONFIG));
+
+const ttnn::TensorSpec TTNNFixtureWithOfflineModel::m_interleaved_32_512_512_0_tiled = ttnn::TensorSpec(
+    ttnn::Shape({32, 512, 512, 0}),
+    tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+        ttnn::L1_MEMORY_CONFIG));
+
+const ttnn::TensorSpec TTNNFixtureWithOfflineModel::m_interleaved_2048_2048_0_0_tiled = ttnn::TensorSpec(
+    ttnn::Shape({2048, 2048, 0, 0}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -121,42 +137,58 @@ TEST_P(TestExpOpRuntimeFromModel, ExpOpFromModel) {
 INSTANTIATE_TEST_SUITE_P(
     GetRuntimeFromModel,
     TestExpOpRuntimeFromModel,
-    ::testing::Values(TestExpOpRuntimeFromModel::m_interleaved_1_3_1024_1024_tiled));
+    ::testing::Values(
+        TestExpOpRuntimeFromModel::m_interleaved_1_3_1024_1024_tiled,
+        TestExpOpRuntimeFromModel::m_interleaved_32_512_512_0_tiled,
+        TestExpOpRuntimeFromModel::m_interleaved_2048_2048_0_0_tiled));
 
 // ============================================================================
 // Json Serialization Test
 // ============================================================================
 
+// struct for testing json serialization of tensorSpec
+struct TensorSpecWithJson {
+    ttnn::TensorSpec spec;
+    nlohmann::json expected_json;
+};
+
 class TestTensorJsonSerialization : public TTNNFixtureWithOfflineModel,
-                                    public testing::WithParamInterface<ttnn::TensorSpec> {};
+                                    public testing::WithParamInterface<TensorSpecWithJson> {};
 
 TEST_P(TestTensorJsonSerialization, TensorSpecToJson) {
-    const auto& input_spec = GetParam();
+    TensorSpecWithJson param = GetParam();
+    const auto& input_spec = param.spec;
+    const auto& test_json = param.expected_json;
 
-    // Serialize the TensorSpec to JSON using tt::stl::json::to_json
+    // serialize the TensorSpec to JSON using tt::stl::json::to_json
     nlohmann::json tensor_json = ttsl::json::to_json(input_spec);
-    nlohmann::json arg = nlohmann::json::object();
-    auto new_arg = ttsl::json::to_json(arg);
 
-    nlohmann::json arg2 = {{"one", 1}, {"two", 2}};
-    auto new_arg2 = ttsl::json::to_json(arg2);
-
-    std::cout << arg2.dump(2) << std::endl;
-    std::cout << new_arg2.dump(2) << std::endl;
-
-    std::cout << new_arg.dump(2);
-
-    // Print or inspect the JSON (for demonstration)
     std::cout << "Serialized TensorSpec JSON: " << tensor_json.dump(2) << std::endl;
 
-    // Basic check: ensure the result is a JSON object or string (if unsupported)
-    EXPECT_TRUE(tensor_json.is_object() || tensor_json.is_string());
+    // ensure the result is a JSON object
+    EXPECT_TRUE(tensor_json.type() == nlohmann::json::value_t::object);
+
+    // ensure the serialized tensor_json input dim, dtype, buffer type match with test_json
+    EXPECT_EQ(tensor_json["logical_shape"], test_json["tensor_spec"]["logical_shape"]);
+    EXPECT_EQ(tensor_json["tensor_layout"]["dtype"], test_json["tensor_spec"]["tensor_layout"]["dtype"]);
+    EXPECT_EQ(
+        tensor_json["tensor_layout"]["memory_config"]["buffer_type"],
+        test_json["tensor_spec"]["tensor_layout"]["memory_config"]["buffer_type"]);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     TensorSpecJsonSerialization,
     TestTensorJsonSerialization,
-    ::testing::Values(TestTensorJsonSerialization::m_interleaved_1_3_1024_1024_tiled));
+    ::testing::Values(
+        TensorSpecWithJson{
+            TTNNFixtureWithOfflineModel::m_interleaved_1_3_1024_1024_tiled,
+            create_serialized_tensor({1, 3, 1024, 1024}, 0, 1)},
+        TensorSpecWithJson{
+            TTNNFixtureWithOfflineModel::m_interleaved_32_512_512_0_tiled,
+            create_serialized_tensor({32, 512, 512, 0}, 0, 1)},
+        TensorSpecWithJson{
+            TTNNFixtureWithOfflineModel::m_interleaved_2048_2048_0_0_tiled,
+            create_serialized_tensor({2048, 2048, 0, 0}, 0, 1)}));
 
 // ============================================================================
 // Unary Exp Op test using query_op_runtime
@@ -168,13 +200,14 @@ class TestExpOpQueryOpRuntime : public TTNNFixtureWithOfflineModel,
 TEST_P(TestExpOpQueryOpRuntime, ExpOpQueryOpRuntime) {
     const auto& input_spec = GetParam();
 
-    // Prepare an empty output layout as expected by the op
+    // output_layout object is not used in ttnn-op-runtime-predictor
+    // for eltwise unary but is sent into query_op_runtime by mlir / metal
     nlohmann::json output_layout = nlohmann::json::object();
 
-    // Call the query_op_runtime interface for ttnn::exp
+    // call the query_op_runtime interface for ttnn::exp
     auto query = ttnn::graph::query_op_runtime(ttnn::exp, device_, input_spec, output_layout);
 
-    // Check that the query was successful and runtime is positive
+    // check query.status is success and returned runtime is > 0
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "failed here" << std::endl;
     EXPECT_GT(query.runtime, 0);
     log_info(tt::LogTest, "QueryOpRuntime for ttnn::exp: {} ns", query.runtime);
@@ -183,7 +216,10 @@ TEST_P(TestExpOpQueryOpRuntime, ExpOpQueryOpRuntime) {
 INSTANTIATE_TEST_SUITE_P(
     QueryOpRuntimeExp,
     TestExpOpQueryOpRuntime,
-    ::testing::Values(TestExpOpQueryOpRuntime::m_interleaved_1_3_1024_1024_tiled));
+    ::testing::Values(
+        TestExpOpQueryOpRuntime::m_interleaved_1_3_1024_1024_tiled,
+        TestExpOpQueryOpRuntime::m_interleaved_32_512_512_0_tiled,
+        TestExpOpQueryOpRuntime::m_interleaved_2048_2048_0_0_tiled));
 
 #endif  // BUILD_MLP_OP_PERF
 
