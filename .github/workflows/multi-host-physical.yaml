@@ -62,4 +62,4 @@ jobs:
           install_wheel: true
           run_args: |
             tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" bash -c "tt-smi-metal -r"
-            LD_LIBRARY_PATH=./build/lib TT_METAL_HOME=/home/ansible/actions-runner/_work/tt-metal/tt-metal PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
+            TT_METAL_HOME=/home/ansible/actions-runner/_work/tt-metal/tt-metal PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
