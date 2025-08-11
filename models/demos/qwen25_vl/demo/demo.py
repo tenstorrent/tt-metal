@@ -29,6 +29,19 @@ from models.tt_transformers.tt.generator import SamplingParams
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
 
+def create_tt_page_table(paged_attention_config, tt_model_args):
+    if paged_attention_config is None:
+        return None
+
+    # Implied shuffling of blocks
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    # Page table which maps virtual blocks to physical
+    reverse_permutation = torch.argsort(permutation)
+    return reverse_permutation.reshape(
+        tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
+    )
+
+
 def create_tt_model(
     mesh_device,
     instruct,
@@ -48,26 +61,14 @@ def create_tt_model(
     )
     state_dict = tt_model_args.load_state_dict()
 
-    page_table = None
-    paged_attention_config = None
-    tt_kv_cache = None
-
-    if use_paged_kv_cache:
-        paged_attention_config = PagedAttentionConfig(
+    paged_attention_config = (
+        PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
-        )
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
+        if use_paged_kv_cache
+        else None
+    )
 
     model = Transformer(
         args=tt_model_args,
@@ -78,10 +79,9 @@ def create_tt_model(
         paged_attention_config=paged_attention_config,
     )
 
-    if use_paged_kv_cache:
-        tt_kv_cache = [l.attention.layer_past for l in model.layers]
+    tt_kv_cache = [l.attention.layer_past for l in model.layers] if use_paged_kv_cache else None
 
-    return tt_model_args, model, page_table, tt_kv_cache
+    return tt_model_args, model, paged_attention_config, tt_kv_cache
 
 
 # List of supported Parameters for demo.py
@@ -334,7 +334,7 @@ def test_demo(
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    model_args, model, page_table, tt_kv_cache = create_tt_model(
+    model_args, model, paged_attention_config, tt_kv_cache = create_tt_model(
         mesh_device,
         instruct=instruct,
         max_batch_size=batch_size,
@@ -381,6 +381,10 @@ def test_demo(
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
+
+        # Create new page table for each batch
+        page_table = create_tt_page_table(paged_attention_config, model_args)
+
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(input_prompts)
@@ -458,8 +462,7 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        argmax_on_device = sampling_params["temperature"] == 0
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
