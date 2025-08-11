@@ -241,8 +241,8 @@ struct Attribute final {
     ~Attribute() { this->destruct(); }
 
 private:
-    alignas(ALIGNMENT) void* pointer = nullptr;
-    alignas(ALIGNMENT) storage_t type_erased_storage;
+    alignas(ALIGNMENT) storage_t type_erased_storage{};
+    void* pointer = nullptr;
 
     void (*delete_storage)(storage_t&) = nullptr;
     void* (*copy_storage)(storage_t& storage, const void*) = nullptr;
@@ -1314,7 +1314,7 @@ struct to_json_t<std::array<T, N>> {
 template <typename T, std::size_t N>
 struct from_json_t<std::array<T, N>> {
     std::array<T, N> operator()(const nlohmann::json& json_object) noexcept {
-        std::array<T, N> array;
+        std::array<T, N> array{};
         [&array, &json_object]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
                 [&array, &json_object] {

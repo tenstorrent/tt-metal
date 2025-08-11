@@ -45,7 +45,7 @@ public:
 
 private:
     // A buffer of std::byte with alignment of T and size of T
-    alignas(T) std::byte storage_[sizeof(T)];
+    alignas(T) std::byte storage_[sizeof(T)]{};
 };
 
 }  // namespace ttsl
