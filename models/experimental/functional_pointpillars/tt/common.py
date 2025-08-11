@@ -66,7 +66,7 @@ class TtConv:
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
+            # dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
