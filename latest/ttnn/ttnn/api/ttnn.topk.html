@@ -146,13 +146,11 @@
 </dt>
 <dd>
 <p>ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -&gt; Tuple[ttnn.Tensor, ttnn.Tensor]</p>
-<p>Returns the <code class="docutils literal notranslate"><span class="pre">k</span></code> largest or <code class="docutils literal notranslate"><span class="pre">k</span></code> smallest elements of the given input tensor along a given dimension.</p>
-<p>If <code class="docutils literal notranslate"><span class="pre">dim</span></code> is not provided, the last dimension of the input tensor is used.</p>
-<p>If <code class="docutils literal notranslate"><span class="pre">largest</span></code> is True, the k largest elements are returned. Otherwise, the k smallest elements are returned.</p>
-<p>The boolean option <code class="docutils literal notranslate"><span class="pre">sorted</span></code> if True, will make sure that the returned k elements are sorted.</p>
-<p>Input tensor must have BFLOAT8 or BFLOAT16 data type and TILE_LAYOUT layout.</p>
-<p>Output value tensor will have the same data type as input tensor and output index tensor will have UINT16 data type.</p>
-<p>Equivalent pytorch code:</p>
+<p>Returns the <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> largest or <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> smallest elements of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along a given dimension <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p>
+<p>If <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> is not provided, the last dimension of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is used.</p>
+<p>If <code class="xref py py-attr docutils literal notranslate"><span class="pre">largest</span></code> is True, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> largest elements are returned. Otherwise, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> smallest elements are returned.</p>
+<p>The boolean option <code class="xref py py-attr docutils literal notranslate"><span class="pre">sorted</span></code> if True, will make sure that the returned <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> elements are sorted.</p>
+<p>Equivalent PyTorch code:</p>
 <div class="highlight-python notranslate">
 <div class="highlight"><pre><span></span><span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">topk</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dim</span><span class="p">,</span> <span class="n">largest</span><span class="o">=</span><span class="n">largest</span><span class="p">,</span> <span class="nb">sorted</span><span class="o">=</span><span class="nb">sorted</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">out</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
 </pre></div>
@@ -185,9 +183,49 @@
 <dd class="field-odd">
 <p><em>List of ttnn.Tensor</em> – the output tensor.</p>
 </dd>
-<dt class="field-even">Type<span class="colon">:</span>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> supports the following data type and layout:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">input_tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT8, BFLOAT16
+- TILE</p></td>
+</tr>
+</tbody>
+</table>
+<p>The <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_value_tensor</span></code> will have the same data type as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_index_tensor</span></code> will have UINT16 data type.</p>
+</div>
+<dl class="simple">
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> must be 4D</p></li>
+<li><p>For <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, N*C*H must be a multiple of 32 and W must be ≥64.</p></li>
+<li><p>To enable multicore execution, the width of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> must be ≥8192 and &lt;65536, and <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> must be ≤64.</p></li>
+<li><p>All shape validations are performed on padded shapes.</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<p>input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.TILE_LAYOUT)
+topk_values, topk_indices = ttnn.topk(input_tensor, k=32, dim=-1, largest=True, sorted=True)</p>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span>
 </dt>
-<dd class="field-even">
+<dd class="field-odd">
 <p>topk(input_tensor</p>
 </dd>
 </dl>

@@ -1843,93 +1843,39 @@
 <tbody>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.cumprod.html#ttnn.cumprod" title="ttnn.cumprod"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.cumprod</span></code></a></p></td>
-<td><p>Returns cumulative product of <cite>input</cite> along dimension <cite>dim</cite> For a given <cite>input</cite> of size N, the <cite>output</cite> will also contain N elements and be such that: This function is fundamentally identical to <cite>torch.cumprod()</cite></p></td>
+<td><p>Returns cumulative product of <cite>input</cite> along dimension <cite>dim</cite> For a given <cite>input</cite> of size N, the <cite>output</cite> will also contain N elements and be such that:</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.max.html#ttnn.max" title="ttnn.max"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.max</span></code></a></p></td>
-<td>
-<p></p>
-<dl class="field-list simple">
-<dt class="field-odd">param input_a<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>the input tensor.</p>
-</dd>
-</dl>
-</td>
+<td><p>max</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.mean.html#ttnn.mean" title="ttnn.mean"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.mean</span></code></a></p></td>
-<td>
-<p></p>
-<dl class="field-list simple">
-<dt class="field-odd">param input_a<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>the input tensor.</p>
-</dd>
-</dl>
-</td>
+<td><p>mean</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.min.html#ttnn.min" title="ttnn.min"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.min</span></code></a></p></td>
-<td>
-<p></p>
-<dl class="field-list simple">
-<dt class="field-odd">param input_a<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>the input tensor.</p>
-</dd>
-</dl>
-</td>
+<td><p>min</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.std.html#ttnn.std" title="ttnn.std"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.std</span></code></a></p></td>
-<td>
-<p></p>
-<dl class="field-list simple">
-<dt class="field-odd">param input_a<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>the input tensor.</p>
-</dd>
-</dl>
-</td>
+<td><p>std</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.sum.html#ttnn.sum" title="ttnn.sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sum</span></code></a></p></td>
-<td>
-<p></p>
-<dl class="field-list simple">
-<dt class="field-odd">param input_a<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>the input tensor.</p>
-</dd>
-</dl>
-</td>
+<td><p>sum</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.var.html#ttnn.var" title="ttnn.var"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.var</span></code></a></p></td>
-<td>
-<p></p>
-<dl class="field-list simple">
-<dt class="field-odd">param input_a<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>the input tensor.</p>
-</dd>
-</dl>
-</td>
+<td><p>var</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.argmax.html#ttnn.argmax" title="ttnn.argmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.argmax</span></code></a></p></td>
-<td><p>Returns the indices of the maximum value of elements in the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor If no <code class="docutils literal notranslate"><span class="pre">dim</span></code> is provided, it will return the indices of maximum value of all elements in given <code class="docutils literal notranslate"><span class="pre">input</span></code> If no <code class="docutils literal notranslate"><span class="pre">keepdim</span></code> is provided, it will default to <cite>False</cite>.</p></td>
+<td><p>Returns the indices of the maximum value of elements in the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.prod.html#ttnn.prod" title="ttnn.prod"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.prod</span></code></a></p></td>
-<td><p>Computes the product of all elements on specified <code class="docutils literal notranslate"><span class="pre">dim</span></code> of the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.</p></td>
+<td><p>Computes the product of all elements on specified <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> tensor.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.topk.html#ttnn.topk" title="ttnn.topk"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.topk</span></code></a></p></td>
@@ -1937,7 +1883,7 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.cumsum.html#ttnn.cumsum" title="ttnn.cumsum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.cumsum</span></code></a></p></td>
-<td><p>Returns cumulative sum of <cite>input</cite> along dimension <cite>dim</cite> For a given <cite>input</cite> of size N, the <cite>output</cite> will also contain N elements and be such that: This function is fundamentally identical to <cite>torch.cumsum()</cite></p></td>
+<td><p>Returns cumulative sum of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> along dimension <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> For a given <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> of size N, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> will also contain N elements and be such that:</p></td>
 </tr>
 </tbody>
 </table>

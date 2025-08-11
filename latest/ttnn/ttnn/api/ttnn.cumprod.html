@@ -20,6 +20,8 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -146,8 +148,9 @@
 </dt>
 <dd>
 <p>Returns cumulative product of <cite>input</cite> along dimension <cite>dim</cite>
-For a given <cite>input</cite> of size N, the <cite>output</cite> will also contain N elements and be such that:
-This function is fundamentally identical to <cite>torch.cumprod()</cite></p>
+For a given <cite>input</cite> of size N, the <cite>output</cite> will also contain N elements and be such that:</p>
+<div class="math notranslate nohighlight">
+\[\mathrm{{output}}_i = \mathrm{{input}}_1 \times \mathrm{{input}}_2 \times \cdots \times \mathrm{{input}}_i\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -172,9 +175,14 @@ This function is fundamentally identical to <cite>torch.cumprod()</cite></p>
 <p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<p>input_tensor = ttnn.rand((N, N), device=device)
+output_tensor = ttnn.cumprod(input_tensor, dim=0)</p>
+</div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>If both <cite>dtype</cite> and <cite>output</cite> are specified then <cite>output.dtype</cite> must be <cite>dtype</cite>)</p>
+<p>If both <cite>dtype</cite> and <cite>output</cite> are specified then <cite>output.dtype</cite> must match <cite>dtype</cite>.</p>
 <p>Supported dtypes, layout, ranks and <cite>dim</cite> values:</p>
 <table class="docutils align-default">
 <thead>
@@ -203,12 +211,10 @@ This function is fundamentally identical to <cite>torch.cumprod()</cite></p>
 </div>
 <p>Example:</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
 
 <span class="c1"># Create tensor</span>
-<span class="n">torch_input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">])</span>
-<span class="n">tensor_input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">tensor_input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
 <span class="c1"># Apply ttnn.cumprod() on dim=0</span>
 <span class="n">tensor_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">cumprod</span><span class="p">(</span><span class="n">tensor_input</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>

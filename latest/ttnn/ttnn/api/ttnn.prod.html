@@ -145,10 +145,10 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">prod</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.prod',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.reduction.prod_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.prod" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Computes the product of all elements on specified <code class="docutils literal notranslate"><span class="pre">dim</span></code> of the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.</p>
-<p>If no <code class="docutils literal notranslate"><span class="pre">dim</span></code> is provided (or <code class="docutils literal notranslate"><span class="pre">dim</span></code> is set to <cite>None</cite>), it will compute the product of all elements in the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.
-If <code class="docutils literal notranslate"><span class="pre">keepdim</span></code> is <cite>True</cite>, the resulting tensor will have a similar shape as the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor, but with the specified <code class="docutils literal notranslate"><span class="pre">dim</span></code> reduced to 1. This is not supported when taking the product across all dimensions.
-Otherwise, the target <code class="docutils literal notranslate"><span class="pre">dim</span></code> will be squeezed, resulting in an output tensor with one less dimension than the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.</p>
+<p>Computes the product of all elements on specified <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> tensor.</p>
+<p>If no <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> is provided (or <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> is set to <cite>None</cite>), it will compute the full product of every element in the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> tensor.</p>
+<p>If <code class="xref py py-attr docutils literal notranslate"><span class="pre">keepdim</span></code> is <cite>True</cite>, the resulting tensor will have the same rank as the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> tensor, but with the specified <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> reduced to 1.
+Otherwise, the target <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> will be squeezed, resulting in an output tensor with one less dimension than the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> tensor.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -170,13 +170,59 @@ Otherwise, the target <code class="docutils literal notranslate"><span class="pr
 <p><em>List of ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
-<p>Example:</p>
-<div class="highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output_all_dims</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
-</pre></div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> supports the following data type and layout:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">input_tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16
+- TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p>The <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code> will be in the following data type and layout:</p>
+<table class="docutils align-default" id="id3">
+<caption>
+<span class="caption-text">output_tensor</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16
+- TILE</p></td>
+</tr>
+</tbody>
+</table>
 </div>
+<dl class="simple">
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>When <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> is not specified (i.e. full product), the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> must be bfloat16, and keepdim=True is not supported  (as this operation results in a scalar).</p></li>
+</ul>
+</dd>
+<dt>Example::</dt>
+<dd>
+<p>tensor = ttnn.rand((1,2), device=device)
+output = ttnn.prod(tensor, dim=0)
+output_all_dims = ttnn.prod(tensor)</p>
+</dd>
+</dl>
 </dd>
 </dl>
 
