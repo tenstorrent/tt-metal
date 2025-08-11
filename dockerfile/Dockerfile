@@ -126,18 +126,6 @@ RUN mkdir -p /tmp/iwyu \
     && cmake --install /tmp/iwyu/build \
     && rm -rf /tmp/iwyu
 
-# Remove gdb if we aren't on Ubuntu 24.04
-# 24.04 has gdb 15.1 by default, lets give that a chance before we decide we need to build something
-RUN [ "$UBUNTU_VERSION" != "24.04" ] && apt-get remove -y gdb || true
-RUN [ "$UBUNTU_VERSION" != "24.04" ] \
-    && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
-    && wget -O /tmp/gdb-build/gdb.tar.gz https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
-    && tar -xvf /tmp/gdb-build/gdb.tar.gz -C /tmp/gdb-build --strip-components=1 \
-    && /tmp/gdb-build/configure --prefix=/usr/local \
-    && make -j$(nproc) \
-    && make install \
-    && rm -rf /tmp/gdb-build
-
 COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
