@@ -8,6 +8,7 @@ from models.experimental.uniad.reference.ffn import FFN
 from models.experimental.uniad.reference.encoder import BEVFormerEncoder
 from models.experimental.uniad.reference.temporal_self_attention import TemporalSelfAttention
 from models.experimental.uniad.reference.spatial_cross_attention import SpatialCrossAttention
+from models.experimental.uniad.tt.model_preprocessing_uniad import custom_preprocessor as custom_preprocessor_fpn
 
 
 from ttnn.model_preprocessing import (
@@ -132,7 +133,7 @@ def custom_preprocessor(model, name):
 def create_uniad_FPN_parameters(model, input_tensors, device=None):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=custom_preprocessor_fpn,
         device=device,
     )
     parameters.conv_args = {}
