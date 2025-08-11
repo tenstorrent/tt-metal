@@ -101,7 +101,11 @@ public:
     // Throws if not found
     int GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const;
 
-    // need a getter api to get the link index used by dispatch
+    // Get the link index used by dispatch for coordination with fabric tensix
+    static uint32_t get_dispatch_link_index(
+        tt::tt_fabric::FabricNodeId src_fabric_node_id,
+        tt::tt_fabric::FabricNodeId dst_fabric_node_id,
+        IDevice* device);
 };
 
 // Helper function to assemble the dispatch_fabric_mux_client_config args
