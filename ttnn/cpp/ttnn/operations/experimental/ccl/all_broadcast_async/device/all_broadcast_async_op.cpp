@@ -182,7 +182,7 @@ std::vector<Tensor> all_broadcast_async_impl(
     const std::vector<IDevice*>& devices) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
+        "all_broadcast_async op is only supported for Fast Dispatch");
 
     uint32_t num_devices;
     if (cluster_axis.has_value()) {

@@ -77,7 +77,6 @@ def run_all_broadcast_impl(
     output_shard_shape=None,
     output_shard_grid=None,
     tensor_mem_layout=None,
-    use_cluster_axis_api=False,
     cluster_axis=None,
     use_barrier=False,
 ):
@@ -212,7 +211,6 @@ def run_all_broadcast_impl(
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_broadcast_topology,
-                cluster_axis=None,
                 subdevice_id=worker_sub_device_id,
                 barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
             )
