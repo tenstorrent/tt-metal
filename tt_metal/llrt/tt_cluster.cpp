@@ -676,6 +676,7 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
         // this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+        tt_driver_atomics::sfence();
         this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, chip_id, core_coord, addr);
     }
 
