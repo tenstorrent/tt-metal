@@ -1695,14 +1695,14 @@ class ModelArgs:
 
             if "text_config" in self.hf_config or "vision_config" in self.hf_config:
                 if "gemma-3-4b" in self.base_model_name:
-                    merged_text_config = merge_text_config(self.hf_config)
-                    self._set_params_from_dict(merged_text_config, is_hf=True)
-                    self._set_vision_params(self.hf_config)
+                    self._set_params_from_dict(self.hf_config, is_hf=True)
+                    if "vision_config" in self.hf_config:
+                        merged_vision_config = merge_vision_config(self.hf_config)
+                        self._set_vision_params(merged_vision_config)
                 else:
                     merged_text_config = merge_text_config(self.hf_config)
                     self._set_params_from_dict(merged_text_config, is_hf=True)
                     if "vision_config" in self.hf_config:
-                        print("Setting vision params from HF config")
                         merged_vision_config = merge_vision_config(self.hf_config)
                         self._set_vision_params(merged_vision_config)
             else:
