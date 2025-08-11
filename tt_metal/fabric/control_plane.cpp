@@ -292,7 +292,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
             // TODO: specialize by topology for better perf
             if (topology == Topology::Mesh || topology == Topology::Torus) {
-                const auto& mesh_host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
                 const auto rows_min = std::min_element(row_min_planes.begin(), row_min_planes.end());
                 const auto cols_min = std::min_element(col_min_planes.begin(), col_min_planes.end());
                 auto mesh_min = std::min(*rows_min, *cols_min);
@@ -1931,7 +1930,6 @@ void ControlPlane::generate_local_intermesh_link_table() {
     // Populate the local to remote mapping for all intermesh links
     // This cannot be done by UMD, since it has no knowledge of links marked
     // for intermesh routing (these links are hidden from UMD).
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
     intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
