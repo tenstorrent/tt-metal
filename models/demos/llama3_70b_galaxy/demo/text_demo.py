@@ -4,6 +4,7 @@
 from pathlib import Path
 from loguru import logger
 from datetime import datetime
+from collections import deque
 import hashlib
 import requests
 import json
@@ -812,6 +813,9 @@ def test_demo_text(
         top_1_accs = []
         read_events = []
         tt_out_toks = []
+        
+        # Deque to store decode iteration data when print_outputs is False
+        decode_iteration_data = deque()
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
@@ -934,12 +938,19 @@ def test_demo_text(
                 # The e2e decode inference accounts for device execution + host post-processing time
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                # Always print perf after every iteration
+                # Store or print perf after every iteration based on print_outputs flag
                 tokens_per_second_per_user = 1 / decode_iteration_time
 
-                logger.info(
-                    f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s"
-                )
+                if print_outputs:
+                    logger.info(f"Decode Iteration {iteration}: Time: {1000*decode_iteration_time:.4f}ms, tok/s/user: {tokens_per_second_per_user:.2f}, Throughput: {batch_size*tokens_per_second_per_user:.2f} tok/s")
+                else:
+                    decode_iteration_data.append({
+                        'iteration': iteration,
+                        'time_ms': 1000*decode_iteration_time,
+                        'tokens_per_second_per_user': tokens_per_second_per_user,
+                        'throughput': batch_size*tokens_per_second_per_user
+                    })
+                
                 if apc_test and (demo_targets["token_pos"] - len(input_tokens_prefill_pt)) == iteration:
                     # Check if the throughput is within the expected range
                     print(f"len of input tokens prefill: {len(input_tokens_prefill_pt)}")
@@ -1043,6 +1054,13 @@ def test_demo_text(
                     logger.warning("Expected outputs data is empty or not loaded, cannot compare.")
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
+
+        # Print all stored decode iteration data if print_outputs was False
+        if not print_outputs and decode_iteration_data:
+            logger.info("=== Decode Loop Performance Summary ===")
+            for per_iteration_data in decode_iteration_data:
+                logger.info(f"Decode Iteration {per_iteration_data['iteration']}: Time: {per_iteration_data['time_ms']:.4f}ms, tok/s/user: {per_iteration_data['tokens_per_second_per_user']:.2f}, Throughput: {per_iteration_data['throughput']:.2f} tok/s")
+            logger.info("=== End Decode Loop Performance Summary ===")
 
     profiler.end(f"inference_decode", iteration=batch_idx)
 
