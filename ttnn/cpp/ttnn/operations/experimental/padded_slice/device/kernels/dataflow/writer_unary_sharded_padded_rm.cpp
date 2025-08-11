@@ -15,9 +15,6 @@ void kernel_main() {
     const uint32_t pad_addr = get_read_ptr(cb_temp_pad);
     const uint32_t out_addr = get_read_ptr(cb_id_out);
 
-    if (pad_size_bytes == 0) {
-        return;  // No padding needed, exit early
-    }
 #ifdef DEBUG
     DPRINT << "num_units: " << num_units << ", num_elements_per_row: " << num_elements_per_row
            << ", unpadded_row_size_bytes: " << unpadded_row_size_bytes
@@ -38,6 +35,5 @@ void kernel_main() {
         noc_async_read_one_packet_with_state<true>(pad_noc_addr, write_addr);
         write_addr += padded_row_size_bytes;
     }
-    noc_async_full_barrier();
     noc_async_read_barrier();
 }

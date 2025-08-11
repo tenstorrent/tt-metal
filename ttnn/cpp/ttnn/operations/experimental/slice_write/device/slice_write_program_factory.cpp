@@ -541,9 +541,8 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     accumulated_total_tiles_per_dim[1] = tt::div_up(output_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
 
     uint32_t output_channel_tiles = accumulated_total_tiles_per_dim[0];
-    accumulated_input_total_tiles_per_dim[0] = actual_input_shape[-1] / TILE_WIDTH;
-    accumulated_input_total_tiles_per_dim[1] =
-        (actual_input_shape[-2] / TILE_HEIGHT) * accumulated_input_total_tiles_per_dim[0];
+    accumulated_input_total_tiles_per_dim[0] = num_input_tiles_per_dim[0];
+    accumulated_input_total_tiles_per_dim[1] = num_input_tiles_per_dim[1] * accumulated_input_total_tiles_per_dim[0];
     for (int32_t i = 2; i < num_dims; i++) {
         uint32_t num_unpadded_dim = actual_input_shape[-(i + 1)];
         uint32_t num_total_dim = output_shape[-(i + 1)];
