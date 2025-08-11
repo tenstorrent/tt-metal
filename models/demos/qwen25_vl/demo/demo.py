@@ -289,6 +289,11 @@ def test_demo(
         stop_at_eos = request.config.getoption("--stop_at_eos")
     json_config_file = request.config.getoption("--decoder_config_file")
 
+    # TEST hypothesis: https://tenstorrent.slack.com/archives/C07G47JMQHM/p1754930540705249?thread_ts=1754925289.711779&cid=C07G47JMQHM
+    assert (
+        False
+    ), "TEST hypothesis: https://tenstorrent.slack.com/archives/C07G47JMQHM/p1754930540705249?thread_ts=1754925289.711779&cid=C07G47JMQHM"
+
     if json_config_file:
         optimizations = parse_decoder_json(json_config_file)
     else:
