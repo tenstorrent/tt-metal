@@ -28,7 +28,8 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -40,9 +41,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 namespace tt {
-namespace tt_metal {
-class IDevice;
-}  // namespace tt_metal
+namespace tt_metal {}  // namespace tt_metal
 }  // namespace tt
 
 namespace tt::tt_metal {
@@ -53,8 +52,8 @@ using namespace tt;
 namespace unit_tests_common::matmul::test_matmul_single_core {
 
 bool matmul_single_core(
-    tt_metal::DispatchFixture* fixture,
-    tt_metal::IDevice* device,
+    tt_metal::MeshDispatchFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
     int M,
     int N,
     int K,
@@ -62,7 +61,12 @@ bool matmul_single_core(
     int out_subblock_w) {
     bool pass = true;
 
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};
     int in0_block_w = 2;
@@ -105,39 +109,38 @@ bool matmul_single_core(
     uint32_t dram_buffer_size_out =
         single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    tt_metal::InterleavedBufferConfig act_config{
-        .device = device,
-        .size = dram_buffer_size_act,
-        .page_size = dram_buffer_size_act,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    tt_metal::InterleavedBufferConfig weights_config{
-        .device = device,
-        .size = dram_buffer_size_weights,
-        .page_size = dram_buffer_size_weights,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    tt_metal::InterleavedBufferConfig dst_config{
-        .device = device,
-        .size = dram_buffer_size_out,
-        .page_size = dram_buffer_size_out,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig act_buffer_config = {
+        .page_size = dram_buffer_size_act, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig act_replicated_buffer_config = {.size = dram_buffer_size_act};
 
-    auto src0_dram_buffer = CreateBuffer(act_config);
-    auto src1_dram_buffer = CreateBuffer(weights_config);
-    auto dst_dram_buffer = CreateBuffer(dst_config);
+    distributed::DeviceLocalBufferConfig weights_buffer_config = {
+        .page_size = dram_buffer_size_weights, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig weights_replicated_buffer_config = {.size = dram_buffer_size_weights};
+
+    distributed::DeviceLocalBufferConfig out_buffer_config = {
+        .page_size = dram_buffer_size_out, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig out_replicated_buffer_config = {.size = dram_buffer_size_out};
+
+    auto src0_dram_buffer =
+        distributed::MeshBuffer::create(act_replicated_buffer_config, act_buffer_config, mesh_device.get());
+    auto src1_dram_buffer =
+        distributed::MeshBuffer::create(weights_replicated_buffer_config, weights_buffer_config, mesh_device.get());
+    auto dst_dram_buffer =
+        distributed::MeshBuffer::create(out_replicated_buffer_config, out_buffer_config, mesh_device.get());
 
     uint32_t src0_cb_index = 0;
     uint32_t cb0_tiles = M * in0_block_w * 2;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t src1_cb_index = 1;
     uint32_t cb1_tiles = N * in0_block_w * 2;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = tt::CBIndex::c_24;
@@ -150,7 +153,7 @@ bool matmul_single_core(
         tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, partials_and_out_data_format_spec)
             .set_page_size(interm0_cb_index, single_tile_size)
             .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program_, cores, cb_output_config);
 
     std::vector<uint32_t> mm_reader_rt_args{
         src0_dram_buffer->address(),
@@ -177,14 +180,14 @@ bool matmul_single_core(
         (std::uint32_t)out_subblock_w * single_tile_size};  // bytes offset to next sub-block
 
     auto mm_reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp",
         core,
         tt_metal::DataMovementConfig{
@@ -219,7 +222,7 @@ bool matmul_single_core(
         uint(out_subblock_num_tiles)};
 
     auto matmul_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
@@ -232,24 +235,24 @@ bool matmul_single_core(
         convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     auto activations_tile_transposed = tt_metal::transpose_tiles(activations, M, K, in0_block_w);
-    fixture->WriteBuffer(device, src0_dram_buffer, activations_tile_transposed);
+    fixture->WriteBuffer(mesh_device, src0_dram_buffer, activations_tile_transposed);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
     auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    fixture->WriteBuffer(device, src1_dram_buffer, weights);
+    fixture->WriteBuffer(mesh_device, src1_dram_buffer, weights);
 
-    tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, mm_reader_rt_args);
+    tt_metal::SetRuntimeArgs(program_, mm_reader_kernel, core, mm_reader_rt_args);
 
-    tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
+    tt_metal::SetRuntimeArgs(program_, unary_writer_kernel, core, writer_rt_args);
 
     log_debug(LogTest, "Launching kernels");
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
     log_debug(LogTest, "Kernels done");
 
     std::vector<uint32_t> result_vec;
-    fixture->ReadBuffer(device, dst_dram_buffer, result_vec);
+    fixture->ReadBuffer(mesh_device, dst_dram_buffer, result_vec);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
@@ -263,19 +266,20 @@ bool matmul_single_core(
 }
 }  // namespace unit_tests_common::matmul::test_matmul_single_core
 
-TEST_F(DispatchFixture, TensixMatmulSingleCoreSmall) {
+TEST_F(MeshDispatchFixture, TensixMatmulSingleCoreSmall) {
     uint32_t M = 4;
     uint32_t K = 4;
     uint32_t N = 4;
     int out_subblock_h = 4;
     int out_subblock_w = 4;
+
     for (unsigned int id = 0; id < devices_.size(); id++) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_single_core::matmul_single_core(
             this, devices_.at(id), M, N, K, out_subblock_h, out_subblock_w));
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulSingleCore) {
+TEST_F(MeshDispatchFixture, TensixMatmulSingleCore) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "Fast dispatch buffer memory issue, skipping for now");
         GTEST_SKIP();

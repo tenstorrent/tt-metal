@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/command_queue.hpp>
 #include "llrt.hpp"
@@ -134,13 +135,17 @@ inline bool move_tiles_to_dram(
 }
 
 inline bool move_tiles_to_dram(
-    tt_metal::IDevice* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, std::shared_ptr<Buffer> buffer) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    std::vector<uint32_t> tensor,
+    int tiles_r,
+    int tiles_c,
+    std::shared_ptr<distributed::MeshBuffer> buffer) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
     int tile_size_bytes = 32 * 32 * 2;
     int start_index = 0;
     int tile_id = 0;
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     std::vector<uint32_t> tile;
     std::vector<uint32_t> tiles;
     for (int i = 0; i < tiles_r; i++) {
@@ -153,7 +158,7 @@ inline bool move_tiles_to_dram(
         }
     }
 
-    EnqueueWriteBuffer(cq, buffer, tiles, false);
+    distributed::WriteShard(cq, buffer, tiles, distributed::MeshCoordinate(0, 0));
     return pass;
 }
 
