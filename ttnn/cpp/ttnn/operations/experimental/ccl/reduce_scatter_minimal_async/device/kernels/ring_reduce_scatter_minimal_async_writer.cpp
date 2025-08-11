@@ -273,11 +273,6 @@ void kernel_main() {
                                     pages_read_in_row = 0;
                                 }
 
-                                uint64_t remote_noc0_dest_noc_addr_tile_one =
-                                    get_noc_addr(tile_one_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                                uint64_t remote_noc0_dest_noc_addr_tile_two =
-                                    get_noc_addr(tile_two_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
                                 scatter_write_for_fabric_write<
                                     true,
                                     fabric_mux_num_buffers_per_channel>(
@@ -299,9 +294,6 @@ void kernel_main() {
                                     row_offset += stride_Wt;
                                     pages_read_in_row = 0;
                                 }
-
-                                uint64_t remote_noc0_dest_noc_addr =
-                                    get_noc_addr(tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                                 write_for_fabric_write<true,fabric_mux_num_buffers_per_channel>(
                                     intermediate_addrgen,

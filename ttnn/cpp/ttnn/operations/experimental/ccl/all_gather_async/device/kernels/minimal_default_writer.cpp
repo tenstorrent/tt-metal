@@ -238,7 +238,7 @@ void kernel_main() {
 
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            scatter_write_for_fabric_write<fabric_mux_num_buffers_per_channel>(
+                            scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
                                 output_addrgen,
                                 tile_one_id,
                                 tile_two_id,
@@ -255,7 +255,7 @@ void kernel_main() {
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            scatter_write_for_fabric_write<fabric_mux_num_buffers_per_channel>(
+                            scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
                                 output_addrgen,
                                 tile_one_id,
                                 tile_two_id,
@@ -278,16 +278,26 @@ void kernel_main() {
 
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            write_for_fabric_write<fabric_mux_num_buffers_per_channel>(
-                                output_addrgen, tile_id, pkt_hdr, *mux_connection_handle, l1_read_addr);
+                            write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_id,
+                                pkt_hdr,
+                                *mux_connection_handle,
+                                l1_read_addr,
+                                output_page_size);
                         }
                         uint64_t local_noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen);
                         noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            write_for_fabric_write<fabric_mux_num_buffers_per_channel>(
-                                output_addrgen, tile_id, pkt_hdr, *mux_connection_handle, l1_read_addr);
+                            write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_id,
+                                pkt_hdr,
+                                *mux_connection_handle,
+                                l1_read_addr,
+                                output_page_size);
                         }
                     }
                     tiles_read++;
@@ -404,7 +414,7 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        scatter_write_for_fabric_write<fabric_mux_num_buffers_per_channel>(
+                        scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
                             output_addrgen, tile_one_id, tile_two_id, pkt_hdr, *mux_connection_handle, l1_read_addr);
                         tiles_read += 2;
                         break;
@@ -418,8 +428,8 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        write_for_fabric_write<fabric_mux_num_buffers_per_channel>(
-                            output_addrgen, tile_id, pkt_hdr, *mux_connection_handle, l1_read_addr);
+                        write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                            output_addrgen, tile_id, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
                         tiles_read++;
                         break;
                     }

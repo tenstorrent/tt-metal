@@ -14,7 +14,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
-#include "minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -274,8 +274,13 @@ void kernel_main() {
                     }
 
                     if (num_pages_to_write == 1) {
-                        write_and_advance_local_read_address_for_fabric<fabric_mux_num_buffers_per_channel>(
-                            intermediate_addrgen, first_tile_id, pkt_hdr, *mux_connection_handle, l1_read_addr);
+                        write_for_fabric_write<true, fabric_mux_num_buffers_per_channel>(
+                            intermediate_addrgen,
+                            first_tile_id,
+                            pkt_hdr,
+                            *mux_connection_handle,
+                            l1_read_addr,
+                            intermediate_page_size);
                     } else if (num_pages_to_write == 2) {
                         uint32_t second_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
 
@@ -285,7 +290,7 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        scatter_write_and_advance_local_read_address_for_fabric<fabric_mux_num_buffers_per_channel>(
+                        scatter_write_for_fabric_write<true, fabric_mux_num_buffers_per_channel>(
                             intermediate_addrgen,
                             first_tile_id,
                             second_tile_id,
