@@ -141,7 +141,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
         optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_config.name_or_path)
         if max_seq_len > max_seq_len_native:
-            logger.info(
+            logger.warning(
                 f"max_seq_len {max_seq_len} is not supported for {hf_config.name_or_path}, using {max_seq_len_native} instead"
             )
             max_seq_len = max_seq_len_native
