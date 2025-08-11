@@ -159,6 +159,10 @@ struct FabricEventDataPoints {
 // vector of DeviceEvents
 // process this vector at the end of the run
 
+// one source of data points for tracy, csv and post-proc
+//
+
+// make this to be more generic ie. MarkerDataPoint
 struct OperationDataPoint {
     chip_id_t device_id;
     int core_x;
