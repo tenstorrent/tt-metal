@@ -108,6 +108,9 @@ void kernel_main() {
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_arg_count);
 
+    InterleavedAddrGen<output_is_dram> output_addrgen{
+        .bank_base_address = output_base_addr, .page_size = data_size_bytes};
+
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){
         cb_reserve_back(packet_header_cb_id,1);
@@ -126,9 +129,6 @@ void kernel_main() {
         mesh_cols,
         replicate_axis,
         num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
-
-    InterleavedAddrGen<output_is_dram> output_addrgen{
-        .bank_base_address = output_base_addr, .page_size = data_size_bytes};
 
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
