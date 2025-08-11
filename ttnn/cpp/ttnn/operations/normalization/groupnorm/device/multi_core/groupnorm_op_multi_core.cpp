@@ -8,6 +8,7 @@
 #include "ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -633,7 +634,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)is_dram(gamma),
         (std::uint32_t)is_dram(beta),
         (std::uint32_t)is_dram(input_mask),
-        (std::uint32_t)is_dram(negative_mask),
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
         (std::uint32_t)per_core_N,
         (std::uint32_t)per_core_N * datum_size_bytes,
@@ -641,6 +641,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)num_groups_per_core,
         (std::uint32_t)num_batches_per_core,
         (std::uint32_t)block_wt};
+
+    // writer kernel
+    if (negative_mask.has_value()) {
+        TensorAccessorArgs(*negative_mask.value().buffer()).append_to(writer_mcast_sender_compile_time_args);
+    } else {
+        writer_mcast_sender_compile_time_args.push_back(0);  // ignored
+    }
 
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[3] * gamma.value().element_size();

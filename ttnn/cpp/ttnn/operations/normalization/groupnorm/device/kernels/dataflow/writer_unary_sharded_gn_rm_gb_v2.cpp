@@ -26,17 +26,16 @@ void kernel_main() {
     constexpr bool input_mask_is_dram = get_compile_time_arg_val(5) == 1;
 
     // Used only if negative mask is passed in kernel, i.e. if define FUSE_NEGATIVE_MASK is defined
-    constexpr bool input_negative_mask_is_dram = get_compile_time_arg_val(6) == 1;
 
-    constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(7);
+    constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(6);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(10);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(7);
+    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(9);
 
-    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(11);
-    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(12);
-    constexpr uint32_t block_w = get_compile_time_arg_val(13);
+    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(10);
+    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(11);
+    constexpr uint32_t block_w = get_compile_time_arg_val(12);
 
     constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(14) == 1;
     constexpr uint32_t size = get_compile_time_arg_val(15);
@@ -73,10 +72,10 @@ void kernel_main() {
     const uint32_t input_negative_mask_single_tile_size_bytes = get_tile_size(cb_input_negative_mask);
     const DataFormat input_negative_mask_data_format = get_dataformat(cb_input_negative_mask);
 
-    const InterleavedAddrGenFast<input_negative_mask_is_dram> negative_mask = {
-        .bank_base_address = input_negative_mask_addr,
-        .page_size = input_negative_mask_single_tile_size_bytes,
-        .data_format = input_negative_mask_data_format};
+    constexpr auto negative_mask_args = TensorAccessorArgs<13>();
+    const auto negative_mask_tensor_accessor =
+        TensorAccessor(negative_mask_args, input_negative_mask_addr, input_negative_mask_single_tile_size_bytes);
+
 #endif
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
@@ -99,7 +98,8 @@ void kernel_main() {
             cb_reserve_back(cb_input_negative_mask, block_w);
             uint32_t l1_write_addr_input_negative_mask = get_write_ptr(cb_input_negative_mask);
             for (uint32_t j = 0; j < block_w; ++j) {
-                noc_async_read_tile(input_negative_mask_tile_id, negative_mask, l1_write_addr_input_negative_mask);
+                noc_async_read_tile(
+                    input_negative_mask_tile_id, negative_mask_tensor_accessor, l1_write_addr_input_negative_mask);
                 l1_write_addr_input_negative_mask += input_negative_mask_single_tile_size_bytes;
                 input_negative_mask_tile_id += 1;
             }
