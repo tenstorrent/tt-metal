@@ -33,13 +33,14 @@ void bind_normalization_layernorm_operation(py::module& module) {
         module,
         ttnn::layer_norm,
         R"doc(
-            Compute `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ over :attr:`input_tensor`.
+            Compute layer norm over :attr:`input_tensor`.
+            See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
             .. math::
+
                 \text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
-            where :math:`\mu` and :math:`\sigma^2` are the mean and variance of the input tensor, respectively.
-            :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively.
-            :math:`\epsilon` is a small constant.
+
+                Where :math:`\mu` and :math:`\sigma^2` are the mean and variance of the input tensor, respectively; :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively; :math:`\epsilon` is a small constant.
 
 
         Args:
@@ -54,7 +55,8 @@ void bind_normalization_layernorm_operation(py::module& module) {
             residual_input_tensor (ttnn.Tensor, optional): Defaults to `None`.
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig)
-        Returns:
+
+            Returns:
                 ttnn.Tensor: the output tensor.
 
         Note:
@@ -112,8 +114,10 @@ void bind_normalization_layernorm_operation(py::module& module) {
             - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
 
         Example:
-            input_tensor = ttnn.rand([32, 64], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-            output_tensor = ttnn.layer_norm(input_tensor)
+            .. code-block:: python
+
+                input_tensor = ttnn.rand([32, 64], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+                output_tensor = ttnn.layer_norm(input_tensor)
 
         )doc",
 

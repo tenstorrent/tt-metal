@@ -18,17 +18,16 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
         module,
         ttnn::group_norm,
         R"doc(
-            Computes group_norm over :attr:`input_tensor`, as described in `Group Normalization <https://arxiv.org/abs/1803.08494>`_.
+            Computes group_norm over :attr:`input_tensor`.
+            See `Group Normalization <https://arxiv.org/abs/1803.08494>`_ for more details.
 
             .. math::
                 \text{group_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
 
-            where :math:`\mu` and :math:`\sigma^2` are the mean and variance of the input tensor, respectively.
-            :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively.
-            :math:`\epsilon` is a small constant.
+            Where :math:`\mu` and :math:`\sigma^2` are the mean and variance of the input tensor, respectively; :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively; :math:`\epsilon` is a small constant.
 
-                    Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
 
             Keyword args:
                 num_groups (int): Number of groups to split the channels into. Must evenly divide C.
@@ -48,39 +47,41 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                 ttnn.Tensor: the output tensor.
 
             Note:
-              The supported input data types and layouts:
-              .. list-table:: input_tensor
-                :header-rows: 1
 
-                * - dtype
-                    - layout
-                * - BFLOAT16
-                    - TILE, ROW_MAJOR
+                The supported input data types and layouts:
+
+                .. list-table:: input_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT16
+                        - TILE, ROW_MAJOR
 
 
-              .. list-table:: weight (gamma) and bias (beta)
-                :header-rows: 1
+                .. list-table:: weight (gamma) and bias (beta)
+                    :header-rows: 1
 
-                * - dtype
-                    - layout
-                * - BFLOAT16
-                    - ROW_MAJOR
+                    * - dtype
+                        - layout
+                    * - BFLOAT16
+                        - ROW_MAJOR
 
-              .. list-table:: input_mask
-                :header-rows: 1
+                .. list-table:: input_mask
+                    :header-rows: 1
 
-                * - dtype
-                    - layout
-                * - BFLOAT16, BFLOAT8_B
-                    - TILE
+                    * - dtype
+                        - layout
+                    * - BFLOAT16, BFLOAT8_B
+                        - TILE
 
-              .. list-table:: output_tensor
-                :header-rows: 1
+                .. list-table:: output_tensor
+                    :header-rows: 1
 
-                * - dtype
-                    - layout
-                * - BFLOAT16
-                    - TILE, ROW_MAJOR
+                    * - dtype
+                        - layout
+                    * - BFLOAT16
+                        - TILE, ROW_MAJOR
 
             Limitations:
               - Inputs are 4D tensors already allocated on device.
@@ -93,40 +94,42 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
               - Width-sharding is not supported (use height or block sharding)
 
               Example:
-                tile_size = 32
-                N, C, H, W = 1, 480, 1, 64
-                grid_size = ttnn.CoreGrid(y=1, x=1)
-                num_out_blocks = 1
 
-                num_groups = 8 # This must be a multiple of grid_size.y (1 in this example)
+                .. code-block:: python
 
-                input_tensor_row_major = ttnn.rand([N, 1, H*W, C], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-                input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+                    tile_size = 32
+                    N, C, H, W = 1, 480, 1, 64
+                    grid_size = ttnn.CoreGrid(y=1, x=1)
+                    num_out_blocks = 1
 
-                # input mask
-                width_per_group = C // num_groups # C must be a multiple of num_groups
-                max_tiles_group_can_span = 1 + math.ceil((width_per_group-1) / tile_size)
-                input_mask_tensor = ttnn.zeros([1, num_groups, tile_size, max_tiles_group_can_span * tile_size], dtype=ttnn.DataType.BFLOAT8_B, layout=ttnn.TILE_LAYOUT, device=device)
+                    num_groups = 8 # This must be a multiple of grid_size.y (1 in this example)
 
-                # gamma/beta
-                values_per_chunk = C // grid_size.y # 480 / 1 = 480. Note that 480 is a multiple of 32, so no padding up to the next tile is needed.
-                values_per_chunk_per_tile = values_per_chunk // tile_size # 480 / 32 = 15
+                    input_tensor_row_major = ttnn.rand([N, 1, H*W, C], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
 
-                gamma_beta = ttnn.rand([1, 1, values_per_chunk_per_tile, 32], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                    # input mask
+                    width_per_group = C // num_groups # C must be a multiple of num_groups
+                    max_tiles_group_can_span = 1 + math.ceil((width_per_group-1) / tile_size)
+                    input_mask_tensor = ttnn.zeros([1, num_groups, tile_size, max_tiles_group_can_span * tile_size], dtype=ttnn.DataType.BFLOAT8_B, layout=ttnn.TILE_LAYOUT, device=device)
 
-                # groupnorm
-                output_tensor = ttnn.group_norm(
-                    input_tensor_tilized,
-                    num_groups=num_groups,
-                    input_mask=input_mask_tensor,
-                    weight=gamma_beta,
-                    bias=gamma_beta,
-                    output_layout=ttnn.TILE_LAYOUT,
-                    core_grid=grid_size,
-                    inplace=False,
-                    num_out_blocks=num_out_blocks,
-                )
+                    # gamma/beta
+                    values_per_chunk = C // grid_size.y # 480 / 1 = 480. Note that 480 is a multiple of 32, so no padding up to the next tile is needed.
+                    values_per_chunk_per_tile = values_per_chunk // tile_size # 480 / 32 = 15
 
+                    gamma_beta = ttnn.rand([1, 1, values_per_chunk_per_tile, 32], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+                    # groupnorm
+                    output_tensor = ttnn.group_norm(
+                        input_tensor_tilized,
+                        num_groups=num_groups,
+                        input_mask=input_mask_tensor,
+                        weight=gamma_beta,
+                        bias=gamma_beta,
+                        output_layout=ttnn.TILE_LAYOUT,
+                        core_grid=grid_size,
+                        inplace=False,
+                        num_out_blocks=num_out_blocks,
+                    )
 
         )doc",
         ttnn::pybind_arguments_t{

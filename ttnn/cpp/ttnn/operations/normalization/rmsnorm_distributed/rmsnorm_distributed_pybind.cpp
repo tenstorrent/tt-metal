@@ -46,7 +46,8 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
               - All tensors must be on-device.
               - Unsharded inputs must be interleaved
               - Sharded inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32). If :attr:`residual_input_tensor` is provided, it must match input's padded shape and sharding.
-        )doc",
+
+              )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),

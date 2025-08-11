@@ -19,7 +19,8 @@ void bind_normalization_rms_norm(py::module& module) {
         module,
         ttnn::rms_norm,
         R"doc(
-            Computes `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ over :attr:`input_tensor`.
+            Computes RMS norm over :attr:`input_tensor`.
+            See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -82,13 +83,16 @@ void bind_normalization_rms_norm(py::module& module) {
               - If ROW_MAJOR: last padded dim must be TILE_WIDTH.
 
         Example:
-            h, w = 32, 64
-            batch_size = 1
+            .. code-block:: python
 
-            input_tensor = ttnn.rand([batch_size, h, w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-            weight = ttnn.rand([w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-            output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
-        )doc",
+              h, w = 32, 64
+              batch_size = 1
+
+              input_tensor = ttnn.rand([batch_size, h, w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+              weight = ttnn.rand([w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+              output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
+
+            )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
