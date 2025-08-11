@@ -144,9 +144,10 @@ def test_topk(device, experts_per_token, num_experts, seq_len):
 @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
 @pytest.mark.parametrize("hidden_dim", [2880])
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
-def test_topk_router(device, experts_per_token, num_experts, seq_len, hidden_dim, use_real_weights, reset_seeds):
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_topk_router(mesh_device, experts_per_token, num_experts, seq_len, hidden_dim, use_real_weights, reset_seeds):
     hidden_states = torch.randn(seq_len, hidden_dim)
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     config = GptOssConfig(
         num_local_experts=num_experts,
         hidden_size=hidden_dim,
@@ -159,23 +160,28 @@ def test_topk_router(device, experts_per_token, num_experts, seq_len, hidden_dim
         reference_model.load_state_dict(state_dict, strict=True)
 
     state_dict = reference_model.state_dict()
-    tt_model = TopKRouter(config, state_dict, device)
+    tt_model = TopKRouter(mesh_device, config, state_dict)
     router_scores, router_indices, router_logits = reference_model(hidden_states)
 
     ttnn_router_scores, ttnn_router_indices, ttnn_router_logits = tt_model(tt_hidden_states)
 
-    ttnn_router_indices = ttnn.to_torch(ttnn_router_indices)
-    ttnn_router_scores = ttnn.to_torch(ttnn_router_scores)
-    ttnn_router_logits = ttnn.to_torch(ttnn_router_logits)
+    ttnn_router_scores_tensors = ttnn.get_device_tensors(ttnn_router_scores)
+    ttnn_router_indices_tensors = ttnn.get_device_tensors(ttnn_router_indices)
+    ttnn_router_logits_tensors = ttnn.get_device_tensors(ttnn_router_logits)
 
-    passing, output = comp_pcc(router_logits, ttnn_router_logits, pcc=0.99)
-    mse = torch.nn.functional.mse_loss(router_logits, ttnn_router_logits)
-    print(f"router_logits: {output}, mse: {mse}")
-    assert passing, "router_logits mismatch"
+    for i in range(len(ttnn_router_scores_tensors)):
+        ttnn_router_scores = ttnn.to_torch(ttnn_router_scores_tensors[i])
+        ttnn_router_indices = ttnn.to_torch(ttnn_router_indices_tensors[i])
+        ttnn_router_logits = ttnn.to_torch(ttnn_router_logits_tensors[i])
 
-    # Run with reference model forced to tt model indices
-    router_scores, _, _ = reference_model.forward_given_indices(hidden_states, ttnn_router_indices.long())
-    passing, output = comp_pcc(router_scores, ttnn_router_scores, pcc=0.987)
-    mse = torch.nn.functional.mse_loss(router_scores, ttnn_router_scores)
-    print(f"router_scores: {output}, mse: {mse}")
+        passing, output = comp_pcc(router_logits, ttnn_router_logits, pcc=0.99)
+        mse = torch.nn.functional.mse_loss(router_logits, ttnn_router_logits)
+        print(f"router_logits: {output}, mse: {mse}")
+        assert passing, "router_logits mismatch"
+
+        # Run with reference model forced to tt model indices
+        router_scores, _, _ = reference_model.forward_given_indices(hidden_states, ttnn_router_indices.long())
+        passing, output = comp_pcc(router_scores, ttnn_router_scores, pcc=0.987)
+        mse = torch.nn.functional.mse_loss(router_scores, ttnn_router_scores)
+        print(f"router_scores: {output}, mse: {mse}")
     assert passing, "router_scores mismatch"

@@ -1,51 +1,63 @@
+import torch
+
 import ttnn
 
 
 class Experts:
-    def __init__(self, config, state_dict, mesh_device):
-        self.intermediate_size = config.intermediate_size
-        self.num_experts = config.num_local_experts
-        self.hidden_size = config.hidden_size
+    def __init__(self, mesh_device, hf_config, state_dict, ccl_manager):
+        self.intermediate_size = hf_config.intermediate_size
+        self.num_experts = hf_config.num_local_experts
+        self.hidden_size = hf_config.hidden_size
         self.expert_dim = self.intermediate_size
+        self.ccl_manager = ccl_manager
+        self.mesh_device = mesh_device
 
         gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(self.num_experts, 1, self.hidden_size, self.expert_dim)
         up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(self.num_experts, 1, self.hidden_size, self.expert_dim)
         gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(self.num_experts, 1, 1, self.expert_dim)
         up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(self.num_experts, 1, 1, self.expert_dim)
+        col_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+        row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
 
-        self.gate_proj = ttnn.from_torch(gate_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        self.up_proj = ttnn.from_torch(up_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        self.gate_proj = ttnn.from_torch(
+            gate_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+        )
+        self.up_proj = ttnn.from_torch(
+            up_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+        )
         self.gate_proj_bias = ttnn.from_torch(
-            gate_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            gate_proj_bias,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=col_mesh_mapper,
         )
         self.up_proj_bias = ttnn.from_torch(
-            up_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            up_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
         )
 
         down_proj = state_dict["down_proj"].reshape(self.num_experts, 1, self.expert_dim, self.hidden_size)
         down_proj_bias = state_dict["down_proj_bias"].reshape(self.num_experts, 1, 1, self.hidden_size)
-        self.down_proj = ttnn.from_torch(down_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        self.down_proj = ttnn.from_torch(
+            down_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=row_mesh_mapper
+        )
+        # Row-parallel bias must not be replicated. Extend it with zeros for TP devices.
+        if mesh_device.shape[1] > 1:
+            down_proj_bias = torch.cat(
+                [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (mesh_device.shape[1] - 1), dim=-1
+            )
         self.down_proj_bias = ttnn.from_torch(
-            down_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            down_proj_bias,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=col_mesh_mapper,
         )
 
         self.alpha = 1.702
         self.limit = 7.0
 
     def __call__(self, hidden_states, routing_weights):
-        """
-        When training it is more efficient to just loop over the experts and compute the output for each expert
-        as otherwise the memory would explode.
-
-        For inference we can sacrifice some memory and compute the output for all experts at once. By repeating the inputs.
-
-        Args:
-            hidden_states (torch.Tensor): (batch_size, seq_len, hidden_size)
-            selected_experts (torch.Tensor): (batch_size * token_num, top_k)
-            routing_weights (torch.Tensor): (batch_size * token_num, num_experts)
-        Returns:
-            torch.Tensor
-        """
         batch_size = hidden_states.shape[0]
         assert batch_size == 1, "batch_size must be 1"
         seq_len = hidden_states.shape[1]
@@ -66,4 +78,31 @@ class Experts:
 
         next_states = next_states * routing_weights
         next_states = ttnn.sum(next_states, dim=0)
+
+        if self.mesh_device.shape[1] > 1:
+            # AllReduce
+            next_states = ttnn.unsqueeze(next_states, 0)
+            next_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
+                next_states,
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_manager.topology,
+                cluster_axis=1,
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
+            )
+            next_states = ttnn.experimental.all_gather_async(
+                next_states_scattered,
+                dim=3,
+                cluster_axis=1,
+                mesh_device=self.ccl_manager.mesh_device,
+                topology=self.ccl_manager.topology,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
+            )
+            next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
+
         return next_states

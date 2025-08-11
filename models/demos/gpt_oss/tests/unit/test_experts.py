@@ -6,6 +6,7 @@ import ttnn
 from models.utility_functions import comp_pcc
 
 from ...reference.configuration_gpt_oss import GptOssConfig
+from ...tt.ccl import CCLManager
 from ...tt.experts import Experts
 
 
@@ -66,8 +67,14 @@ class ReferenceExperts(nn.Module):
 )
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 def test_experts(
-    device, num_experts, experts_per_token, intermediate_size, hidden_size, seq_len, batch_size, reset_seeds
+    mesh_device, num_experts, experts_per_token, intermediate_size, hidden_size, seq_len, batch_size, reset_seeds
 ):
     # Create configuration
     config = GptOssConfig(
@@ -84,44 +91,48 @@ def test_experts(
     routing_weights = torch.nn.functional.softmax(routing_weights, dim=-1)
 
     # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_routing_weights = ttnn.from_torch(routing_weights, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
 
     # Create models
     reference_model = ReferenceExperts(config)
     state_dict = reference_model.state_dict()
-    tt_model = Experts(config, state_dict, device)
+    ccl_manager = CCLManager(mesh_device)
+    tt_model = Experts(mesh_device, config, state_dict, ccl_manager)
 
     # Run forward passes
     reference_output = reference_model(hidden_states, routing_weights)
     tt_output = tt_model(tt_hidden_states, tt_routing_weights)
 
-    # Convert TTNN output to torch
-    tt_output = ttnn.to_torch(tt_output)
+    tt_output_tensors = ttnn.get_device_tensors(tt_output)
+    for i in range(len(tt_output_tensors)):
+        tt_output = ttnn.to_torch(tt_output_tensors[i])
 
-    # Compare outputs
-    passing, output = comp_pcc(reference_output, tt_output, pcc=0.99)
-    mse = torch.nn.functional.mse_loss(reference_output, tt_output)
+        # Compare outputs
+        passing, output = comp_pcc(reference_output, tt_output, pcc=0.99)
+        mse = torch.nn.functional.mse_loss(reference_output, tt_output)
 
-    # Calculate relative error metrics
-    ref_variance = torch.var(reference_output)
-    ref_mean_abs = torch.mean(torch.abs(reference_output))
-    ref_std = torch.std(reference_output)
+        # Calculate relative error metrics
+        ref_variance = torch.var(reference_output)
+        ref_mean_abs = torch.mean(torch.abs(reference_output))
+        ref_std = torch.std(reference_output)
 
-    relative_mse_to_variance = mse / ref_variance if ref_variance > 0 else float("inf")
-    relative_mse_to_scale = mse / (ref_mean_abs**2) if ref_mean_abs > 0 else float("inf")
-    snr_db = 10 * torch.log10(ref_variance / mse) if mse > 0 else float("inf")
+        relative_mse_to_variance = mse / ref_variance if ref_variance > 0 else float("inf")
+        relative_mse_to_scale = mse / (ref_mean_abs**2) if ref_mean_abs > 0 else float("inf")
+        snr_db = 10 * torch.log10(ref_variance / mse) if mse > 0 else float("inf")
 
-    print(f"experts_output: {output}")
-    print(f"MSE: {mse:.6e}")
-    print(f"Reference variance: {ref_variance:.6e}, std: {ref_std:.6e}, mean_abs: {ref_mean_abs:.6e}")
-    print(f"Relative MSE to variance: {relative_mse_to_variance:.6e} ({relative_mse_to_variance*100:.4f}%)")
-    print(f"Relative MSE to scale²: {relative_mse_to_scale:.6e} ({relative_mse_to_scale*100:.4f}%)")
-    print(f"Signal-to-Noise Ratio: {snr_db:.2f} dB")
-    print(f"Reference output range: [{torch.min(reference_output):.6e}, {torch.max(reference_output):.6e}]")
-    print(f"TT output range: [{torch.min(tt_output):.6e}, {torch.max(tt_output):.6e}]")
+        print(f"experts_output: {output}")
+        print(f"MSE: {mse:.6e}")
+        print(f"Reference variance: {ref_variance:.6e}, std: {ref_std:.6e}, mean_abs: {ref_mean_abs:.6e}")
+        print(f"Relative MSE to variance: {relative_mse_to_variance:.6e} ({relative_mse_to_variance*100:.4f}%)")
+        print(f"Relative MSE to scale²: {relative_mse_to_scale:.6e} ({relative_mse_to_scale*100:.4f}%)")
+        print(f"Signal-to-Noise Ratio: {snr_db:.2f} dB")
+        print(f"Reference output range: [{torch.min(reference_output):.6e}, {torch.max(reference_output):.6e}]")
+        print(f"TT output range: [{torch.min(tt_output):.6e}, {torch.max(tt_output):.6e}]")
 
-    assert passing, "experts output mismatch"
+        assert passing, "experts output mismatch"
 
 
 # @pytest.mark.parametrize(

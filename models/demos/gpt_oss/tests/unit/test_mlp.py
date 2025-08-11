@@ -10,6 +10,7 @@ from models.utility_functions import comp_pcc
 
 from ...reference.configuration_gpt_oss import GptOssConfig
 from ...reference.hf_utils import get_state_dict
+from ...tt.ccl import CCLManager
 from ...tt.mlp import MLP
 
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
@@ -93,8 +94,14 @@ class ReferenceExperts(nn.Module):
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_mlp(
-    device,
+    mesh_device,
     num_experts,
     experts_per_token,
     intermediate_size,
@@ -116,7 +123,7 @@ def test_mlp(
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
     # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     # Create models
     reference_model = ReferenceMLP(config)
@@ -127,50 +134,44 @@ def test_mlp(
 
     state_dict = reference_model.state_dict()
 
-    # Create combined state dict for MLP (router + experts)
-    mlp_state_dict = {
-        "router.weight": state_dict["router.weight"],
-        "router.bias": state_dict["router.bias"],
-        "experts.gate_up_proj": state_dict["experts.gate_up_proj"],
-        "experts.gate_up_proj_bias": state_dict["experts.gate_up_proj_bias"],
-        "experts.down_proj": state_dict["experts.down_proj"],
-        "experts.down_proj_bias": state_dict["experts.down_proj_bias"],
-    }
-
-    tt_model = MLP(config, mlp_state_dict, device)
+    ccl_manager = CCLManager(mesh_device)
+    tt_model = MLP(mesh_device, config, state_dict, ccl_manager)
 
     # Run tt forward pass first to get the routing scores to use in reference execution
     tt_output, tt_router_scores = tt_model(tt_hidden_states)
-    # Convert TTNN outputs to torch
-    tt_output = ttnn.to_torch(tt_output)
-    tt_router_scores = ttnn.to_torch(tt_router_scores)
+    tt_output_tensors = ttnn.get_device_tensors(tt_output)
+    tt_router_scores_tensors = ttnn.get_device_tensors(tt_router_scores)
 
-    # Run reference
-    reference_output = reference_model.experts(hidden_states, routing_weights=tt_router_scores)
+    for i in range(len(tt_output_tensors)):
+        tt_output = ttnn.to_torch(tt_output_tensors[i])
+        tt_router_scores = ttnn.to_torch(tt_router_scores_tensors[i])
 
-    # Compare MLP outputs
-    passing, output = comp_pcc(reference_output, tt_output, pcc=0.99)
-    mse = torch.nn.functional.mse_loss(reference_output, tt_output)
+        # Run reference
+        reference_output = reference_model.experts(hidden_states, routing_weights=tt_router_scores)
 
-    # Calculate relative error metrics for MLP output
-    ref_variance = torch.var(reference_output)
-    ref_mean_abs = torch.mean(torch.abs(reference_output))
-    ref_std = torch.std(reference_output)
+        # Compare MLP outputs
+        passing, output = comp_pcc(reference_output, tt_output, pcc=0.99)
+        mse = torch.nn.functional.mse_loss(reference_output, tt_output)
 
-    relative_mse_to_variance = mse / ref_variance if ref_variance > 0 else float("inf")
-    relative_mse_to_scale = mse / (ref_mean_abs**2) if ref_mean_abs > 0 else float("inf")
-    snr_db = 10 * torch.log10(ref_variance / mse) if mse > 0 else float("inf")
+        # Calculate relative error metrics for MLP output
+        ref_variance = torch.var(reference_output)
+        ref_mean_abs = torch.mean(torch.abs(reference_output))
+        ref_std = torch.std(reference_output)
 
-    print(f"MLP output: {output}")
-    print(f"MSE: {mse:.6e}")
-    print(f"Reference variance: {ref_variance:.6e}, std: {ref_std:.6e}, mean_abs: {ref_mean_abs:.6e}")
-    print(f"Relative MSE to variance: {relative_mse_to_variance:.6e} ({relative_mse_to_variance*100:.4f}%)")
-    print(f"Relative MSE to scale²: {relative_mse_to_scale:.6e} ({relative_mse_to_scale*100:.4f}%)")
-    print(f"Signal-to-Noise Ratio: {snr_db:.2f} dB")
-    print(f"Reference output range: [{torch.min(reference_output):.6e}, {torch.max(reference_output):.6e}]")
-    print(f"TT output range: [{torch.min(tt_output):.6e}, {torch.max(tt_output):.6e}]")
+        relative_mse_to_variance = mse / ref_variance if ref_variance > 0 else float("inf")
+        relative_mse_to_scale = mse / (ref_mean_abs**2) if ref_mean_abs > 0 else float("inf")
+        snr_db = 10 * torch.log10(ref_variance / mse) if mse > 0 else float("inf")
 
-    assert passing, "MLP output mismatch"
+        print(f"MLP output: {output}")
+        print(f"MSE: {mse:.6e}")
+        print(f"Reference variance: {ref_variance:.6e}, std: {ref_std:.6e}, mean_abs: {ref_mean_abs:.6e}")
+        print(f"Relative MSE to variance: {relative_mse_to_variance:.6e} ({relative_mse_to_variance*100:.4f}%)")
+        print(f"Relative MSE to scale²: {relative_mse_to_scale:.6e} ({relative_mse_to_scale*100:.4f}%)")
+        print(f"Signal-to-Noise Ratio: {snr_db:.2f} dB")
+        print(f"Reference output range: [{torch.min(reference_output):.6e}, {torch.max(reference_output):.6e}]")
+        print(f"TT output range: [{torch.min(tt_output):.6e}, {torch.max(tt_output):.6e}]")
+
+        assert passing, "MLP output mismatch"
 
     # # Compare router scores
     # passing_router, output_router = comp_pcc(reference_router_scores, tt_router_scores, pcc=.99)
