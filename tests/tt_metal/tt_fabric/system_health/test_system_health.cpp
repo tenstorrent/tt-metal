@@ -17,6 +17,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>
+#include <yaml-cpp/yaml.h>
 
 namespace tt::tt_fabric {
 namespace system_health_tests {
@@ -182,6 +183,76 @@ std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t ch
     return str.str();
 }
 
+std::string build_local_connectivity_desc_yaml(
+    const std::unordered_map<std::string, std::unordered_map<uint64_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>>& local_eth_connectivity,
+    const std::string& filename) {
+
+    TT_FATAL(local_eth_connectivity.size() == 1, "Local ethernet connectivity should only have one host");
+
+    YAML::Node root;
+    root["host_name"] = local_eth_connectivity.begin()->first;
+
+    YAML::Node asic_ids(YAML::NodeType::Sequence);
+    YAML::Node connections;
+
+    for (const auto& [src_asic_id, asic_data] : local_eth_connectivity.begin()->second) {
+        asic_ids.push_back(src_asic_id);
+        YAML::Node asic_node;
+        asic_node["asic_id"] = src_asic_id;
+
+        for (const auto& [src_channel, connection_tuple] : asic_data) {
+            uint64_t dst_asic_id = std::get<0>(connection_tuple);
+            ethernet_channel_t dst_channel = std::get<1>(connection_tuple);
+            YAML::Node connection;
+            connection["asic_id"] = dst_asic_id;
+            connection["chan"] = dst_channel;
+            asic_node[std::to_string(src_channel)] = connection;
+        }
+        connections.push_back(asic_node);
+    }
+    root["asic_ids"] = asic_ids;
+    root["eth_connections"] = connections;
+    
+    YAML::Emitter emitter;
+    emitter << root;
+    std::cout << emitter.c_str() << std::endl;
+    return emitter.c_str();
+}
+
+TEST(Cluster, GetLocalEthernetConnectivity) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& eth_connections = cluster.get_ethernet_connections();
+    const auto& chip_unique_ids = cluster.get_unique_chip_ids();
+
+    std::unordered_map<std::string, std::unordered_map<uint64_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>> local_eth_connectivity;
+    std::unordered_map<std::string, std::unordered_map<uint64_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>> remote_eth_connectivity;
+
+    char hostname[HOST_NAME_MAX + 1];
+    gethostname(hostname, sizeof(hostname));
+    std::string hostname_str = std::string(hostname);
+
+    local_eth_connectivity[hostname_str] = {};
+    // Get Host Local Ethernet Connectivity
+    for (auto& [src, conn] : eth_connections) {
+        auto src_unique_id = chip_unique_ids.at(src);
+        local_eth_connectivity[hostname_str][src_unique_id] = {};
+        for (auto& [chan, dst] : conn) {
+            local_eth_connectivity[hostname_str][src_unique_id][chan] = {chip_unique_ids.at(std::get<0>(dst)), std::get<1>(dst)};
+        }
+    }
+
+    // Get Cross-Host Ethernet Connectivity
+    remote_eth_connectivity[hostname_str] = {};
+    
+    for (auto chip : cluster.user_exposed_chip_ids()) {
+        auto src_unique_id = chip_unique_ids.at(src);
+        for (auto link : cluster.get_intermesh_eth_links(chip)) {
+
+        }
+    }
+    build_local_connectivity_desc_yaml(local_eth_connectivity, "local_ethernet_connectivity.yaml");
+}
+
 TEST(Cluster, ReportIntermeshLinks) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -251,9 +322,7 @@ TEST(Cluster, ReportSystemHealth) {
     ss << "Found " << unique_chip_ids.size() << " chips in cluster:" << std::endl;
 
     auto cluster_type = cluster.get_cluster_type();
-    for (auto& [chip, unique_id] : cluster.get_unique_chip_ids()) {
-        std::cout << "Chip ID: " << chip << ", Unique ID: " << unique_id << std::endl;
-    }
+
     std::vector<std::string> unexpected_system_states;
     for (const auto& [chip_id, unique_chip_id] : unique_chip_ids) {
         const auto& soc_desc = cluster.get_soc_desc(chip_id);

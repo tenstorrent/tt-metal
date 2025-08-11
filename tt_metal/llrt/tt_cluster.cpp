@@ -1353,7 +1353,6 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
 const std::unordered_map<chip_id_t, uint64_t>& Cluster::get_unique_chip_ids() const {
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
-    std::cout << "Hostname: " << std::string(hostname) << std::endl;
     if (chip_id_to_unique_id_.empty()) {
         if (this->get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_) ==
             tt::tt_metal::ClusterType::GALAXY) {
