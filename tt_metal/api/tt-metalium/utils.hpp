@@ -22,7 +22,7 @@ float get_timeout_seconds_for_operations();
 
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 template <typename FuncBody, typename FuncWait, typename OnTimeout, typename... Args>
-auto timeout_function(
+auto wait_with_timeout(
     FuncBody&& func_body, FuncWait&& wait_condition, OnTimeout&& on_timeout, float timeout_seconds, Args&&... args) {
     auto start_time = std::chrono::high_resolution_clock::now();
 

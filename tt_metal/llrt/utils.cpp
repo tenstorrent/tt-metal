@@ -59,7 +59,7 @@ const std::string& get_reports_dir() {
 
 float get_timeout_seconds_for_operations() {
     if (timeout_seconds == -1.f) {
-        const char* env_value = std::getenv("TT_METAL_OPERATION_TIMEOUT");
+        const char* env_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
         // If is not configured, is infinite
         timeout_seconds = env_value ? std::stof(env_value) : 0.f;
     }
