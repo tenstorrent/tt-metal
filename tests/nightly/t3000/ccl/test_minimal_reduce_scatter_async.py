@@ -174,6 +174,7 @@ def run_reduce_scatter_impl(
 
     if enable_trace:
         # Compile the op
+        tt_reduce_scatter_output_trace_list = []
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
         logger.info(f"Done compiling Op")
@@ -182,7 +183,7 @@ def run_reduce_scatter_impl(
         trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
-            tt_reduce_scatter_output_list.append(tt_reduce_scatter_output_tensor)
+            tt_reduce_scatter_output_trace_list.append(tt_reduce_scatter_output_tensor)
         ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
         logger.info(f"Done capturing trace")
 
@@ -192,6 +193,11 @@ def run_reduce_scatter_impl(
 
         # Synchronize the devices
         ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+        for tt_tensor in tt_reduce_scatter_output_trace_list:
+            tt_rs_out = ttnn.from_device(tt_tensor)
+            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
+            tt_tensor.deallocate(True)
+            tt_reduce_scatter_output_list.append(tt_rs_out)
     else:
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
