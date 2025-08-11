@@ -2185,5 +2185,22 @@ TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) {
     FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
 }
 
+// Test cases using the new Fabric1DMuxFixture to test tensix config with mux
+TEST_F(Fabric1DMuxFixture, TestLinearFabricUnicastNocUnicastWrite1DMux) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE);
+}
+
+TEST_F(Fabric1DMuxFixture, TestLinearFabricUnicastNocAtomicInc1DMux) {
+    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC);
+}
+
+TEST_F(Fabric1DMuxFixture, TestLinearFabricMulticastNocUnicastWrite1DMux) {
+    FabricMulticastCommon(this, NOC_UNICAST_WRITE);
+}
+
+TEST_F(Fabric1DMuxFixture, TestLinearFabricMulticastNocAtomicInc1DMux) {
+    FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC);
+}
+
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
