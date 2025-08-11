@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 using namespace tt::tt_fabric::linear::experimental;
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
@@ -55,6 +56,37 @@ void kernel_main() {
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
     uint64_t start_timestamp = get_timestamp();
+
+    // Optional 2D route preconfig
+#ifdef FABRIC_2D
+    uint32_t ew_dim = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t my_dev_id = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t dst_mesh_id = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint16_t dst_dev_ids[num_send_dir] = {};
+    for (uint32_t i = 0; i < num_send_dir; i++) {
+        dst_dev_ids[i] = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_arg_idx++));
+    }
+
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+#if defined(DYNAMIC_ROUTING_ENABLED)
+        fabric_set_unicast_route(
+            (MeshPacketHeader*)packet_header,
+            static_cast<eth_chan_directions>(connections[i].direction),
+            my_dev_id,
+            dst_dev_ids[i],
+            dst_mesh_id,
+            ew_dim);
+#else
+        fabric_set_unicast_route(
+            (LowLatencyMeshPacketHeader*)packet_header,
+            static_cast<eth_chan_directions>(connections[i].direction),
+            my_dev_id,
+            dst_dev_ids[i],
+            dst_mesh_id,
+            ew_dim);
+#endif
+    });
+#endif
 
     for (uint32_t i = 0; i < num_packets; i++) {
         if constexpr (is_chip_multicast) {
