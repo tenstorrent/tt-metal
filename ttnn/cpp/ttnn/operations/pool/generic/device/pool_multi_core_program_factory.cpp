@@ -347,7 +347,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_cb_sz = 0;
     uint32_t in_nblocks_c = 1;
     if (return_indices) {
-        // for return_indices, we in CB must be 4 tiles since topk processes 2 data tiles and 2 index tiles
+        // for return indices we use 1 whole tile per reduction to simplify logic
         in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     } else {
         if (params.is_wide_reduction) {
@@ -514,10 +514,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
-    std::string reader_kernel_fname = return_indices ? "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-                                                       "reader_index_pool_2d.cpp"
-                                                     : "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-                                                       "reader_pool_2d.cpp";
+    std::string reader_kernel_fname =
+        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+        "reader_pool_2d.cpp";
 
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -565,8 +564,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         .defines = get_defines(pool_type)};
 
     std::string compute_kernel_fname =
-        return_indices ? "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_index_pool_2d.cpp"
-                       : "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
+        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
