@@ -8,6 +8,7 @@ import torch
 import pytest
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
+from models.utility_functions import skip_for_blackhole
 
 
 def prepare_conv_weights_func(
@@ -419,6 +420,7 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
+@skip_for_blackhole("#26435: Not fully tested on Blackhole")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, kernel, stride, padding, dilation, act_block_h_override",
