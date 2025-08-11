@@ -4,13 +4,8 @@
 
 #pragma once
 
-#include <algorithm>
-#include <random>
-#include <thread>
 #include <vector>
 
-#include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/xtensor_utils.hpp"
 
 namespace ttml::init {
