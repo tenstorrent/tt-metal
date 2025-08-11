@@ -1,0 +1,34 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/decorators.hpp"
+
+#include <optional>
+
+namespace ttnn {
+namespace operations::experimental {
+
+using namespace tt;
+
+struct IsInOperation {
+    static Tensor invoke(
+        const QueueId& queue_id,
+        const Tensor& elements,
+        const Tensor& test_elements,
+        const bool& assume_unique = false,
+        const bool& invert = false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& opt_out = std::nullopt);
+};
+
+}  // namespace operations::experimental
+
+namespace experimental {
+constexpr auto isin =
+    ttnn::register_operation<"ttnn::experimental::isin", ttnn::operations::experimental::IsInOperation>();
+}  // namespace experimental
+
+}  // namespace ttnn
