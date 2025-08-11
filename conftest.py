@@ -405,13 +405,12 @@ def mesh_device(request, silicon_arch_name, device_params):
         num_devices_requested = min(param, len(device_ids))
         mesh_shape = ttnn.MeshShape(1, num_devices_requested)
 
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
-
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in mesh_device.get_device_ids()]
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
