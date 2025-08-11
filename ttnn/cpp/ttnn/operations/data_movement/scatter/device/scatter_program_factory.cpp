@@ -86,10 +86,11 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
     const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
-    const uint32_t index_and_source_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
+    const uint32_t index_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
+    const uint32_t source_chunk_size = std::min(source_stick_size, index_and_source_max_chunk_size);
     const uint32_t input_and_output_chunk_size_bytes = input_and_output_chunk_size * input_datum_size;
-    const uint32_t index_chunk_size_bytes = index_and_source_chunk_size * index_datum_size;
-    const uint32_t source_chunk_size_bytes = index_and_source_chunk_size * source_datum_size;
+    const uint32_t index_chunk_size_bytes = index_chunk_size * index_datum_size;
+    const uint32_t source_chunk_size_bytes = source_chunk_size * source_datum_size;
 
     // pad pages to 32
     const uint32_t input_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
@@ -160,7 +161,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
              stick_offset,
              sticks_per_core,
              input_and_output_chunk_size,
-             index_and_source_chunk_size});
+             index_chunk_size,
+             source_chunk_size});
 
         SetRuntimeArgs(
             program,
