@@ -42,7 +42,8 @@ private:
             return 1;
         }
         uint32_t hw_concurrency = std::thread::hardware_concurrency();
-        // Do not use all hardware threads
+        // Use sqrt to balance 2D parallelization: total threads = out_threads × in_threads ≈ sqrt(hw_concurrency - 1)²
+        // This prevents oversubscription while maintaining good load distribution across both channel dimensions
         return std::max(1u, static_cast<uint32_t>(std::sqrt(hw_concurrency - 1)));
     }
 
