@@ -24,7 +24,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_input = get_compile_time_arg_val(4);
     constexpr uint32_t cb_id_working = get_compile_time_arg_val(5);  // scratch
     constexpr bool is_bfp8 = get_compile_time_arg_val(6);
-    constexpr auto output_args = TensorAccessorArgs<7>();
+    constexpr uint32_t tiles_per_row = get_compile_time_arg_val(7);
+    constexpr bool last_is_two_facelines = get_compile_time_arg_val(8);
+    constexpr auto output_args = TensorAccessorArgs<9>();
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr, Tile_size_bytes);
 
@@ -37,6 +39,8 @@ void kernel_main() {
     const uint32_t working_write_addr = get_write_ptr(cb_id_working);
     for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
         uint8_t exp_buffer[exponents_size] = {0};  // for bfloat8_b exponents
+        bool last_tile = ((output_page_idx + 1) % tiles_per_row == 0);
+        bool two_facelines = (last_tile && last_is_two_facelines) || !last_tile;
         cb_wait_front(cb_id_mapping, 1);
         const uint32_t map_addr = get_read_ptr(cb_id_mapping);
         auto map_ptr = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(map_addr);
@@ -78,14 +82,15 @@ void kernel_main() {
                 uint32_t row_id = (input_page_offset % faceline_size) / faceline_row;
                 uint32_t output_row_id = (faceline_ctr / 2) % faceline_row;
                 uint32_t output_subtile_id = output_page_offset / faceline_size;
-                exp_buffer[faceline_row * output_subtile_id + output_row_id] =
-                    input_ptr[faceline_row * subtile_id + row_id];  // store first byte for debugging
-                if (seg_idx == 31 &&
-                    map_ptr[seg_idx].num_elements == faceline_row * 2) {  // if reading 2 facelines at a time
-                    exp_buffer[32] = input_ptr[faceline_row * subtile_id + row_id + 1];
-                    faceline_ctr++;
+                uint32_t exp_idx = faceline_row * output_subtile_id + output_row_id;
+                exp_buffer[exp_idx] = input_ptr[faceline_row * subtile_id + row_id];
+
+                if (map_ptr[seg_idx].num_elements == faceline_row * 2) {  // if reading 2 facelines at a time
+
+                    exp_buffer[exp_idx + 1] = input_ptr[faceline_row * subtile_id + row_id + 1];
+                    faceline_ctr = two_facelines ? faceline_ctr + 1 : faceline_ctr + 2;
                 }
-                faceline_ctr++;
+                faceline_ctr = two_facelines ? faceline_ctr + 1 : faceline_ctr + 2;
             }
             // skip exponents for bfloat8_b when moving data
             tt_memmove<false, true, false, Tile_size_bytes>(

@@ -378,6 +378,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     bool is_bfloat8_b = input_tensor.dtype() == DataType::BFLOAT8_B;
     const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
+    uint32_t faceline_row = 16;
+    uint32_t tile_width = output_tensor.tensor_spec().tile().get_width();
+    uint32_t tiles_per_row = std::ceil((float)output_shape[-1] / (float)tile_width);
+    bool last_is_two_facelines = (output_shape[-1] - (tiles_per_row - 1) * tile_width) > faceline_row;
     std::vector<uint32_t> writer_compile_time_args = {
         input_tile_size_bytes,
         max_map_entries,
@@ -385,7 +389,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         mapping_cb_idx,
         input_cb_idx,
         output_cb_idx,
-        is_bfloat8_b};
+        is_bfloat8_b,
+        tiles_per_row,
+        last_is_two_facelines};
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(

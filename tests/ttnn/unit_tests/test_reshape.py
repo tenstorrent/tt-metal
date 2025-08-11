@@ -648,6 +648,10 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
         ((1, 990, 990, 64), (1, 1, 980100, 64)),
         ((1, 1006, 254, 64), (1, 1, 255524, 64)),
         ((1, 1020, 1020, 32), (1, 1, 1040400, 32)),
+        ((2, 2, 2), (1, 4, 2)),
+        ((2, 2, 16), (1, 4, 16)),
+        ((10, 17, 18), (1, 170, 18)),
+        ((984, 21, 129), (1, 20664, 129)),
     ],
 )
 def test_dram_tile_bfp8(input_shape, output_shape, device):
