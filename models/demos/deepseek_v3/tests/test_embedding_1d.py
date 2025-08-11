@@ -59,8 +59,6 @@ def test_embedding_forward_pass(
     else:
         state_dict = load_state_dict(model_path, module_path)
         torch_input, reference_output = load_reference_io_tensors_for_module(mode, module_path, seq_len, 1)
-        torch_input.unsqueeze_(0)
-        reference_output.unsqueeze_(0)
 
     # Generate module configs and state
     weight_config = Embedding1D.convert_weights(hf_config, state_dict, tmp_path, mesh_device)

@@ -72,8 +72,11 @@ def test_forward_pass(
     # Create a new model state with CCL
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
 
+    # Create a new model shared state
+    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
+
     # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, model_state)
+    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     # Convert input to TTNN, DP=4 and Replicated
     tt_input = ttnn.from_torch(
