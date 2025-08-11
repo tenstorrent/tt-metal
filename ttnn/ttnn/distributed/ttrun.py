@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_CACHE_DIR_PATTERN = "{home}/.cache/{hostname}_rank{rank}"
+DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
@@ -96,6 +97,10 @@ def get_rank_environment(
         "TT_MESH_ID": str(binding.mesh_id),
         "TT_HOST_RANK": str(mesh_to_host_rank_id[binding.mesh_id]),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
+        "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
+        "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
+        # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
+        "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
     }
     mesh_to_host_rank_id[binding.mesh_id] += 1
 
@@ -250,7 +255,12 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
         - TT_METAL_CACHE: Per-rank cache directory
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
+        - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
+        Default values for the following environment variables will be used if not set when calling tt-run:
+        - TT_METAL_HOME: User's home directory
+        - PYTHONPATH: User's home directory
+        - LD_LIBRARY_PATH: `<USER_HOME>/build/lib`
 
     See examples/ttrun/ for example configuration files.
     """
