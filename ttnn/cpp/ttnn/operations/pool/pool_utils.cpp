@@ -159,7 +159,12 @@ FactoryParameters get_factory_parameters(
     const uint32_t max_rows_for_reduction =
         !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
-    const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 2 : (is_avg_pool && is_large_kernel) ? 4 : 8;
+    if (return_indices) {
+        TT_FATAL(
+            !is_avg_pool && !is_large_kernel && !is_partial_tile,
+            "Currently only small full width max pool is supported with return_indices");
+    }
+    const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     return FactoryParameters{
@@ -226,10 +231,14 @@ uint32_t calculate_L1_usage(
     uint32_t clear_value_cb_size = tt::constants::TILE_HW * params.nbytes;
 
     uint32_t in_cb_sz = 0;
-    if (params.is_wide_reduction) {
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+    if (return_indices) {
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     } else {
-        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+        if (params.is_wide_reduction) {
+            in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+        } else {
+            in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+        }
     }
 
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
