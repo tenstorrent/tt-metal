@@ -25,7 +25,7 @@ from models.utility_functions import run_for_wormhole_b0
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
+    [{"l1_small_size": (7 * 8192) + 2592, "trace_region_size": 1605632, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize("use_torch_model", [False])
@@ -110,7 +110,7 @@ def test_unet_demo_single_image(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
+    [{"l1_small_size": (7 * 8192) + 2592, "trace_region_size": 1605632, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize("use_torch_model", [False])

@@ -172,7 +172,7 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 1730}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 2592}], indirect=True)
 @skip_for_grayskull()
 def test_unet(device, reset_seeds, model_location_generator):
     reference_model = load_torch_model(model_location_generator)
