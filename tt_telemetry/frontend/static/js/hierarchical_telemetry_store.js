@@ -37,21 +37,21 @@ export class HierarchicalTelemetryStore {
         for (const part of parts) {
             if (!currentMap || !currentMap.has(part)) {
                 // Path doesn't exist in hierarchy, must be leaf node
-                return this._stateByPath.get(path) == true ? true : false;
+                return this._stateByPath.get(path) === true ? true : false;
             }
             currentMap = currentMap.get(part);
         }
         
         // If currentMap is null, this is a leaf node
         if (!currentMap) {
-            return this._stateByPath.get(path) == true ? true : false;
+            return this._stateByPath.get(path) === true ? true : false;
         }
         
         // Aggregate children states
         let state = true;
         for (const nextPathComponent of currentMap.keys()) {
             const childPath = path + "_" + nextPathComponent;
-            const childState = this._stateByPath.get(childPath) == true ? true : false;
+            const childState = this._stateByPath.get(childPath) === true ? true : false;
             state &= childState;
         }
         return state;
@@ -67,12 +67,16 @@ export class HierarchicalTelemetryStore {
             console.log(`Invalid id ${id}, cannot update state`);
             return;
         }
+
+        // Convert state to bool if it is not
+        state = state == true;
         
         // Update state
         const oldState = this._stateByPath.get(path);
         const forceUpdate = oldState === undefined;
         let changed = state != oldState;
         this._stateByPath.set(path, state);
+        console.log(`Set ${path} = ${state}`);
 
         // No change? We are done.
         if (!changed && !forceUpdate) {
@@ -146,7 +150,7 @@ export class HierarchicalTelemetryStore {
             return false;
         }
         console.log(`Get state ${path} = ${this._stateByPath.get(path)}`);
-        return this._stateByPath.get(path) == true ? true : false;
+        return this._stateByPath.get(path);
     }
 }
 
