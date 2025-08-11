@@ -5,7 +5,9 @@
 #include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
 #include <numeric>
+#include <string>
 #include <vector>
 
 #include "blackhole/bh_hal.hpp"
@@ -17,6 +19,7 @@
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
+#include "hal_1xx_common.hpp"
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -52,6 +55,138 @@ static constexpr float INF_BH = 1.7014e+38;
 namespace tt {
 
 namespace tt_metal {
+
+class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
+public:
+    std::vector<std::string> link_objs(const Params& params) const override {
+        std::vector<std::string> objs;
+        if (params.is_fw) {
+            objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
+        }
+        if ((params.core_type == HalProgrammableCoreType::TENSIX and
+             params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
+            (params.core_type == HalProgrammableCoreType::IDLE_ETH and
+             params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
+            // Brisc and Idle Erisc.
+            objs.push_back("runtime/hw/lib/blackhole/noc.o");
+        }
+        objs.push_back("runtime/hw/lib/blackhole/substitutes.o");
+        return objs;
+    }
+
+    std::vector<std::string> includes(const Params& params) const override {
+        std::vector<std::string> includes;
+
+        // Common includes for all core types
+        includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
+        includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_io");
+        includes.push_back("tt_metal/hw/inc/blackhole");
+        includes.push_back("tt_metal/hw/inc/blackhole/blackhole_defines");
+        includes.push_back("tt_metal/hw/inc/blackhole/noc");
+        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
+        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
+
+        switch (params.core_type) {
+            case HalProgrammableCoreType::TENSIX:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::COMPUTE:
+                        includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_api");
+                        includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu");
+                        break;
+                    case HalProcessorClassType::DM: break;
+                }
+                break;
+            case HalProgrammableCoreType::ACTIVE_ETH: {
+                includes.push_back("tt_metal/hw/inc/ethernet");
+                break;
+            }
+            case HalProgrammableCoreType::IDLE_ETH: break;
+            default:
+                TT_THROW(
+                    "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
+        }
+        includes.push_back("tt_metal/hw/firmware/src/tt-1xx");
+        return includes;
+    }
+
+    std::vector<std::string> defines(const Params& params) const override {
+        auto defines = HalJitBuildQueryBase::defines(params);
+        defines.push_back("ARCH_BLACKHOLE");
+        return defines;
+    }
+
+    std::vector<std::string> srcs(const Params& params) const override {
+        auto srcs = HalJitBuildQueryBase::srcs(params);
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            if (params.is_fw) {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
+            } else {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
+            }
+        }
+        return srcs;
+    }
+
+    std::string common_flags(const Params& params) const override {
+        std::string cflags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay ";
+        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
+              params.processor_class == HalProcessorClassType::COMPUTE)) {
+            cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+        }
+        return cflags;
+    }
+
+    std::string linker_script(const Params& params) const override {
+        switch (params.core_type) {
+            case HalProgrammableCoreType::TENSIX:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: {
+                        return fmt::format(
+                            "runtime/hw/toolchain/blackhole/{}_{}risc.ld",
+                            params.is_fw ? "firmware" : "kernel",
+                            params.processor_id == 0 ? "b" : "nc");
+                    }
+                    case HalProcessorClassType::COMPUTE:
+                        return fmt::format(
+                            "runtime/hw/toolchain/blackhole/{}_trisc{}.ld",
+                            params.is_fw ? "firmware" : "kernel",
+                            params.processor_id);
+                }
+                break;
+            case HalProgrammableCoreType::ACTIVE_ETH:
+                return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
+                                    : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
+            case HalProgrammableCoreType::IDLE_ETH:
+                switch (params.processor_id) {
+                    case 0:
+                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_ierisc.ld"
+                                            : "runtime/hw/toolchain/blackhole/kernel_ierisc.ld";
+                    case 1:
+                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_ierisc.ld"
+                                            : "runtime/hw/toolchain/blackhole/kernel_subordinate_ierisc.ld";
+                }
+            default:
+                TT_THROW(
+                    "Unsupported programmable core type {} to query linker script",
+                    enchantum::to_string(params.core_type));
+        }
+        TT_THROW(
+            "Invalid processor id {} of processor class {} in programmable core type {}",
+            params.processor_id,
+            enchantum::to_string(params.processor_class),
+            enchantum::to_string(params.core_type));
+    }
+
+    std::string target_name(const Params& params) const override {
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            // build.cpp used to distinguish "active_erisc" and "erisc" and use
+            // that to determine what object files to link.
+            // This is no longer necessary, but only to keep the target names unchanged.
+            return "active_erisc";
+        }
+        return HalJitBuildQueryBase::target_name(params);
+    }
+};
 
 void Hal::initialize_bh() {
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
@@ -184,6 +319,8 @@ void Hal::initialize_bh() {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
+
+    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>();
 }
 
 }  // namespace tt_metal

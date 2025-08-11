@@ -5,7 +5,10 @@
 #include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
+#include <memory>
 #include <numeric>
+#include <string>
 #include <vector>
 
 #include "core_config.h"  // ProgrammableCoreType
@@ -17,6 +20,8 @@
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include "wormhole/wh_hal.hpp"
+#include "impl/context/metal_context.hpp"
+#include "hal_1xx_common.hpp"
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -52,6 +57,158 @@ static constexpr float INF_WHB0 = 1.7014e+38;
 namespace tt {
 
 namespace tt_metal {
+
+class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
+public:
+    std::vector<std::string> link_objs(const Params& params) const override {
+        std::vector<std::string> objs;
+        if (params.is_fw and params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
+            objs.push_back("runtime/hw/lib/wormhole/tmu-crt0.o");
+        }
+        if (params.core_type == HalProgrammableCoreType::TENSIX and
+            params.processor_class == HalProcessorClassType::DM and params.processor_id == 1) {
+            // ncrisc wormhole kernels have an exciting entry sequence
+            if (params.is_fw) {
+                objs.push_back("runtime/hw/lib/wormhole/wh-iram-trampoline.o");
+                objs.push_back("runtime/hw/lib/wormhole/tdma_xmov.o");
+            } else {
+                objs.push_back("runtime/hw/lib/wormhole/wh-iram-start.o");
+            }
+        }
+        if ((params.core_type == HalProgrammableCoreType::TENSIX and
+             params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
+            (params.core_type == HalProgrammableCoreType::IDLE_ETH and
+             params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
+            // Brisc and Idle Erisc.
+            objs.push_back("runtime/hw/lib/wormhole/noc.o");
+        }
+        objs.push_back("runtime/hw/lib/wormhole/substitutes.o");
+        return objs;
+    }
+
+    std::vector<std::string> includes(const Params& params) const override {
+        std::vector<std::string> includes;
+
+        // Common includes for all core types
+        includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/common");
+        includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/llk_io");
+        includes.push_back("tt_metal/hw/inc/wormhole");
+        includes.push_back("tt_metal/hw/inc/wormhole/wormhole_b0_defines");
+        includes.push_back("tt_metal/hw/inc/wormhole/noc");
+        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
+        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
+
+        switch (params.core_type) {
+            case HalProgrammableCoreType::TENSIX:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::COMPUTE:
+                        includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/llk_api");
+                        includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu");
+                        break;
+                    case HalProcessorClassType::DM: break;
+                }
+                includes.push_back("tt_metal/hw/firmware/src/tt-1xx");
+                break;
+            case HalProgrammableCoreType::ACTIVE_ETH: {
+                includes.push_back("tt_metal/hw/inc/ethernet");
+                break;
+            }
+            case HalProgrammableCoreType::IDLE_ETH: includes.push_back("tt_metal/hw/firmware/src/tt-1xx"); break;
+            default:
+                TT_THROW(
+                    "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
+        }
+        return includes;
+    }
+
+    std::vector<std::string> defines(const Params& params) const override {
+        auto defines = HalJitBuildQueryBase::defines(params);
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            // Additional defines on Wormhole for active ETH cores
+            if (rtoptions.get_erisc_iram_enabled()) {
+                defines.push_back("ENABLE_IRAM");
+            }
+            defines.push_back("COOPERATIVE_ERISC");
+        }
+        defines.push_back("ARCH_WORMHOLE");
+        return defines;
+    }
+
+    std::vector<std::string> srcs(const Params& params) const override {
+        auto srcs = HalJitBuildQueryBase::srcs(params);
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            if (params.is_fw) {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/erisc.cc");
+                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/erisc-crt0.cc");
+            } else {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/erisck.cc");
+            }
+        }
+        return srcs;
+    }
+
+    std::string common_flags(const Params& params) const override {
+        std::string cflags = "-mcpu=tt-wh ";
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            cflags += "-fno-delete-null-pointer-checks ";
+        } else if (
+            (params.core_type == HalProgrammableCoreType::TENSIX &&
+             params.processor_class == HalProcessorClassType::DM) ||
+            params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+        }
+        return cflags;
+    }
+
+    std::string linker_script(const Params& params) const override {
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        switch (params.core_type) {
+            case HalProgrammableCoreType::TENSIX:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: {
+                        return fmt::format(
+                            "runtime/hw/toolchain/wormhole/{}_{}risc.ld",
+                            params.is_fw ? "firmware" : "kernel",
+                            params.processor_id == 0 ? "b" : "nc");
+                    }
+                    case HalProcessorClassType::COMPUTE:
+                        return fmt::format(
+                            "runtime/hw/toolchain/wormhole/{}_trisc{}.ld",
+                            params.is_fw ? "firmware" : "kernel",
+                            params.processor_id);
+                }
+                break;
+            case HalProgrammableCoreType::ACTIVE_ETH:
+                if (params.is_fw) {
+                    return rtoptions.get_erisc_iram_enabled() ? "runtime/hw/toolchain/wormhole/erisc-b0-app_iram.ld"
+                                                              : "runtime/hw/toolchain/wormhole/erisc-b0-app.ld";
+                } else {
+                    return rtoptions.get_erisc_iram_enabled() ? "runtime/hw/toolchain/wormhole/erisc-b0-kernel_iram.ld"
+                                                              : "runtime/hw/toolchain/wormhole/erisc-b0-kernel.ld";
+                }
+                break;
+            case HalProgrammableCoreType::IDLE_ETH:
+                switch (params.processor_id) {
+                    case 0:
+                        return params.is_fw ? "runtime/hw/toolchain/wormhole/firmware_ierisc.ld"
+                                            : "runtime/hw/toolchain/wormhole/kernel_ierisc.ld";
+                    case 1:
+                        return params.is_fw ? "runtime/hw/toolchain/wormhole/firmware_subordinate_ierisc.ld"
+                                            : "runtime/hw/toolchain/wormhole/kernel_subordinate_ierisc.ld";
+                }
+                break;
+            default:
+                TT_THROW(
+                    "Unsupported programmable core type {} to query lflags", enchantum::to_string(params.core_type));
+        }
+        TT_THROW(
+            "Invalid processor id {} of processor class {} in programmable core type {}",
+            params.processor_id,
+            enchantum::to_string(params.processor_class),
+            enchantum::to_string(params.core_type));
+    }
+};
 
 void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
@@ -183,6 +340,8 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_1),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_2),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
+
+    this->jit_build_query_ = std::make_unique<HalJitBuildQueryWormhole>();
 }
 
 }  // namespace tt_metal

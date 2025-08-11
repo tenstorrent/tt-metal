@@ -68,9 +68,17 @@ target_link_libraries(
 
 add_library(hal_1xx STATIC)
 add_library(HAL::1xx ALIAS hal_1xx)
+target_sources(hal_1xx PRIVATE hal_1xx_common.cpp)
+target_include_directories(hal_1xx BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
 target_link_libraries(
     hal_1xx
     PUBLIC
         wh_hal
         bh_hal
+    PRIVATE
+        fmt::fmt-header-only
+        hw
+        umd::device
+        TT::STL
+        tt-logger::tt-logger
 )
