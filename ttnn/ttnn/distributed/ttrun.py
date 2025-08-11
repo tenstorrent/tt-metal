@@ -99,7 +99,7 @@ def get_rank_environment(
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
         "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
         "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
-        # TODO: Investigate why this needs to be set for multi-host CI environments
+        #26640: TODO - Investigate why this needs to be set for multi-host CI environments
         "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
     }
     mesh_to_host_rank_id[binding.mesh_id] += 1

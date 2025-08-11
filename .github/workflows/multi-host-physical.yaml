@@ -4,9 +4,6 @@ on:
     types: [closed]
     branches:
       - main
-  push:
-    branches:
-      - akirby/multi-host-workflow
   workflow_dispatch:
 
 jobs:
