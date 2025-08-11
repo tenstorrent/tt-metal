@@ -1,47 +1,67 @@
-class TelemetryPoint {
-    constructor() {
-        this.state = false;
-    }
-}
+/*
+ * HierarchicalTelemetryStore.js
+ *
+ * Stores telemetry data, named by underscore-delimited paths, in a hierarchical tree. Leaf nodes
+ * contain actual reported telemetry data and intermediate nodes are aggregated from children.
+ */
 
 export class HierarchicalTelemetryStore {
     constructor() {
-        this._path_by_id = new Map();       // full path by id
-        this._state_by_path = new Map();    // state by path (including partial paths: part1, part1_part2, part1_part2_part3, etc.)
-        this._path_children = new Map();    // hierarchical map of paths
+        // Full path by ID. Telemetry updates are transmitted by ID number in order to keep
+        // messages compact. This allows us to map back to path.
+        this._pathById = new Map();
+
+        // Telemetry data (state) is hashed by path. Partial paths are also tracked and are the
+        // aggregate state of all children (ANDed together). That is, "true" is good and if any
+        // descendant is false (bad), all ancestors up the tree will be bad. Each time an actual
+        // telemetry point (i.e., a leaf node) changes, the aggregate state is propagated upwards.
+        // So e.g. if "host_data1" and "host_data2" are telemetry points, their state will be
+        // stored directly while "host" will also be present in the map and computed from both.
+        this._stateByPath = new Map();
+
+        // Hierarchical map of paths, allowing us to navigate to subsequently deeper levels. Given
+        // a path like foo_bar_baz, the first level of keys will include "foo", which will index a
+        // map containing "bar", which will in turn index a map containing "baz". "baz" has no 
+        // children and its value is nil.
+        this._pathChildren = new Map();    // hierarchical map of paths
     }
 
+    // Returns the aggregate state of a path by looking at immediate children, otherwise looks at
+    // the node directly, assuming it is a leaf. If it cannot be found, false is returned.
     _getAggregateState(path) {
         // First, we need to navigate to the correct position in the hierarchy
         const parts = path.split("_");
-        let current_map = this._path_children;
+        let currentMap = this._pathChildren;
         
         // Navigate through the hierarchy to find the correct map
         for (const part of parts) {
-            if (!current_map || !current_map.has(part)) {
+            if (!currentMap || !currentMap.has(part)) {
                 // Path doesn't exist in hierarchy, must be leaf node
-                return this._state_by_path.get(path) == true ? true : false;
+                return this._stateByPath.get(path) == true ? true : false;
             }
-            current_map = current_map.get(part);
+            currentMap = currentMap.get(part);
         }
         
-        // If current_map is null, this is a leaf node
-        if (!current_map) {
-            return this._state_by_path.get(path) == true ? true : false;
+        // If currentMap is null, this is a leaf node
+        if (!currentMap) {
+            return this._stateByPath.get(path) == true ? true : false;
         }
         
         // Aggregate children states
         let state = true;
-        for (const next_path_component of current_map.keys()) {
-            const child_path = path + "_" + next_path_component;
-            const child_state = this._state_by_path.get(child_path) == true ? true : false;
-            state &= child_state;
+        for (const nextPathComponent of currentMap.keys()) {
+            const childPath = path + "_" + nextPathComponent;
+            const childState = this._stateByPath.get(childPath) == true ? true : false;
+            state &= childState;
         }
         return state;
     }
 
-    updateState(id, state, forceUpdate) {
-        const path = this._path_by_id.get(id);
+    // Updates telemetry state for a particular node. Will set the state directly and then
+    // propagate upwards if changed. If the state did not already exist and this is the first
+    // insertion, propagation will occur.
+    updateState(id, state) {
+        const path = this._pathById.get(id);
         if (!path) {
             // Invalid telemetry data, does not map to any known path
             console.log(`Invalid id ${id}, cannot update state`);
@@ -49,9 +69,10 @@ export class HierarchicalTelemetryStore {
         }
         
         // Update state
-        const old_state = this._state_by_path.get(path) == true ? true : false;
-        let changed = state != old_state;
-        this._state_by_path.set(path, state);
+        const oldState = this._stateByPath.get(path);
+        const forceUpdate = oldState === undefined;
+        let changed = state != oldState;
+        this._stateByPath.set(path, state);
 
         // No change? We are done.
         if (!changed && !forceUpdate) {
@@ -61,65 +82,71 @@ export class HierarchicalTelemetryStore {
         // Split path into components. Then move upwards to propagate the state.
         const parts = path.split("_");
         for (let i = parts.length; i > 0; i--) {
-            const current_path = parts.slice(0, i).join("_");
-            this._state_by_path.set(current_path, this._getAggregateState(current_path));
+            const currentPath = parts.slice(0, i).join("_");
+            this._stateByPath.set(currentPath, this._getAggregateState(currentPath));
         }
     }
 
+    // Adds a new telemetry value to the store for the first time.
     addPath(path, id, initialState) {
-        if (this._path_by_id.has(id)) {
-            const existing_path = this._path_by_id.get(id);
-            console.error(`cannot add (${id}, ${path}) to id -> path mapping because (${id}, ${existing_path}) already exists there`);
+        if (this._pathById.has(id)) {
+            const existingPath = this._pathById.get(id);
+            console.error(`Cannot add (${id}, ${path}) to id -> path mapping because (${id}, ${existingPath}) already exists there`);
             return;
         }
 
-        this._path_by_id.set(id, path);
+        this._pathById.set(id, path);
     
         // Now update path component maps. Note that terminal part of path must have no children.
         const parts = path.split("_");
-        let map = this._path_children;
+        let map = this._pathChildren;
         for (let i = 0; i < parts.length; i++) {
-            const current_part = parts[i];
-            const reached_end = i == parts.length - 1;
-            if (!map.has(current_part)) {
-                map.set(current_part, reached_end ? null : new Map());
+            const currentPart = parts[i];
+            const reachedEnd = i == parts.length - 1;
+            if (!map.has(currentPart)) {
+                map.set(currentPart, reachedEnd ? null : new Map());
             }
-            map = map.get(current_part);
+            map = map.get(currentPart);
         }
 
         console.log(`[HierarchicalTelemetryStore] Added ${id}:${path} (state=${initialState})`);
 
         // Update state
-        this.updateState(id, initialState, true);
+        this.updateState(id, initialState);
     }
 
+    // Gets the names of immediate children, if any. For example, if the store contains a_b_c1 and
+    // a_b_c2, getChildNames("a_b") will return [ "c1", "c2" ] and getChildNames("a") will return
+    // [ "b" ].
     getChildNames(path) {
         // Special case: empty path, get first level
         if (path.length == 0) {
-            return [ ...this._path_children.keys() ];
+            return [ ...this._pathChildren.keys() ];
         }
         // Navigate through the hierarchy to find the correct map
         const parts = path.split("_");
-        let current_map = this._path_children;
+        let currentMap = this._pathChildren;
         for (const part of parts) {
-            if (!current_map || !current_map.has(part)) {
+            if (!currentMap || !currentMap.has(part)) {
                 return [];
             }
-            current_map = current_map.get(part);
+            currentMap = currentMap.get(part);
         }
-        return current_map ? [ ...current_map.keys() ] : [];
+        return currentMap ? [ ...currentMap.keys() ] : [];
     }
 
-    getState(id_or_path) {
-        const is_path = typeof(id_or_path) === "string" || id_or_path instanceof String;
-        const path = is_path ? id_or_path : this._path_by_id.get(id_or_path);
+    // Gets telemetry state for a particular value. The path (a string) or ID (a number) may be
+    // supplied.
+    getState(idOrPath) {
+        const isPath = typeof(idOrPath) === "string" || idOrPath instanceof String;
+        const path = isPath ? idOrPath : this._pathById.get(idOrPath);
         if (!path) {
             // Invalid telemetry data, does not map to any known path
-            console.error(`Unknown id ${id_or_path}`);
+            console.error(`Unknown id ${idOrPath}`);
             return false;
         }
-        console.log(`Get state ${path} = ${this._state_by_path.get(path)}`);
-        return this._state_by_path.get(path) == true ? true : false;
+        console.log(`Get state ${path} = ${this._stateByPath.get(path)}`);
+        return this._stateByPath.get(path) == true ? true : false;
     }
 }
 
