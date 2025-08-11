@@ -84,9 +84,9 @@ def test_multimodal_demo_chat(
         )
 
         for msg in dialog:
-            print(f"{msg.role.capitalize()}: {msg.content}\n")
+            print(f"{msg['role'].capitalize()}: {msg['content']}\n")
 
-        out_message = result.generation
+        out_message = result
         print(f"> {out_message.role.capitalize()}: {out_message.content}")
         # for t in out_message.tool_calls:
         #     print(f"  Tool call: {t.tool_name} ({t.arguments})")
