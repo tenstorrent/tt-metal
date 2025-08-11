@@ -56,27 +56,27 @@ def test_rope_op(
     q_rope_torch, k_rope_torch = apply_rotary_pos_emb(q_torch, k_torch, cos, sin)
 
     q_tt = ttnn.from_torch(
-        q_torch,
+        q_torch.permute(0, 2, 1, 3),
         device=mesh_device,
         # Shard along the num_attention_heads dimension
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -3)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -2)),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 
     k_tt = ttnn.from_torch(
-        k_torch,
+        k_torch.permute(0, 2, 1, 3),
         device=mesh_device,
         # Shard along the num_key_value_heads dimension
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -3)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -2)),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 
     cos_tt = ttnn.from_torch(
-        cos,
+        cos.unsqueeze(-2),
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, None)),
         dtype=ttnn.bfloat16,
@@ -84,7 +84,7 @@ def test_rope_op(
         layout=ttnn.TILE_LAYOUT,
     )
     sin_tt = ttnn.from_torch(
-        sin,
+        sin.unsqueeze(-2),
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, None)),
         dtype=ttnn.bfloat16,
@@ -98,11 +98,11 @@ def test_rope_op(
     k_tt_rotated = apply_rope(k_tt, cos_tt, sin_tt)
 
     q_tt_rotated_torch = ttnn.to_torch(
-        q_tt_rotated, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -3))
-    )
+        q_tt_rotated, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -2))
+    ).permute(0, 2, 1, 3)
     k_tt_rotated_torch = ttnn.to_torch(
-        k_tt_rotated, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -3))
-    )
+        k_tt_rotated, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -2))
+    ).permute(0, 2, 1, 3)
 
     passing, pcc_message = comp_pcc(q_tt_rotated_torch, q_rope_torch)
     assert passing, f"q_tt_rotated_torch: {pcc_message}"
