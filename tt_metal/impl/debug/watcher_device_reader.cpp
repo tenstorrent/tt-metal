@@ -247,21 +247,6 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
     if (f != stdout && f != stderr) {
         log_info(tt::LogMetal, "Watcher checking device {}", device_id);
-
-        for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
-            CoreDescriptor logical_core = {eth_core, CoreType::ETH};
-
-            CoreDescriptor virtual_core;
-            virtual_core.coord =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                    device_id, logical_core.coord, logical_core.type);
-            virtual_core.type = logical_core.type;
-
-            std::vector<uint32_t> data;
-            data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core.coord, 0x3690, sizeof(uint32_t));
-            log_info(tt::LogMetal, "Device {} virtual ethernet core {} run flag: {}", device_id, virtual_core, data[0]);
-        }
     }
 
     // Clear per-dump info
