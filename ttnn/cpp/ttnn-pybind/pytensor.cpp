@@ -325,7 +325,6 @@ PyTensorPreparedConversion prepare_torch_tensor_conversion(
     const MemoryConfig& memory_config,
     const std::optional<Tile>& optional_tile) {
     PyTensorPreparedConversion res;
-    bool HANDLE_FLOAT32_BUG_23405 = true;
     py::object torch = py::module_::import("torch");
     py::object tensor = py::reinterpret_borrow<pybind11::object>(py_tensor);
 
@@ -379,20 +378,20 @@ PyTensorPreparedConversion prepare_torch_tensor_conversion(
         // clang-format on
     };
 
-    auto ttnn_fallback_type_mapping = [&torch](std::optional<DataType> dtype) -> std::optional<std::string> {
+    auto ttnn_fallback_type_mapping = [](std::optional<DataType> dtype) -> std::optional<std::string> {
         if (!dtype.has_value()) {
             return std::nullopt;
         } else {
             switch (dtype.value()) {
-                case DataType::UINT8: return "uint8";
-                case DataType::UINT16: return "int16";
-                case DataType::INT32: return "int32";
+                case DataType::BFLOAT16: return "bfloat16";
+                case DataType::FLOAT32: return "float32";
                 case DataType::UINT32: return "int32";
                 case DataType::BFLOAT4_B: return "float32";
                 case DataType::BFLOAT8_B: return "float32";
-                case DataType::FLOAT32: return "float32";
-                case DataType::BFLOAT16: return "bfloat16";
-                default: return std::nullopt;
+                case DataType::UINT8: return "uint8";
+                case DataType::UINT16: return "int16";
+                case DataType::INT32: return "int32";
+                case DataType::INVALID: TT_THROW("Invalid data type specified for from_torch conversion");
             }
         }
     };
@@ -449,7 +448,7 @@ PyTensorPreparedConversion prepare_torch_tensor_conversion(
         }
     };
 
-    if ((tensor.attr("numel")().cast<int>() == 0) || (tensor.attr("dim")().cast<int>() == 0)) {
+    if ((tensor.attr("numel")().cast<std::uint64_t>() == 0) || (tensor.attr("dim")().cast<std::uint64_t>() == 0)) {
         // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
         // the tensor must be constructed on host.
         set_default_conversion_parameters();
@@ -461,7 +460,7 @@ PyTensorPreparedConversion prepare_torch_tensor_conversion(
         // on-device tiling operation expects 32x32 row
         set_default_conversion_parameters();
         res.construct_with_data_type = dtype;
-    } else if (has_device && (is_torch_and_ttnn_type_identical(dtype, tensor) || dtype.has_value())) {
+    } else if (has_device) {
         DataType expected_dtype = DataType::INVALID;
         if (dtype.has_value()) {
             expected_dtype = dtype.value();
@@ -477,8 +476,7 @@ PyTensorPreparedConversion prepare_torch_tensor_conversion(
 
         if (expected_dtype != DataType::INVALID) {
             PyFromTorchConversionInput input{
-                .torch_dtype =
-                    tensor.attr("dtype").attr("__str__")().cast<std::string>().substr(6 /* cut off `torch.` prefix*/),
+                .torch_dtype = tensor.attr("dtype").attr("__str__")().cast<std::string>().substr(sizeof("torch.") - 1),
                 .optional_data_type = expected_dtype,
                 .optional_layout = layout.value_or(Layout::ROW_MAJOR),
             };
@@ -553,7 +551,7 @@ Tensor convert_python_tensor_to_tt_tensor(
             TT_FATAL(
                 !optional_layout.has_value() or *optional_layout == Layout::TILE,
                 "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
-                *optional_layout);
+                (optional_layout.has_value() ? fmt::format("{}", *optional_layout) : "std::nullopt"));
             return Layout::TILE;
         } else if (strategy) {
             return strategy->construct_with_layout;
