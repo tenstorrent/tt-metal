@@ -898,7 +898,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     auto rt_args_addr =
                                         kernel_config_base +
                                         kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
-                                    log_info(
+                                    log_debug(
                                         tt::LogMetal,
                                         "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
                                         "{}",
@@ -916,7 +916,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     auto common_rt_args_addr =
                                         kernel_config_base +
                                         kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
-                                    log_info(
+                                    log_debug(
                                         tt::LogMetal,
                                         "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
                                         "{}",
