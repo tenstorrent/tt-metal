@@ -150,8 +150,7 @@ void bind_normalization_scale_mask_softmax_operation(py::module& module) {
 
             Limitations:
               - All tensors must be on-device
-              - Mask broadcasting: for unsharded ROW_MAJOR mask, intermediate dims except the last two must be 1; last dim must equal TILE_WIDTH; width (in tiles) must align to input.
-              - Sharded inputs require TILE layout mask with identical padded shape to input.
+              - When mask is ROW_MAJOR, intermediate dims except the last two must be 1; last dim must equal TILE_WIDTH; width (in tiles) must align to input.
               - Internal block size constraints on width-in-tiles may restrict in-place variants for very large widths.
 
 
@@ -432,27 +431,23 @@ void bind_normalization_scale_causal_mask_hw_dims_softmax_in_place_operation(py:
             Limitations:
               - All tensors must be on-device.
               - Requires sharded input (with ROW_MAJOR shard orientation) and a sharded softmax program config.
-              - Mask must not be sharded.
+              - Mask must not be sharded. It should have shape [1, 1, H, W]
               - Scale must be provided.
 
               Example:
-                in_dtype = ttnn.bfloat8_b
-
-                fuse_head = 2
-
                 compute_grid_size = device.compute_with_storage_grid_size()
                 batch = compute_grid_size.x
                 num_cores_r = compute_grid_size.y
 
-                input_shape = (batch, num_cores_r, fuse_head * 384, 768)
-                attention_mask_t = ttnn.rand((batch, 1, 384, 768), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+                input_shape = (batch, num_cores_r, 384, 768)
+                attention_mask_t = ttnn.rand((1, 1, 384, 768), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-                input_tiled = ttnn.rand(input_shape, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+                input_tiled = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
                 # We must shard the input tensor in ROW_MAJOR orientation
                 grid_coord = ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
                 shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-                shard_shape = [fuse_head * 384, 768]
+                shard_shape = [384, 768]
                 shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
                 sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -462,7 +457,7 @@ void bind_normalization_scale_causal_mask_hw_dims_softmax_in_place_operation(py:
                 program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
                     compute_with_storage_grid_size=compute_grid_size,
                     subblock_w=8,
-                    block_h=12 * fuse_head,
+                    block_h=12,
                     block_w=24,
                 )
 
