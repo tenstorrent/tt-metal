@@ -7,31 +7,34 @@ class RMSNorm(nn.Module):
     def __init__(self, mesh_device, hf_config, state_dict):
         super().__init__()
         torch_weight = state_dict["weight"]
+        # self.is_distributed = mesh_device.shape[1] > 1
+        self.is_distributed = False
         self.tt_weight = ttnn.as_tensor(
             torch_weight.reshape((1, 1, -1, ttnn.TILE_SIZE)),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -2)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -2))
+            if self.is_distributed
+            else None,
         )
 
         self.eps = hf_config.rms_norm_eps
-        self.is_distributed = mesh_device.shape[1] > 1
         self.mesh_device = mesh_device
         self.mesh_shape = tuple(mesh_device.shape)
 
     def forward(self, x):
-        activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
-        shard_height, shard_width = x.memory_config().shard_spec.shape
-        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=activation_grid_bounding_box_size,
-            subblock_w=1,
-            block_h=ttnn.core.divup(shard_height, ttnn.TILE_SIZE),
-            block_w=ttnn.core.divup(shard_width, ttnn.TILE_SIZE),
-            inplace=False,
-        )
         if self.is_distributed:
+            activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
+            shard_height, shard_width = x.memory_config().shard_spec.shape
+            program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=activation_grid_bounding_box_size,
+                subblock_w=1,
+                block_h=ttnn.core.divup(shard_height, ttnn.TILE_SIZE),
+                block_w=ttnn.core.divup(shard_width, ttnn.TILE_SIZE),
+                inplace=False,
+            )
             # If the activation is sharded, we need to use an optimized rmsnorm
 
             tt_gathered_stats_memory_config = ttnn.create_sharded_memory_config(
@@ -72,6 +75,6 @@ class RMSNorm(nn.Module):
                 x,
                 weight=self.tt_weight,
                 epsilon=self.eps,
-                program_config=program_config,
+                # program_config=program_config,
             )
             return tt_output
