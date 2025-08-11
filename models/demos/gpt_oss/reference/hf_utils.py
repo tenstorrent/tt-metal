@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import concurrent.futures
+import os
 from glob import glob
 
 import torch
@@ -10,6 +11,8 @@ from safetensors.torch import load_file
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.modeling_utils import no_init_weights
+
+STATE_DICT_FILE = "torch_state_dict.pt"
 
 
 def convert_bf16_to_fp32(weights_dict):
@@ -78,4 +81,35 @@ def load_model_weights(
             weights_dict.update(future.result())
 
     print("Loaded all weights")
+    return weights_dict
+
+
+def get_state_dict(model_path: str, prefix: str | None = None, dtype=torch.float32) -> dict[str, torch.Tensor]:
+    """
+    Loads a partial or full state dictionary, converting it to the specified dtype.
+
+    Args:
+        model_path (str): Path to the model directory.
+        prefix (str | None): If provided, filters the state dictionary to include only keys that contain this prefix.
+        dtype (torch.dtype): The desired data type for the tensors.
+
+    Returns:
+        dict[str, torch.Tensor]: The partial state dictionary.
+    """
+    torch_state_dict_path = os.path.join(model_path, STATE_DICT_FILE)
+
+    if not os.path.exists(torch_state_dict_path):
+        weights_dict = load_model_weights(model_path)
+        print(f"Saving weights to {torch_state_dict_path}")
+        torch.save(weights_dict, torch_state_dict_path)
+    else:
+        print(f"Loading weights from {torch_state_dict_path}")
+        weights_dict = torch.load(torch_state_dict_path)
+
+    if prefix is not None:
+        weights_dict = {k[len(prefix) :]: v for k, v in weights_dict.items() if k.startswith(prefix)}
+
+    if dtype == torch.float32:
+        weights_dict = convert_bf16_to_fp32(weights_dict)
+
     return weights_dict
