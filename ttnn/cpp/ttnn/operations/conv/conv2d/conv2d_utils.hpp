@@ -62,6 +62,9 @@ struct SkipMcast {
 SkipMcast conv_skip_mcast(
     const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout);
 
+bool is_split_reader_supported(
+    TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles);
+
 sliding_window::ParallelConfig determine_parallel_config(
     TensorMemoryLayout shard_layout,
     uint32_t batch_size,
