@@ -236,17 +236,14 @@ class TtMistralImageAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # All reduce
-        # if self.num_devices > 1:  # replace with reduce_scatter and all_gather
-        #     print("self.num_devices > 1")
-        #     dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-        #     print("dense_out_gathered", dense_out_gathered)
-        #     dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-        #         dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
-        #     )
-        #     print("dense_out_reduced", dense_out_reduced)
-        #     dense_out_reduced_trimmed = ttnn.slice(dense_out_reduced, (0, 0, 0, 0), (1, 1, seq_len, ))
-
-        #     return dense_out_reduced_trimmed
-        # else:
-        #     return output_11SH
-        return output_11SH
+        if self.num_devices > 1:  # replace with reduce_scatter and all_gather
+            dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+            output_11SH.deallocate(True)
+            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
+                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+            )
+            # slicing the required sequence length
+            dense_out_reduced = dense_out_reduced[:, :, : dense_out_gathered.shape[-2], :]
+            return dense_out_reduced
+        else:
+            return output_11SH

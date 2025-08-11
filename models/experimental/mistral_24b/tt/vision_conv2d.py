@@ -58,7 +58,7 @@ class TtMistralConv2dPatch(LightweightModule):
 
         self._unfold = torch.nn.Unfold(kernel_size=self.kernel_size, stride=self.stride)
 
-        weight = state_dict[f"{state_dict_prefix}_linear.weight"]
+        weight = state_dict[f"{state_dict_prefix}weight"]
         if weight.ndim == 4:
             weight = weight.reshape(out_channels, -1).T
         # pad_len = nearest_32(weight.shape[-1]) - weight.shape[-1]

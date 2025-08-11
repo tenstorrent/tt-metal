@@ -48,14 +48,14 @@ class MistralTTVisionMLP(LightweightModule):
             )
 
         # Weights and Biases
-        self.w1 = as_tensor("gate_proj", dtype)
-        self.b1 = as_tensor("gate_proj", ttnn.bfloat16, is_bias=False)
+        self.w1 = as_tensor("w1", dtype)
+        self.b1 = as_tensor("w1", ttnn.bfloat16, is_bias=False)
 
-        self.w3 = as_tensor("up_proj", dtype)
-        self.b3 = as_tensor("up_proj", ttnn.bfloat16, is_bias=False)
+        self.w3 = as_tensor("w3", dtype)
+        self.b3 = as_tensor("w3", ttnn.bfloat16, is_bias=False)
 
-        self.w2 = as_tensor("down_proj", dtype)
-        self.b2 = as_tensor("down_proj", ttnn.bfloat16, is_bias=False)
+        self.w2 = as_tensor("w2", dtype)
+        self.b2 = as_tensor("w2", ttnn.bfloat16, is_bias=False)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """

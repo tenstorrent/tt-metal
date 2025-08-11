@@ -27,7 +27,6 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
-    convert_vision_hf_to_meta,
     convert_vision_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
@@ -1703,7 +1702,9 @@ class ModelArgs:
         return self.vision_chunk_size > 0
 
     def get_state_dict_prefix(self, module_name, layer_num):
-        text_prefix = self.state_dict_text_prefix
+        text_prefix = (
+            self.state_dict_text_prefix if self.is_vision() and not "Mistral-Small-3.1-24B" in self.model_name else ""
+        )
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",
@@ -1717,7 +1718,9 @@ class ModelArgs:
             "TransformerBlock": "",
             "": "",
         }
-        module_map = vision_module_map if self.is_vision() else module_map
+        module_map = (
+            vision_module_map if self.is_vision() and not "Mistral-Small-3.1-24B" in self.model_name else module_map
+        )
         return text_prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
@@ -1783,14 +1786,14 @@ class ModelArgs:
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+                state_dict = standardize_hf_keys_multimodal(state_dict)
                 self.is_multimodal = False
             elif self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim)
             else:
                 state_dict = standardize_hf_keys(state_dict)
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2149,55 +2152,76 @@ class ModelArgs:
             logger.info(f"Model name: {self.model_name}")
             logger.info(f"Base model name: {self.base_model_name}")
 
-            try:
-                # Try to load tokenizer from the original model path
-                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
-                logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
-            except Exception as e:
-                logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
+            # Special handling for Mistral-Small-3.1-24B-Instruct-2503
+            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    "mistralai/Mistral-Small-3.1-24B-Instruct-2503", trust_remote_code=True
+                )
+                logger.info("Manually setting Mistral instruct-style chat template on the tokenizer.")
 
-                # Try to use base model tokenizer as fallback
-                fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
+                mistral_template = """{% for message in messages %}
+                                    {% if message['role'] == 'system' %}
+                                    <|system|>
+                                    {{ message['content'] }}
+                                    {% elif message['role'] == 'user' %}
+                                    [INST] {{ message['content'] }} [/INST]
+                                    {% elif message['role'] == 'assistant' %}
+                                    {{ message['content'] }}{{ eos_token }}
+                                    {% endif %}
+                                    {% endfor %}"""
+                tokenizer.chat_template = mistral_template
+            else:
+                try:
+                    # Try to load tokenizer from the original model path
+                    tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                    logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
+                except Exception as e:
+                    logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
 
-                # If no direct match, try to infer from model name patterns
-                if not fallback_tokenizer_path:
-                    model_name_lower = self.model_name.lower()
-                    if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-1.5B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "3b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-3B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "7b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-7B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "14b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-14B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
-                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
-                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.1-70B-Instruct"
-                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "1b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.2-1B-Instruct"
-                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "3b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
-                    elif "mistral" in model_name_lower and "7b" in model_name_lower:
-                        fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
+                    # Try to use base model tokenizer as fallback
+                    fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
 
-                if fallback_tokenizer_path:
-                    logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
-                    try:
-                        tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
-                        logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
-                    except Exception as fallback_e:
-                        logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
-                        raise fallback_e
-                else:
-                    logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
-                    raise e
+                    # If no direct match, try to infer from model name patterns
+                    if not fallback_tokenizer_path:
+                        model_name_lower = self.model_name.lower()
+                        if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-1.5B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "3b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-3B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "7b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-7B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "14b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-14B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
+                        elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
+                            fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
+                        elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
+                            fallback_tokenizer_path = "meta-llama/Llama-3.1-70B-Instruct"
+                        elif "llama" in model_name_lower and "3.2" in model_name_lower and "1b" in model_name_lower:
+                            fallback_tokenizer_path = "meta-llama/Llama-3.2-1B-Instruct"
+                        elif "llama" in model_name_lower and "3.2" in model_name_lower and "3b" in model_name_lower:
+                            fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
+                        elif "mistral" in model_name_lower and "7b" in model_name_lower:
+                            fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
+
+                    if fallback_tokenizer_path:
+                        logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
+                        try:
+                            tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
+                            logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
+                        except Exception as fallback_e:
+                            logger.error(
+                                f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}"
+                            )
+                            raise fallback_e
+                    else:
+                        logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
+                        raise e
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:

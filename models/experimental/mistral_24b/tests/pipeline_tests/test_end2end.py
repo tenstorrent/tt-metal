@@ -122,7 +122,7 @@ def setup_vision_prompts_and_tokenizer(model_args, instruct):
             "content": [
                 {"type": "image", "image": image},
                 # "image": "https://raw.githubusercontent.com/yavuzceliker/sample-images/refs/heads/main/images/image-1.jpg",
-                {"type": "text", "text": "Describe this image."},
+                {"type": "text", "text": "Tell me what you see in the picture?"},
             ],
         }
     ]
@@ -154,13 +154,14 @@ def process_real_vision_inputs(messages, model_args):
     )
 
     image_inputs, video_inputs = process_vision_info(messages)
+    # image_inputs, video_inputs = None, None
 
     encoded = processor(
         text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt", return_dict=True
     ).to("cpu", dtype=torch.bfloat16)
     input_ids = encoded["input_ids"]
-    pixel_values = encoded["pixel_values"]
-    attention_mask = encoded["attention_mask"]
+    pixel_values = encoded["pixel_values"] if "pixel_values" in encoded else None
+    attention_mask = encoded["attention_mask"] if "attention_mask" in encoded else None
     image_sizes = encoded["image_sizes"] if "image_sizes" in encoded else None
 
     return {
