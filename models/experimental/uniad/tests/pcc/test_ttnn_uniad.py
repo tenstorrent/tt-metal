@@ -169,35 +169,35 @@ def test_uniad(device, reset_seeds):
         },
     )
 
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
+    # weights = torch.load(weights_path, map_location=torch.device("cpu"))
 
-    state_dict = weights.get("state_dict", weights)
+    # state_dict = weights.get("state_dict", weights)
 
     # Your model's expected shape
-    new_bev_h = 50
-    new_bev_w = 50
-    new_bev_size = new_bev_h * new_bev_w
+    # new_bev_h = 50
+    # new_bev_w = 50
+    # new_bev_size = new_bev_h * new_bev_w
 
-    # 1. Slice row_embed and col_embed from [200, 128] → [50, 128]
-    for key in [
-        "pts_bbox_head.positional_encoding.row_embed.weight",
-        "pts_bbox_head.positional_encoding.col_embed.weight",
-    ]:
-        if key in state_dict:
-            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_h, state_dict[key].shape[1])}")
-            state_dict[key] = state_dict[key][:new_bev_h, :]
+    # # 1. Slice row_embed and col_embed from [200, 128] → [50, 128]
+    # for key in [
+    #     "pts_bbox_head.positional_encoding.row_embed.weight",
+    #     "pts_bbox_head.positional_encoding.col_embed.weight",
+    # ]:
+    #     if key in state_dict:
+    #         print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_h, state_dict[key].shape[1])}")
+    #         state_dict[key] = state_dict[key][:new_bev_h, :]
 
-    # 2. Slice bev_embedding from [40000, 256] → [2500, 256]
-    for key in ["pts_bbox_head.bev_embedding.weight", "seg_head.bev_embedding.weight"]:
-        if key in state_dict:
-            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_size, state_dict[key].shape[1])}")
-            state_dict[key] = state_dict[key][:new_bev_size, :]
+    # # 2. Slice bev_embedding from [40000, 256] → [2500, 256]
+    # for key in ["pts_bbox_head.bev_embedding.weight", "seg_head.bev_embedding.weight"]:
+    #     if key in state_dict:
+    #         print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_size, state_dict[key].shape[1])}")
+    #         state_dict[key] = state_dict[key][:new_bev_size, :]
 
-    if "criterion.code_weights" in state_dict:
-        del state_dict["criterion.code_weights"]
+    # if "criterion.code_weights" in state_dict:
+    #     del state_dict["criterion.code_weights"]
 
-    # Load the modified checkpoint
-    reference_model.load_state_dict(state_dict)
+    # # Load the modified checkpoint
+    # reference_model.load_state_dict(state_dict)
     reference_model.eval()
 
     rescale = True

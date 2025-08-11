@@ -373,7 +373,8 @@ class TtPansegformerHead(nn.Module):
             lane_score = ttnn.zeros(
                 shape=[self.num_things_classes, mask_pred.shape[-2], mask_pred.shape[-1]], device=self.device
             )
-
+            lane = ttnn.to_torch(lane).to(torch.int64)
+            lane_score = ttnn.to_torch(lane_score).to(torch.float32)
             for i, scores in enumerate(scores_all):
                 # MDS: things and sutff have different threholds may perform a little bit better
                 if labels_all[i] < self.num_things_classes and scores < self.quality_threshold_things:
@@ -382,7 +383,7 @@ class TtPansegformerHead(nn.Module):
                     continue
                 _mask = masks_all[i] > 0.5
                 mask_area = _mask.sum().item()
-                intersect = _mask & (results[0] > 0)
+                intersect = _mask & ttnn.to_torch((results[0] > 0)).bool()
                 intersect_area = intersect.sum().item()
                 if labels_all[i] < self.num_things_classes:
                     if mask_area == 0 or (intersect_area * 1.0 / mask_area) > self.overlap_threshold_things:
@@ -391,13 +392,16 @@ class TtPansegformerHead(nn.Module):
                     if mask_area == 0 or (intersect_area * 1.0 / mask_area) > self.overlap_threshold_stuff:
                         continue
                 if intersect_area > 0:
-                    _mask = _mask & (results[0] == 0)
+                    _mask = _mask & ttnn.to_torch((results[0] == 0)).bool()
+                results = ttnn.to_torch(results)
                 results[0, _mask] = labels_all[i]
+                labels_all = labels_all.long()
                 if labels_all[i] < self.num_things_classes:
                     lane[labels_all[i], _mask] = 1
                     lane_score[labels_all[i], _mask] = masks_all[i][_mask]
                     results[1, _mask] = id_unique
                     id_unique += 1
+                results = ttnn.from_torch(results, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
             file_name = img_metas[img_id]["pts_filename"].split("/")[-1].split(".")[0]
             panoptic_list.append((ttnn.permute(results, (1, 2, 0)), file_name, ori_shape))
@@ -405,8 +409,8 @@ class TtPansegformerHead(nn.Module):
             bbox_list.append(bbox_th)
             labels_list.append(labels_th)
             seg_list.append(seg_th)
-            lane_list.append(ttnn.to_torch(lane))
-            lane_score_list.append(ttnn.to_torch(lane_score))
+            lane_list.append(lane)
+            lane_score_list.append(lane_score)
 
         results = []
         for i in range(len(img_metas)):

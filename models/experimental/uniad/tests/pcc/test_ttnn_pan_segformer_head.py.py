@@ -21,10 +21,7 @@ class DotDict(dict):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_uniad_TtPansegformerhead(
-    device,
-    reset_seeds,
-):
+def test_uniad_TtPansegformerhead(device, reset_seeds):
     weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     kwargs = {
         "num_query": 300,
@@ -39,8 +36,8 @@ def test_uniad_TtPansegformerhead(
         "loss_iou": {"type": "GIoULoss", "loss_weight": 2.0},
     }
 
-    torch_dict = torch.load(weights_path, map_location=torch.device("cpu"))
-    torch_dict = torch_dict["state_dict"]
+    torch_dict = torch.load(weights_path, map_location=torch.device("cpu"))["state_dict"]
+
     torch_model = PansegformerHead(
         bev_h=50,
         bev_w=50,
@@ -50,8 +47,18 @@ def test_uniad_TtPansegformerhead(
         as_two_stage=False,
         **kwargs,
     )
-    state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("seg_head"))}
+
+    new_bev_h, new_bev_w = 50, 50
+    new_bev_size = new_bev_h * new_bev_w
+
+    state_dict = {k: v for k, v in torch_dict.items() if k.startswith("seg_head")}
+    for key in ["pts_bbox_head.bev_embedding.weight", "seg_head.bev_embedding.weight"]:
+        if key in state_dict:
+            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_size, state_dict[key].shape[1])}")
+            state_dict[key] = state_dict[key][:new_bev_size, :]
+
     new_state_dict = dict(zip(torch_model.state_dict().keys(), state_dict.values()))
+    torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
     pts_feats = torch.randn(2500, 1, 256)
@@ -92,7 +99,6 @@ def test_uniad_TtPansegformerhead(
             "can_bus": np.random.randn(18).astype(np.float32),
         }
     ]
-    rescale = True
 
     torch_output = torch_model.forward_test(
         pts_feats=pts_feats,
@@ -101,13 +107,10 @@ def test_uniad_TtPansegformerhead(
         img_metas=img_metas,
         rescale=True,
     )
-
     parameter = create_uniad_model_parameters_encoder(torch_model, device=device)
 
     pts_feats = ttnn.from_torch(pts_feats, device=device, layout=ttnn.TILE_LAYOUT)
-
     gt_lane_labels = [ttnn.from_torch(label, device=device, layout=ttnn.TILE_LAYOUT) for label in gt_lane_labels]
-
     gt_lane_masks = [ttnn.from_torch(mask, device=device, layout=ttnn.TILE_LAYOUT) for mask in gt_lane_masks]
 
     tt_model = TtPansegformerHead(
@@ -139,7 +142,6 @@ def test_uniad_TtPansegformerhead(
         except AssertionError as e:
             print(f"[WARNING] PCC check failed for '{name}'. Error: {e}")
 
-    # Now apply it to each case
     check_pcc_and_log("bbox", torch_output[0]["pts_bbox"]["bbox"], ttnn_output[0]["pts_bbox"]["bbox"])
     check_pcc_and_log("segm", torch_output[0]["pts_bbox"]["segm"], ttnn_output[0]["pts_bbox"]["segm"])
     check_pcc_and_log("labels", torch_output[0]["pts_bbox"]["labels"], ttnn_output[0]["pts_bbox"]["labels"])
@@ -151,3 +153,12 @@ def test_uniad_TtPansegformerhead(
         convert_ttnn_to_torch=True,
     )
     check_pcc_and_log("lane_score", torch_output[0]["pts_bbox"]["lane_score"], ttnn_output[0]["pts_bbox"]["lane_score"])
+
+    for i in range(len(torch_output[0]["args_tuple"]) - 2):
+        if torch_output[0]["args_tuple"][i] is not None:
+            check_pcc_and_log(
+                "args_tuple",
+                torch_output[0]["args_tuple"][i],
+                ttnn_output[0]["args_tuple"][i],
+                convert_ttnn_to_torch=True,
+            )
