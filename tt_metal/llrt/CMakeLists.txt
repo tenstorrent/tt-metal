@@ -9,7 +9,6 @@ set(LLRT_SRC
     tt_elffile.cpp
     tt_memory.cpp
     hal.cpp
-    hal_1xx_common.cpp
     utils.cpp
 )
 
