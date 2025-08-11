@@ -126,12 +126,15 @@ FactoryParameters get_factory_parameters(
     // for medium kernels with sizes 16 < kernel_size_hw < 32 we tilize an entire tile even if some rows are unused,
     // so the in_cb height must be equal to the TILE_HEIGHT, but for kernels spanning only one face we set the
     // face_r_dim to only tilize the necessary number of rows, thus we can make the in_cb height smaller
-    uint32_t num_tilized_rows = kernel_size_hw <= 16 ? kernel_size_hw : tt::constants::TILE_HEIGHT;
+    uint32_t num_tilized_rows =
+        kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw : tt::constants::TILE_HEIGHT;
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
-    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / 16);
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::FACE_WIDTH);
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
-    const bool last_tile_is_partial = (in_channels / num_shards_c) % 32 != 0 && (in_channels / num_shards_c) % 32 < 17;
+    const bool last_tile_is_partial =
+        (in_channels / num_shards_c) % tt::constants::TILE_WIDTH != 0 &&
+        (in_channels / num_shards_c) % tt::constants::TILE_WIDTH <= tt::constants::FACE_WIDTH;
     const uint32_t max_rows_for_reduction =
         !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
@@ -150,7 +153,8 @@ FactoryParameters get_factory_parameters(
         .is_large_kernel = is_large_kernel,
         .MAX_TILES_PER_REDUCTION = MAX_TILES_PER_REDUCTION,
         .is_wide_reduction = is_wide_reduction,
-        .num_tilized_rows = num_tilized_rows};
+        .num_tilized_rows = num_tilized_rows,
+    };
 }
 
 uint32_t calculate_L1_usage(
@@ -186,7 +190,6 @@ uint32_t calculate_L1_usage(
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
-    const bool last_tile_is_partial = (in_channels / num_shards_c) % 32 != 0 && (in_channels / num_shards_c) % 32 < 17;
 
     // scalar CB as coefficient of reduce
     uint32_t in_scalar_cb_pagesize = tt::constants::TILE_HW * params.nbytes;
@@ -219,7 +222,8 @@ uint32_t calculate_L1_usage(
 
     // after reduction
     uint32_t out_cb_pagesize =
-        std::min(static_cast<uint32_t>(16), output_memory.shard_spec().value().shape[1]) * params.nbytes;
+        std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
+        params.nbytes;
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 

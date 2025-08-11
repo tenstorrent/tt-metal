@@ -293,8 +293,8 @@ def run_avg_pool2d(
         [1, 576, 32, 32],
         # C partial tile test
         [1, 16, 12, 12],
-        [2, 1, 7, 7],
-        [1, 290, 10, 10],
+        [1, 1, 56, 56],
+        [2, 290, 10, 10],
     ),
 )
 @pytest.mark.parametrize(

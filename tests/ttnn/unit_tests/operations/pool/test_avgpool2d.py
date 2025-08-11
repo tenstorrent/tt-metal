@@ -20,12 +20,10 @@ def tensor_map():
         # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
-        [1, 1, 56, 56],
         [2, 32, 16, 16],
-        [2, 290, 10, 10],
         [1, 512, 112, 32],
         [1, 320, 48, 48],
-        [1, 320, 47, 47],
+        [1, 290, 47, 47],
     ),
 )
 @pytest.mark.parametrize(

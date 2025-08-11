@@ -43,7 +43,7 @@ void MAIN {
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
     constexpr uint32_t num_faces_in_input_tile =
-        (max_sticks_for_reduction < TILE_WIDTH || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
+        (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
@@ -94,11 +94,11 @@ void MAIN {
             const uint32_t tiles_to_reduce =
                 tilize_reconfig ? (last_c_block ? partial_iter_output_tiles : max_tiles_per_iter) : max_tiles_per_iter;
             const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
-            const uint32_t pages_to_reserve =
+            const uint32_t num_faces_to_reserve =
                 (last_tile_is_partial && last_c_block)
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            cb_reserve_back(out_cb_id, pages_to_reserve);
+            cb_reserve_back(out_cb_id, num_faces_to_reserve);
             if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
@@ -128,7 +128,7 @@ void MAIN {
             } else {
                 pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
             }
-            cb_push_back(out_cb_id, pages_to_reserve);
+            cb_push_back(out_cb_id, num_faces_to_reserve);
             tile_regs_release();
         }
         if constexpr (!one_scalar_per_core) {
