@@ -10,7 +10,14 @@ on:
         default: "ALL SWEEPS (Nightly)"
         options:
           - ALL SWEEPS (Nightly)
-          - add
+          - ccl.generality.all_broadcast
+          - ccl.generality.all_gather
+          - ccl.generality.all_reduce
+          - ccl.generality.all_to_all_combine
+          - ccl.generality.all_to_all_dispatch
+          - ccl.generality.all_to_all
+          - ccl.generality.point_to_point
+          - ccl.generality.reduce_scatter
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
           - conv2d.full.conv2d_misc
