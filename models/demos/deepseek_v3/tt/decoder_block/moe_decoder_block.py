@@ -94,6 +94,18 @@ class MoEDecoderBlock(DecoderBlockBase):
 
     @classmethod
     @abstractmethod
+    def create_mlp_shared_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...],
+    ) -> ModelState:
+        return [
+            None if is_padding else MoE.create_shared_state(hf_config, mesh_device) for is_padding in is_padding_layer
+        ]
+
+    @classmethod
+    @abstractmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, row_idx: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
         mlp_out = MoE.forward_prefill(x, cfg["moe"][row_idx])
         mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"])
