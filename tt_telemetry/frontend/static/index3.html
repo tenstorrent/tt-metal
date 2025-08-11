@@ -288,28 +288,41 @@
                     this._eventSource.onmessage = (event) => {
                         let did_update = false;
 
+                        // Handle message
                         try {
                             const data = JSON.parse(event.data);
 
-                            // Handle message
-                            if (data["type"] == "EndpointDefinitionMessage") {
-                                for (const endpoint of data["endpoints"]) {
-                                    const path = data["host"] + "_" + endpoint["from"];
-                                    const id = endpoint["id"];
-                                    const state = endpoint["state"];
+                            const metric_indices = data["metric_indices"];
+                            const metric_names = data["metric_names"];    // optional, and indicates new telemetry metrics if present
+                            const metric_values = data["metric_values"];
+                            const is_absolute = data["is_absolute"];      // absolute update
+
+                            if (metric_indices.length != metric_values.length) {
+                                console.log(`SSE error: Received differing index and value counts (${metric_indices.length} vs. ${metric_values.length})`);
+                                return;
+                            }
+
+                            if (metric_names.length > 0 && metric_names.length != metric_indices.length) {
+                                console.log(`SSE error: Received differing name and index counts (${metric_names.length} vs. ${metric_indices.length})`);
+                                return;
+                            }
+
+                            if (metric_names.length > 0) {
+                                // Adding new
+                                for (let i = 0; i < metric_indices.length; i++) {
+                                    const path = metric_names[i];
+                                    const id = metric_indices[i];
+                                    const state = metric_values[i];
                                     this._telemetryStore.addPath(path, id, state);
                                     did_update = true;
                                 }
-                            } else if (data["type"] == "EndpointStateChangeMessage") {
-                                const ids = data["endpoint_indices"];
-                                const states = data["endpoint_states"];
-                                if (ids.length != states.length) {
-                                    console.log(`SSE error: Received EndpointStateChangeMessage with differing endpoint index and value counts (${ids.length} vs. ${states.length})`);
-                                } else {
-                                    for (let i = 0; i < ids.length; i++) {
-                                        this._telemetryStore.updateState(ids[i], states[i]);
-                                        did_update = true;
-                                    }
+                            } else {
+                                // Delta updates
+                                for (let i = 0; i < metric_indices.length; i++) {
+                                    const id = metric_indices[i];
+                                    const state = metric_values[i];
+                                    this._telemetryStore.updateState(id, state);
+                                    did_update = true;
                                 }
                             }
                         } catch (error) {

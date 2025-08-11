@@ -19,13 +19,7 @@
 
 using json = nlohmann::json;
 
-class DummyTelemetrySubscriber: public TelemetrySubscriber {
-    void on_telemetry_ready(HandoffHandle<TelemetrySnapshot> &&telemetry) override {
-        std::cout << "Telemetry values: " << telemetry->metric_indices.size() << std::endl;
-    }
-};
-
-class NewMockTelemetryProvider {
+class MockTelemetryProvider {
 private:
     static constexpr auto UPDATE_INTERVAL_SECONDS = std::chrono::seconds(5);
 
@@ -150,7 +144,7 @@ private:
     }
 
 public:
-    explicit NewMockTelemetryProvider(TelemetrySubscriber *subscriber)
+    explicit MockTelemetryProvider(TelemetrySubscriber *subscriber)
         : current_buffer_(create_new_handoff_buffer(std::make_shared<TelemetrySnapshot>()))
         , subscriber_(subscriber)
         , gen_(rd_())
@@ -169,129 +163,7 @@ public:
         }
 
         // Start update thread
-        thread_ = std::thread(&NewMockTelemetryProvider::update_telemetry_randomly, this);
-    }
-};
-
-class MockTelemetryProvider {
-private:
-    static constexpr auto UPDATE_INTERVAL = std::chrono::seconds(5);
-    
-    std::vector<messages::EndpointDescription> endpoints_;
-    std::string host_;
-    std::chrono::steady_clock::time_point last_update_time_;
-    std::vector<size_t> pending_updates_indices_;
-    std::vector<uint8_t> pending_updates_states_;
-
-    // Create mock endpoints with descriptive names
-    const std::vector<std::pair<std::string, std::string>> endpoint_names_ = {
-        {"tray1_n1_channel0", "tray2_n1_channel0"}, // from, to
-        {"tray1_n1_channel1", "tray2_n1_channel1"},
-        {"tray1_n1_channel2", "tray1_n3_channel0"},
-        {"tray1_n1_channel3", "tray1_n3_channel1"},
-        {"tray1_n2_channel0", "tray1_n4_channel0"},
-        {"tray1_n2_channel1", "tray1_n4_channel1"},
-        {"tray1_n2_channel2", "tray1_n3_channel0"},
-        {"tray1_n2_channel3", "tray1_n3_channel1"}
-    };
-    
-    // Random number generation
-    mutable std::random_device rd_;
-    mutable std::mt19937 gen_;
-    mutable std::uniform_int_distribution<> bool_dist_;
-    mutable std::uniform_int_distribution<> endpoint_dist_;
-    mutable std::uniform_int_distribution<> num_updates_dist_;
-    
-    void initialize_endpoints() {
-        size_t num_endpoints = endpoint_names_.size();
-    
-        endpoints_.clear();
-        endpoints_.reserve(num_endpoints);
-        
-        for (size_t i = 0; i < num_endpoints; ++i) {
-            messages::EndpointDescription endpoint;
-            endpoint.id = i;
-            endpoint.from = endpoint_names_[i].first;
-            endpoint.to = endpoint_names_[i].second;
-            endpoint.state = bool_dist_(gen_) & 1;  // Random initial state
-            
-            endpoints_.push_back(endpoint);
-        }
-    }
-    
-    void update_random_endpoints() {
-        int num_updates = num_updates_dist_(gen_);
-        pending_updates_indices_.clear();
-        pending_updates_states_.clear();
-        
-        // Select random endpoints to update
-        for (int i = 0; i < num_updates; ++i) {
-            size_t endpoint_idx = endpoint_dist_(gen_);
-            bool new_state = bool_dist_(gen_) & 1;
-            
-            // Only add to updates if state actually changes
-            if (endpoints_[endpoint_idx].state != new_state) {
-                endpoints_[endpoint_idx].state = new_state;
-                pending_updates_indices_.push_back(endpoint_idx);
-                pending_updates_states_.push_back(new_state);
-            }
-        }
-        
-        last_update_time_ = std::chrono::steady_clock::now();
-    }
-    
-public:
-    explicit MockTelemetryProvider(const std::string& host = "mock-host")
-        : host_(host)
-        , last_update_time_(std::chrono::steady_clock::now())
-        , gen_(rd_())
-        , bool_dist_(0, 1)
-        , endpoint_dist_(0, endpoint_names_.size() - 1)
-        , num_updates_dist_(1, 4)
-    {
-        initialize_endpoints();
-    }
-    
-    // Get the full snapshot of all endpoints as EndpointDefinitionMessage
-    nlohmann::json get_full_snapshot() {
-        messages::EndpointDefinitionMessage msg;
-        msg.host = host_;
-        msg.endpoints = endpoints_;
-        
-        nlohmann::json result;
-        to_json(result, msg);
-        return result;
-    }
-    
-    // Get pending state updates as EndpointStateChangeMessage
-    // Checks elapsed time and generates new updates if enough time has passed
-    nlohmann::json get_updates() {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = now - last_update_time_;
-        
-        // Generate new updates if enough time has elapsed
-        if (elapsed >= UPDATE_INTERVAL) {
-            update_random_endpoints();
-        }
-        
-        // Return pending updates if any exist
-        if (!pending_updates_indices_.empty()) {
-            messages::EndpointStateChangeMessage msg;
-            msg.host = host_;
-            msg.endpoint_indices = pending_updates_indices_;
-            msg.endpoint_states = pending_updates_states_;
-            
-            nlohmann::json result;
-            to_json(result, msg);
-            
-            // Clear pending updates after returning them
-            pending_updates_indices_.clear();
-            pending_updates_states_.clear();
-            
-            return result;
-        }
-        
-        return nlohmann::json::object(); // Return empty object if no updates
+        thread_ = std::thread(&MockTelemetryProvider::update_telemetry_randomly, this);
     }
 };
 
@@ -545,7 +417,7 @@ public:
 
 bool run_web_server() {
     TelemetryServer server;
-    NewMockTelemetryProvider mock_provider(&server);
+    MockTelemetryProvider mock_provider(&server);
     
     try {
         server.start();
