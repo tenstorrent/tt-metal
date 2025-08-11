@@ -74,32 +74,51 @@ def test_conv_features(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
-    run_conv(
-        device,
-        torch_tensor_map,
-        math_fidelity,
-        output_dtype,
-        weights_dtype,
-        batch_size,
-        output_channels,
-        input_channels,
-        input_height,
-        input_width,
-        filter,
-        filter,
-        stride,
-        stride,
-        padding,
-        config,
-        shard_layout=shard_layout,
-        output_layout=output_layout,
-        has_bias=True,
-        fp32_accum=fp32_accum,
-        packer_l1_acc=packer_l1_acc,
-        run_twice=True,
-        input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
-        input_dtype=input_dtype,
+    # Create subdevice with 4x5 grid (20 cores total)
+    tensix_cores = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(3, 4),  # 4x5 grid: x from 0-3, y from 0-4
+            ),
+        }
     )
+    sub_device = ttnn.SubDevice([tensix_cores])
+    sub_devices = [sub_device]
+    sub_device_manager = device.create_sub_device_manager(sub_devices, 3200)
+    device.load_sub_device_manager(sub_device_manager)
+
+    try:
+        run_conv(
+            device,
+            torch_tensor_map,
+            math_fidelity,
+            output_dtype,
+            weights_dtype,
+            batch_size,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            filter,
+            filter,
+            stride,
+            stride,
+            padding,
+            config,
+            shard_layout=shard_layout,
+            output_layout=output_layout,
+            has_bias=True,
+            fp32_accum=fp32_accum,
+            packer_l1_acc=packer_l1_acc,
+            run_twice=True,
+            input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
+            input_dtype=input_dtype,
+        )
+    finally:
+        # Clean up subdevice manager
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(sub_device_manager)
 
 
 SliceHeight = ttnn.Conv2dSliceHeight
