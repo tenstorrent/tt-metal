@@ -378,8 +378,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         free_space_pages = (int32_t)free_space_pages_wrap;
     } while (free_space_pages < num_pages);
     // Assert that region is contiguous.
-    ASSERT(get_local_cb_interface(operand).fifo_wr_ptr + num_pages <=
-           get_local_cb_interface(operand).fifo_limit);
+    ASSERT(get_local_cb_interface(operand).fifo_wr_ptr + num_pages <= get_local_cb_interface(operand).fifo_limit);
     WAYPOINT("CRBD");
 }
 
@@ -451,6 +450,8 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
     do {
         pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
+    // Assert that region is contiguous.
+    ASSERT(get_local_cb_interface(operand).fifo_rd_ptr + num_pages <= get_local_cb_interface(operand).fifo_limit);
     WAYPOINT("CWFD");
 }
 
