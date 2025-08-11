@@ -185,7 +185,7 @@ tests/ttnn/multidevice_perf_tests/ @sjameelTT @ntarafdar @nardoTT @llongTT @amor
 tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/test_sort.py @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 tests/ttnn/unit_tests/operations/test_tosa_gather.py @mgajewskiTT @aczajkowskiTT @bbradelTT
-tests/ttnn/unit_tests/operations/test_tosa_scatter.py @jbbieniekTT @aczajkowskiTT
+tests/ttnn/unit_tests/operations/test_tosa_scatter.py @jbbieniekTT @aczajkowskiTT @bbradelTT
 tests/ttnn/unit_tests/operations/test_scatter.py @aczajkowskiTT @sjameelTT @bbradelTT @jbbieniekTT
 tests/ttnn/unit_tests/operations/test_gather.py @aczajkowskiTT @mgajewskiTT @bbradelTT
 tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
