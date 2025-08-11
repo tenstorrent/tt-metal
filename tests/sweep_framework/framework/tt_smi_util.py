@@ -26,11 +26,12 @@ class ResetUtil:
 
         self.smi_options = [
             "tt-smi",
-            "tt-smi-metal",
-            "/home/software/syseng/gs/tt-smi" if arch == "grayskull" else "/home/software/syseng/wh/tt-smi",
+            #"tt-smi-metal",
+            #"/home/software/syseng/gs/tt-smi" if arch == "grayskull" else "/home/software/syseng/wh/tt-smi",
         ]
         for smi_option in self.smi_options:
             executable = shutil.which(smi_option)
+            logger.info(f"tt-smi executable: {executable}")
             if executable is not None:
                 args = []
                 # Corner case for newer version of tt-smi, -tr and -wr are removed on this version (tt-smi-metal).
@@ -40,24 +41,28 @@ class ResetUtil:
                 elif arch == "grayskull":
                     args = GRAYSKULL_ARGS
                 elif arch == "wormhole_b0":
-                    smi_process = subprocess.run([executable, "-v"], capture_output=True, text=True)
-                    smi_version = smi_process.stdout.strip()
-                    if not smi_version.startswith("3.0"):
-                        args = LEGACY_WORMHOLE_ARGS
-                    else:
-                        args = ["-r"]
-                        smi_process = subprocess.run([executable, "-g", ".reset.json"])
-                        import json
-
-                        with open(".reset.json", "r") as f:
-                            reset_json = json.load(f)
-                            card_id = reset_json["wh_link_reset"]["pci_index"]
-                            if len(card_id) < 1:
-                                raise Exception(f"SWEEPS: TT-SMI Reset Failed to Find Card ID.")
-                            args.append(str(card_id[0]))
-                        subprocess.run(["rm", "-f", ".reset.json"])
+                    args = ["-r"]
+  #                   smi_process = subprocess.run([executable, "-v"], capture_output=True, text=True)
+#                     smi_version = smi_process.stdout.strip()
+#                     if not smi_version.startswith("3.0"):
+#                         args = LEGACY_WORMHOLE_ARGS
+#                     else:
+#                         args = ["-r"]
+#                         smi_process = subprocess.run([executable, "-g", ".reset.json"])
+#                         import json
+# 
+#                         with open(".reset.json", "r") as f:
+#                             reset_json = json.load(f)
+#                             card_id = reset_json["wh_link_reset"]["pci_index"]
+#                             if len(card_id) < 1:
+#                                 raise Exception(f"SWEEPS: TT-SMI Reset Failed to Find Card ID.")
+#                             args.append(str(card_id[0]))
+#                         subprocess.run(["rm", "-f", ".reset.json"])
                 elif arch == "blackhole":
                     args = ["-r", "0"]
+                
+                return
+                
                 smi_process = subprocess.run([executable, *args])
                 if smi_process.returncode == 0:
                     self.command = executable
