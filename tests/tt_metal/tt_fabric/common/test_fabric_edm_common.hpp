@@ -1443,7 +1443,6 @@ void Run1DFabricPacketSendTest(
     bool use_t3k = num_devices == 8;
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
-    bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
     if (num_devices < 4) {
         log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
@@ -1474,8 +1473,6 @@ void Run1DFabricPacketSendTest(
         case FabricTestMode::FullRing:
         case FabricTestMode::RingAsLinear: topology = tt::tt_fabric::Topology::Ring; break;
     }
-
-    const auto edm_buffer_config = get_edm_buffer_config_helper(fabric_mode, line_size);
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
@@ -1869,7 +1866,6 @@ static void validate_fabric_packet_send_test_params(const FullMeshTestParams& fu
 static void validate_fabric_packet_send_test_params(
     const std::variant<WriteThroughputStabilityTestWithPersistentFabricParams, FullMeshTestParams>& params) {
     if (std::holds_alternative<WriteThroughputStabilityTestWithPersistentFabricParams>(params)) {
-        const auto& write_throughput_params = std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(params);
         TT_THROW("Not commonized yet");
     } else {
         const auto& full_mesh_params = std::get<FullMeshTestParams>(params);
@@ -2305,15 +2301,11 @@ void Run1DFullMeshFabricPacketSendTest(
     for (size_t axis = 0; axis < MAX_NUM_AXES; axis++) {
         const uint32_t source_payload_cb_index = axis == 0 ? tt::CB::c_in1 : tt::CB::c_in3;
         auto line_size = params.line_size[axis];
-        auto fabric_mode = fabric_modes[axis];
-        auto topology = topologies[axis];
         auto& dest_core_coord = dest_core_coord_per_axis[axis];
         auto num_devices_with_workers = params.num_devices_with_workers[axis];
         if (num_devices_with_workers == 0) {
             num_devices_with_workers = line_size;
         }
-        auto num_links = params.num_links[axis];
-        auto first_link_offset = params.first_link_offset[axis];
         auto num_op_invocations = params.num_op_invocations;
         auto senders_are_unidirectional = params.senders_are_unidirectional[axis];
         size_t num_messages = (test_specs.num_messages * line_size) / max_line_size;
@@ -2339,8 +2331,7 @@ void Run1DFullMeshFabricPacketSendTest(
                 tt_metal::CircularBufferConfig cb_src1_config =
                     tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                         .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
-                CBHandle sender_workers_payload_cb =
-                    CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
+                CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
 
                 auto worker_kernel_id = tt_metal::CreateKernel(
                     program,

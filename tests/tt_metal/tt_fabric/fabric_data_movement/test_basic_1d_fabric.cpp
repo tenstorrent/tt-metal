@@ -1739,7 +1739,7 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
                     this->RunProgramNonblocking(sender_device, program);
                     this->WaitForSingleProgramDone(sender_device, program);
                     auto end_time = std::chrono::high_resolution_clock::now();
-                    auto duration_ms =
+                    [[maybe_unused]] auto duration_ms =
                         std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
                     log_debug(
