@@ -95,7 +95,6 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     detail::ValidateCircularBufferRegion(program, mesh_device.get());
     ShardSpecBuffer local_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
-    uint32_t local_buffer_size = k_local_l1_size / 2;
     distributed::DeviceLocalBufferConfig local_config_2 = {
         .page_size = global_buffer_size,
         .buffer_type = BufferType::L1,
@@ -303,7 +302,6 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.
 TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinates) {
     auto mesh_device = devices_[0];
-    uint32_t local_l1_size = 3200;
     // Make 2 sub devices.
     // origin means top left.
     // for sub_device_1 = 0,0. so relative coordinates are the same as logical.

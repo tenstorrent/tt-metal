@@ -361,7 +361,8 @@ void build_and_run_autonomous_stream_test(
     uint32_t second_relay_stream_overlay_blob_addr =
         tt_metal::detail::GetCircularBuffer(program, second_relay_stream_overlay_blob_cb)->address();
 
-    uint32_t receiver_cb_address = tt_metal::detail::GetCircularBuffer(program, receiver_cb)->address();
+    [[maybe_unused]] uint32_t receiver_cb_address =
+        tt_metal::detail::GetCircularBuffer(program, receiver_cb)->address();
     log_trace(tt::LogTest, "receiver_cb_address: {}", receiver_cb_address);
 
     TT_ASSERT(sender_stream_buffer_size_bytes % page_size_plus_header == 0);
@@ -546,37 +547,37 @@ void build_and_run_autonomous_stream_test(
             .compile_args = {tile_header_size}});
 
     log_trace(tt::LogTest, "sender_reader_rt_args: ");
-    for (auto const& arg : sender_reader_rt_args) {
+    for ([[maybe_unused]] const auto& arg : sender_reader_rt_args) {
         log_trace(tt::LogTest, "\t{}", arg);
     }
     tt_metal::SetRuntimeArgs(program, sender_reader_kernel, sender_core, sender_reader_rt_args);
 
     log_trace(tt::LogTest, "sender_writer_rt_args: ");
-    for (auto const& arg : sender_writer_rt_args) {
+    for ([[maybe_unused]] const auto& arg : sender_writer_rt_args) {
         log_trace(tt::LogTest, "\t{}", arg);
     }
     tt_metal::SetRuntimeArgs(program, sender_writer_kernel, sender_core, sender_writer_rt_args);
 
     log_trace(tt::LogTest, "first_relay_rt_args: ");
-    for (auto const& arg : first_relay_rt_args) {
+    for ([[maybe_unused]] const auto& arg : first_relay_rt_args) {
         log_trace(tt::LogTest, "\t{}", arg);
     }
     tt_metal::SetRuntimeArgs(program, first_relay_kernel, first_relay_core, first_relay_rt_args);
 
     log_trace(tt::LogTest, "second_relay_rt_args: ");
-    for (auto const& arg : second_relay_rt_args) {
+    for ([[maybe_unused]] const auto& arg : second_relay_rt_args) {
         log_trace(tt::LogTest, "\t{}", arg);
     }
     tt_metal::SetRuntimeArgs(program, second_relay_kernel, second_relay_core, second_relay_rt_args);
 
     log_trace(tt::LogTest, "receiver_reader_rt_args: ");
-    for (auto const& arg : receiver_reader_rt_args) {
+    for ([[maybe_unused]] const auto& arg : receiver_reader_rt_args) {
         log_trace(tt::LogTest, "\t{}", arg);
     }
     tt_metal::SetRuntimeArgs(program, receiver_reader_kernel, receiver_core, receiver_reader_rt_args);
 
     log_trace(tt::LogTest, "receiver_writer_rt_args: ");
-    for (auto const& arg : receiver_writer_rt_args) {
+    for ([[maybe_unused]] const auto& arg : receiver_writer_rt_args) {
         log_trace(tt::LogTest, "\t{}", arg);
     }
     tt_metal::SetRuntimeArgs(program, receiver_writer_kernel, receiver_core, receiver_writer_rt_args);

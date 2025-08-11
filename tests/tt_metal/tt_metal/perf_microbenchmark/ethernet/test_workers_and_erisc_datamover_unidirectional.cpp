@@ -290,7 +290,7 @@ bool RunWriteBWTest(
     log_debug(tt::LogTest, "\t-- receiver --");
     log_debug(tt::LogTest, "\tchip0_receiver_channels_offset: {}", chip0_receiver_channels_offset);
     chip0_edm_args.push_back(chip0_receiver_channels_offset);
-    uint32_t chip0_receiver_num_channels = 0;
+    [[maybe_unused]] uint32_t chip0_receiver_num_channels = 0;
     // chip0_edm_args.push_back(chip0_receiver_num_channels);
     log_debug(tt::LogTest, "\tchip0_receiver_num_channels: {}", chip0_receiver_num_channels);
     //---------------------

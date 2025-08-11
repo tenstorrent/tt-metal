@@ -540,8 +540,8 @@ int main(int argc, char** argv) {
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        [[maybe_unused]] uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        [[maybe_unused]] uint32_t num_cores_y = compute_with_storage_grid_size.y;
         log_debug(tt::LogTest, "device x : {}", num_cores_x);
         log_debug(tt::LogTest, "device y : {}", num_cores_y);
 

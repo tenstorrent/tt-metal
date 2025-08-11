@@ -248,7 +248,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEventsQueryBasic) {
         EnqueueRecordEvent(this->device_->command_queue(), event);
 
         if (i > 0 && ((i % num_events_between_query) == 0)) {
-            auto status = EventQuery(event);
+            [[maybe_unused]] auto status = EventQuery(event);
             log_trace(tt::LogTest, "EventQuery for i: {} - status: {}", i, status);
         }
     }
