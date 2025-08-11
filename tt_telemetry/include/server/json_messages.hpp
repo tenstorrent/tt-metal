@@ -12,31 +12,13 @@
 #include <nlohmann/json.hpp>
 
 namespace messages {
-    // Describes the state of an endpoint
-    struct EndpointState {
-        size_t id;
-        bool up;
-    };
-
-    static inline void to_json(nlohmann::json &j, const EndpointState &s) {
-        j = nlohmann::json {
-            { "id", s.id },
-            { "up", s.up }
-        };
-    }
-
-    static inline void from_json(const nlohmann::json &j, EndpointState &s) {
-        j.at("id").get_to(s.id);
-        j.at("up").get_to(s.up);
-    }
-
     // Describes an endpoint. "from" is the name of the endpoint, "to" is the name of the end it
     // is connected to.
     struct EndpointDescription {
         size_t id;              // unique id
         std::string from;
         std::string to;
-        EndpointState state;    // initial state
+        uint8_t state;
     };
 
     static inline void to_json(nlohmann::json &j, const EndpointDescription &d) {
@@ -79,19 +61,22 @@ namespace messages {
     struct EndpointStateChangeMessage {
         const char *type = "EndpointStateChangeMessage";
         std::string host;
-        std::vector<EndpointState> endpoints;
+        std::vector<size_t> endpoint_indices;
+        std::vector<uint8_t> endpoint_states;
     };
 
     static inline void to_json(nlohmann::json &j, const EndpointStateChangeMessage &s) {
         j = nlohmann::json({
             { "type", s.type },
             { "host", s.host },
-            { "endpoints", s.endpoints }
+            { "endpoint_indices", s.endpoint_indices },
+            { "endpoint_states", s.endpoint_states }
         });
     }
 
     static inline void from_json(const nlohmann::json &j, EndpointStateChangeMessage &s) {
         j.at("host").get_to(s.host);
-        j.at("endpoints").get_to(s.endpoints);
+        j.at("endpoint_indices").get_to(s.endpoint_indices);
+        j.at("endpoint_states").get_to(s.endpoint_states);
     }
 }

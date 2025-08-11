@@ -296,16 +296,19 @@
                                 for (const endpoint of data["endpoints"]) {
                                     const path = data["host"] + "_" + endpoint["from"];
                                     const id = endpoint["id"];
-                                    const state = endpoint["state"]["up"];
+                                    const state = endpoint["state"];
                                     this._telemetryStore.addPath(path, id, state);
                                     did_update = true;
                                 }
                             } else if (data["type"] == "EndpointStateChangeMessage") {
-                                for (const endpoint of data["endpoints"]) {
-                                    const id = endpoint["id"];
-                                    const state = endpoint["up"];
-                                    this._telemetryStore.updateState(id, state);
-                                    did_update = true;
+                                const ids = data["endpoint_indices"];
+                                const states = data["endpoint_states"];
+                                if (ids.length != states.length) {
+                                    console.log(`SSE error: Received EndpointStateChangeMessage with differing endpoint index and value counts (${ids.length} vs. ${states.length})`);
+                                } else {
+                                    for (let i = 0; i < ids.length; i++) {
+                                        this._telemetryStore.updateState(ids[i], states[i]);
+                                    }
                                 }
                             }
                         } catch (error) {

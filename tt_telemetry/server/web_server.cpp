@@ -23,7 +23,8 @@ private:
     std::vector<messages::EndpointDescription> endpoints_;
     std::string host_;
     std::chrono::steady_clock::time_point last_update_time_;
-    std::vector<messages::EndpointState> pending_updates_;
+    std::vector<size_t> pending_updates_indices_;
+    std::vector<uint8_t> pending_updates_states_;
 
     // Create mock endpoints with descriptive names
     const std::vector<std::pair<std::string, std::string>> endpoint_names_ = {
@@ -55,8 +56,7 @@ private:
             endpoint.id = i;
             endpoint.from = endpoint_names_[i].first;
             endpoint.to = endpoint_names_[i].second;
-            endpoint.state.id = i;
-            endpoint.state.up = bool_dist_(gen_) == 1; // Random initial state
+            endpoint.state = bool_dist_(gen_) & 1;  // Random initial state
             
             endpoints_.push_back(endpoint);
         }
@@ -64,21 +64,19 @@ private:
     
     void update_random_endpoints() {
         int num_updates = num_updates_dist_(gen_);
-        pending_updates_.clear();
+        pending_updates_indices_.clear();
+        pending_updates_states_.clear();
         
         // Select random endpoints to update
         for (int i = 0; i < num_updates; ++i) {
             size_t endpoint_idx = endpoint_dist_(gen_);
-            bool new_state = bool_dist_(gen_) == 1;
+            bool new_state = bool_dist_(gen_) & 1;
             
             // Only add to updates if state actually changes
-            if (endpoints_[endpoint_idx].state.up != new_state) {
-                endpoints_[endpoint_idx].state.up = new_state;
-                
-                messages::EndpointState state_update;
-                state_update.id = endpoint_idx;
-                state_update.up = new_state;
-                pending_updates_.push_back(state_update);
+            if (endpoints_[endpoint_idx].state != new_state) {
+                endpoints_[endpoint_idx].state = new_state;
+                pending_updates_indices_.push_back(endpoint_idx);
+                pending_updates_states_.push_back(new_state);
             }
         }
         
@@ -120,16 +118,18 @@ public:
         }
         
         // Return pending updates if any exist
-        if (!pending_updates_.empty()) {
+        if (!pending_updates_indices_.empty()) {
             messages::EndpointStateChangeMessage msg;
             msg.host = host_;
-            msg.endpoints = pending_updates_;
+            msg.endpoint_indices = pending_updates_indices_;
+            msg.endpoint_states = pending_updates_states_;
             
             nlohmann::json result;
             to_json(result, msg);
             
             // Clear pending updates after returning them
-            pending_updates_.clear();
+            pending_updates_indices_.clear();
+            pending_updates_states_.clear();
             
             return result;
         }

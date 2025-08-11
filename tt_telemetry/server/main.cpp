@@ -37,7 +37,6 @@
 #include <telemetry/ethernet_helpers.hpp>
 #include <telemetry/print_helpers.hpp>
 #include <server/web_server.hpp>
-#include <server/json_messages.hpp>
 
 
 /**************************************************************************************************
@@ -89,23 +88,6 @@ int main() {
             std::cout << "  " << endpoint << ": " << (is_ethernet_endpoint_up(cluster, endpoint) ? "UP" : "DOWN") << std::endl;
         }
     }
-
-    // JSON test
-    messages::EndpointDefinitionMessage msg {
-        .host = "sjc-wh-05",
-        .endpoints = { { 200, "from", "to" } }
-    };
-
-    nlohmann::json j = msg;
-    std::cout << "json: " << j << std::endl;;
-
-    messages::EndpointStateChangeMessage msg2 {
-        .host = "sjc-wh-05",
-        .endpoints = { { 100, true } }
-    };
-
-    j = msg2;
-    std::cout << "json: " << j << std::endl;
 
     // Web server
     run_web_server();
