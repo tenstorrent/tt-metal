@@ -1503,8 +1503,8 @@ void DeviceProfiler::readPacketData(
     //     zone_phase,
     //     getDeviceEventColor(risc_num, zone_details.zone_name_keyword_flags));
     std::vector<OperationDataPoint>& data_points_for_op = this->operation_data_points[run_host_id];
-    data_points_for_op.emplace_back(
-        device_id, core.x, core.y, tracy::riscName[risc_num], timestamp, zone_details.zone_name_keyword_flags);
+    // data_points_for_op.emplace_back(
+    //     device_id, core.x, core.y, tracy::riscName[risc_num], timestamp, zone_details.zone_name_keyword_flags);
 
     device_data_points.emplace_back(
         device_id,
