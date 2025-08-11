@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -174,8 +174,10 @@ ALWI void read_window_with_top_left_index(
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
+            tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 32);
             cb_push_back(in_cb_id, 1);
             if constexpr (return_indices) {
+                tt::data_movement::common::print_u16_pages(get_read_ptr(in_idx_cb_id), 32, 32);
                 cb_push_back(in_idx_cb_id, 1);
             }
         }
@@ -270,9 +272,9 @@ void kernel_main() {
     constexpr uint32_t face_r_dim = window_size_hw < 16 && !return_indices ? window_size_hw : 16;
     constexpr bool is_partial_tile = in_c < 32;
     constexpr uint32_t num_faces_in_input_tile =
-        is_partial_tile                                                              ? 1
-        : (max_sticks_for_reduction < 32 || window_size_hw <= 16 && !return_indices) ? 2
-                                                                                     : 4;
+        is_partial_tile                                                                ? 1
+        : ((max_sticks_for_reduction < 32 || window_size_hw <= 16) && !return_indices) ? 2
+                                                                                       : 4;
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -296,6 +298,7 @@ void kernel_main() {
         if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
         }
+        // we don't need to clear the idx CB since the data CB is the one being sorted
     }
 
     // initialize the scalar CB
