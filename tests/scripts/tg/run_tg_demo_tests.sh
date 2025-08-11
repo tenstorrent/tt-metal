@@ -105,7 +105,7 @@ run_tg_sentence_bert_tests() {
   echo "LOG_METAL: Running run_tg_sentence_bert_tests"
 
   # Sentence BERT demo test
-  pytest -n auto models/demos/tg/sentence_bert/demo/demo.py --timeout=1000 ; fail+=$?
+  pytest models/demos/tg/sentence_bert/demo/demo.py --timeout=1000 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
