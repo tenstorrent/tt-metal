@@ -13,7 +13,9 @@
 
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <llrt/tt_cluster.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
+#include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 
 namespace tt {
@@ -28,6 +30,27 @@ FabricType operator|(FabricType lhs, FabricType rhs) {
 FabricType operator&(FabricType lhs, FabricType rhs) {
     return static_cast<FabricType>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
 }
+
+namespace {
+constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
+}
+
+const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
+    MeshGraph::cluster_type_to_mesh_graph_descriptor =
+        *new tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
+            std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
+                {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"}});
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
@@ -169,8 +192,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             board_name_to_topology.find(board_name) == board_name_to_topology.end(),
             "MeshGraph: Duplicate board name: {}",
             board_name);
-        auto fabric_type =
-            enchantum::cast<FabricType>(board["type"].as<std::string>(), ttsl::ascii_caseless_comp);
+        auto fabric_type = enchantum::cast<FabricType>(board["type"].as<std::string>(), ttsl::ascii_caseless_comp);
         TT_FATAL(
             fabric_type.has_value(), "MeshGraph: Invalid yaml fabric board type: {}", board["type"].as<std::string>());
 
@@ -500,5 +522,14 @@ std::optional<HostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip
 }
 
 const MeshContainer<HostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) const { return mesh_host_ranks_[*mesh_id]; }
+
+std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+    tt::tt_metal::ClusterType cluster_type, const std::string& root_dir) {
+    auto it = cluster_type_to_mesh_graph_descriptor.get().find(cluster_type);
+    if (it != cluster_type_to_mesh_graph_descriptor.get().end()) {
+        return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / it->second;
+    }
+    TT_THROW("Cannot find mesh graph descriptor for cluster type {}", cluster_type);
+}
 
 }  // namespace tt::tt_fabric
