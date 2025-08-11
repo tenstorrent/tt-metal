@@ -25,10 +25,9 @@ PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
 
 class RankBinding(BaseModel):
-    """Binding between MPI rank to target MeshId and HostRankId as defined in the mesh graph descriptor."""
+    """Binding between MPI rank to target as defined in the mesh graph descriptor."""
 
     rank: int = Field(..., ge=0, description="MPI rank (must be >= 0)")
-    mesh_id: int = Field(..., ge=0, description="`MeshId` defines the mesh to which the rank belongs")
     env_overrides: Dict[str, str] = Field(default_factory=dict, description="Environment variable overrides")
 
 
@@ -76,9 +75,7 @@ def parse_binding_config(yaml_path: Path) -> TTRunConfig:
         raise ValueError(f"Invalid configuration: {e}")
 
 
-def get_rank_environment(
-    binding: RankBinding, config: TTRunConfig, mesh_to_host_rank_id: Dict[int, int]
-) -> Dict[str, str]:
+def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
 
     Args:
@@ -93,11 +90,8 @@ def get_rank_environment(
             "TT_METAL_CACHE",
             DEFAULT_CACHE_DIR_PATTERN.format(home=str(Path.home()), hostname=os.uname().nodename, rank=binding.rank),
         ),  # Need to explicitly configure this because kernel cache is not multi-process safe (#21089)
-        "TT_MESH_ID": str(binding.mesh_id),
-        "TT_HOST_RANK": str(mesh_to_host_rank_id[binding.mesh_id]),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
     }
-    mesh_to_host_rank_id[binding.mesh_id] += 1
 
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first
@@ -108,9 +102,7 @@ def get_rank_environment(
     return env
 
 
-def build_rank_environment_args(
-    binding: RankBinding, config: TTRunConfig, mesh_to_host_rank_id: Dict[int, int]
-) -> List[str]:
+def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> List[str]:
     """Build environment variable arguments for mpirun.
 
     Args:
@@ -121,7 +113,7 @@ def build_rank_environment_args(
         List of ["-x", "KEY=value"] arguments for mpirun
     """
     env_args = []
-    env = get_rank_environment(binding, config, mesh_to_host_rank_id)
+    env = get_rank_environment(binding, config)
 
     for key, value in env.items():
         env_args.extend(["-x", f"{key}={value}"])
@@ -143,13 +135,12 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
         cmd.extend(mpi_args)
 
     # Build per-rank application contexts
-    mesh_to_host_rank_id = defaultdict(int)
     for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
         if i > 0:
             cmd.append(":")
 
         cmd.extend(["-np", "1"])
-        cmd.extend(build_rank_environment_args(binding, config, mesh_to_host_rank_id))
+        cmd.extend(build_rank_environment_args(binding, config))
         cmd.extend(program)
 
     return cmd
@@ -245,8 +236,6 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
     \b
     Environment Variables:
         The following variables are automatically set for each rank:
-        - TT_MESH_ID: Mesh identifier
-        - TT_HOST_RANK: Host rank within the mesh
         - TT_METAL_CACHE: Per-rank cache directory
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path

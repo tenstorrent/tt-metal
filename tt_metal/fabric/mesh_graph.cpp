@@ -206,8 +206,10 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         std::uint32_t col_size = board["topology"][0].as<std::uint32_t>();
         board_name_to_topology[board_name] = {col_size, row_size};
     }
-    // Loop over Meshes, populate intra mesh
+    // Loop over Meshes, populate intra mesh.
+    // Host ranks are assigned sequentially, starting from 0.
     std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id;
+    std::uint32_t current_host_rank_id = 0;
     for (const auto& mesh : yaml["Mesh"]) {
         std::string mesh_board = mesh["board"].as<std::string>();
         MeshId mesh_id{mesh["id"].as<std::uint32_t>()};
@@ -266,23 +268,14 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         this->mesh_to_chip_ids_.emplace(*mesh_id, MeshContainer<chip_id_t>(mesh_shape, chip_ids));
 
         // Fill in host ranks for Mesh
-        TT_FATAL(
-            mesh["host_ranks"].IsSequence() and mesh["host_ranks"].size() == mesh_board_ns_size,
-            "MeshGraph: Expecting host_ranks to define a 2D array that matches host topology NS size {}",
-            mesh_board_ns_size);
-
         std::vector<HostRankId> mesh_host_ranks_values;
         mesh_host_ranks_values.reserve(mesh_board_ns_size * mesh_board_ew_size);
 
         // Track the start and end coordinates of each host rank
         std::unordered_map<HostRankId, std::pair<MeshCoordinate, MeshCoordinate>> host_rank_submesh_start_end_coords;
         for (std::uint32_t i = 0; i < mesh_board_ns_size; i++) {
-            TT_FATAL(
-                mesh["host_ranks"][i].IsSequence() and mesh["host_ranks"][i].size() == mesh_board_ew_size,
-                "MeshGraph: Expecting host_ranks to define a 2D array that matches host topology EW size {}",
-                mesh_board_ew_size);
             for (std::uint32_t j = 0; j < mesh_board_ew_size; j++) {
-                HostRankId host_rank{mesh["host_ranks"][i][j].as<std::uint32_t>()};
+                HostRankId host_rank = HostRankId{current_host_rank_id++};
                 if (host_rank_submesh_start_end_coords.find(host_rank) == host_rank_submesh_start_end_coords.end()) {
                     host_rank_submesh_start_end_coords.insert(
                         {host_rank, std::make_pair(MeshCoordinate(i, j), MeshCoordinate(i, j))});

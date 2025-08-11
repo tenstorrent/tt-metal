@@ -327,34 +327,31 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 }
 
 LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
-    const char* mesh_id_str = std::getenv("TT_MESH_ID");
-    const char* host_rank_str = std::getenv("TT_HOST_RANK");
-    if (mesh_id_str == nullptr ^ host_rank_str == nullptr) {
-        TT_THROW("Both TT_MESH_ID and TT_HOST_RANK environment variables must be set together or both unset");
-    }
+    auto& ctx = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto mpi_rank = *ctx.rank();
+    LocalMeshBinding local_mesh_binding{.host_rank = HostRankId{mpi_rank}};
 
-    // If both TT_MESH_ID and TT_HOST_RANK are unset, we don't initialzie the local mesh binding.
-    // A nullopt here indicates that the host this ControlPlane is runnning on owns all Meshes in
+    // A nullopt here indicates that the host this ControlPlane is runnning on owns Meshes as per
     // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
-    if (mesh_id_str == nullptr && host_rank_str == nullptr) {
-        auto& ctx = tt::tt_metal::MetalContext::instance().global_distributed_context();
-        auto mpi_rank = *ctx.rank();
-        std::vector<MeshId> local_mesh_ids;
+    if (const char* mesh_id_str = std::getenv("TT_MESH_ID"); mesh_id_str == nullptr) {
         for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
             const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
-            for (const auto& [coord, rank] : host_ranks) {
-                if (mpi_rank == *rank) {
-                    local_mesh_ids.push_back(mesh_id);
+            for (const auto& [_, rank] : host_ranks) {
+                if (local_mesh_binding.host_rank == rank) {
+                    local_mesh_binding.mesh_ids.push_back(mesh_id);
                 }
             }
         }
-        TT_FATAL(local_mesh_ids.size() > 0, "No local meshes found for host rank {}", mpi_rank);
-        return LocalMeshBinding{.mesh_ids = std::move(local_mesh_ids), .host_rank = HostRankId{mpi_rank}};
+        TT_FATAL(local_mesh_binding.mesh_ids.size() > 0, "No local meshes found for host rank {}", mpi_rank);
+    } else {
+        local_mesh_binding.mesh_ids.push_back(MeshId{std::stoi(mesh_id_str)});
+        // Validate the local mesh binding exists in the mesh graph descriptor
+        auto mesh_ids = this->routing_table_generator_->mesh_graph->get_mesh_ids();
+        TT_FATAL(
+            std::find(mesh_ids.begin(), mesh_ids.end(), local_mesh_binding.mesh_ids[0]) != mesh_ids.end(),
+            "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
+            local_mesh_binding.mesh_ids[0]);
     }
-
-    // If both TT_MESH_ID and TT_HOST_RANK are set, we'll use the values from the environment variables.
-    auto local_mesh_binding = LocalMeshBinding{
-        .mesh_ids = {MeshId{std::stoi(mesh_id_str)}}, .host_rank = HostRankId{std::stoi(host_rank_str)}};
 
     log_debug(
         tt::LogDistributed,
@@ -362,23 +359,14 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
         local_mesh_binding.mesh_ids[0],
         local_mesh_binding.host_rank);
 
-    // Validate the local mesh binding exists in the mesh graph descriptor
-    auto mesh_ids = this->routing_table_generator_->mesh_graph->get_mesh_ids();
-    if (std::find(mesh_ids.begin(), mesh_ids.end(), local_mesh_binding.mesh_ids[0]) == mesh_ids.end()) {
-        TT_THROW(
-            "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
-            local_mesh_binding.mesh_ids[0]);
-    }
-
-    // Validate host rank (only if mesh_id is valid)
     const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(local_mesh_binding.mesh_ids[0]);
-    bool is_valid_host_rank = std::find_if(host_ranks.begin(), host_ranks.end(), [&](const auto& coord_rank_pair) {
-                                  return coord_rank_pair.value() == local_mesh_binding.host_rank;
-                              }) != host_ranks.end();
-
     TT_FATAL(
-        is_valid_host_rank,
-        "Invalid TT_HOST_RANK: Local mesh binding host_rank {} not found in mesh graph descriptor",
+        std::find_if(
+            host_ranks.begin(),
+            host_ranks.end(),
+            [&](const auto& coord_rank_pair) { return coord_rank_pair.value() == local_mesh_binding.host_rank; }) !=
+            host_ranks.end(),
+        "Invalid host rank: Local mesh binding host_rank {} not found in mesh graph descriptor",
         local_mesh_binding.host_rank);
 
     return local_mesh_binding;

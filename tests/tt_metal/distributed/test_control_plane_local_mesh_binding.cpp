@@ -134,30 +134,6 @@ TEST_F(ControlPlaneLocalMeshBinding, InvalidEnvironmentVariablesMeshId) {
         std::runtime_error);
 }
 
-TEST_F(ControlPlaneLocalMeshBinding, PartialEnvironmentVariables) {
-    // Test with only TT_MESH_ID set
-    {
-        ScopedEnvVar mesh_only("TT_MESH_ID", "0");
-        EXPECT_THROW(
-            {
-                auto chip_mapping = get_dual_host_chip_mapping();
-                auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
-            },
-            std::runtime_error);
-    }
-
-    // Test with only TT_HOST_RANK set
-    {
-        ScopedEnvVar host_only("TT_HOST_RANK", "0");
-        EXPECT_THROW(
-            {
-                auto chip_mapping = get_dual_host_chip_mapping();
-                auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
-            },
-            std::runtime_error);
-    }
-}
-
 TEST_F(ControlPlaneLocalMeshBinding, GetPhysicalMeshShapeWithScopeDualHost) {
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
