@@ -770,7 +770,6 @@ class TT_CCL:
         persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
             self.reduce_scatter_buffer_idx[cluster_axis]
         ]
-        breakpoint()
         w1_out, w3_out, ttnn_tensor_out = ttnn.experimental.llama_rs_matmul(
             matmul_input,
             matmul_weightA,
