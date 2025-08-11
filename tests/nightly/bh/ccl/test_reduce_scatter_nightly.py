@@ -8,25 +8,17 @@ from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce
 from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
-        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (4, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (4, [1, 1, 333, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
-    ],
-    ids=[
-        "batch_8",
-        "batch_4",
-        "batch_1_sd35_spatial",
-        "batch_1_sd35_prompt",
-        "batch_2",
-        "batch_1",
+        (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, [1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (2, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (2, [1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (2, [1, 1, 32, 768], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
     ],
 )
 @pytest.mark.parametrize(
@@ -35,31 +27,43 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
         (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        )
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
     ],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
-        (False, 1),
+        (False, 10),
     ],
-    ids=["perf", "check"],
+    ids=[
+        "non-trace",
+    ],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=[
+        "fabric_linear",
+        "fabric_ring",
+    ],
 )
 @pytest.mark.parametrize("chunks_per_sync", [2])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [8])
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_reduce_scatter_async(
-    mesh_device,
+def test_rs_nightly(
+    p150_mesh_device,
     num_devices,
     num_links,
     rs_input_shape,
@@ -75,7 +79,9 @@ def test_reduce_scatter_async(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    if ttnn.get_num_devices() < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+    submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_reduce_scatter_impl(
         submesh_device,
