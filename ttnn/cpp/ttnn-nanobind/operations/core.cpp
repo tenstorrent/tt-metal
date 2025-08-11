@@ -9,12 +9,15 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>  // needed for DeviceComputerKernelConfig
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
+
+NB_MAKE_OPAQUE(ttnn::DeviceComputeKernelConfig);
 
 namespace ttnn::operations::core {
 
