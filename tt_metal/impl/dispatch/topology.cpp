@@ -1085,11 +1085,14 @@ void build_tt_fabric_program(
             edm_builders.insert({eth_chan, edm_builder});
 
             auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
-            // Only create tensix builder if this channel is not used by dispatch
-            if (!(device_has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
-                auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
-                    device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan);
-                tensix_builders.insert({eth_chan, tensix_builder});
+            if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                tt::tt_fabric::FabricTensixConfig::DISABLED) {
+                // Only create tensix builder if this channel is not used by dispatch
+                if (!(device_has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
+                    auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
+                        device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan);
+                    tensix_builders.insert({eth_chan, tensix_builder});
+                }
             }
         }
 
@@ -1187,8 +1190,11 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     }
 
     // Compile all tensix builders
-    for (auto& [eth_chan, tensix_builder] : tensix_builders) {
-        tensix_builder.create_and_compile(device, *fabric_program_ptr);
+    if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+        tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        for (auto& [eth_chan, tensix_builder] : tensix_builders) {
+            tensix_builder.create_and_compile(device, *fabric_program_ptr);
+        }
     }
 
     // for now it doesnt matter which channel is the master, so just pick the 1st in the map

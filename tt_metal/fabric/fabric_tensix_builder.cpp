@@ -204,6 +204,36 @@ bool FabricTensixDatamoverConfig::is_risc_id_active(size_t risc_id) const {
     return mux_configs_.find(risc_id) != mux_configs_.end();
 }
 
+size_t FabricTensixDatamoverConfig::get_local_flow_control_semaphore_address(
+    uint32_t eth_chan_id, uint32_t channel_id) const {
+    auto risc_id = get_risc_id_for_channel(eth_chan_id);
+    auto mux_config = get_mux_config(risc_id);
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    return mux_config->get_flow_control_address(channel_type, channel_id);
+}
+
+size_t FabricTensixDatamoverConfig::get_connection_semaphore_address(uint32_t eth_chan_id, uint32_t channel_id) const {
+    auto risc_id = get_risc_id_for_channel(eth_chan_id);
+    auto mux_config = get_mux_config(risc_id);
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    return mux_config->get_connection_handshake_address(channel_type, channel_id);
+}
+
+size_t FabricTensixDatamoverConfig::get_worker_conn_info_base_address(uint32_t eth_chan_id, uint32_t channel_id) const {
+    auto risc_id = get_risc_id_for_channel(eth_chan_id);
+    auto mux_config = get_mux_config(risc_id);
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    return mux_config->get_connection_info_address(channel_type, channel_id);
+}
+
+size_t FabricTensixDatamoverConfig::get_buffer_index_semaphore_address(
+    uint32_t eth_chan_id, uint32_t channel_id) const {
+    auto risc_id = get_risc_id_for_channel(eth_chan_id);
+    auto mux_config = get_mux_config(risc_id);
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    return mux_config->get_buffer_index_address(channel_type, channel_id);
+}
+
 // FabricTensixDatamoverBuilder implementation
 
 FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
