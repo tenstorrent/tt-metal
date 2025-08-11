@@ -118,6 +118,8 @@ void Tensor::init(
         device_storage != nullptr && device_storage->mesh_buffer != nullptr) {
         mesh_device_ = device_storage->mesh_buffer->device();
     }
+
+    *this = set_tensor_id(*this);
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
