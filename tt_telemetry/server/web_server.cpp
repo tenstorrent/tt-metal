@@ -1,4 +1,5 @@
-//TODO next: generate mock telemetry data to drive a UI
+//TODO next: mock telemetry provider should NOT write to subscriber if it is busy. We must track busy state in release handler.
+//           remove std::queue<> in consumer
 
 #include <thread>
 #include <mutex>
@@ -294,21 +295,60 @@ public:
     }
 };
 
-class TelemetryServer {
+class TelemetryServer: public TelemetrySubscriber {
 private:
     httplib::Server server_;
-    std::vector<httplib::DataSink*> sse_clients_;
+    std::vector<httplib::DataSink*> sse_clients_;       // initial snapshot sent, able to receive all delta updates
+    std::vector<httplib::DataSink*> new_sse_clients_;   // joined but not yet snapshotted
     std::mutex clients_mutex_;
     std::thread telemetry_thread_;
     std::atomic<bool> running_{false};
-    MockTelemetryProvider telemetry_provider_;
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
+
+    // Telemetry data
+    std::unordered_map<size_t, std::string> metric_name_by_index_;
+    std::unordered_map<size_t, bool> metric_value_by_index_;
+    std::mutex snapshot_mutex_;
+    std::queue<HandoffHandle<TelemetrySnapshot>> pending_snapshots_;
 
     void broadcast_telemetry() {
         while (running_) {
-            auto data = telemetry_provider_.get_updates();
-            std::string message = "data: " + data.dump() + "\n\n";
+            // Get snapshot from telemetry producer thread, if one is ready
+            HandoffHandle<TelemetrySnapshot> current_snapshot(nullptr, {});
+            {
+                std::lock_guard<std::mutex> lock(snapshot_mutex_);
+                if (!pending_snapshots_.empty()) {
+                    current_snapshot = std::move(pending_snapshots_.front());
+                    pending_snapshots_.pop();
+                }
+            }
 
+            // If no snapshot, sleep and try again
+            if (!current_snapshot.is_valid()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                continue;
+            }
+
+            // Process snapshot: update internal copy of telemetry data
+            //TODO: assert vectors are equal length
+            if (current_snapshot->is_absolute) {
+                // Absolute snapshot -- replace everything with new data
+                metric_name_by_index_.clear();
+                metric_value_by_index_.clear();
+            }
+
+            for (size_t i = 0; i < current_snapshot->metric_indices.size(); i++) {
+                size_t idx = current_snapshot->metric_indices[i];
+                if (current_snapshot->metric_names.size() > 0) {
+                    // Names were included, which indicates new metrics added!
+                    metric_name_by_index_.insert({ idx, current_snapshot->metric_names[i] });
+                }
+                metric_value_by_index_.insert({ idx, current_snapshot->metric_values[i] });
+            }
+
+            // Forward to all clients
+            json j = *current_snapshot;
+            std::string message = "data: " + j.dump() + "\n\n";
             std::lock_guard<std::mutex> lock(clients_mutex_);
             auto it = sse_clients_.begin();
             while (it != sse_clients_.end()) {
@@ -320,7 +360,29 @@ private:
                 }
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            // Handle any new clients by creating a complete snapshot for them, then add them to 
+            // the permanent client list
+            TelemetrySnapshot full_snapshot;
+            full_snapshot.is_absolute = true;
+            for (const auto &[index, name]: metric_name_by_index_) {
+                full_snapshot.metric_indices.push_back(index);
+                full_snapshot.metric_names.push_back(name);
+                full_snapshot.metric_values.push_back(metric_value_by_index_[index]);
+            }
+            j = full_snapshot;
+            message = "data: " + j.dump() + "\n\n";
+            it = new_sse_clients_.begin();
+            while (it != new_sse_clients_.end()) {
+                if (!(*it)->write(message.c_str(), message.size())) {
+                    // Client disconnected
+                    it = new_sse_clients_.erase(it);
+                } else {
+                    // Add client
+                    sse_clients_.push_back(*it);
+                    ++it;
+                }
+            }
+            new_sse_clients_.clear();
         }
     }
 
@@ -336,8 +398,7 @@ private:
 
 public:
     TelemetryServer()
-        : telemetry_provider_("telemetry-server")
-        , started_at_(std::chrono::steady_clock::now()) 
+        : started_at_(std::chrono::steady_clock::now()) 
     {
     }
 
@@ -395,8 +456,9 @@ public:
 
         // REST API - Get latest telemetry snapshot
         server_.Get("/api/telemetry", [this](const httplib::Request&, httplib::Response& res) {
-            auto data = telemetry_provider_.get_full_snapshot();
-            res.set_content(data.dump(), "application/json");
+            //TODO: return full snapshot
+            //auto data = telemetry_provider_.get_full_snapshot();
+            //res.set_content(data.dump(), "application/json");
         });
 
         // Server-Sent Events endpoint for real-time telemetry
@@ -408,15 +470,10 @@ public:
             res.set_content_provider(
                 "text/event-stream",
                 [this](size_t /*offset*/, httplib::DataSink& sink) {
-                    // Generate initial snapshot
-                    auto initial_data = telemetry_provider_.get_full_snapshot();
-                    std::string initial_message = "data: " + initial_data.dump() + "\n\n";
-                    sink.write(initial_message.c_str(), initial_message.size());
-
-                    // Add to client list for future updates
+                    // Add to new client list for initial snapshot and future updates
                     {
                         std::lock_guard<std::mutex> lock(clients_mutex_);
-                        sse_clients_.push_back(&sink);
+                        new_sse_clients_.push_back(&sink);
                     }
 
                     // Keep connection alive - the broadcast_telemetry thread will send updates
@@ -433,6 +490,9 @@ public:
                         sse_clients_.erase(
                             std::remove(sse_clients_.begin(), sse_clients_.end(), &sink),
                             sse_clients_.end());
+                        new_sse_clients_.erase(
+                            std::remove(new_sse_clients_.begin(), new_sse_clients_.end(), &sink),
+                            new_sse_clients_.end());
                     }
 
                     std::cout << "Connection finished" << std::endl;
@@ -473,6 +533,11 @@ public:
         }
     }
 
+    void on_telemetry_ready(HandoffHandle<TelemetrySnapshot> &&telemetry) override {
+        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+        pending_snapshots_.push(std::move(telemetry));
+    }
+
     ~TelemetryServer() {
         stop();
     }
@@ -480,7 +545,7 @@ public:
 
 bool run_web_server() {
     TelemetryServer server;
-    NewMockTelemetryProvider mock_provider(new DummyTelemetrySubscriber());
+    NewMockTelemetryProvider mock_provider(&server);
     
     try {
         server.start();
