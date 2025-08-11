@@ -277,6 +277,7 @@ void kernel_main() {
                             pkt_hdr, first_tile_id, intermediate_addrgen, 0 /*offset*/);
                         tt::tt_fabric::fabric_async_write(
                             *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
+                        noc_async_writes_flushed();
                     } else if (num_pages_to_write == 2) {
                         uint32_t second_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
 
@@ -291,6 +292,7 @@ void kernel_main() {
 
                         tt::tt_fabric::fabric_async_write(
                             *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
+                        noc_async_writes_flushed();
                     } else {
                         ASSERT(false);
                     }
@@ -356,6 +358,9 @@ void kernel_main() {
             noc_async_write_barrier();
         }
     }
+
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);

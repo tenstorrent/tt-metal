@@ -433,6 +433,9 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
     }
 
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+
     tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
     if constexpr (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
