@@ -2,13 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-#include <limits>
-#include <tuple>
-#include "circular_buffer.h"
+#include "compute_kernel_api/common_globals.h"
 #include "debug/debug.h"
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "compute_kernel_api/common.h"
+#include "circular_buffer.h"
 
 using namespace tt;
 
@@ -19,7 +16,9 @@ using namespace tt;
 static constexpr auto cb_id = tt::CBIndex::c_0;
 static constexpr auto cb_step_size = 32;
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
+#ifdef TRISC_PACK
     // We bring the acked and received a single page (32) from overflow
     for (uint32_t i = 0; i < 2046; i++) {
         cb_reserve_back(cb_id, cb_step_size);
@@ -54,4 +53,6 @@ void kernel_main() {
 
     DPRINT << "After: Received: " << HEX() << *get_cb_tiles_received_ptr(cb_id)
            << " Acked: " << *get_cb_tiles_acked_ptr(cb_id) << ENDL();
+#endif
 }
+}  // namespace NAMESPACE

@@ -30,13 +30,13 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_writer.cpp",
         worker_core,
-        WriterDataMovementConfig{});
+        ComputeConfig{});
 
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_reader.cpp",
         worker_core,
-        ComputeConfig{});
+        WriterDataMovementConfig{});
 
     CreateCircularBuffer(
         program,
