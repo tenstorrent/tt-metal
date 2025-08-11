@@ -114,7 +114,6 @@ target_sources(
         sharded/reshard/device/reshard_program_factory.cpp
         sharded/reshard/device/nd_reshard_program_factory.cpp
         sharded/reshard/reshard.cpp
-        sharded/reshard/reshard_helper.cpp
         sharded/sharded_common.cpp
         sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.cpp
         sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.cpp

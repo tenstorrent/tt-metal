@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "reshard_helper.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
