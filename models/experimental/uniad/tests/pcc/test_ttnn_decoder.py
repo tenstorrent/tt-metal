@@ -6,6 +6,7 @@ import ttnn
 
 import pytest
 import torch
+from torch import nn
 from collections import OrderedDict
 
 from models.experimental.uniad.reference.decoder import DetectionTransformerDecoder, FFN
@@ -68,10 +69,18 @@ def test_uniad_decoder(device, reset_seeds):
         custom_preprocessor=custom_preprocessor,
     )
 
-    query = torch.load("models/experimental/uniad/reference/decoder_diffferent_shape/query.pt")
-    kwargs = torch.load("models/experimental/uniad/reference/decoder_diffferent_shape/kwargs_updated.pt")
-    reference_points = torch.load("models/experimental/uniad/reference/decoder_diffferent_shape/reference_points.pt")
-    reg_branches = torch.load("models/experimental/uniad/reference/decoder_diffferent_shape/reg_branches.pt")
+    query = torch.randn(901, 1, 256)
+    kwargs = {}
+    kwargs["key"] = None
+    kwargs["value"] = torch.randn(2500, 1, 256)
+    kwargs["query_pos"] = torch.randn(901, 1, 256)
+    kwargs["spatial_shapes"] = torch.Tensor([[50, 50]]).to(dtype=torch.int64)
+    reference_points = torch.randn(1, 901, 3)
+
+    def create_block():
+        return nn.Sequential(nn.Linear(256, 256), nn.ReLU(), nn.Linear(256, 256), nn.ReLU(), nn.Linear(256, 10))
+
+    reg_branches = nn.ModuleList([create_block() for _ in range(6)])
 
     parameters_branches = {}
     parameters_branches = extract_sequential_branch(reg_branches, dtype=ttnn.bfloat16, device=device)
