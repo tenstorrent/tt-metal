@@ -47,6 +47,7 @@
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
 #include "ttnn/operations/experimental/where/where_pybind.hpp"
+#include "ttnn/operations/experimental/isin/isin_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -111,6 +112,8 @@ void py_module(py::module& module) {
     broadcast_to::detail::py_bind_broadcast_to(module);
 
     operations::experimental::ternary::detail::bind_where(module);
+
+    isin::detail::bind_isin_operation(module);
 }
 
 }  // namespace ttnn::operations::experimental
