@@ -106,8 +106,7 @@ void scatter_write_for_fabric_write(
     tt::tt_fabric::fabric_async_write(
         fabric_mux_connection, pkt_hdr, l1_read_addr, first_payload_size_bytes + second_payload_size_bytes);
     noc_async_writes_flushed();
-    if constexpr (advance)
-    {
+    if constexpr (advance) {
         l1_read_addr += first_payload_size_bytes + second_payload_size_bytes;
     }
 }
@@ -125,8 +124,7 @@ void scatter_write_for_fabric_write(
 
     tt::tt_fabric::fabric_async_write(fabric_mux_connection, pkt_hdr, l1_read_addr, payload_size_bytes);
     noc_async_writes_flushed();
-    if constexpr (advance)
-    {
+    if constexpr (advance) {
         l1_read_addr += payload_size_bytes;
     }
 }
@@ -142,8 +140,7 @@ void write_for_fabric_write(
 
     tt::tt_fabric::fabric_async_write(fabric_mux_connection, pkt_hdr, l1_read_addr, payload_size_bytes);
     noc_async_writes_flushed();
-    if constexpr (advance)
-    {
+    if constexpr (advance) {
         l1_read_addr += payload_size_bytes;
     }
 }
@@ -161,8 +158,7 @@ void write_for_fabric_write(
     tt::tt_fabric::fabric_async_write(fabric_mux_connection, pkt_hdr, l1_read_addr, payload_size_bytes);
     noc_async_writes_flushed();
 
-    if constexpr (advance)
-    {
+    if constexpr (advance) {
         l1_read_addr += payload_size_bytes;
     }
 }
