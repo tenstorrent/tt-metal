@@ -40,7 +40,10 @@ void bind_normalization_layernorm_operation(py::module& module) {
 
                 \text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
 
-                Where :math:`\mu` and :math:`\sigma^2` are the mean and variance of the input tensor, respectively; :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively; :math:`\epsilon` is a small constant.
+            Where:
+                - :math:`\mu` and :math:`\sigma^2` are the mean and variance of the input tensor, respectively
+                - :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively
+                - :math:`\epsilon` is a small constant
 
 
         Args:
