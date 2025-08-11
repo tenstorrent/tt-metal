@@ -9,6 +9,8 @@
 
 #include "device/scatter_device_operation.hpp"
 
+#include "slice/slice.hpp"
+#include "tt_stl/small_vector.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -20,13 +22,31 @@ namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+// index_shape[...] <= src_shape[...]
+// index_shape[d != dim] <= input_shape[d != dim]
+// https://docs.pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html#torch.Tensor.scatter_
 // validate dimension constraints before sending down to device operation working on the last dimension
 void validate_inputs(
     const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
     const auto& input_shape{input_tensor.logical_shape()};
     const auto& index_shape{index_tensor.logical_shape()};
-    const int32_t input_rank{input_shape.rank()};
-    const int32_t normalized_dim{(dim < 0) ? (dim + input_rank) : dim};
+    const auto& source_shape{source_tensor.logical_shape()};
+    const auto input_rank = input_shape.rank();
+    const auto index_rank = index_shape.rank();
+    const auto source_rank = source_shape.rank();
+    const int32_t normalized_dim = (dim < 0) ? (dim + input_rank) : dim;
+
+    TT_FATAL(
+        input_rank == index_rank,
+        "input_rank must be equal to index_rank (input_rank == {}, index_rank == {})",
+        input_rank,
+        index_rank);
+
+    TT_FATAL(
+        input_rank == source_rank,
+        "input_rank must be equal to source_rank (input_rank == {}, source_rank == {})",
+        input_rank,
+        source_rank);
 
     TT_FATAL(
         dim < static_cast<int32_t>(input_rank) && -static_cast<int32_t>(input_rank) <= dim,
@@ -35,18 +55,21 @@ void validate_inputs(
         static_cast<int32_t>(input_rank));
 
     for (uint32_t probe_dim = 0; probe_dim < input_rank; ++probe_dim) {
+        TT_FATAL(
+            index_shape[probe_dim] <= source_shape[probe_dim],
+            "index_shape[{}] <= source_shape[{}] == false (index_shape: {}, source_shape: {})",
+            probe_dim,
+            probe_dim,
+            index_shape,
+            source_shape);
         if (probe_dim != normalized_dim) {
             TT_FATAL(
-                index_shape[probe_dim] == input_shape[probe_dim],
-                "Index tensor has dimension {}'s length otyer than input shape's (index dimension: {}, "
-                "input_dimension: "
-                "{}). (normalized dim: {}, dim: {}, rank: {})",
+                index_shape[probe_dim] <= input_shape[probe_dim],
+                "index_shape[{}] <= input_shape[{}] == false (index_shape: {}, input_shape: {})",
                 probe_dim,
-                index_shape[probe_dim],
-                input_shape[probe_dim],
-                normalized_dim,
-                dim,
-                input_rank);
+                probe_dim,
+                index_shape,
+                input_shape);
         }
     }
 }
@@ -109,12 +132,22 @@ void check_support(
 }
 
 Tensor pre_scatter_transform_tensor(
-    const Tensor& input_tensor, const int8_t dim, const bool is_dim_last_idx, const bool is_rank_le_4d) {
+    const Tensor& input_tensor,
+    const int8_t& dim,
+    const bool& is_dim_last_idx,
+    const bool& is_rank_le_4d,
+    const std::optional<Shape>& index_shape = std::nullopt) {
     if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
     }
 
     Tensor processed_tensor = input_tensor;
+    if (index_shape.has_value()) {
+        const ttnn::SmallVector<uint32_t> start(index_shape->rank(), 0);
+        const ttnn::SmallVector<uint32_t> steps(index_shape->rank(), 1);
+        const ttnn::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
+        processed_tensor = ttnn::slice(processed_tensor, start, end, steps, processed_tensor.memory_config());
+    }
     // if layout is tile, convert to row-major first
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {
         processed_tensor = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
@@ -129,9 +162,10 @@ Tensor pre_scatter_transform_tensor(
 Tensor pre_scatter_transform_tensor(
     const Tensor& input_tensor,
     Shape& after_transpose_shape,
-    const int8_t dim,
-    const bool is_dim_last_idx,
-    const bool is_rank_le_4d) {
+    const int8_t& dim,
+    const bool& is_dim_last_idx,
+    const bool& is_rank_le_4d,
+    const std::optional<Shape>& index_shape = std::nullopt) {
     if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
     }
@@ -152,8 +186,8 @@ Tensor pre_scatter_transform_tensor(
 Tensor post_scatter_transform_tensor(
     Tensor& output_tensor,
     const Shape& after_transpose_shape,
-    const int32_t dim,
-    const bool is_dim_last_idx,
+    const int32_t& dim,
+    const bool& is_dim_last_idx,
     const Shape& original_logical_shape,
     const Layout& original_layout) {
     const auto orig_rank = original_logical_shape.rank();
@@ -224,7 +258,7 @@ Tensor ScatterOperation::invoke(
         index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
     Tensor transformed_source_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-        source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
+        source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, index_tensor.logical_shape());
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
