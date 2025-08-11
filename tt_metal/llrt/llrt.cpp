@@ -135,6 +135,12 @@ void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core) {
     reset_msg.signal = RUN_MSG_RESET_READ_PTR_FROM_HOST;
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         &reset_msg, sizeof(go_msg_t), tt_cxy_pair(chip, virtual_core), go_signal_adrr);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(chip);
+    uint32_t go_message_index_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
+        dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
+    uint32_t zero = 0;
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &zero, sizeof(uint32_t), tt_cxy_pair(chip, virtual_core), go_message_index_addr);
 }
 
 void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
