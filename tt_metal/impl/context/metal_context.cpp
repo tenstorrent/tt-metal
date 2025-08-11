@@ -417,7 +417,8 @@ void MetalContext::teardown_fabric_config() {
 void MetalContext::set_fabric_config(
     const tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
-    std::optional<uint8_t> num_routing_planes) {
+    std::optional<uint8_t> num_routing_planes,
+    tt_fabric::FabricTensixConfig fabric_tensix_config) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
     force_reinit_ = true;
 
@@ -468,6 +469,9 @@ void MetalContext::set_fabric_config(
             new_val);
     }
     this->num_fabric_active_routing_planes_ = new_val;
+
+    // Set the fabric tensix config
+    this->set_fabric_tensix_config(fabric_tensix_config);
 }
 
 void MetalContext::initialize_fabric_config() {

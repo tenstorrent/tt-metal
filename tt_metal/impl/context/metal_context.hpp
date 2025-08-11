@@ -82,7 +82,8 @@ public:
         tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricReliabilityMode reliability_mode =
             tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        std::optional<uint8_t> num_routing_planes = std::nullopt);
+        std::optional<uint8_t> num_routing_planes = std::nullopt,
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED);
     void initialize_fabric_config();
     tt_fabric::FabricConfig get_fabric_config() const;
 
