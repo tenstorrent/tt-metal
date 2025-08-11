@@ -257,7 +257,7 @@ Tensor ScatterOperation::invoke(
 
     // tensors sent to the device operation must be:
     // - row-major
-    // - transposed to have the last dimension as last axis
+    // - transposed to have the last dimension as scatter axis
     // - (un)squeezed to 4D
     Shape after_transpose_shape;
     Tensor transformed_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
