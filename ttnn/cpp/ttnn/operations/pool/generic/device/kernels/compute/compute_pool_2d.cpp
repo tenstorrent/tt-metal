@@ -6,8 +6,12 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
+#include "compute_kernel_api.h"
+#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
+#include "compute_kernel_api/pack.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -71,8 +75,10 @@ void MAIN {
     // data which is much slower than just untilizing the entire MAX_TILES_PER_REDUCTION
     constexpr bool tilize_reconfig =
         in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 && window_size_hw <= 16;
-    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
+    if constexpr (!return_indices) {
+        tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+            in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
+    }
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -109,15 +115,52 @@ void MAIN {
                 if constexpr (return_indices) {
                     cb_wait_front(curr_in_idx_cb_id, 1);
                 }
-                unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                    curr_in_cb_id,
-                    curr_scalar_cb_id,
-                    tiles_to_reduce,
-                    0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                    num_faces_in_input_tile,
-                    face_r_dim);
-                for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
-                    reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                if constexpr (!return_indices) {
+                    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                        curr_in_cb_id,
+                        curr_scalar_cb_id,
+                        tiles_to_reduce,
+                        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                        num_faces_in_input_tile,
+                        face_r_dim);
+                    for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
+                        reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                    }
+                } else {
+                    // topk_local_sort sorts by columns - transpose input tiles for sorting
+                    reconfig_data_format_srca(curr_in_cb_id);
+                    transpose_wh_init_short(curr_in_cb_id);
+                    transpose_wh_tile(curr_in_cb_id, 0, 0);
+                    // transpose_wh_tile(curr_in_cb_id, 0, 1); // TODO do we need to fill all 4 tiles if so we should
+                    // use padding values
+
+                    DPRINT << "TRANS WH TILE" << ENDL();
+                    dprint_tensix_dest_reg(0);
+
+                    reconfig_data_format_srca(curr_in_idx_cb_id);
+                    transpose_wh_init_short(curr_in_idx_cb_id);
+                    transpose_wh_tile(curr_in_idx_cb_id, 0, 2);
+                    // transpose_wh_tile(curr_in_idx_cb_id, 0, 3);
+
+                    dprint_tensix_dest_reg(2);
+
+                    // llk_topk_sort -> inplace
+                    // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
+                    topk_tile_init();
+                    ckernel::topk_local_sort(0, 0, 4, 0);
+
+                    DPRINT << "TOP K" << ENDL();
+                    dprint_tensix_dest_reg(0);
+                    dprint_tensix_dest_reg(2);
+
+                    // // re-transpose the tiles to get max values and indices from column 0 to row 0
+                    transpose_wh_dest_init_short();
+                    transpose_wh_dest(0);
+                    // transpose_wh_dest(2);
+
+                    DPRINT << "TRANS WH DEST" << ENDL();
+                    dprint_tensix_dest_reg(0);
+                    dprint_tensix_dest_reg(2);
                 }
                 cb_pop_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
@@ -126,13 +169,29 @@ void MAIN {
             }
             tile_regs_commit();
             tile_regs_wait();
-            if (last_c_block) {
-                pack_untilize_dest<partial_iter_output_tiles>(
-                    out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                cb_push_back(out_cb_id, partial_iter_output_tiles);
+            if constexpr (!return_indices) {
+                if (last_c_block) {
+                    pack_untilize_dest<partial_iter_output_tiles>(
+                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    cb_push_back(out_cb_id, partial_iter_output_tiles);
+                } else {
+                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    cb_push_back(out_cb_id, max_tiles_per_iter);
+                }
             } else {
-                pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                cb_push_back(out_cb_id, max_tiles_per_iter);
+                constexpr uint32_t topk_output_tiles = 1;
+
+                constexpr uint32_t data_dst_idx = 0;
+                pack_reconfig_data_format(out_cb_id);
+                pack_untilize_dest<topk_output_tiles>(
+                    out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, data_dst_idx);
+                cb_push_back(out_cb_id, topk_output_tiles);
+
+                constexpr uint32_t index_dst_idx = 2;
+                pack_reconfig_data_format(out_idx_cb_id);
+                pack_untilize_dest<topk_output_tiles>(
+                    out_idx_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, index_dst_idx);
+                cb_push_back(out_idx_cb_id, topk_output_tiles);
             }
             tile_regs_release();
         }
