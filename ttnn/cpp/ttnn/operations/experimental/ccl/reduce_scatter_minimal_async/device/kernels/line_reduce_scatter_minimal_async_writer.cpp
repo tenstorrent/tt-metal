@@ -14,6 +14,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#include "minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -273,11 +274,8 @@ void kernel_main() {
                     }
 
                     if (num_pages_to_write == 1) {
-                        tt::tt_fabric::linear::to_noc_unicast_write(
-                            pkt_hdr, first_tile_id, intermediate_addrgen, 0 /*offset*/);
-                        tt::tt_fabric::fabric_async_write(
-                            *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
-                        noc_async_writes_flushed();
+                        write_and_advance_local_read_address_for_fabric<fabric_mux_num_buffers_per_channel>(
+                            intermediate_addrgen, first_tile_id, pkt_hdr, *mux_connection_handle, l1_read_addr);
                     } else if (num_pages_to_write == 2) {
                         uint32_t second_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
 
@@ -287,17 +285,17 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
-                            pkt_hdr, first_tile_id, second_tile_id, intermediate_addrgen, 0 /*offset0*/, 0 /*offset1*/);
-
-                        tt::tt_fabric::fabric_async_write(
-                            *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
-                        noc_async_writes_flushed();
+                        scatter_write_and_advance_local_read_address_for_fabric<fabric_mux_num_buffers_per_channel>(
+                            intermediate_addrgen,
+                            first_tile_id,
+                            second_tile_id,
+                            pkt_hdr,
+                            *mux_connection_handle,
+                            l1_read_addr);
                     } else {
                         ASSERT(false);
                     }
 
-                    l1_read_addr += payload_size_bytes;
                     tiles_read += num_pages_to_write;
                 }
                 cb_pop_front(cb_output_id, tile_granularity);
