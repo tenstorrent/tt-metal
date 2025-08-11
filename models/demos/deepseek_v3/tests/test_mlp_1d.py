@@ -31,8 +31,8 @@ DEVICE_SHAPE = ttnn.MeshShape(2, min(ttnn.get_num_devices() // 2, 8))
     "device_params", [{"mesh_shape": DEVICE_SHAPE, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
 def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
-    reference_model = DeepseekV3MLP(hf_config)
-    reference_state_dict = reference_model.state_dict()
+    reference_model = DeepseekV3MLP(hf_config).eval()
+    reference_state_dict = reference_model.to(torch.bfloat16).state_dict()
     run_weight_conversion_test(
         MLPClass=MLP1D,
         hf_config=hf_config,
