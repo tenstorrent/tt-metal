@@ -356,11 +356,11 @@ class TtMotionHead:
                 )
 
         batch_size, num_agents = scene_level_ego_embedding.shape[0], scene_level_ego_embedding.shape[1]
-        agent_level_embedding = ttnn.unsqueeze(
-            ttnn.unsqueeze(agent_level_embedding, 0), 0
+        agent_level_embedding = ttnn.expand(
+            ttnn.unsqueeze(ttnn.unsqueeze(agent_level_embedding, 0), 0), (batch_size, num_agents, -1, -1, -1)
         )  # agent_level_embedding[None, None, ...].expand(batch_size, num_agents, -1, -1, -1)
-        learnable_embed = ttnn.unsqueeze(
-            ttnn.unsqueeze(learnable_query_pos, 0), 0
+        learnable_embed = ttnn.expand(
+            ttnn.unsqueeze(ttnn.unsqueeze(learnable_query_pos, 0), 0), (batch_size, num_agents, -1, -1, -1)
         )  # learnable_query_pos[None, None, ...].expand(batch_size, num_agents, -1, -1, -1)
 
         # save for latter, anchors

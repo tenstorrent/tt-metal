@@ -434,35 +434,35 @@ def test_uniad_MotionHead(device, reset_seeds):
 
     assert_with_pcc(
         torch_output[0][0]["traj_0"], ttnn.to_torch(ttnn_output[0][0]["traj_0"]), pcc=0.999
-    )  # 0.9993774037698014
+    )  # 0.9994312010232113
     assert_with_pcc(
         torch_output[0][0]["traj_scores_0"], ttnn.to_torch(ttnn_output[0][0]["traj_scores_0"]), pcc=0.98
-    )  #  0.9898022321172142
+    )  #  0.9891932550464795
     assert_with_pcc(
         torch_output[0][0]["traj_1"], ttnn.to_torch(ttnn_output[0][0]["traj_1"]), pcc=0.99
-    )  # 0.996325248631942
+    )  # 0.9960413270506279
     assert_with_pcc(
         torch_output[0][0]["traj_scores_1"], ttnn.to_torch(ttnn_output[0][0]["traj_scores_1"]), pcc=0.93
-    )  # 0.9362177649746471
+    )  # 0.9443695190799927
     assert_with_pcc(
         torch_output[0][0]["traj"], ttnn.to_torch(ttnn_output[0][0]["traj"]), pcc=0.99
-    )  # 0.9944974337090697
+    )  # 0.9945363157090221
     assert_with_pcc(
         torch_output[0][0]["traj_scores"], ttnn.to_torch(ttnn_output[0][0]["traj_scores"]), pcc=0.92
-    )  # 0.9230514823257762
+    )  # 0.9265729519631479
 
     assert_with_pcc(
         torch_output[1]["all_traj_scores"], ttnn.to_torch(ttnn_output[1]["all_traj_scores"]), pcc=0.94
-    )  # 0.9556107035315878
+    )  # 0.9453872789178166
     assert_with_pcc(
         torch_output[1]["all_traj_preds"], ttnn.to_torch(ttnn_output[1]["all_traj_preds"]), pcc=0.99
-    )  # 0.9966735089661874
+    )  # 0.9965912712804653
     assert_with_pcc(
         torch_output[1]["valid_traj_masks"], ttnn.to_torch(ttnn_output[1]["valid_traj_masks"]), pcc=0.99
     )  # 1.0
     assert_with_pcc(
         torch_output[1]["sdc_traj_query"], ttnn.to_torch(ttnn_output[1]["sdc_traj_query"]), pcc=0.99
-    )  # 0.9961219810395238
+    )  # 0.9961525207269588
     assert_with_pcc(
         torch_output[1]["sdc_track_query"], ttnn.to_torch(ttnn_output[1]["sdc_track_query"]), pcc=0.999
     )  # 0.9999985195832592
