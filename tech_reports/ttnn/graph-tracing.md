@@ -348,7 +348,7 @@ Sometimes there might be cases where an operation hangs and the arguments can be
 We have added the following configuration
 
 ```
-export TT_METAL_OPERATION_TIMEOUT=30
+export TT_METAL_OPERATION_TIMEOUT_SECONDS=30
 ```
 
 
