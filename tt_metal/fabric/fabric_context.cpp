@@ -13,6 +13,7 @@
 #include <enchantum/enchantum.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
@@ -144,20 +145,8 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
         tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
         tt::tt_fabric::FabricEriscDatamoverAxis::Long);
 
-    // when initilize fabric context, need to create the tensix_config_ here.
-    // we need the following fields to be set:
-    // uint8_t num_full_size_channels, - based on fabric topology, can get from FabricEriscDatamoverConfig,
-    //                                  ex, num_sender_channels_1d_linear, num_sender_channels_2d_mesh, etc.
-    // uint8_t num_header_only_channels, - set to 0 for now, until we find a use of it.
-    // uint8_t num_buffers_full_size_channel, - get the num buffers from fabric tensix config, this
-    // uint8_t num_buffers_header_only_channel, - 0
-    // size_t buffer_size_bytes_full_size_channel, - this is just num_full_size_channels *
-    // num_buffers_full_size_channel, get  from fabric tensix config size_t base_l1_address, - based on risc type
-    // (BRISC/NCRISC), can get it from tensix config,
-    //                                      brisc start at top unreserved space, ncrisc start at brisc address +
-    //                                      num_full_size_channels * num_buffers_full_size_channel
-    // CoreType core_type - always tensix
-    //
+    // Initialize fabric tensix config for mux configuration
+    tensix_config_ = std::make_unique<tt::tt_fabric::FabricTensixDatamoverConfig>();
 
     this->num_devices = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
@@ -278,6 +267,26 @@ std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> FabricContext::get_
 std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_address_and_signal() const {
     return std::make_pair(
         this->router_config_->termination_signal_address, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+}
+
+tt::tt_fabric::FabricTensixDatamoverConfig& FabricContext::get_fabric_tensix_config() const {
+    TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
+    return *tensix_config_.get();
+}
+
+std::pair<uint32_t, uint32_t> FabricContext::get_fabric_tensix_termination_address_and_signal() const {
+    TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
+
+    // Get termination signal from first active RISC ID (they should be the same) - much cleaner!
+    for (size_t risc_id = 0; risc_id < tensix_config_->get_num_riscs_per_core(); ++risc_id) {
+        if (tensix_config_->is_risc_id_active(risc_id)) {
+            auto mux_config = tensix_config_->get_mux_config(risc_id);
+            return std::make_pair(
+                mux_config->get_termination_signal_address(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+        }
+    }
+
+    TT_THROW("No active RISC IDs found in fabric tensix config");
 }
 
 }  // namespace tt::tt_fabric
