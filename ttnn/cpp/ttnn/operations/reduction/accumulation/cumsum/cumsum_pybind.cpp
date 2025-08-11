@@ -21,16 +21,18 @@ namespace py = pybind11;
 void bind_reduction_cumsum_operation(py::module& module) {
     auto docstring =
         R"doc(
-        Returns cumulative sum of `input` along dimension `dim`
-        For a given `input` of size N, the `output` will also contain N elements and be such that:
-        This function is fundamentally identical to `torch.cumsum()`
+        Returns cumulative sum of :attr:`input` along dimension :attr:`dim`
+        For a given :attr:`input` of size N, the :attr:`output` will also contain N elements and be such that:
+
+        .. math::
+            \mathrm{{output}}_i = \mathrm{{input}}_1 + \mathrm{{input}}_2 + \cdots + \mathrm{{input}}_i
 
         Args:
             input (ttnn.Tensor): input tensor
             dim (int): dimension along which to compute cumulative sum
 
         Keyword Args:
-            dtype (ttnn.DataType, optional): desired output type. If specified then input tensor will be casted to `dtype` before processing.
+            dtype (ttnn.DataType, optional): desired output type. If specified then input tensor will be cast to `dtype` before processing.
             reverse_order (bool, optional, default False): whether to perform accumulation from the end to the beginning of accumulation axis.
             out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
 
@@ -38,9 +40,8 @@ void bind_reduction_cumsum_operation(py::module& module) {
             ttnn.Tensor: the output tensor.
 
 
-
         Note:
-            If both `dtype` and `output` are specified then `output.dtype` must be `dtype`)
+            If both :attr:`dtype` and :attr:`output` are specified then :attr:`output.dtype` must match :attr:`dtype`.
 
             Supported dtypes, layout, ranks and `dim` values:
 
@@ -64,12 +65,10 @@ void bind_reduction_cumsum_operation(py::module& module) {
 
         .. code-block:: python
 
-            import torch
             import ttnn
 
             # Create tensor
-            torch_input = torch.rand([2, 3, 4])
-            tensor_input = ttnn.from_torch(torch_input, device=device)
+            tensor_input = ttnn.rand((2, 3, 4), device=device)
 
             # Apply ttnn.cumsum() on dim=0
             tensor_output = ttnn.cumsum(tensor_input, dim=0)
