@@ -201,10 +201,10 @@ class TtPerceptionTransformer:
     ):
         bs = bev_embed.shape[1]
         query_pos, query = object_query_embed[:, :256], object_query_embed[:, 256:]
-        query_pos = ttnn.unsqueeze(query_pos, 0)  # .unsqueeze(0).expand(bs, -1, -1) Same change so commented
-        query = ttnn.unsqueeze(query, 0)  # .expand(bs, -1, -1) Same change so commented
+        query_pos = ttnn.expand(ttnn.unsqueeze(query_pos, 0), (bs, -1, -1))  # .unsqueeze(0).expand(bs, -1, -1)
+        query = ttnn.expand(ttnn.unsqueeze(query, 0), (bs, -1, -1))  # .expand(bs, -1, -1)
 
-        reference_points = ttnn.unsqueeze(reference_points, 0)  # .expand(bs, -1, -1) Same change so commented
+        reference_points = ttnn.expand(ttnn.unsqueeze(reference_points, 0), (bs, -1, -1))  # .expand(bs, -1, -1)
         reference_points = ttnn.sigmoid(reference_points)
 
         init_reference_out = ttnn.clone(reference_points)
