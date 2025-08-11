@@ -15,15 +15,13 @@ def test_exp_arange_masking(device):
     high = 88.5
 
     # Generate all possible bit pattersn for bf16
-    all_bitpatterns = np.arange(0, 2**16, dtype=np.uint16)
-    float32_bits = all_bitpatterns.astype(np.uint32) << 16
-    all_values = float32_bits.view(np.float32)
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor_f32 = input_tensor.to(torch.float32)
 
     # masking to working range
-    mask = (all_values >= low) & (all_values <= high)
-    selected_values = all_values[mask]
-    input_tensor = torch.tensor(selected_values, dtype=torch.bfloat16)
-    print(input_tensor)
+    mask = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
+    input_tensor = input_tensor[mask]
 
     tt_in = ttnn.from_torch(
         input_tensor,
@@ -38,7 +36,6 @@ def test_exp_arange_masking(device):
 
     tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
-    print("Golden : ", golden, "\nResult : ", result)
     assert_with_ulp(golden, result, 1)
     # Input  :  tensor([-87.0000,   -87.5000,   -88.0000,   -88.5000,   -89.0000,   -89.5000,   -90.0000], dtype=torch.bfloat16)
     # Golden :  tensor([1.6439e-38, 1.0010e-38, 6.0611e-39, 3.6734e-39, 2.2041e-39, 1.3775e-39, 8.2652e-40], dtype=torch.bfloat16)
