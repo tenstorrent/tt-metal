@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
@@ -73,6 +74,10 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
 
 inline int get_tt_npu_clock(tt::tt_metal::IDevice* device) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+}
+
+inline int get_tt_npu_rpeak_tflops(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(mesh_device->get_devices()[0]->id());
 }
 
 template <typename T>
