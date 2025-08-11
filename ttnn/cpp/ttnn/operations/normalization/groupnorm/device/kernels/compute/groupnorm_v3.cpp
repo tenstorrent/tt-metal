@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
+#define REDUCE_OP PoolType::AVG
 #define REDUCE_DIM ReduceDim::REDUCE_SCALAR
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWSUB
@@ -32,26 +32,28 @@ void MAIN {
 
     constexpr uint32_t mean_dst_reg = 0;
 
+    //-------------------------------------------------------------------------
+    // Mean
     binary_op_init_common(src_cb_idx, scaler_cb_idx, /*not_used*/ mean_cb_idx);
     reduce_init(src_cb_idx, scaler_cb_idx, /*not_used*/ mean_cb_idx);
 
-    // Mean
-
+    cb_wait_front(scaler_cb_idx, 1);
     cb_reserve_back(mean_cb_idx, 1);
+
     tile_regs_acquire();
     for (uint32_t batch = 0; batch < num_batches; ++batch) {
         for (uint32_t page = 0; page < num_pages; ++page) {
             cb_wait_front(src_cb_idx, src_tiles_per_page);
-            cb_wait_front(scaler_cb_idx, 1);
 
             for (uint32_t tile = 0; tile < src_tiles_per_page; ++tile) {
                 reduce_tile(src_cb_idx, scaler_cb_idx, tile, 0, mean_dst_reg);
             }
 
             cb_pop_front(src_cb_idx, src_tiles_per_page);
-            cb_pop_front(scaler_cb_idx, 1);
         }
     }
+    cb_pop_front(scaler_cb_idx, 1);
+
     dprint_tensix_dest_reg(mean_dst_reg);
     tile_regs_commit();
     tile_regs_wait();
@@ -60,6 +62,7 @@ void MAIN {
     cb_push_back(mean_cb_idx, 1);
     reduce_uninit();
 
+    //-------------------------------------------------------------------------
     // xmm
     cb_wait_front(mean_cb_idx, 1);
 
