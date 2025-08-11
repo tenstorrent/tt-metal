@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import json
 import math
 import os
@@ -1480,9 +1481,13 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
+        vision_config = config.get("vision_config", config)
+
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", vision_config.get("image_size", -1))
+        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
+        self.vision_num_cross_attention_layers = vision_config.get(
+            "vision_num_cross_attention_layers", vision_config.get("num_global_layers", -1)
+        )
 
         # Vision constants
         self.vision_dim = 1280
@@ -1672,9 +1677,14 @@ class ModelArgs:
 
                     print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
                 else:
-                    from transformers import AutoModelForCausalLM
+                    from transformers import AutoModelForCausalLM, AutoModelForVision2Seq
 
-                model = AutoModelForCausalLM.from_pretrained(
+                if self.is_vision():
+                    model_cls = AutoModelForVision2Seq
+                else:
+                    model_cls = AutoModelForCausalLM
+
+                model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto"
                     # Note that the default setting is torch.dtype.float32, but model weights are
@@ -2238,7 +2248,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
+            use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2344,7 +2354,7 @@ class HfAttentionWrapper:
 
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)
-            output, _ = self.attention(
+            output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,
                 past_key_value=self.past_key_value,
