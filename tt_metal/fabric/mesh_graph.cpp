@@ -276,18 +276,14 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         for (std::uint32_t i = 0; i < mesh_board_ns_size; i++) {
             for (std::uint32_t j = 0; j < mesh_board_ew_size; j++) {
                 HostRankId host_rank = HostRankId{current_host_rank_id++};
-                if (host_rank_submesh_start_end_coords.find(host_rank) == host_rank_submesh_start_end_coords.end()) {
-                    host_rank_submesh_start_end_coords.insert(
-                        {host_rank, std::make_pair(MeshCoordinate(i, j), MeshCoordinate(i, j))});
-                } else {
-                    host_rank_submesh_start_end_coords.at(host_rank).second = MeshCoordinate(i, j);
-                }
+                host_rank_submesh_start_end_coords.emplace(
+                    host_rank, std::make_pair(MeshCoordinate(i, j), MeshCoordinate(i, j)));
                 mesh_host_ranks_values.push_back(host_rank);
             }
         }
         // Fill in all host rank coordinate ranges
         for (const auto& [host_rank, coords] : host_rank_submesh_start_end_coords) {
-            this->mesh_host_rank_coord_ranges_.emplace(
+            mesh_host_rank_coord_ranges_.emplace(
                 std::make_pair(*mesh_id, host_rank),
                 MeshCoordinateRange(
                     MeshCoordinate(coords.first[0] * board_ns_size, coords.first[1] * board_ew_size),
@@ -440,8 +436,15 @@ MeshCoordinateRange MeshGraph::get_coord_range(MeshId mesh_id, std::optional<Hos
     this->validate_mesh_id(mesh_id);
 
     if (host_rank.has_value()) {
-        return this->mesh_host_rank_coord_ranges_.at(std::make_pair(mesh_id, *host_rank));
+        auto it = this->mesh_host_rank_coord_ranges_.find(std::make_pair(mesh_id, *host_rank));
+        TT_FATAL(
+            it != this->mesh_host_rank_coord_ranges_.end(),
+            "MeshGraph: host_rank {} not found for mesh {}",
+            *host_rank,
+            *mesh_id);
+        return it->second;
     }
+
     auto mesh_shape = this->mesh_to_chip_ids_.at(mesh_id).shape();
     return MeshCoordinateRange(mesh_shape);
 }
@@ -461,10 +464,11 @@ std::vector<MeshId> MeshGraph::get_mesh_ids() const {
 MeshContainer<chip_id_t> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<HostRankId> host_rank) const {
     auto it = mesh_to_chip_ids_.find(mesh_id);
     TT_FATAL(it != mesh_to_chip_ids_.end(), "MeshGraph: mesh_id {} not found", mesh_id);
+    const auto& chip_ids = it->second;
 
     if (!host_rank.has_value()) {
         // Return the entire mesh
-        return it->second;
+        return chip_ids;
     }
 
     // Return submesh for the specific host rank
@@ -475,7 +479,7 @@ MeshContainer<chip_id_t> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<H
     submesh_chip_ids.reserve(submesh_shape.mesh_size());
 
     for (const auto& coord : coord_range) {
-        submesh_chip_ids.push_back(it->second.at(coord));
+        submesh_chip_ids.push_back(chip_ids.at(coord));
     }
 
     return MeshContainer<chip_id_t>(submesh_shape, submesh_chip_ids);

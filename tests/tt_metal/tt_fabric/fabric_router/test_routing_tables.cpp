@@ -58,16 +58,16 @@ TEST(MeshGraphValidation, TestTGMeshGraphInit) {
         mesh_graph_desc->get_coord_range(MeshId{0}, HostRankId(0)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     EXPECT_EQ(
-        mesh_graph_desc->get_coord_range(MeshId{1}, HostRankId(0)),
+        mesh_graph_desc->get_coord_range(MeshId{1}, HostRankId(1)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     EXPECT_EQ(
-        mesh_graph_desc->get_coord_range(MeshId{2}, HostRankId(0)),
+        mesh_graph_desc->get_coord_range(MeshId{2}, HostRankId(2)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     EXPECT_EQ(
-        mesh_graph_desc->get_coord_range(MeshId{3}, HostRankId(0)),
+        mesh_graph_desc->get_coord_range(MeshId{3}, HostRankId(3)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     EXPECT_EQ(
-        mesh_graph_desc->get_coord_range(MeshId{4}, HostRankId(0)),
+        mesh_graph_desc->get_coord_range(MeshId{4}, HostRankId(4)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
 }
 
@@ -284,9 +284,9 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraph) {
     const auto& host_ranks_mesh0 = mesh_graph->get_host_ranks(MeshId{0});
     EXPECT_EQ(host_ranks_mesh0, MeshContainer<HostRankId>(MeshShape(1, 1), {HostRankId(0)}));
 
-    // Check host ranks for mesh 1 - single host rank 0
+    // Check host ranks for mesh 1 - single host rank 1
     const auto& host_ranks_mesh1 = mesh_graph->get_host_ranks(MeshId{1});
-    EXPECT_EQ(host_ranks_mesh1, MeshContainer<HostRankId>(MeshShape(1, 1), {HostRankId(0)}));
+    EXPECT_EQ(host_ranks_mesh1, MeshContainer<HostRankId>(MeshShape(1, 1), {HostRankId(1)}));
 
     // Each mesh has a 2x2 board topology
     EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(2, 2));
@@ -294,7 +294,7 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraph) {
 
     // Since there's only one host rank per mesh, mesh shape should be same
     EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}, HostRankId(0)), MeshShape(2, 2));
-    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{1}, HostRankId(0)), MeshShape(2, 2));
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{1}, HostRankId(1)), MeshShape(2, 2));
 
     // Check coordinate ranges
     EXPECT_EQ(mesh_graph->get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
@@ -305,7 +305,7 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraph) {
         mesh_graph->get_coord_range(MeshId{0}, HostRankId(0)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
     EXPECT_EQ(
-        mesh_graph->get_coord_range(MeshId{1}, HostRankId(0)),
+        mesh_graph->get_coord_range(MeshId{1}, HostRankId(1)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
 
     // Check chip IDs - each mesh has 4 chips (2x2)
@@ -321,7 +321,7 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraph) {
         mesh_graph->get_chip_ids(MeshId{0}, HostRankId(0)),
         MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
     EXPECT_EQ(
-        mesh_graph->get_chip_ids(MeshId{1}, HostRankId(0)),
+        mesh_graph->get_chip_ids(MeshId{1}, HostRankId(1)),
         MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
 }
 
@@ -373,7 +373,7 @@ TEST(MeshGraphValidation, TestGetHostRankForChip) {
     // Each mesh has only one host rank (0)
     for (chip_id_t chip_id = 0; chip_id < 4; chip_id++) {
         EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{0}, chip_id), HostRankId(0));
-        EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{1}, chip_id), HostRankId(0));
+        EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{1}, chip_id), HostRankId(1));
     }
 
     // Test invalid chip IDs for 2x2 configuration

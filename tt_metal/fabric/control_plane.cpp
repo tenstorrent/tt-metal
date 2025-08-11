@@ -1923,10 +1923,11 @@ void ControlPlane::generate_local_intermesh_link_table() {
     // Populate the local to remote mapping for all intermesh links
     // This cannot be done by UMD, since it has no knowledge of links marked
     // for intermesh routing (these links are hidden from UMD).
+    intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
+    intermesh_link_table_.local_host_rank_id = local_mesh_binding_.host_rank;
+
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
-    intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
     const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
@@ -2107,7 +2108,7 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
             bool connection_found = false;
             // TODO: untested, but should work. We would need two big meshes connected to test this
             auto connected_host_rank_id = this->routing_table_generator_->mesh_graph
-                                              ->get_host_rank_for_chip(connected_mesh_id, fabric_node_id.chip_id)
+                                              ->get_host_rank_for_chip(connected_mesh_id, edge.connected_chip_ids[0])
                                               .value();
             for (const auto& [candidate_desc, candidate_peer_desc] :
                  peer_intermesh_link_tables_[connected_mesh_id][connected_host_rank_id]) {
@@ -2137,7 +2138,11 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
     }
     TT_FATAL(
         num_directions_assigned == num_links_requested_on_node,
-        "Could not bind all edges in the Mesh Graph to an intermesh link.");
+        "Could not bind all edges in the Mesh Graph to an intermesh link. num_directions_assigned: {}, "
+        "num_links_requested_on_node: {}, fabric_node_id: {}",
+        num_directions_assigned,
+        num_links_requested_on_node,
+        fabric_node_id);
 }
 
 const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const { return intermesh_link_table_; }
