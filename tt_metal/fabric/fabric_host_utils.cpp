@@ -345,11 +345,84 @@ std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const Intra
     return physical_chip_ids;
 }
 
+// Helper function to collect ethernet channel debug information for a set of chips
+void get_ethernet_channels_debug_info(const std::set<chip_id_t>& chip_ids) {
+    std::stringstream debug_info;
+
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    for (const auto& chip_id : chip_ids) {
+        std::string debug_info = "  Chip " + std::to_string(chip_id) + ": ";
+        try {
+            auto fabric_ethernet_channels = cluster.get_fabric_ethernet_channels(chip_id);
+            if (fabric_ethernet_channels.empty()) {
+                debug_info += "No fabric ethernet channels";
+            } else {
+                debug_info += "Fabric ethernet channels: ";
+                bool first = true;
+                for (const auto& channel : fabric_ethernet_channels) {
+                    if (!first) {
+                        debug_info += ", ";
+                    }
+                    debug_info += std::to_string(static_cast<std::uint16_t>(channel));
+                    first = false;
+                }
+            }
+
+            // Get active ethernet cores for this chip
+            const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+            auto active_eth_cores = control_plane.get_active_ethernet_cores(chip_id, false);
+            if (!active_eth_cores.empty()) {
+                debug_info += " | Active ethernet cores: ";
+                bool first = true;
+                for (const auto& core : active_eth_cores) {
+                    if (!first) {
+                        debug_info += ", ";
+                    }
+                    debug_info += "(" + std::to_string(core.x) + "," + std::to_string(core.y) + ")";
+                    first = false;
+                }
+            }
+
+            // Get inactive ethernet cores for this chip
+            auto inactive_eth_cores = control_plane.get_inactive_ethernet_cores(chip_id);
+            if (!inactive_eth_cores.empty()) {
+                debug_info += " | Inactive ethernet cores: ";
+                bool first = true;
+                for (const auto& core : inactive_eth_cores) {
+                    if (!first) {
+                        debug_info += ", ";
+                    }
+                    debug_info += "(" + std::to_string(core.x) + "," + std::to_string(core.y) + ")";
+                    first = false;
+                }
+            }
+        } catch (const std::exception& e) {
+            debug_info += "Error getting ethernet info: " + std::string(e.what());
+        }
+
+        log_info(tt::LogTest, "{}", debug_info);
+    }
+}
+
 std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id) {
+    // FIXME: Debug information, to delete
+    // Collect all chip IDs for ethernet channel debug information
+    std::set<chip_id_t> all_chip_ids;
+    for (const auto& [chip_id, neighbors] : topology_info.adjacency_map) {
+        all_chip_ids.insert(chip_id);
+        for (const auto& neighbor : neighbors) {
+            all_chip_ids.insert(neighbor);
+        }
+    }
+
+    get_ethernet_channels_debug_info(all_chip_ids);
+
     // Check number of corners for 2D meshes
-    TT_FATAL(
-        topology_info.corners.size() == 4, "Expected 4 corners for 2D mesh, got {}.", topology_info.corners.size());
+    if (topology_info.corners.size() != 4) {
+        TT_FATAL(false, "Expected 4 corners for 2D mesh, got {}", topology_info.corners.size());
+    }
 
     // Determine the northwest corner
     chip_id_t nw_corner;
