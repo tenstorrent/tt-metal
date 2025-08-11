@@ -35,17 +35,17 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const uint32_t input_rank{input_shape.rank()};
     const uint32_t index_rank{index_shape.rank()};
 
-    TT_FATAL(
-        index_shape == src_shape,
-        "index_shape must be the same as src_shape (index_shape: {}, src_shape: {}).",
-        index_shape,
-        src_shape);
+    // TT_FATAL(
+    //     index_shape == src_shape,
+    //     "index_shape must be the same as src_shape (index_shape: {}, src_shape: {}).",
+    //     index_shape,
+    //     src_shape);
 
-    TT_FATAL(
-        input_rank == index_rank,
-        "input_rank must equal index_rank (input_rank: {}, index_rank: {}).",
-        input_rank,
-        index_rank);
+    // TT_FATAL(
+    //     input_rank == index_rank,
+    //     "input_rank must equal index_rank (input_rank: {}, index_rank: {}).",
+    //     input_rank,
+    //     index_rank);
 
     TT_FATAL(
         input_dtype == src_dtype,
