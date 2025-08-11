@@ -41,7 +41,7 @@ void py_bind_all_to_all_combine(py::module& module) {
             Keyword Args:
                 local_reduce (bool, optional): whether or not the tokens are locally reduce prior to combining. The expectation is that the expert output tokens corresponding to the dispatched token are already reduced. Defaults to `False`.
                 num_links (number, optional): the number of cross-device links to use for combining the tokens. Defaults to `1`.
-                topology (ttnn.Topology, optional): the topology to use when combining the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Farbric Init unless it matches the topology of the mesh.
+                topology (ttnn.Topology, optional): the topology to use when combining the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
                 axis (int, optional): the cluster axis to combine along. Defaults to `None` though we assert out when it is not specified.
                 subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
