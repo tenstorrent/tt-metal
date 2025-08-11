@@ -84,7 +84,7 @@ tt_metal/tools/mem_bench @nhuang-tt # should be moved to tests micro benchmark?
 tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT
 tt_metal/tools/watcher_dump/ @pgkeller
 tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
-tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
+tt_metal/tools/profiler/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent
 
@@ -281,6 +281,7 @@ models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
 docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT
+docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @pgkeller @abhullar-tt @rtawfik01 @vvukomanovicTT @atatuzunerTT
 
 # misc
 dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra

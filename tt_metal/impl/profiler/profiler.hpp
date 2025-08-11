@@ -134,6 +134,13 @@ struct DeviceProfilerDataPoint {
     nlohmann::json meta_data;
 };
 
+struct FabricEventDataPoints {
+    std::vector<DeviceProfilerDataPoint> fabric_write_datapoints;
+    DeviceProfilerDataPoint fabric_routing_fields_datapoint;
+    DeviceProfilerDataPoint local_noc_write_datapoint;
+    std::optional<DeviceProfilerDataPoint> fabric_mux_datapoint;
+};
+
 class DeviceProfiler {
 private:
     // Device architecture
