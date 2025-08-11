@@ -64,7 +64,6 @@ class Conv:
             deallocate_activation=conv_param.deallocate_activation,
             enable_act_double_buffer=conv_param.enable_act_double_buffer,
             enable_weights_double_buffer=True,
-            enable_split_reader=conv_param.enable_split_reader,
             output_layout=output_layout,
         )
         config_override = None
