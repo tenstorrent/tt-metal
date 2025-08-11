@@ -9,18 +9,23 @@
 #include <array>
 
 #include "dfb_register.h"
+#include "dfb_test_common.hpp"
 
-enum DataflowBufferAccessPattern : uint8_t {
-    NONE,
-    STRIDED,
-    BLOCKED,
-    GLOBAL,  // no producer, all data is resident
-};
+namespace tt::tt_metal {
+
+    enum DataflowBufferAccessPattern : uint8_t {
+        NONE,
+        STRIDED,
+        BLOCKED,
+        GLOBAL,  // no producer, all data is resident
+    };
+    
 
 namespace dev {
 
 // riscs would have to set this up based on how host config, similar to how we currently set up local cb interface
 
+// each thread should have an instance of this
 struct local_dfb_interface_t {
     uint32_t size;
     uintptr_t limit;  // check for wraps
@@ -35,7 +40,7 @@ struct local_dfb_interface_t {
     DataflowBufferAccessPattern rapt = DataflowBufferAccessPattern::NONE;
 };
 
-extern local_dfb_interface_t overlay_cluster_dfb_access_pattern_tracker[64];
+extern thread_local local_dfb_interface_t overlay_cluster_dfb_access_pattern_tracker[64];
 // Internal mapping table - maps DFB index to register indices. Index from DFB "logial index" and the uint64_t is the
 // register assignment mask
 extern uint64_t dfb_to_register_allocation[64];
@@ -86,19 +91,17 @@ public:
     // Get the DataflowBuffer index (user-facing)
     uint8_t get_index() const { return index; }
 
-    // `thread_id` is just to facilitate simulation. Production APIs will not have this parameter
-    // `thread_id` will be a risv global
-    void reserve_back(uint32_t num_pages, uint8_t thread_id) {
-        uint8_t register_index = this->get_register_index(thread_id);
-        std::cout << "rb reg idx " << std::dec << (uint32_t)register_index << " cap " << std::dec
-                  << overlay_cluster_instances[register_index].get_capacity() << std::endl;
-        std::cout << "reserve_back: " << std::dec << overlay_cluster_instances[register_index].get_space_avail()
-                  << std::dec << std::endl;
+    void reserve_back(uint32_t num_pages) {
+        auto& out = tt::tt_metal::get_thread_output_stream();
+        uint8_t register_index = this->get_register_index(tt::tt_metal::current_thread_id);
+        out << "TID " << (uint32_t)current_thread_id << " RB reg idx " << std::dec << (uint32_t)register_index << " cap " << std::dec
+                  << overlay_cluster_instances[register_index].get_space_avail() << std::endl;
         while (overlay_cluster_instances[register_index].get_space_avail() < num_pages);
     }
 
-    void push_back(uint32_t num_pages, uint8_t thread_id) {
-        uint8_t register_index = this->get_register_index(thread_id);
+    void push_back(uint32_t num_pages) {
+        auto& out = tt::tt_metal::get_thread_output_stream();
+        uint8_t register_index = this->get_register_index(tt::tt_metal::current_thread_id);
         overlay_cluster_instances[register_index].inc_pages_posted(num_pages);
         overlay_cluster_dfb_access_pattern_tracker[register_index].wr_ptr +=
             (num_pages * overlay_cluster_dfb_access_pattern_tracker[register_index].page_size);
@@ -107,25 +110,21 @@ public:
             overlay_cluster_dfb_access_pattern_tracker[register_index].wr_ptr -=
                 overlay_cluster_dfb_access_pattern_tracker[register_index].size;
         }
-        std::cout << "after push back pages avail: " << std::dec
+        out << "TID " << (uint32_t)current_thread_id << " PB pages avail: " << std::dec
                   << overlay_cluster_instances[register_index].get_pages_avail() << std::endl;
     }
 
-    void wait_front(uint32_t num_pages, uint8_t thread_id) {
-        uint8_t register_index = this->get_register_index(thread_id);
-        std::cout << "wf reg idx " << std::dec << (uint32_t)register_index << " cap " << std::dec
-                  << overlay_cluster_instances[register_index].get_capacity() << " num pages " << std::dec << num_pages
-                  << std::endl;
-
-        std::cout << "wait_front: " << std::dec << overlay_cluster_instances[register_index].get_pages_avail()
-                  << std::dec << std::endl;
+    void wait_front(uint32_t num_pages) {
+        auto& out = tt::tt_metal::get_thread_output_stream();
+        uint8_t register_index = this->get_register_index(tt::tt_metal::current_thread_id);
+        out << "TID " << (uint32_t)current_thread_id << " WF pages avail: " << std::dec
+                  << overlay_cluster_instances[register_index].get_pages_avail() << std::endl;
         while (overlay_cluster_instances[register_index].get_pages_avail() < num_pages);
-        std::cout << "now wf done: " << std::dec << overlay_cluster_instances[register_index].get_pages_avail()
-                  << std::endl;
     }
 
-    void pop_front(uint32_t num_pages, uint8_t thread_id) {
-        uint8_t register_index = this->get_register_index(thread_id);
+    void pop_front(uint32_t num_pages) {
+        auto& out = tt::tt_metal::get_thread_output_stream();
+        uint8_t register_index = this->get_register_index(tt::tt_metal::current_thread_id);
         overlay_cluster_instances[register_index].inc_pages_acked(num_pages);
         overlay_cluster_dfb_access_pattern_tracker[register_index].rd_ptr +=
             (num_pages * overlay_cluster_dfb_access_pattern_tracker[register_index].page_size);
@@ -134,18 +133,17 @@ public:
             overlay_cluster_dfb_access_pattern_tracker[register_index].rd_ptr -=
                 overlay_cluster_dfb_access_pattern_tracker[register_index].size;
         }
-        std::cout << "after pop front space avail: " << std::dec
-                  << overlay_cluster_instances[register_index].get_space_avail() << " pages avail: " << std::dec
-                  << overlay_cluster_instances[register_index].get_pages_avail() << std::endl;
+        out << "TID " << (uint32_t)current_thread_id << " PF space avail: " << std::dec
+        << overlay_cluster_instances[register_index].get_space_avail() << std::endl;
     }
 
-    bool pages_reservable_at_back(DataflowBuffer<WAPT, RAPT>& dfb, uint32_t num_pages, uint8_t thread_id) {
-        uint8_t register_index = this->get_register_index(thread_id);
+    bool pages_reservable_at_back(DataflowBuffer<WAPT, RAPT>& dfb, uint32_t num_pages) {
+        uint8_t register_index = this->get_register_index(tt::tt_metal::current_thread_id);
         return overlay_cluster_instances[register_index].get_space_avail() >= num_pages;
     }
 
-    bool pages_available_at_front(DataflowBuffer<WAPT, RAPT>& dfb, uint32_t num_pages, uint8_t thread_id) {
-        uint8_t register_index = this->get_register_index(thread_id);
+    bool pages_available_at_front(DataflowBuffer<WAPT, RAPT>& dfb, uint32_t num_pages) {
+        uint8_t register_index = this->get_register_index(tt::tt_metal::current_thread_id);
         return overlay_cluster_instances[register_index].get_pages_avail() >= num_pages;
     }
 
@@ -165,3 +163,5 @@ private:
 // get_read_ptr -> gets address so data can be read from addr this returns and sent over noc
 
 }  // namespace dev
+
+} // namespace tt::tt_metal

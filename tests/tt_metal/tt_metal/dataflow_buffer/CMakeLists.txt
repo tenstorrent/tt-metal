@@ -1,5 +1,6 @@
 set(UNIT_TESTS_DATAFLOW_BUFFER_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/host/dataflow_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dfb_test_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_local_dataflow_buffer.cpp
 )
 

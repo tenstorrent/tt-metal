@@ -4,6 +4,8 @@
 
 #pragma once
 
+namespace tt::tt_metal {
+
 namespace dev {
 
 class dfb_register_t {
@@ -29,6 +31,9 @@ private:
 };
 
 extern dfb_register_t intra_cluster_instances[16];  // these should only be used in compute kernels
+// overlay sees all 64 but each tensix only sees 16 instances, how is this exposed?
 extern dfb_register_t overlay_cluster_instances[64];
 
 }  // namespace dev
+
+}  // namespace tt::tt_metal

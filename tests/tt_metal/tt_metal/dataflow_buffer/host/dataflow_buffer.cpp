@@ -13,15 +13,15 @@
 #include "dev/dataflow_buffer.h"
 #include "host/dataflow_buffer.hpp"
 
+namespace tt::tt_metal {
+
 namespace dev {
 
-dfb_register_t overlay_cluster_instances[64] = {};
-local_dfb_interface_t overlay_cluster_dfb_access_pattern_tracker[64] = {};
-uint64_t dfb_to_register_allocation[64] = {};
-
-}  // namespace dev
-
-namespace tt::tt_metal {
+    dfb_register_t overlay_cluster_instances[64] = {};
+    thread_local local_dfb_interface_t overlay_cluster_dfb_access_pattern_tracker[64] = {};
+    uint64_t dfb_to_register_allocation[64] = {};
+    
+    }  // namespace dev
 
 DataflowBufferConfig::DataflowBufferConfig(uint32_t total_size, const tt::DataFormat& data_format) :
     total_size_(total_size), data_format_(data_format), page_size_(0), max_size_(0), access_patterns_() {}
@@ -160,7 +160,7 @@ void CreateDataflowBuffer(
     while (temp_mask) {
         int bit_position = __builtin_ctzll(temp_mask);  // Find lowest set bit
         std::cout << bit_position << " ";
-        dev::overlay_cluster_instances[buffer_index].set_capacity(capacity);
+        dev::overlay_cluster_instances[bit_position].set_capacity(capacity);
 
         temp_mask &= (temp_mask - 1);  // Clear the lowest set bit
     }
