@@ -13,8 +13,12 @@ run_tg_llama3_tests() {
   # Run all Llama3 tests for 8B, 1B, and 3B weights
   # for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
   for llama_dir in "$llama70b"; do
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3_70b_galaxy/tests/test_llama_model_nd.py --timeout=1800 ; fail+=$?
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k full --timeout=1800 ; fail+=$?
+    # LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3_70b_galaxy/tests/test_llama_model_nd.py --timeout=1800 ; fail+=$?
+    # run 20 loops of next command:
+    for i in {1..20}; do
+      echo "LOG_METAL: Running loop $i"
+      LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k full --timeout=1800 ; fail+=$?
+    done
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
