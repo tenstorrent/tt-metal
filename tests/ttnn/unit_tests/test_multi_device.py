@@ -13,6 +13,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+
 
 #######
 # Test MultiDevice Initialization, Open/Close
@@ -208,6 +210,7 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
+@pytest.mark.skip(reason=LEGACY_SKIP)
 def test_ttnn_multi_device_all_gather(pcie_mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation"""
     if pcie_mesh_device.get_num_devices() <= 1:
@@ -216,7 +219,9 @@ def test_ttnn_multi_device_all_gather(pcie_mesh_device):
 
     ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(pcie_mesh_device, dim=3))
     ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_mesh_device)
-    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
+    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy CCL call removed"
+    # ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
     for device_tensor in device_tensors:
@@ -488,6 +493,7 @@ def test_max(mesh_device):
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
+@pytest.mark.skip(reason=LEGACY_SKIP)
 def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation for full 8-device T3K"""
 
@@ -497,7 +503,9 @@ def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
 
     ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=3))
     ttnn_tensor = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
-    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
+    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy CCL call removed"
+    # ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
     for device_tensor in device_tensors:
@@ -663,6 +671,7 @@ def test_visualize_mesh_device(t3k_mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
+@pytest.mark.skip(reason=LEGACY_SKIP)
 def test_all_gather_multiple_submeshes(mesh_device):
     """Test all_gather with multiple submeshes"""
     if mesh_device.get_num_devices() < 8:
@@ -677,7 +686,9 @@ def test_all_gather_multiple_submeshes(mesh_device):
 
         ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(submesh, dim=3))
         ttnn_tensor = ttnn.to_device(ttnn_tensor, submesh)
-        ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
+        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        assert False, "Legacy CCL call removed"
+        # ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
         for device_tensor in ttnn.get_device_tensors(ttnn_tensor):
             device_tensor_torch = ttnn.to_torch(device_tensor)
@@ -689,6 +700,7 @@ def test_all_gather_multiple_submeshes(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8_line")], indirect=True)
+@pytest.mark.skip(reason=LEGACY_SKIP)
 def test_line_all_gather_after_reshape(mesh_device):
     if mesh_device.get_num_devices() < 8:
         pytest.skip()
@@ -702,13 +714,15 @@ def test_line_all_gather_after_reshape(mesh_device):
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=list(mesh_device.shape), dims=(2, 3)),
     )
-    output_tensor = ttnn.all_gather(
-        mesh_tensor,
-        dim=2,
-        cluster_axis=0,
-        mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
-    )
+    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy CCL call removed"
+    # output_tensor = ttnn.all_gather(
+    #     mesh_tensor,
+    #     dim=2,
+    #     cluster_axis=0,
+    #     mesh_device=mesh_device,
+    #     topology=ttnn.Topology.Linear,
+    # )
 
 
 def test_distribute_api(mesh_device):

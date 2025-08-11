@@ -14,6 +14,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
 )
 from ttnn import ShardTensorToMesh
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+pytestmark = pytest.mark.skip(reason=LEGACY_SKIP)
+
 
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -179,11 +182,13 @@ def run_line_all_gather_instances(
     result_mesh_tensors = []
     for loop in range(num_iters):
         for i, devices in enumerate(t3000_device_rows):
-            tt_out_tensor = ttnn.all_gather(
-                input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
-            )
-            result_mesh_tensors.append(tt_out_tensor)
-
+            pytest.skip(LEGACY_SKIP)
+            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # tt_out_tensor = ttnn.all_gather(
+            #     input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
+            # )
+            # result_mesh_tensors.append(tt_out_tensor)
+            assert False, "Legacy CCL call removed"
     for loop in range(num_iters):
         ## Wait for completion
         ttnn.synchronize_device(t3k_mesh_device)

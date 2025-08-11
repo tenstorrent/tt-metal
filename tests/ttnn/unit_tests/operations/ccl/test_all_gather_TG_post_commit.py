@@ -12,6 +12,8 @@ from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+
 NUM_BUFFERS = 16
 
 
@@ -84,15 +86,17 @@ def run_with_trace(
             subdevice_id=worker_sub_device_id,
         )
     else:
-        tt_out_tensor = ttnn.all_gather(
-            input_tensor,
-            dim=dim,
-            cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            topology=all_gather_topology,
-        )
+        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        pytest.skip(LEGACY_SKIP)
+        # tt_out_tensor = ttnn.all_gather(
+        #     input_tensor,
+        #     dim=dim,
+        #     cluster_axis=cluster_axis,
+        #     mesh_device=mesh_device,
+        #     num_links=num_links,
+        #     memory_config=output_mem_config,
+        #     topology=all_gather_topology,
+        # )
     ttnn.synchronize_device(mesh_device)
 
     # Capture trace
@@ -120,15 +124,17 @@ def run_with_trace(
                     subdevice_id=worker_sub_device_id,
                 )
             else:
-                tt_out_tensor = ttnn.all_gather(
-                    input_tensor,
-                    dim=dim,
-                    cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
-                    num_links=num_links,
-                    memory_config=output_mem_config,
-                    topology=all_gather_topology,
-                )
+                # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+                pytest.skip(LEGACY_SKIP)
+                # tt_out_tensor = ttnn.all_gather(
+                #     input_tensor,
+                #     dim=dim,
+                #     cluster_axis=cluster_axis,
+                #     mesh_device=mesh_device,
+                #     num_links=num_links,
+                #     memory_config=output_mem_config,
+                #     topology=all_gather_topology,
+                # )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         return trace_id
@@ -319,15 +325,17 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         subdevice_id=worker_sub_device_id,
                     )
                 else:
-                    ttnn_tensor_out = ttnn.all_gather(
-                        ttnn_tensor,
-                        dim=dim,
-                        cluster_axis=cluster_axis,
-                        mesh_device=mesh_device,
-                        num_links=num_links,
-                        memory_config=output_mem_config,
-                        topology=all_gather_topology,
-                    )
+                    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+                    pytest.skip(LEGACY_SKIP)
+                    # ttnn_tensor_out = ttnn.all_gather(
+                    #     ttnn_tensor,
+                    #     dim=dim,
+                    #     cluster_axis=cluster_axis,
+                    #     mesh_device=mesh_device,
+                    #     num_links=num_links,
+                    #     memory_config=output_mem_config,
+                    #     topology=all_gather_topology,
+                    # )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             signpost("stop")
     except Exception as e:

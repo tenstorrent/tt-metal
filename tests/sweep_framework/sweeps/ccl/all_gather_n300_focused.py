@@ -12,6 +12,8 @@ from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_ti
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -203,12 +205,14 @@ def run(
     )
 
     for i in range(num_iters):
-        start_time = start_measuring_time()
-        tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
-        e2e_perf = stop_measuring_time(start_time)
+        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        return [("skipped", LEGACY_SKIP), None]
+        # start_time = start_measuring_time()
+        # tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+        # e2e_perf = stop_measuring_time(start_time)
 
-        ttnn.synchronize_device(device)
-        logger.info(f"Done iteration {i}")
+        # ttnn.synchronize_device(device)
+        # logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
         tt_output_tensor = ttnn.to_torch(t)

@@ -11,6 +11,8 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case_t3k
 from ttnn.distributed.distributed import ShardTensorToMesh
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Skipping all_gather until replaced."
+
 
 def sharded_impl(
     device,
@@ -30,6 +32,7 @@ def sharded_impl(
     num_iter,
     tile=(32, 32),
 ):
+    pytest.skip(LEGACY_SKIP)
     if device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
     n_worker = None
@@ -89,15 +92,17 @@ def sharded_impl(
     else:
         ## Alternate between barrier and all gather in a loop
         for i in range(num_iter):
-            tt_out_tensor = ttnn.all_gather(
-                input_tensor_mesh,
-                dim,
-                num_links=num_links,
-                memory_config=mem_config,
-                num_workers=n_worker,
-                num_buffers_per_channel=n_buffer,
-                topology=all_gather_topology,
-            )
+            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            assert False, "Legacy CCL call removed"
+            # tt_out_tensor = ttnn.all_gather(
+            #     input_tensor_mesh,
+            #     dim,
+            #     num_links=num_links,
+            #     memory_config=mem_config,
+            #     num_workers=n_worker,
+            #     num_buffers_per_channel=n_buffer,
+            #     topology=all_gather_topology,
+            # )
             ttnn.barrier(
                 input_tensor_mesh,
                 memory_config=mem_config,
@@ -150,17 +155,20 @@ def run_normal(
 def run_with_trace(
     device, all_gather_topology, input_tensor_mesh, dim, num_links, output_mem_config, n_worker, n_buffer, num_iter
 ):
+    pytest.skip(LEGACY_SKIP)
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.all_gather(
-        input_tensor_mesh,
-        dim,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        num_workers=n_worker,
-        num_buffers_per_channel=n_buffer,
-        topology=all_gather_topology,
-    )
+    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy CCL call removed"
+    # tt_out_tensor = ttnn.all_gather(
+    #     input_tensor_mesh,
+    #     dim,
+    #     num_links=num_links,
+    #     memory_config=output_mem_config,
+    #     num_workers=n_worker,
+    #     num_buffers_per_channel=n_buffer,
+    #     topology=all_gather_topology,
+    # )
     ttnn.barrier(
         input_tensor_mesh,
         memory_config=output_mem_config,
@@ -172,16 +180,18 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(num_iter):
+        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        assert False, "Legacy CCL call removed"
         # Alternate between barrier and all gather in a loop
-        tt_out_tensor = ttnn.all_gather(
-            input_tensor_mesh,
-            dim,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            num_workers=n_worker,
-            num_buffers_per_channel=n_buffer,
-            topology=all_gather_topology,
-        )
+        # tt_out_tensor = ttnn.all_gather(
+        #     input_tensor_mesh,
+        #     dim,
+        #     num_links=num_links,
+        #     memory_config=output_mem_config,
+        #     num_workers=n_worker,
+        #     num_buffers_per_channel=n_buffer,
+        #     topology=all_gather_topology,
+        # )
         ttnn.barrier(
             input_tensor_mesh,
             memory_config=output_mem_config,

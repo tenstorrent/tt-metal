@@ -14,6 +14,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
 from ttnn import ShardTensorToMesh
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -102,13 +104,15 @@ def run(
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
     for i in range(num_iters):
-        start_time = start_measuring_time()
-        tt_out_tensor = ttnn.all_gather(
-            input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
-        )
-        e2e_perf = stop_measuring_time(start_time)
+        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        return [("skipped", LEGACY_SKIP), None]
+        # start_time = start_measuring_time()
+        # tt_out_tensor = ttnn.all_gather(
+        #     input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
+        # )
+        # e2e_perf = stop_measuring_time(start_time)
 
-        logger.info(f"Done iteration {i}")
+        # logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()

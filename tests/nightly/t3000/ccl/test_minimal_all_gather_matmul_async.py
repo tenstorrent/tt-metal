@@ -12,6 +12,8 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+
 
 def create_global_semaphores(t3k_mesh_device, num_devices, cores, initial_value):
     # create global semaphore handles
@@ -199,12 +201,15 @@ def run_all_gather_impl(
     def run_op(i):
         if use_non_fused:
             if use_legacy_allgather:
-                tt_all_gather_out_tensor = ttnn.all_gather(
-                    input_tensor_mesh_list[i],
-                    dim,
-                    num_links=num_links,
-                    memory_config=mem_config_ag,
-                )
+                pytest.skip(LEGACY_SKIP)
+                # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+                # tt_all_gather_out_tensor = ttnn.all_gather(
+                #     input_tensor_mesh_list[i],
+                #     dim,
+                #     num_links=num_links,
+                #     memory_config=mem_config_ag,
+                # )
+                assert False, "Legacy CCL call removed"
             else:
                 tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
@@ -384,10 +389,8 @@ def run_all_gather_impl(
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
-        (
-            {"trace_region_size": 90112},
-            True,
-            ttnn.Topology.Ring,
+        pytest.param(
+            {"trace_region_size": 90112}, True, ttnn.Topology.Ring, marks=pytest.mark.skip(reason=LEGACY_SKIP)
         ),
     ],
     indirect=["device_params"],
