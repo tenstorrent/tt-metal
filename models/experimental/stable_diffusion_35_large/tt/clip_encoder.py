@@ -575,6 +575,7 @@ class TtCLIPTextTransformerParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
         parallel_manager: EncoderParallelManager = None,
+        has_text_projection: bool = True,  # SDXL Base encoder 1 does not have text projection, so this is a quick hack to handle it
     ) -> TtCLIPTextTransformerParameters:
         text_model_state = substate(state, "text_model")
 
@@ -595,7 +596,9 @@ class TtCLIPTextTransformerParameters:
             ),
             text_projection_weight=from_torch_fast(
                 state["text_projection.weight"], dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT
-            ),
+            )
+            if has_text_projection
+            else None,
         )
 
 
@@ -650,8 +653,11 @@ class TtCLIPTextTransformer:
 
         pooled_output = self._gather_eos(normalized_final_state, input_ids, eos_token_id, device)
 
-        text_projection_transposed = ttnn.transpose(self._text_projection, -2, -1)
-        projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
+        if self._text_projection is not None:
+            text_projection_transposed = ttnn.transpose(self._text_projection, -2, -1)
+            projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
+        else:
+            projected_output = pooled_output
 
         return encoder_output, projected_output
 
