@@ -1,3 +1,5 @@
+import os
+
 import pytest
 import torch
 import torch.nn as nn
@@ -7,7 +9,10 @@ import ttnn
 from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
 from ...reference.configuration_gpt_oss import GptOssConfig
+from ...reference.hf_utils import get_state_dict
 from ...tt.topk import TopKRouter, topk_router
+
+local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
 
 def reference_topk(g, experts_per_token):
@@ -138,7 +143,8 @@ def test_topk(device, experts_per_token, num_experts, seq_len):
 )
 @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
 @pytest.mark.parametrize("hidden_dim", [2880])
-def test_topk_router(device, experts_per_token, num_experts, seq_len, hidden_dim, reset_seeds):
+@pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
+def test_topk_router(device, experts_per_token, num_experts, seq_len, hidden_dim, use_real_weights, reset_seeds):
     hidden_states = torch.randn(seq_len, hidden_dim)
     tt_hidden_states = ttnn.from_torch(hidden_states, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     config = GptOssConfig(
@@ -147,6 +153,11 @@ def test_topk_router(device, experts_per_token, num_experts, seq_len, hidden_dim
         num_experts_per_tok=experts_per_token,
     )
     reference_model = ReferenceTopKRouter(config)
+
+    if use_real_weights:
+        state_dict = get_state_dict(local_weights_path, "model.layers.0.mlp.router.", dtype=torch.float32)
+        reference_model.load_state_dict(state_dict, strict=True)
+
     state_dict = reference_model.state_dict()
     tt_model = TopKRouter(config, state_dict, device)
     router_scores, router_indices, router_logits = reference_model(hidden_states)
