@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <iostream>
 
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/trace.hpp"
@@ -139,7 +138,6 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
     auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
 
 #ifdef BUILD_MLP_OP_PERF
-    std::cout << "in ifdef" << std::endl;
 
     // helper lambda to make nlohmann::json objects from args
     auto transform_to_json = [](auto&& arg) {
@@ -148,7 +146,6 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
             return arg;
         } else {
             auto json_arg = ttsl::json::to_json(arg);
-            std::cout << "arg is " << json_arg.dump(5) << std::endl;
             return json_arg;
         }
     };
@@ -160,22 +157,19 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
     std::string op_name;
     if constexpr (std::is_same_v<Op, std::decay_t<decltype(ttnn::exp)>>) {
         op_name = "ttnn::exp";
-        std::cout << "here!" << std::endl;
     } else {
         op_name = "unknown";
-        std::cout << "unknown" << std::endl;
     }
 
     uint64_t runtime = std::apply(
         [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op_name, json_args...); }, json_args_tuple);
     if (runtime != 0) {
-        return RuntimeQueryResponse{ExecutionStatus::Success, runtime, ""};
+        return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
     }
 
 #endif
 
     try {
-        std::cout << "in online models" << std::endl;
         auto trace_id = std::apply(
             [&](auto&&... unpacked_args) {
                 return capture_op_trace(op, device, std::forward<decltype(unpacked_args)>(unpacked_args)...);
