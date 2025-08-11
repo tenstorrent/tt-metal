@@ -38,37 +38,90 @@ def reference_sdpa(Q, K, V, S, sm_scale, sliding_window=0):
     ids=["gpt20B", "gpt20B_tp2"],
 )
 @pytest.mark.parametrize("sliding_window", [0, 128])
-def test_sdpa(device, num_tokens, nh, nkv, dim, sliding_window):
+@pytest.mark.parametrize(
+    "num_iters",
+    [
+        128,
+    ],
+)
+def test_sdpa(device, num_tokens, nh, nkv, dim, sliding_window, num_iters, reset_seeds):
     dtype = ttnn.bfloat16
 
-    # Torch input
-    q = torch.randn(num_tokens, 1, nh, dim).reshape(num_tokens, nkv, nh // nkv, dim)
-    k = torch.randn(num_tokens, nkv, dim)
-    v = torch.randn(num_tokens, nkv, dim)
-    s = torch.randn(1, nh, 1, 1)
-    sm_scale = 1.0 / (dim**0.5)
+    q, k, v = None, None, None
+    tt_cache = None
+    all_passing = True
+    for n in range(num_iters):
+        logger.info(f"Running iteration {n} of {num_iters}")
+        cur_seq_len = num_tokens + n
 
-    mask = torch.triu(torch.full((1, 1, num_tokens, num_tokens), -float("inf")), diagonal=1)
-    if sliding_window > 0:
-        mask += torch.tril(torch.full((1, 1, num_tokens, num_tokens), -float("inf")), diagonal=-sliding_window)
+        # Torch input
+        q = torch.randn(num_tokens, nkv, nh // nkv, dim) if n == 0 else q
+        k = torch.randn(num_tokens, nkv, dim) if k is None else k
+        v = torch.randn(num_tokens, nkv, dim) if v is None else v
+        s = torch.randn(1, nh, 1, 1)
+        sm_scale = 1.0 / (dim**0.5)
 
-    # Torch output
-    reference_out = reference_sdpa(q, k, v, s, sm_scale, sliding_window)
+        if n > 0:
+            q = torch.cat([q, torch.randn(1, nkv, nh // nkv, dim)], dim=0)
+            k = torch.cat([k, torch.randn(1, nkv, dim)], dim=0)
+            v = torch.cat([v, torch.randn(1, nkv, dim)], dim=0)
 
-    # TT input
-    tt_q = ttnn.from_torch(q.view(num_tokens, 1, nh, dim), device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-    tt_k = ttnn.from_torch(k, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-    tt_v = ttnn.from_torch(v, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-    tt_sink = ttnn.from_torch(s, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-    tt_mask = ttnn.from_torch(mask, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+        mask = torch.triu(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=1)
+        if sliding_window > 0:
+            mask += torch.tril(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=-sliding_window)
 
-    # TT output
-    tt_out = tt_sdpa(tt_q, tt_k, tt_v, tt_sink, sm_scale=sm_scale, tt_mask=tt_mask)
-    tt_out_torch = ttnn.to_torch(tt_out)
+        # Torch output
+        reference_out = reference_sdpa(q, k, v, s, sm_scale, sliding_window)
 
-    # Compare outputs
-    pcc = 0.99
-    passed, pcc_message = comp_pcc(reference_out, tt_out_torch, pcc)
-    logger.info(f"Test passed: {passed}, PCC: {pcc_message}")
+        # TT input
+        if n == 0:
+            q_in = q.view(num_tokens, 1, nh, dim)
+            k_in = k
+            v_in = v
+        else:
+            q_in = q[-1:, ...].view(1, 1, nh, dim)
+            k_in = k[-1:, ...]
+            v_in = v[-1:, ...]
 
-    assert passed, "Test failed: Outputs do not match"
+        tt_q = ttnn.from_torch(q_in, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+        tt_k = ttnn.from_torch(k_in, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+        tt_v = ttnn.from_torch(v_in, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+        tt_sink = ttnn.from_torch(s, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+        tt_mask = ttnn.from_torch(mask, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+
+        # TT output
+        # if n >= 5:
+        #     breakpoint()
+        tt_out, tt_cache = tt_sdpa(tt_q, tt_k, tt_v, tt_sink, sm_scale=sm_scale, tt_mask=tt_mask, tt_cache=tt_cache)
+        tt_out_torch = ttnn.to_torch(tt_out)
+
+        # Only compare the last token
+        if n > 0:
+            reference_out = reference_out[-1:, ...]
+
+        # Compare outputs
+        pcc = 0.99
+        passed, pcc_message = comp_pcc(reference_out, tt_out_torch, pcc)
+        if not passed:
+            logger.error(f"Iteration {n} | Test passed: {passed}, PCC: {pcc_message}")
+        all_passing = all_passing and passed
+
+    assert all_passing, "Test failed: Outputs do not match"
+
+
+def test_reshape_hang_repro(device, reset_seeds):
+    input_shape = [1, 1, 64, 64]
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # reference_out = torch_input.reshape(1, 1, -1)
+    temps = []
+
+    for i in range(10000):
+        logger.info(f"Running reshape iteration {i}")
+        tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_out = ttnn.reshape(tt_input, [1, 1, 4096])
+
+        temps.append(ttnn.from_torch(torch.ones(32, 128)))
+
+        tt_out_torch = ttnn.to_torch(tt_out)
+        torch_input = tt_out_torch.view(1, 1, 64, 64)  # Reshape back to original shape for next iteration
