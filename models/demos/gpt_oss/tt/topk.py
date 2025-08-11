@@ -38,7 +38,7 @@ class TopKRouter:
         self.compute_config = None
 
     def __call__(self, hidden_states):
-        # hidden_states = hidden_states.reshape(-1, self.hidden_dim)
+        hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
         router_logits = ttnn.linear(
             hidden_states, self.weight, bias=self.bias, compute_kernel_config=self.compute_config
         )
