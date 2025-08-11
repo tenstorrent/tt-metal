@@ -16,10 +16,10 @@ def topk_router(g, experts_per_token):
 
 
 class TopKRouter:
-    def __init__(self, config, state_dict, mesh_device):
-        self.top_k = config.num_experts_per_tok
-        self.num_experts = config.num_local_experts
-        self.hidden_dim = config.hidden_size
+    def __init__(self, mesh_device, hf_config, state_dict):
+        self.top_k = hf_config.num_experts_per_tok
+        self.num_experts = hf_config.num_local_experts
+        self.hidden_dim = hf_config.hidden_size
         self.weight = ttnn.from_torch(
             state_dict["weight"].transpose(0, 1), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
         )
