@@ -115,7 +115,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
 // llama All Gather MM Variants
-tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_sharded(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
     Tensor& output_tensor,

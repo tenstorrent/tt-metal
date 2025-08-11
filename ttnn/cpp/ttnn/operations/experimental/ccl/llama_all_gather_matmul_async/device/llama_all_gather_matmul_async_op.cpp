@@ -157,7 +157,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
         }
     }
 
-    return llama_all_gather_mm_async_sharded(
+    return llama_all_gather_matmul_async_sharded(
         input_tensors[0],   // in0
         input_tensors[1],   // in1
         output_tensors[0],  // mm output tensor
@@ -317,8 +317,8 @@ Tensor llama_all_gather_matmul_async_impl(
 }  // namespace
 
 Tensor llama_all_gather_matmul_async(
-    const Tensor& input_tensor,
-    const Tensor& input_tensor_b,
+    const Tensor& input_tensor0,
+    const Tensor& input_tensor1,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -333,8 +333,8 @@ Tensor llama_all_gather_matmul_async(
     const std::optional<const DataType> dtype,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     return llama_all_gather_matmul_async_impl(
-        input_tensor,
-        input_tensor_b,
+        input_tensor0,
+        input_tensor1,
         dim,
         cluster_axis,
         mesh_device,
