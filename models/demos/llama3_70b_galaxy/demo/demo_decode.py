@@ -13,7 +13,6 @@ import pytest
 import requests
 from pathlib import Path
 import hashlib
-from collections import deque
 
 
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
@@ -277,9 +276,9 @@ def run_llama3_demo(
 
     logger.info("Starting decode...")
 
-    # Deques to store iteration data when print_outputs is False
-    prefill_iteration_data = deque()
-    decode_iteration_data = deque()
+    # Lists to store iteration data when print_outputs is False
+    prefill_iteration_data = []
+    decode_iteration_data = []
 
     # Initial positions
     decoding_pos = [start_pos] * batch_size
