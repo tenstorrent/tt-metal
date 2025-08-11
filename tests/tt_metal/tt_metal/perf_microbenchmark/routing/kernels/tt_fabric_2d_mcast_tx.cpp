@@ -15,7 +15,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 #ifdef TEST_ENABLE_FABRIC_TRACING
-#include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
+#include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
 #endif
 
 // clang-format on

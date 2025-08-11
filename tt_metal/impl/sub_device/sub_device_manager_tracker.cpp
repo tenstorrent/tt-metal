@@ -65,8 +65,10 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
     if (dynamic_cast<distributed::MeshDevice*>(device_)) {
         // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
-        mesh_device->mesh_command_queue().reset_worker_state(
-            true, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
+        for (uint8_t cq_id = 0; cq_id < mesh_device->num_hw_cqs(); ++cq_id) {
+            mesh_device->mesh_command_queue(cq_id).reset_worker_state(
+                cq_id == 0, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
+        }
     } else {
         for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
             auto& hw_cq = device_->command_queue(cq_id);
