@@ -40,6 +40,8 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer
             for k_or_v in [cache_k, cache_v]
         ]
 
+    return [l.attention.layer_past for l in model.layers]
+
 
 def get_platform_specific_optimizations(model_name):
     is_72B = "72B" in model_name
@@ -171,10 +173,9 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         return self.model_args.model_cache_path
 
     def allocate_kv_cache(self, *args, **kwargs):
-        allocate_vllm_kv_cache(
+        return allocate_vllm_kv_cache(
             *args, **kwargs, model=self.model, model_args=self.model_args, tt_cache_path=self.cache_path
         )
-        return [l.attention.layer_past for l in self.model.layers]
 
     def prefill_forward(
         self,
