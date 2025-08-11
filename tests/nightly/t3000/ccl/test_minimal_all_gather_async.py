@@ -45,6 +45,16 @@ def run_all_gather_impl(
 
     tile = (32, 32)
 
+    ag_input_shape = ag_output_shape[:]
+    ag_input_shape[dim] *= num_devices
+    is_unpadded_on_gather_dim = (dim == 2 or dim == 3) and (
+        ag_input_shape[2] % tile[0] != 0 or ag_input_shape[3] % tile[1] != 0
+    )
+    invoking_composite = layout == ttnn.ROW_MAJOR_LAYOUT or is_unpadded_on_gather_dim
+
+    if invoking_composite and not use_barrier:
+        pytest.skip(f"Barrier semaphore required for composite AG")
+
     # Skip unsupported cases
     (is_known_failure, message) = is_unsupported_case(
         ag_output_shape, dim, mem_config_ag, num_devices, num_links, ag_input_dtype, layout, tile
@@ -192,29 +202,32 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [
-        # (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # Tests for training shapes
+        (8, [1, 1, 8, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 1, 1, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 1, 16, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 1, 8, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 1, 64, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (8, [1, 1, 256, 16], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 64, 8], 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 8, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
     ],
-    # ids=[
-    #     "sd35_spatial",
-    #     "sd35_prompt",
-    #     "gather_dim_0",
-    #     "gather_dim_1",
-    #     "gather_dim_2",
-    #     "gather_dim_2_padded_dim_3",
-    #     "gather_dim_3_padded_dim_2",
-    # ],
+    ids=[
+        "sd35_spatial",
+        "sd35_prompt",
+        "gather_dim_0",
+        "gather_dim_1",
+        "gather_dim_2",
+        "gather_dim_2_padded_dim_3",
+        "gather_dim_3_padded_dim_2",
+        "tt_training_test_one",
+        "tt_training_test_two",
+        "tt_training_test_three",
+        "tt_training_test_four",
+    ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
@@ -246,10 +259,10 @@ def run_all_gather_impl(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    # ids=["fabric_ring", "fabric_linear"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_async(
     t3k_mesh_device,
