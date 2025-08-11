@@ -36,6 +36,7 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
         )
         value_l_ = ttnn.to_torch(value_l_).float()
         sampling_grid_l_ = ttnn.to_torch(sampling_grid_l_).float()
+        # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/21617>
         sampling_value_l_ = F.grid_sample(
             value_l_, sampling_grid_l_, mode="bilinear", padding_mode="zeros", align_corners=False
         )

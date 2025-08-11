@@ -69,7 +69,9 @@ class TtSpatialCrossAttention:
         for i, mask_per_img in enumerate(bev_mask):
             index_query_per_img = ttnn.sum(mask_per_img[0], -1)
             index_query_per_img = ttnn.to_torch(index_query_per_img)
-            index_query_per_img = index_query_per_img.nonzero()
+            index_query_per_img = (
+                index_query_per_img.nonzero()
+            )  # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/25261>
             index_query_per_img = ttnn.from_torch(index_query_per_img, device=self.device, dtype=ttnn.uint32)
 
             index_query_per_img = ttnn.squeeze(index_query_per_img, -1)
@@ -84,6 +86,7 @@ class TtSpatialCrossAttention:
         for j in range(bs):
             for i, reference_points_per_img in enumerate(reference_points_cam):
                 index_query_per_img = indexes[i]
+                # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/25517>
                 index_query_per_img = ttnn.to_torch(index_query_per_img)
                 queries_rebatch[j, i, : len(index_query_per_img)] = query[j, index_query_per_img]
                 reference_points_rebatch[j, i, : len(index_query_per_img)] = reference_points_per_img[
@@ -113,7 +116,7 @@ class TtSpatialCrossAttention:
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
                 index_query_per_img = ttnn.to_torch(index_query_per_img)
-
+                # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/25517>
                 slots[j, index_query_per_img] += queries[j, i, : len(index_query_per_img)]
 
         count = ttnn.sum(bev_mask, -1) > 0

@@ -650,6 +650,7 @@ class TtVADHead:
         min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
         min_map_pos = ttnn.to_torch(min_map_pos)
         min_map_pos_idx = ttnn.to_torch(min_map_pos_idx)
+        # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/15553>
         min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
 
         min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)
@@ -836,6 +837,7 @@ class TtVADHead:
             map_query = ttnn.to_torch(map_query)
             min_map_pos = ttnn.to_torch(min_map_pos)
             map_idx = ttnn.to_torch(map_idx, dtype=torch.bool)
+            # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/1553>
             valid_map_query = map_query[i, map_idx[i]]
             valid_map_pos = min_map_pos[i, map_idx[i]]
             valid_map_query = ttnn.from_torch(valid_map_query, dtype=ttnn.bfloat16, device=self.device)
@@ -938,6 +940,7 @@ class TtVADHead:
             query = ttnn.to_torch(query)
             query_pos = ttnn.to_torch(query_pos)
             query_idx = ttnn.to_torch(query_idx, dtype=torch.bool)
+            # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/15553>
             valid_query = query[i, query_idx[i]]
             valid_query_pos = query_pos[i, query_idx[i]]
             valid_query = ttnn.from_torch(valid_query, dtype=ttnn.bfloat16, device=self.device)
