@@ -110,20 +110,6 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
             .set_page_size(im5_cb_index, in_cb_pagesize);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im5_config);
 
-    // output for x > 3.5
-    uint32_t im6_cb_index = tt::CBIndex::c_7;
-    tt::tt_metal::CircularBufferConfig cb_im6_config =
-        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im6_cb_index, act_df}})
-            .set_page_size(im6_cb_index, in_cb_pagesize);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im6_config);
-
-    // output for x <= 3.5
-    uint32_t im7_cb_index = tt::CBIndex::c_8;
-    tt::tt_metal::CircularBufferConfig cb_im7_config =
-        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im7_cb_index, act_df}})
-            .set_page_size(im7_cb_index, in_cb_pagesize);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im7_config);
-
     // output sharded CB
     uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig out_cb_config =
@@ -162,10 +148,20 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im2_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im3_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im4_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im5_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines;
+    if (input.dtype() == DataType::FLOAT32) {
+        unary_defines["TANH_FP32"] = "1";
+    } else {
+        unary_defines["TANH_BF16"] = "1";
+    }
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
 
     tt::tt_metal::CreateKernel(
