@@ -519,11 +519,11 @@ class TtMotionTransformerDecoder:
         intermediate_reference_trajs = []
 
         B, _, P, D = agent_level_embedding.shape
-        track_query_bc = ttnn.concat(
-            [ttnn.unsqueeze(track_query, 2) for i in range(P)], dim=-2
+        track_query_bc = ttnn.expand(
+            ttnn.unsqueeze(track_query, 2), (-1, -1, P, -1)
         )  # .expand(-1, -1, P, -1)  # (B, A, P, D)
-        track_query_pos_bc = ttnn.concat(
-            [ttnn.unsqueeze(track_query_pos, 2) for i in range(P)], dim=-2
+        track_query_pos_bc = ttnn.expand(
+            ttnn.unsqueeze(track_query_pos, 2), (-1, -1, P, -1)
         )  # .expand(-1, -1, P, -1)  # (B, A, P, D)
 
         # static intention embedding, which is imutable throughout all layers
