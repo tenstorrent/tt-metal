@@ -104,6 +104,8 @@ void DistributedHostBuffer::emplace_shard(
     }
 }
 
+bool DistributedHostBuffer::is_local(const distributed::MeshCoordinate& coord) const { return shards_.is_local(coord); }
+
 DistributedHostBuffer DistributedHostBuffer::transform(
     const TransformFn& fn, ProcessShardExecutionPolicy policy) const {
     const std::vector<size_t> indices_to_process = get_populated_shard_indices();

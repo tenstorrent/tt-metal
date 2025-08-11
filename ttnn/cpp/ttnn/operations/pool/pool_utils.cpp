@@ -330,4 +330,97 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     return l1_config_height.config;
 }
 
+// pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure
+// they are sensical to avoid problems in sliding window config, halo and other setup procedures
+void validate_input_params(
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    uint32_t pad_top,
+    uint32_t pad_bottom,
+    uint32_t pad_left,
+    uint32_t pad_right,
+    uint32_t dilation_h,
+    uint32_t dilation_w,
+    bool is_in_tiled) {
+    // dimension value validation
+    TT_FATAL(batch_size > 0, "Pool2D: Batch size must be greater than 0, got {}", batch_size);
+    TT_FATAL(input_h > 0, "Pool2D: Input height must be greater than 0, got {}", input_h);
+    TT_FATAL(input_w > 0, "Pool2D: Input width must be greater than 0, got {}", input_w);
+    TT_FATAL(channels > 0, "Pool2D: Channels must be greater than 0, got {}", channels);
+
+    // tensor shape validation against provided NHWC dimensions
+    const uint32_t nhw = batch_size * input_h * input_w;
+    const auto& input_shape = input_tensor.logical_shape();
+    TT_FATAL(
+        input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == nhw && input_shape[3] == channels,
+        "Input tensor shape {} does not match expected shape (1, 1, {}, {})",
+        input_shape,
+        nhw,
+        channels);
+
+    if (is_in_tiled) {
+        const uint32_t padded_channels = tt::round_up(channels, tt::constants::TILE_WIDTH);
+        const uint32_t padded_nhw = tt::round_up(nhw, tt::constants::TILE_HEIGHT);
+        const auto& padded_input_shape = input_tensor.padded_shape();
+        TT_FATAL(
+            padded_input_shape[0] == 1 && padded_input_shape[1] == 1 && padded_input_shape[2] == padded_nhw &&
+                padded_input_shape[3] == padded_channels,
+            "Padded input tensor shape {} does not match expected shape (1, 1, {}, {})",
+            padded_input_shape,
+            padded_nhw,
+            padded_channels);
+    }
+
+    // kernel size validation
+    TT_FATAL(
+        kernel_size[0] > 0 && kernel_size[1] > 0,
+        "Pool2D: Kernel size must be greater than 0 in both dimensions, got ({}, {})",
+        kernel_size[0],
+        kernel_size[1]);
+
+    // stride validation
+    TT_FATAL(
+        stride[0] > 0 && stride[1] > 0,
+        "Pool2D: Stride must be greater than 0 in both dimensions, got ({}, {})",
+        stride[0],
+        stride[1]);
+
+    // dilation validation
+    TT_FATAL(
+        dilation_h > 0 && dilation_w > 0,
+        "Pool2D: Dilation must be greater than 0 in both dimensions, got ({}, {})",
+        dilation_h,
+        dilation_w);
+
+    // check that padding is not excessive (should not be more than half the kernel size)
+    TT_FATAL(
+        pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2 && pad_left <= kernel_size[1] / 2 &&
+            pad_right <= kernel_size[1] / 2,
+        "Pool2D: Padding ({}, {}, {}, {}) should not exceed half of kernel size ({}, {})",
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        kernel_size[0],
+        kernel_size[1]);
+
+    // ensure effective kernel size (with dilation) doesn't exceed padded input
+    uint32_t effective_kernel_h = dilation_h * (kernel_size[0] - 1) + 1;
+    uint32_t effective_kernel_w = dilation_w * (kernel_size[1] - 1) + 1;
+    uint32_t padded_input_h = input_h + pad_top + pad_bottom;
+    uint32_t padded_input_w = input_w + pad_left + pad_right;
+    TT_FATAL(
+        effective_kernel_h <= padded_input_h && effective_kernel_w <= padded_input_w,
+        "Pool2D: Effective kernel size ({}, {}) cannot exceed padded input size ({}, {})",
+        effective_kernel_h,
+        effective_kernel_w,
+        padded_input_h,
+        padded_input_w);
+}
+
 }  // namespace ttnn::operations::pool
