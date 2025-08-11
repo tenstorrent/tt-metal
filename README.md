@@ -195,13 +195,13 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 
 ### Hello World
 
-- [Hello World! Compute Kernel](./tech_reports/prog_examples/hello_world_compute/hello_world_compute.md)
-- [Hello World! Data Movement Kernel](./tech_reports/prog_examples/hello_world_data_movement/hello_world_data_movement.md)
+- [Hello World! Compute Kernel](./tt_metal/programming_examples/hello_world_compute_kernel)
+- [Hello World! Data Movement Kernel](./tt_metal/programming_examples/hello_world_datamovement_kernel)
 
 ### Add Integers
 
-- [Add 2 Integers in Baby RiscV](./tech_reports/prog_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.md)
-- [Add 2 Integers in Compute Kernel](./tech_reports/prog_examples/add_2_integers_in_compute/add_2_integers_in_compute.md)
+- [Add 2 Integers in Baby RiscV](./tt_metal/programming_examples/add_2_integers_in_riscv)
+- [Add 2 Integers in Compute Kernel](./tt_metal/programming_examples/add_2_integers_in_compute)
 
 ### Simple Tensor Manipulation
 
@@ -210,17 +210,17 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 
 ### DRAM Data Movement
 
-- [Dram Loopback Data Movement](./tech_reports/prog_examples/dram_loopback/dram_loopback.md)
+- [Dram Loopback Data Movement](./tt_metal/programming_examples/loopback)
 
 ### Eltwise
 
-- [Eltwise Unary OP in Vector Engine (SFPU)](./tech_reports/prog_examples/eltwise_sfpu/eltwise_sfpu.md)
-- [Eltwise Binary OP in Matrix Engine (FPU)](./tech_reports/prog_examples/eltwise_binary/eltwise_binary.md)
+- [Eltwise Unary OP in Vector Engine (SFPU)](./tt_metal/programming_examples/eltwise_sfpu)
+- [Eltwise Binary OP in Matrix Engine (FPU)](./tt_metal/programming_examples/eltwise_binary)
 
 ### Matmul
 
-- [Matmul OP on a Single_core](./tech_reports/prog_examples/matmul_single_core/matmul_single_core.md)
-- [Matmul OP on Multi_core (Basic)](./tech_reports/prog_examples/matmul_multi_core/matmul_multi_core.md)
+- [Matmul OP on a Single_core](./tt_metal/programming_examples/matmul/matmul_single_core)
+- [Matmul OP on Multi_core (Basic)](./tt_metal/programming_examples/matmul/matmul_multi_core)
 - [Matmul Multi_core Reuse (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_reuse.md)
 - [Matmul Multi_core Multi-Cast (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_mcast.md)
 
