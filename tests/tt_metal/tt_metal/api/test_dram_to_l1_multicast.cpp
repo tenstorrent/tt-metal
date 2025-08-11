@@ -31,6 +31,8 @@
 
 using namespace tt;
 
+namespace tt::tt_metal {
+
 namespace unit_tests_common::dram::test_dram_to_l1_multicast {
 
 struct DRAMtoL1MulticastConfig {
@@ -153,8 +155,6 @@ bool dram_to_l1_multicast(
     return pass;
 }
 }  // namespace unit_tests_common::dram::test_dram_to_l1_multicast
-
-namespace tt::tt_metal {
 
 TEST_F(MeshDispatchFixture, TensixDRAMtoL1Multicast) {
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
