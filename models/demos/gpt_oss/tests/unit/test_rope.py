@@ -102,6 +102,10 @@ def test_rope_op(
     ).permute(0, 2, 1, 3)
 
     passing, pcc_message = comp_pcc(q_tt_rotated_torch, q_rope_torch)
+    mse = torch.nn.functional.mse_loss(q_tt_rotated_torch, q_rope_torch)
+    print(f"Q: {pcc_message}, mse: {mse}")
     assert passing, f"q_tt_rotated_torch: {pcc_message}"
     passing, pcc_message = comp_pcc(k_tt_rotated_torch, k_rope_torch)
+    mse = torch.nn.functional.mse_loss(k_tt_rotated_torch, k_rope_torch)
+    print(f"K: {pcc_message}, mse: {mse}")
     assert passing, f"k_tt_rotated_torch: {pcc_message}"
