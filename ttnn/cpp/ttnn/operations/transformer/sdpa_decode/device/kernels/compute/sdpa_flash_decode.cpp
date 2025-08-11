@@ -432,7 +432,6 @@ void MAIN {
             }
         }
         /* END OF FLASH ATTENTION LOOP */
-
         // Perform reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
             // cb_out_accumulate_im should contain o_1 (output from FA of itself's core)
@@ -492,6 +491,7 @@ void MAIN {
             /* OUT_ACC *= CUR_SUM */
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);
             pack_reconfig_data_format(cb_out_accumulate_im);
+
             mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
             pack_reconfig_data_format(cb_out_final);
 
@@ -523,6 +523,7 @@ void MAIN {
             }
             // Free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
+            cb_pop_front(cb_prev_sum, Sq_chunk_t);
         }
     }
 
