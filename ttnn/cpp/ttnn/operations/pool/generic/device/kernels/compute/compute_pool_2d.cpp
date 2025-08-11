@@ -87,6 +87,7 @@ void MAIN {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
+        const uint32_t curr_in_idx_cb_id = !reader0 ? in_idx_cb_id_1 : in_idx_cb_id_0;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
@@ -104,6 +105,9 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
+                if constexpr (return_indices) {
+                    cb_wait_front(curr_in_idx_cb_id, 1);
+                }
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
@@ -115,6 +119,9 @@ void MAIN {
                     reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                 }
                 cb_pop_front(curr_in_cb_id, 1);
+                if constexpr (return_indices) {
+                    cb_pop_front(curr_in_idx_cb_id, 1);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
