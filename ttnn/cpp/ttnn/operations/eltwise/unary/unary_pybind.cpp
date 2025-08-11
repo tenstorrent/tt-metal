@@ -891,7 +891,7 @@ void bind_tanh(py::module& module, const unary_operation_t& operation) {
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16, BFLOAT8_B
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE
                  - 2, 3, 4
 

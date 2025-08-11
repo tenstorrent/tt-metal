@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/comp.h"
@@ -12,6 +13,7 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/where.h"
 #include "compute_kernel_api.h"
 
 namespace NAMESPACE {
@@ -23,12 +25,10 @@ void MAIN {
     constexpr auto cb_output = tt::CBIndex::c_2;  // output
 
     constexpr auto cb_tanh_lut = tt::CBIndex::c_1;   // lut tanh(x)
-    constexpr auto cb_exp_2x = tt::CBIndex::c_3;     // exp(2x) and abs(x)
+    constexpr auto cb_exp_2x = tt::CBIndex::c_3;     // exp(2x)
     constexpr auto cb_sub = tt::CBIndex::c_4;        // exp(2x) - 1
     constexpr auto cb_add = tt::CBIndex::c_5;        // recip ( exp(2x) + 1 )
     constexpr auto cb_tanh_exp = tt::CBIndex::c_6;   // tanh[x] = (exp[2x] - 1) / (exp[2x] + 1)
-    constexpr auto cb_true_val = tt::CBIndex::c_7;   // output for x > 3.5
-    constexpr auto cb_false_val = tt::CBIndex::c_8;  // output for x <= 3.5
 
     constexpr uint32_t one = 0x3f800000u;    //  1.0f
     constexpr uint32_t two = 0x40000000u;    //  2.0f
@@ -117,8 +117,19 @@ void MAIN {
             cb_wait_front(cb_add, 1);
             tile_regs_acquire();
 
+#ifdef TANH_BF16
             mul_tiles_init(cb_sub, cb_add);
             mul_tiles(cb_sub, cb_add, 0, 0, 0);
+#endif
+
+#ifdef TANH_FP32
+            copy_tile_to_dst_init_short(cb_sub);
+            copy_tile(cb_sub, 0, 0);
+            copy_tile_to_dst_init_short(cb_add);
+            copy_tile(cb_add, 0, 1);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1);
+#endif
 
             tile_regs_commit();
             tile_regs_wait();
@@ -130,98 +141,38 @@ void MAIN {
             cb_pop_front(cb_sub, 1);
             cb_pop_front(cb_add, 1);
 
-            // abs(x) > 3.5f in c_3
+            // output = cb_tanh_lut if x > 3.5, otherwise cb_tanh_exp
+            cb_wait_front(cb_tanh_lut, 1);
+            cb_wait_front(cb_tanh_exp, 1);
+            cb_wait_front(cb_input, 1);
 
-            cb_reserve_back(cb_exp_2x, 1);
             tile_regs_acquire();
             copy_tile_to_dst_init_short(cb_input);
             copy_tile(cb_input, 0, 0);
-
             abs_tile_init();
             abs_tile(0);
             unary_gt_tile_init();
             unary_gt_tile(0, limit);
-
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb_exp_2x);
-
-            tile_regs_release();
-            cb_push_back(cb_exp_2x, 1);
-
-            cb_pop_front(cb_input, 1);
-
-            // t2 output for x > 3.5
-
-            cb_wait_front(cb_tanh_lut, 1);
-            cb_wait_front(cb_exp_2x, 1);
-            cb_reserve_back(cb_true_val, 1);
-
-            tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_exp_2x);
-            copy_tile(cb_exp_2x, 0, 0);
-
-            gtz_tile_init();
-            gtz_tile(0);
-
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                cb_tanh_lut);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                cb_tanh_lut, 0, 0);
-
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb_true_val);
-
-            tile_regs_release();
-
-            cb_push_back(cb_true_val, 1);
-            cb_pop_front(cb_tanh_lut, 1);
-
-            // t1 output for x <= 3.5
-
-            cb_wait_front(cb_tanh_exp, 1);
-            cb_reserve_back(cb_false_val, 1);
-
-            tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_exp_2x);
-            copy_tile(cb_exp_2x, 0, 0);
-
-            lez_tile_init();
-            lez_tile(0);
-
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                cb_tanh_exp);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                cb_tanh_exp, 0, 0);
-
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb_false_val);
-
-            tile_regs_release();
-
-            cb_push_back(cb_false_val, 1);
-            cb_pop_front(cb_exp_2x, 1);
-            cb_pop_front(cb_tanh_exp, 1);
-
-            // out = t1 + t2
-            cb_wait_front(cb_false_val, 1);
-            cb_wait_front(cb_true_val, 1);
-
-            tile_regs_acquire();
-
-            add_tiles_init(cb_true_val, cb_false_val);
-            add_tiles(cb_true_val, cb_false_val, 0, 0, 0);
-
+            copy_tile_to_dst_init_short(cb_tanh_lut);
+            copy_tile(cb_tanh_lut, 0, 1);
+            copy_tile_to_dst_init_short(cb_tanh_exp);
+            copy_tile(cb_tanh_exp, 0, 2);
+            where_tile_init();
+#ifdef TANH_FP32
+            where_fp32_tile(0, 1, 2);
+#endif
+#ifdef TANH_BF16
+            where_tile(0, 1, 2);
+#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, cb_output);
 
             tile_regs_release();
 
-            cb_pop_front(cb_true_val, 1);
-            cb_pop_front(cb_false_val, 1);
+            cb_pop_front(cb_tanh_exp, 1);
+            cb_pop_front(cb_tanh_lut, 1);
+            cb_pop_front(cb_input, 1);
         }
         cb_push_back(cb_output, per_core_block_dim);
     }
