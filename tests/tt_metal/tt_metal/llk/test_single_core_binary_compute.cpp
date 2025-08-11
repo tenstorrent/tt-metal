@@ -258,6 +258,27 @@ bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig&
         });
     auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
+    // DEBUG: Print golden data
+    tt::log_info(tt::LogTest, "DEBUG: Generated {} packed_golden values", packed_golden.size());
+    for (size_t i = 0; i < std::min(packed_golden.size(), size_t(8)); i++) {
+        uint32_t raw_val = packed_golden[i];
+        bfloat16 bf16_val = *reinterpret_cast<bfloat16*>(&raw_val);
+        tt::log_info(tt::LogTest, "DEBUG: packed_golden[{}] = 0x{:08x} = {}", i, raw_val, bf16_val.to_float());
+    }
+
+    // DEBUG: Print input data
+    tt::log_info(tt::LogTest, "DEBUG: Generated {} packed_input0 values", packed_input0.size());
+    for (size_t i = 0; i < std::min(packed_input0.size(), size_t(4)); i++) {
+        uint32_t raw_val = packed_input0[i];
+        bfloat16 bf16_val = *reinterpret_cast<bfloat16*>(&raw_val);
+        tt::log_info(tt::LogTest, "DEBUG: packed_input0[{}] = 0x{:08x} = {}", i, raw_val, bf16_val.to_float());
+    }
+    for (size_t i = 0; i < std::min(packed_input1.size(), size_t(4)); i++) {
+        uint32_t raw_val = packed_input1[i];
+        bfloat16 bf16_val = *reinterpret_cast<bfloat16*>(&raw_val);
+        tt::log_info(tt::LogTest, "DEBUG: packed_input1[{}] = 0x{:08x} = {}", i, raw_val, bf16_val.to_float());
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
@@ -295,7 +316,22 @@ bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig&
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
+
+    // DEBUG: Print DRAM buffer info before reading
+    tt::log_info(tt::LogTest, "DEBUG: About to read from output_dram_buffer");
+    tt::log_info(tt::LogTest, "DEBUG: output_dram_buffer address: 0x{:x}", output_dram_buffer->address());
+    tt::log_info(tt::LogTest, "DEBUG: output_dram_buffer size: {} bytes", output_dram_buffer->size());
+    tt::log_info(tt::LogTest, "DEBUG: output_dram_buffer num_pages: {}", output_dram_buffer->num_pages());
+
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+
+    // DEBUG: Print first few values from DRAM buffer
+    tt::log_info(tt::LogTest, "DEBUG: dest_buffer_data size: {}", dest_buffer_data.size());
+    for (size_t i = 0; i < std::min(dest_buffer_data.size(), size_t(8)); i++) {
+        uint32_t raw_val = dest_buffer_data[i];
+        bfloat16 bf16_val = *reinterpret_cast<bfloat16*>(&raw_val);
+        tt::log_info(tt::LogTest, "DEBUG: dest_buffer[{}] = 0x{:08x} = {}", i, raw_val, bf16_val.to_float());
+    }
 
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.0155f); });

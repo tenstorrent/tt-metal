@@ -839,12 +839,16 @@ void Device::initialize_and_launch_firmware() {
         if (this->arch() == ARCH::BLACKHOLE) {
             for (const CoreCoord& core : pcie_cores) {
                 auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+                tt::log_info(tt::LogTest, "DEBUG: BLACKHOLE PCIE core ({}, {}) -> virtual ({}, {})",
+                           core.x, core.y, virtual_core.x, virtual_core.y);
                 core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
                     virtual_core.x, virtual_core.y, AddressableCoreType::PCIE};
             }
             auto translated_dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
+            tt::log_info(tt::LogTest, "DEBUG: BLACKHOLE translated_dram_cores count: {}", translated_dram_cores.size());
 
             for (const CoreCoord& core : translated_dram_cores) {
+                tt::log_info(tt::LogTest, "DEBUG: BLACKHOLE translated DRAM core: ({}, {})", core.x, core.y);
                 core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
                     core.x, core.y, AddressableCoreType::DRAM};
             }
@@ -1420,8 +1424,11 @@ CoreCoord Device::virtual_core_from_logical_core(const CoreCoord &logical_coord,
 }
 
 CoreCoord Device::virtual_core_from_physical_core(const CoreCoord& physical_coord) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+    auto virtual_coord = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
         this->id_, physical_coord);
+    tt::log_info(tt::LogTest, "DEBUG: virtual_core_from_physical_core({}, {}) -> ({}, {})",
+               physical_coord.x, physical_coord.y, virtual_coord.x, virtual_coord.y);
+    return virtual_coord;
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
@@ -1655,9 +1662,14 @@ void Device::generate_device_bank_to_noc_tables()
     dram_bank_offset_map_.clear();
     dram_bank_offset_map_.resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        auto physical_dram_core = this->dram_core_from_dram_channel(allocator->get_dram_channel_from_bank_id(bank_id));
+        auto dram_channel = allocator->get_dram_channel_from_bank_id(bank_id);
+        auto physical_dram_core = this->dram_core_from_dram_channel(dram_channel);
+        tt::log_info(tt::LogTest, "DEBUG: Bank {} - DRAM channel {} - physical_dram_core: ({}, {})",
+                   bank_id, dram_channel, physical_dram_core.x, physical_dram_core.y);
         dram_noc_coord_per_bank[bank_id] = physical_dram_core;
-        dram_bank_offset_map_[bank_id] = allocator->get_bank_offset(BufferType::DRAM, bank_id);
+        auto bank_offset = allocator->get_bank_offset(BufferType::DRAM, bank_id);
+        tt::log_info(tt::LogTest, "DEBUG: Bank {} - bank_offset: 0x{:x}", bank_id, bank_offset);
+        dram_bank_offset_map_[bank_id] = bank_offset;
     }
     const size_t num_l1_banks = allocator->get_num_banks(BufferType::L1);
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
@@ -1790,13 +1802,20 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal.get_virtualized_core_types().end();
         const metal_SocDescriptor& soc_d =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
-        std::vector<CoreCoord> dram_phy_coords;
+                std::vector<CoreCoord> dram_phy_coords;
         for (int i = 0; i < num_dram_banks; ++i) {
             auto dram_core = dram_core_from_dram_channel(i);
+            tt::log_info(tt::LogTest, "DEBUG: OPTIMAL_ASSIGNMENT DRAM channel {} - original dram_core: ({}, {})", i, dram_core.x, dram_core.y);
+            tt::log_info(tt::LogTest, "DEBUG: OPTIMAL_ASSIGNMENT dram_is_virtualized: {}", dram_is_virtualized);
             if (dram_is_virtualized) {
+                auto original_dram_core = dram_core;
                 dram_core = soc_d.translate_coord_to(dram_core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+                tt::log_info(tt::LogTest, "DEBUG: OPTIMAL_ASSIGNMENT DRAM channel {} - translated from ({}, {}) to ({}, {})",
+                           i, original_dram_core.x, original_dram_core.y, dram_core.x, dram_core.y);
             }
             dram_phy_coords.push_back(dram_core);
+            tt::log_info(tt::LogTest, "DEBUG: OPTIMAL_ASSIGNMENT DRAM channel {} - final physical coord: ({}, {})",
+                       i, dram_core.x, dram_core.y);
         }
         // Get all logical cores in the worker grid
         std::vector<CoreCoord> all_worker_cores_logical;
