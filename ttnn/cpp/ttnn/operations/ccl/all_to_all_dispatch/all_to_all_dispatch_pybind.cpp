@@ -41,10 +41,11 @@ void py_bind_all_to_all_dispatch(py::module& module) {
             Keyword Args:
                 cluster_axis (int, optional): the cluster axis to dispatch along. Defaults to `None` though we assert out when it is not specified.
                 num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `1`.
-                topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to `ttnn.Topology.Linear`.
+                topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Farbric Init unless it matches the topology of the mesh.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
                 subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
                 global_semaphore (ttnn.GlobalSemaphore, optional): the global semaphore for synchronizing the dispatching of the tokens. Defaults to `None`.
+                init_semaphore (ttnn.GlobalSemaphore, optional): the global semaphore that ensures the input buffers are ready. Defaults to `None`.
                 queue_id (int, optional): command queue id. Defaults to `0`.
 
            Returns:
