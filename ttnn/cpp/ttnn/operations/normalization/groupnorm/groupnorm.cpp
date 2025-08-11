@@ -48,8 +48,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-        "Unsupported memory layout: Input tensor must be width-sharded, but it is not. (memory_layout={})",
-        input_tensor.memory_config().memory_layout());
+        "Unsupported memory layout: Input tensor cannot be width-sharded.");
 
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
