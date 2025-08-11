@@ -41,8 +41,7 @@ Tensor optimized_conv_new(
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
-    bool full_inner_dim,
-    bool enable_split_reader) {
+    bool full_inner_dim) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -71,8 +70,7 @@ Tensor optimized_conv_new(
         compute_kernel_config,
         enable_act_double_buffer,
         enable_weights_double_buffer,
-        full_inner_dim,
-        enable_split_reader);
+        full_inner_dim);
     IDevice* device = a.device();
 
     optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -254,7 +252,6 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             compute_kernel_config,
             enable_act_double_buffer,
             enable_weights_double_buffer,
-            enable_split_reader,
             full_inner_dim);
     }
 
@@ -277,8 +274,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .shard_layout = this->memory_config.memory_layout(),
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,
-            .enable_weights_double_buffer = enable_weights_double_buffer,
-            .enable_split_reader = enable_split_reader},
+            .enable_weights_double_buffer = enable_weights_double_buffer},
         input_tensor_a.dtype(),
         this->dtype,
         has_bias,

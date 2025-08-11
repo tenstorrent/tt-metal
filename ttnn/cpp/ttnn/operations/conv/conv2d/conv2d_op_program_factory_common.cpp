@@ -116,8 +116,7 @@ std::vector<CBInfo> get_cb_info(
         // ACT and ACT_SECOND_READER CB
         uint32_t act_cb_num_tiles = act_block_num_tiles;
         uint32_t act_block_split_num_tiles = 0;
-        if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED && conv_config.enable_split_reader &&
-            !is_1d_depthwise_conv) {
+        if (is_split_reader_supported(sharding_scheme, is_1d_depthwise_conv, block_config.act_block_h_ntiles)) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -281,6 +280,11 @@ const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb c
 }
 CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name) {
     return const_cast<CBInfo&>(get_cb_info_by_name(cb_info, cb_name));
+}
+
+bool is_split_reader_supported(
+    TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles) {
+    return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1;
 }
 
 }  // namespace conv2d
