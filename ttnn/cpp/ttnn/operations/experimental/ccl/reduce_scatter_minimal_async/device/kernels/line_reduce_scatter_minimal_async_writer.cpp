@@ -263,7 +263,6 @@ void kernel_main() {
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t num_pages_to_write = std::min(contig_pages_advanced, num_pages_to_read - j);
-                    uint32_t payload_size_bytes = num_pages_to_write * intermediate_page_size;
 
                     uint32_t first_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
 
