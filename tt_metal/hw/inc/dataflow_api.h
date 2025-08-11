@@ -377,6 +377,9 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
     } while (free_space_pages < num_pages);
+    // Assert that region is contiguous.
+    ASSERT(get_local_cb_interface(operand).fifo_wr_ptr + num_pages <=
+           get_local_cb_interface(operand).fifo_limit);
     WAYPOINT("CRBD");
 }
 

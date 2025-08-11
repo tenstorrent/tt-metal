@@ -38,6 +38,9 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
         std::uint32_t free_tiles_wrap = get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
         free_tiles = (std::int32_t)free_tiles_wrap;
     } while (free_tiles < num_tiles);
+    // Assert that region is contiguous.
+    ASSERT(get_local_cb_interface(output).fifo_wr_ptr + num_tiles <=
+           get_local_cb_interface(output).fifo_limit);
 }
 
 inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t num_words) {
