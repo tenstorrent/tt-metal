@@ -195,7 +195,7 @@ for (uint32_t i = 0; i < num_shards; ++i) {
 }
 ```
 
-Or this sharded tensor copy, which should be more efficient, since it uses iterator to calculate address for both src and dst:
+Or this sharded tensor copy, which should be more efficient, since it uses an iterator to calculate the address for both the src and the dst:
 ```c++
 for (uint32_t i = 0; i < num_shards; ++i) {
     uint32_t shard_id = first_shard_id + i * num_cores;
