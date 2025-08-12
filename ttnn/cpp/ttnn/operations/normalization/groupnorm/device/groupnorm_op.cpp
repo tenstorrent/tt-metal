@@ -20,11 +20,12 @@ void GroupNorm::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(
-        input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
+        input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 5 input tensors");
     auto& a = input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
     const auto& input_mask = optional_input_tensors.at(2);
+    const auto& negative_mask = optional_input_tensors.at(3);
     TT_FATAL(a.dtype() == DataType::BFLOAT16, "Error");
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
@@ -78,6 +79,43 @@ void GroupNorm::validate(
         TT_FATAL(input_mask.value().padded_shape()[2] == TILE_HEIGHT, "Error");
         TT_FATAL(input_mask.value().padded_shape()[3] % TILE_WIDTH == 0, "Error");
     }
+
+    // Negative mask tensor is used to reduce the number of CB's used in the sharded version of the kernel by
+    // overlapping the CB's used for tilized input and output. (The kernel is in fact row major variant, but is
+    // internally tilizing RM into tilized inputs) Valid only if sharded program is used, and input and output tensors
+    // are in row major layout.
+    if (negative_mask.has_value()) {
+        TT_FATAL(
+            negative_mask.value().layout() == Layout::TILE,
+            "Negative musk must be in TILE layout, but layout is {}",
+            negative_mask.value().layout());
+        TT_FATAL(
+            negative_mask.value().padded_shape()[1] == this->num_groups,
+            "Negative mask padded shape[1] must be equal to num_groups, but is {} and num_groups is {}",
+            negative_mask.value().padded_shape()[1],
+            this->num_groups);
+        TT_FATAL(
+            negative_mask.value().padded_shape()[2] == TILE_HEIGHT,
+            "Negative mask padded shape[2] must be equal to TILE_HEIGHT, but is {} and TILE_HEIGHT is {}",
+            negative_mask.value().padded_shape()[2],
+            TILE_HEIGHT);
+        TT_FATAL(
+            negative_mask.value().padded_shape()[3] % TILE_WIDTH == 0,
+            "Negative mask padded shape[3] must be divisible by TILE_WIDTH, but is {} and TILE_WIDTH is {}",
+            negative_mask.value().padded_shape()[3],
+            TILE_WIDTH);
+        TT_FATAL(a.is_sharded(), "Negative mask support is only available for sharded input tensors.");
+        TT_FATAL(
+            a.layout() == Layout::ROW_MAJOR,
+            "If using negative mask, input tensor must be in ROW_MAJOR layout, but layout is {}",
+            a.layout());
+        Layout output_layout =
+            std::visit([](const auto& config) -> Layout { return config.output_layout; }, this->program_config);
+        TT_FATAL(
+            output_layout == Layout::ROW_MAJOR,
+            "If using negative mask, output tensor must be in ROW_MAJOR layout, but layout is {}",
+            output_layout);
+    }
 }
 std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -126,6 +164,7 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
     const auto& input_mask = optional_input_tensors.at(2);
+    const auto& negative_mask = optional_input_tensors.at(3);
     auto& output_tensor = output_tensors.at(0);
 
     return std::visit(
@@ -143,6 +182,7 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                     gamma,
                     beta,
                     input_mask,
+                    negative_mask,
                     output_tensor,
                     this->eps,
                     this->num_groups,
