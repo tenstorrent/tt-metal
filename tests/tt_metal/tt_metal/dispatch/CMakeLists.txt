@@ -22,7 +22,10 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(unit_tests_dispatch_smoke PRIVATE test_metal_common_libs)
+target_link_libraries(
+	unit_tests_dispatch_smoke PRIVATE test_metal_common_libs
+	test_metal_common_libs PRIVATE execinfo
+)
 
 # Basic tests (too slow for smoke; will run less frequently)
 add_library(unit_tests_dispatch_basic OBJECT)
@@ -46,7 +49,10 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(unit_tests_dispatch_basic PRIVATE test_metal_common_libs)
+target_link_libraries(
+	unit_tests_dispatch_basic PRIVATE test_metal_common_libs
+	test_metal_common_libs PRIVATE execinfo
+)
 
 add_library(unit_tests_dispatch_slow OBJECT)
 add_library(TT::Metalium::Test::Dispatch::Slow ALIAS unit_tests_dispatch_slow)

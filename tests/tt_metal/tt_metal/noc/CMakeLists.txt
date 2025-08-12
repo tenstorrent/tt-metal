@@ -3,7 +3,10 @@ set(UNIT_TESTS_NOC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_dynamic_noc.cpp)
 add_executable(unit_tests_noc ${UNIT_TESTS_NOC_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_noc)
 
-target_link_libraries(unit_tests_noc PUBLIC test_metal_common_libs)
+target_link_libraries(
+	unit_tests_noc PUBLIC test_metal_common_libs
+	test_metal_common_libs PRIVATE execinfo
+	)
 
 target_include_directories(
     unit_tests_noc

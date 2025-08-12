@@ -4,6 +4,7 @@ target_link_libraries(
     INTERFACE
         Metalium::Metal
         test_common_libs
+    test_common_libs execinfo
 )
 
 set(TT_METAL_TESTS_SRCS

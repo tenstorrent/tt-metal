@@ -54,7 +54,10 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
-    target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
+    target_link_libraries(
+    	${TEST_TARGET} PRIVATE test_metal_common_libs
+	tests_metal_common_libs PRIVATE execinfo
+    )
 
     if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)

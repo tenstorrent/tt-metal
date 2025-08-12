@@ -30,4 +30,7 @@ set_target_properties(
 )
 
 # Link the object library to the executable
-target_link_libraries(multi_host_socket_tests PRIVATE multi_host_sockets)
+target_link_libraries(
+	multi_host_socket_tests PRIVATE multi_host_sockets
+	multi_host_sockets PRIVATE execinfo
+)

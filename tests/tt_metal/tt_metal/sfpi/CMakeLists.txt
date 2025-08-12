@@ -13,7 +13,10 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(unit_tests_sfpi_lib PRIVATE test_metal_common_libs)
+target_link_libraries(
+	unit_tests_sfpi_lib PRIVATE test_metal_common_libs
+	test_metal_common_libs execinfo
+)
 
 # Create the executable using the object library
 add_executable(unit_tests_sfpi)
