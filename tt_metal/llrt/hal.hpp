@@ -282,8 +282,6 @@ public:
         return this->virtualized_core_types_;
     }
 
-    const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
-    const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
     uint32_t get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
