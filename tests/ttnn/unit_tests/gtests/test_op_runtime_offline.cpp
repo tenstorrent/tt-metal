@@ -85,11 +85,11 @@ const ttnn::TensorSpec TTNNFixtureWithOfflineModel::m_interleaved_2048_2048_0_0_
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
+#ifdef BUILD_MLP_OP_PERF
+
 // ============================================================================
 // Unary Exp Op test using get_runtime_from_model
 // ============================================================================
-
-#ifdef BUILD_MLP_OP_PERF
 
 // Utility function to create serialized tensor in the format expected by mlp-op-perf
 // This matches the format used in the mlp-op-perf test_interface.cpp
@@ -168,7 +168,7 @@ TEST_P(TestTensorJsonSerialization, TensorSpecToJson) {
     // ensure the result is a JSON object
     EXPECT_TRUE(tensor_json.type() == nlohmann::json::value_t::object);
 
-    // ensure the serialized tensor_json input dim, dtype, buffer type match with test_json
+    // ensure the serialized tensor_json input dim, dtype, buffer type can be accessed and match with test_json
     EXPECT_EQ(tensor_json["logical_shape"], test_json["tensor_spec"]["logical_shape"]);
     EXPECT_EQ(tensor_json["tensor_layout"]["dtype"], test_json["tensor_spec"]["tensor_layout"]["dtype"]);
     EXPECT_EQ(
@@ -208,7 +208,7 @@ TEST_P(TestExpOpQueryOpRuntime, ExpOpQueryOpRuntime) {
     auto query = ttnn::graph::query_op_runtime(ttnn::exp, device_, input_spec, output_layout);
 
     // check query.status is success and returned runtime is > 0
-    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "failed here" << std::endl;
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
     EXPECT_GT(query.runtime, 0);
     log_info(tt::LogTest, "QueryOpRuntime for ttnn::exp: {} ns", query.runtime);
 }

@@ -161,10 +161,13 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
         op_name = "unknown";
     }
 
-    uint64_t runtime = std::apply(
-        [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op_name, json_args...); }, json_args_tuple);
-    if (runtime != 0) {
-        return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
+    if (op_name != "unknown") {
+        uint64_t runtime = std::apply(
+            [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op_name, json_args...); },
+            json_args_tuple);
+        if (runtime != 0) {
+            return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
+        }
     }
 
 #endif
