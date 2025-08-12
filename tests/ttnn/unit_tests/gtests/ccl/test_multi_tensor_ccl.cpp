@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "test_fabric_edm_common.hpp"
@@ -115,21 +116,26 @@ TEST_F(MultiCQMeshDevice2x4Fixture, ReduceScatter) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
     }
-    auto from_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
-    auto to_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    auto sem0 = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    auto sem1 = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    auto sem2 = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {sem0, sem1, sem2};
+    auto barrier_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
 
+    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
     // auto reduced = ttnn::reduce_scatter(
     // tensors, 3, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Linear);
-    auto reduced = ttnn::experimental::reduce_scatter_async(
+    auto reduced = ttnn::experimental::reduce_scatter_minimal_async(
         tensors,
         3,
-        from_remote_multi_device_global_semaphore,
-        to_remote_multi_device_global_semaphore,
-        ttnn::operations::reduction::ReduceType::Sum,
+        multi_dev_semaphore,
+        barrier_semaphore,
+        1,
+        std::nullopt,
         std::nullopt,
         ttnn::ccl::Topology::Linear,
-        1,
-        SubDeviceId(0));
+        SubDeviceId(0),
+        1);
 
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = reduced[dev_idx].to_vector<bfloat16>();

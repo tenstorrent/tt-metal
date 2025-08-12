@@ -27,6 +27,21 @@ struct ExecuteReduceScatterMinimalAsync {
         std::optional<uint32_t> chunks_per_sync = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
         std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+
+    static std::vector<ttnn::Tensor> invoke(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        int32_t dim,
+        const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
+        const global_semaphore::MultiDeviceGlobalSemaphore& barrier_semaphore,
+        uint32_t num_links = 1,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& intermediate_memory_config = std::nullopt,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        std::optional<uint32_t> cluster_axis = std::nullopt,
+        std::optional<uint32_t> chunks_per_sync = std::nullopt,
+        std::optional<uint32_t> num_workers_per_link = std::nullopt,
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

@@ -308,7 +308,7 @@ Tensor reduce_scatter_minimal_async_impl(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<MemoryConfig>& intermeidate_memory_config,
+    const std::optional<MemoryConfig>& intermediate_memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::vector<IDevice*>& devices,
@@ -333,8 +333,6 @@ Tensor reduce_scatter_minimal_async_impl(
         num_devices = devices.size();
     }
 
-    TT_FATAL(
-        num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
     if (num_devices == 2) {
@@ -360,7 +358,7 @@ Tensor reduce_scatter_minimal_async_impl(
                    num_links,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
-                   intermeidate_memory_config.value_or(input_tensor.memory_config()),
+                   intermediate_memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
                    multi_device_global_semaphore,
                    barrier_semaphore,
@@ -384,7 +382,7 @@ Tensor reduce_scatter_minimal_async(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<MemoryConfig>& intermeidate_memory_config,
+    const std::optional<MemoryConfig>& intermediate_memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     std::optional<uint32_t> cluster_axis,
@@ -400,7 +398,7 @@ Tensor reduce_scatter_minimal_async(
         barrier_semaphore,
         num_links,
         memory_config,
-        intermeidate_memory_config,
+        intermediate_memory_config,
         topology,
         sub_device_id,
         devices,
@@ -408,6 +406,51 @@ Tensor reduce_scatter_minimal_async(
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel);
+}
+
+std::vector<Tensor> reduce_scatter_minimal_async(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
+    const global_semaphore::MultiDeviceGlobalSemaphore& barrier_semaphore,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& intermediate_memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel) {
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (uint32_t i = 0; i < input_tensors.size(); i++) {
+        const auto& input_tensor = input_tensors.at(i);
+        std::vector<GlobalSemaphore> global_sems;
+        auto& barrier_sem = barrier_semaphore.global_semaphores.at(i);
+        global_sems.reserve(multi_device_global_semaphore.size());
+        for (uint32_t j = 0; j < multi_device_global_semaphore.size(); j++) {
+            global_sems.push_back(multi_device_global_semaphore.at(j).global_semaphores.at(i));
+        }
+        std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
+        output_tensors.push_back(reduce_scatter_minimal_async_impl(
+            input_tensor,
+            std::nullopt,
+            dim,
+            global_sems,
+            barrier_sem,
+            num_links,
+            memory_config,
+            intermediate_memory_config,
+            topology,
+            sub_device_id,
+            devices,
+            cluster_axis,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel));
+    }
+    return output_tensors;
 }
 
 }  // namespace ccl
