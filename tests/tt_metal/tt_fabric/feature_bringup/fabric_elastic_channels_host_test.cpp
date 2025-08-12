@@ -183,6 +183,7 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
 
     local_erisc_kernel = tt_metal::CreateKernel(
         program0,
+        config.n_workers > 0 ? "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channels_erisc_forward_worker_traffic.cpp" :
         "tests/tt_metal/tt_fabric/feature_bringup/fabric_elastic_channels_test.cpp",
         test_resources.local_device.eth_core,
         tt_metal::EthernetConfig{
@@ -190,6 +191,7 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
 
     remote_erisc_kernel = tt_metal::CreateKernel(
         program1,
+        config.n_workers > 0 ? "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channels_erisc_forward_worker_traffic.cpp" :
         "tests/tt_metal/tt_fabric/feature_bringup/fabric_elastic_channels_test.cpp",
         test_resources.remote_device.eth_core,
         tt_metal::EthernetConfig{

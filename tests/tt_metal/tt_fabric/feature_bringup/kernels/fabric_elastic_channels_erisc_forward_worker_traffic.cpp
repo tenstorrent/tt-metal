@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/hw/inc/compile_time_args.h"
+#include "core_config.h"
 
 // Compile-time configuration - passed as compile_args from host
 constexpr size_t N_CHUNKS = get_compile_time_arg_val(0);
@@ -209,9 +210,9 @@ void kernel_main() {
     std::array<noc_addr_t, N_SRC_CHANS> src_ch_new_chunk_addrs;
     std::array<noc_addr_t, N_SRC_CHANS> dest_noc_write_addrs;
     for (size_t i = 0; i < N_SRC_CHANS; i++) {
-        local_src_ch_semaphore_addrs[i] = get_semaphore<CoreType::ETH>(local_src_ch_semaphores[i]));
-        remote_src_ch_semaphore_ack_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<CoreType::Worker>(remote_src_semaphore_ack_addrs[i]));
-        src_ch_new_chunk_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<CoreType::Worker>(remote_src_new_chunk_addrs[i]));
+        local_src_ch_semaphore_addrs[i] = get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(local_src_ch_semaphores[i]));
+        remote_src_ch_semaphore_ack_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_semaphore_ack_addrs[i]));
+        src_ch_new_chunk_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_new_chunk_addrs[i]));
         dest_noc_write_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], dest_noc_buffer_addrs[i]);
     }
 

@@ -5,6 +5,7 @@
 #include "dataflow_api.h"
 
 #include "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channels.hpp"
+#include "core_config.h"
 
 // What do I need to get the next chunk:
 // address? (could be an ID instead, in which case it could be packed in a single word)
@@ -90,13 +91,13 @@ void kernel_main() {
     size_t arg_idx = 0;
     size_t n_pkts = get_arg_val<size_t>(arg_idx++);
     size_t src_addr = get_arg_val<size_t>(arg_idx++);
-    size_t dest_eth_noc_x = get_arg_val<size_t>(arg_idx++);
-    size_t dest_eth_noc_y = get_arg_val<size_t>(arg_idx++);
+    uint32_t dest_eth_noc_x = get_arg_val<size_t>(arg_idx++);
+    uint32_t dest_eth_noc_y = get_arg_val<size_t>(arg_idx++);
     size_t payload_size = get_arg_val<size_t>(arg_idx++);
 
-    volatile uint32_t *next_chunk_ptr = get_semaphore<CoreType::WORKER>(get_arg_val<uint32_t>(arg_idx++));
-    volatile uint32_t *from_eth_flow_control_ptr = get_semaphore<CoreType::ETH>(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t to_eth_flow_control_addr = get_semaphore<CoreType::ETH>(get_arg_val<uint32_t>(arg_idx++));
+    auto next_chunk_ptr = reinterpret_cast<volatile uint32_t *>(get_semaphore<ProgrammableCoreType::TENSIX>(get_arg_val<uint32_t>(arg_idx++)));
+    auto from_eth_flow_control_ptr = reinterpret_cast<volatile uint32_t *>(get_semaphore<ProgrammableCoreType::TENSIX>(get_arg_val<uint32_t>(arg_idx++)));
+    uint32_t to_eth_flow_control_addr = get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
 
     
     FabricWriterAdapter<N_CHUNKS, CHUNK_N_PKTS> fabric_writer_adapter(next_chunk_ptr);
@@ -106,7 +107,7 @@ void kernel_main() {
     while (pkts_sent < n_pkts) {
         if (fabric_writer_adapter.has_valid_destination()) {
             auto dest_bank_addr = fabric_writer_adapter.get_next_write_address();
-            auto dest_noc_addr = get_noc_addr(dest_noc_x, dest_noc_y, dest_bank_addr);
+            auto dest_noc_addr = get_noc_addr(dest_eth_noc_x, dest_eth_noc_y, dest_bank_addr);
             noc_async_write(src_addr, dest_noc_addr, payload_size);
             noc_semaphore_inc(dest_sem_noc_addr, 1);
 
