@@ -14,8 +14,8 @@ using namespace tt::tt_metal;
 constexpr CoreCoord worker_core = {0, 0};
 
 // CB have 64 pages.
-constexpr size_t cb_size = 128;
-constexpr size_t cb_page_size = 2;
+constexpr size_t cb_size = 1024;
+constexpr size_t cb_page_size = 16;
 
 /**
  *  This test checks that the cb_reserve_back will wait correctly when the buffer is full.
