@@ -178,7 +178,8 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] output_is_sharded: {}", output_is_sharded);
 
     // Check for minimal sharded case
-    if (input_is_sharded && output_is_sharded) {
+    std::string arch_name = tt::tt_metal::hal::get_arch_name();
+    if (input_is_sharded && output_is_sharded && arch_name != "blackhole") {
         // Check for llama post binary mult+silu case
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
             input_tensor_shape[3] == 960 && input_tensor_memory_config.buffer_type() == BufferType::L1 &&

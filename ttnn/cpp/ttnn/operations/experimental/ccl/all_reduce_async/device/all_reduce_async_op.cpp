@@ -61,6 +61,11 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
         "has {}",
         output_shard_shape_volume * this->ring_size,
         buffer_shard_shape_volume);
+    TT_FATAL(
+        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+            (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
+        "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
+        "by the fabric api");
 }
 
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

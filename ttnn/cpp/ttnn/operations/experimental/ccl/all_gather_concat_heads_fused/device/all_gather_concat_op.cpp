@@ -43,6 +43,11 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(
         padded_input_shape[0] == 1 && padded_input_shape[1] == 8 && padded_input_shape[3] == 128,
         "Unsupported input shape, should be [1, 8, 32, 128] or [1, 8, 8, 128]!");
+    TT_FATAL(
+        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+            (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
+        "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
+        "by the fabric api");
 }
 
 std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
