@@ -872,22 +872,29 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
                     continue;
                 }
 
-                // Loop through all active RISC IDs and send termination signals to mux cores
-                for (size_t risc_id = 0; risc_id < tensix_config.get_num_riscs_per_core(); ++risc_id) {
-                    if (!tensix_config.is_risc_id_active(risc_id)) {
-                        continue;
-                    }
+                // Get fabric node ID to access active ethernet channels
+                const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+                const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
+                const auto& active_fabric_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+                // Loop through all active eth channels and send termination signals to mux cores
+                for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                    auto risc_id = tensix_config.get_risc_id_for_channel(dev->id(), eth_chan_id);
 
                     auto [tensix_termination_address, tensix_signal] =
                         fabric_context.get_fabric_tensix_termination_address_and_signal(risc_id);
                     std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
-                    auto mux_core = tensix_config.get_core_for_channel(dev->id(), risc_id);
+                    auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
 
                     log_info(
-                        tt::LogTest, "terminate mux on dev {}, with address {}", dev->id(), tensix_termination_address);
+                        tt::LogTest,
+                        "terminate mux on dev {}, eth_chan {}, with address {}",
+                        dev->id(),
+                        eth_chan_id,
+                        tensix_termination_address);
 
                     tt_metal::detail::WriteToDeviceL1(
-                        dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::TENSIX);
+                        dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
                 }
 
                 // L1 barrier to ensure all termination signals are delivered
