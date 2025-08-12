@@ -1,13 +1,19 @@
+import itertools
+import os
+
 import pytest
 import torch
 import torch.nn as nn
+from loguru import logger
 
 import ttnn
 from models.utility_functions import comp_pcc
 
 from ...reference.configuration_gpt_oss import GptOssConfig
 from ...tt.ccl import CCLManager
-from ...tt.experts import Experts
+from ...tt.experts import Experts, SparseExperts
+
+tensor_cache_dir = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16") + "/ttnn_cache"
 
 
 class ReferenceExperts(nn.Module):
@@ -100,7 +106,7 @@ def test_experts(
     reference_model = ReferenceExperts(config)
     state_dict = reference_model.state_dict()
     ccl_manager = CCLManager(mesh_device)
-    tt_model = Experts(mesh_device, config, state_dict, ccl_manager)
+    tt_model = Experts(mesh_device, config, state_dict, ccl_manager, tensor_cache_path=tensor_cache_dir)
 
     # Run forward passes
     reference_output = reference_model(hidden_states, routing_weights)
@@ -187,3 +193,101 @@ def test_experts(
 #     passing, output = comp_allclose_and_pcc(reference_output, tt_output, atol=1e-2, rtol=1e-1)
 #     print(f"sparse_experts_output: {output}")
 #     assert passing, "sparse experts output mismatch"
+
+
+@pytest.mark.parametrize(
+    "num_experts, experts_per_token, intermediate_size, hidden_size",
+    [
+        (32, 4, 2880, 2880),  # 20B config
+        # (128, 4, 2880, 2880),  # 120B config
+    ],
+    ids=["gpt20B"],
+)
+@pytest.mark.parametrize("batch_size", (1,))
+@pytest.mark.parametrize("seq_len", [1], ids=["s1_"])
+# @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_sparse_experts(
+    mesh_device, num_experts, experts_per_token, intermediate_size, hidden_size, seq_len, batch_size, reset_seeds
+):
+    """Test experts with sparse routing weights (only a few experts active per token)"""
+    # Create configuration
+    config = GptOssConfig(
+        num_local_experts=num_experts,
+        intermediate_size=intermediate_size,
+        hidden_size=hidden_size,
+        num_experts_per_tok=experts_per_token,
+    )
+
+    # Create input tensors
+    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+
+    # Create sparse routing weights (simulate topk routing)
+    routing_weights = torch.zeros(batch_size * seq_len, num_experts)
+
+    for b, s in itertools.product(range(batch_size), range(seq_len)):
+        # Randomly select which experts are active for this token
+        active_experts = torch.randperm(num_experts)[:experts_per_token]
+        weights = torch.rand(experts_per_token)
+        weights = weights / weights.sum()  # Normalize
+        routing_weights[b * seq_len + s, active_experts] = weights
+
+    # Convert to TTNN tensors
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+    tt_routing_weights2 = ttnn.from_torch(
+        routing_weights, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
+    )
+
+    # Create models
+    reference_model = ReferenceExperts(config)
+    state_dict = reference_model.state_dict()
+    ccl_manager = CCLManager(mesh_device)
+    tt_model = SparseExperts(mesh_device, config, state_dict, ccl_manager, tensor_cache_path=tensor_cache_dir)
+
+    # # Run forward passes
+    reference_output = reference_model(hidden_states, routing_weights)
+    tt_output = tt_model(tt_hidden_states, tt_routing_weights, tt_routing_weights2)
+
+    tt_output_tensors = ttnn.get_device_tensors(tt_output)
+
+    logger.info(f"tt_output_tensors: {tt_output_tensors}")
+    logger.info(f"tt_output_tensors.size: {len(tt_output_tensors)}")
+    logger.info(f"tt_output_tensors.shape: {tt_output_tensors[0].shape}")
+
+    # Log if all the tensors in tt_output_tensors are the same shape
+    logger.info(f"all_same_shape: {len(set(tuple(tensor.shape) for tensor in tt_output_tensors)) == 1}")
+
+    for i in range(len(tt_output_tensors)):
+        tt_output = ttnn.to_torch(tt_output_tensors[i])
+
+        # Compare outputs
+        passing, output = comp_pcc(reference_output, tt_output, pcc=0.99)
+        mse = torch.nn.functional.mse_loss(reference_output, tt_output)
+
+        # Calculate relative error metrics
+        ref_variance = torch.var(reference_output)
+        ref_mean_abs = torch.mean(torch.abs(reference_output))
+        ref_std = torch.std(reference_output)
+
+        relative_mse_to_variance = mse / ref_variance if ref_variance > 0 else float("inf")
+        relative_mse_to_scale = mse / (ref_mean_abs**2) if ref_mean_abs > 0 else float("inf")
+        snr_db = 10 * torch.log10(ref_variance / mse) if mse > 0 else float("inf")
+
+        print(f"experts_output: {output}")
+        print(f"MSE: {mse:.6e}")
+        print(f"Reference variance: {ref_variance:.6e}, std: {ref_std:.6e}, mean_abs: {ref_mean_abs:.6e}")
+        print(f"Relative MSE to variance: {relative_mse_to_variance:.6e} ({relative_mse_to_variance*100:.4f}%)")
+        print(f"Relative MSE to scale²: {relative_mse_to_scale:.6e} ({relative_mse_to_scale*100:.4f}%)")
+        print(f"Signal-to-Noise Ratio: {snr_db:.2f} dB")
+        print(f"Reference output range: [{torch.min(reference_output):.6e}, {torch.max(reference_output):.6e}]")
+        print(f"TT output range: [{torch.min(tt_output):.6e}, {torch.max(tt_output):.6e}]")
+
+        assert passing, "experts output mismatch"

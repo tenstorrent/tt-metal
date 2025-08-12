@@ -105,6 +105,99 @@ class Experts:
         routing_weights = ttnn.permute(routing_weights, (1, 0))
         routing_weights = ttnn.reshape(routing_weights, (self.num_experts, batch_size, seq_len, 1))
 
+        breakpoint()
+        next_states = next_states * routing_weights
+        next_states = ttnn.sum(next_states, dim=0)
+
+        if self.mesh_device.shape[1] > 1:
+            # AllReduce
+            next_states = ttnn.unsqueeze(next_states, 0)
+            next_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
+                next_states,
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_manager.topology,
+                cluster_axis=1,
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
+            )
+            next_states = ttnn.experimental.all_gather_async(
+                next_states_scattered,
+                dim=3,
+                cluster_axis=1,
+                mesh_device=self.ccl_manager.mesh_device,
+                topology=self.ccl_manager.topology,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
+            )
+            next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
+
+        return next_states
+
+
+class SparseExperts(Experts):
+    def __init__(self, mesh_device, hf_config, state_dict, ccl_manager, dtype=ttnn.bfloat16, tensor_cache_path=None):
+        super().__init__(mesh_device, hf_config, state_dict, ccl_manager, dtype, tensor_cache_path)
+        self.num_experts_per_tok = hf_config.num_experts_per_tok
+
+    def __call__(self, hidden_states, routing_weights, routing_weights2):
+        batch_size = hidden_states.shape[0]
+        assert batch_size == 1, "batch_size must be 1"
+        seq_len = hidden_states.shape[1]
+
+        # gate = ttnn.sparse_matmul(hidden_states, self.gate_proj) + self.gate_proj_bias
+        hidden_states2 = ttnn.unsqueeze_to_4D(hidden_states)
+        gate_proj2 = ttnn.permute(self.gate_proj, (1, 0, 2, 3))
+        routing_weights2 = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights2), ttnn.ROW_MAJOR_LAYOUT)
+        output_tile = ttnn.Tile([32, 32])
+        gate = ttnn.sparse_matmul(
+            hidden_states2,
+            gate_proj2,
+            sparsity=routing_weights2,
+            nnz=self.num_experts_per_tok,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
+        )
+        gate = ttnn.reshape(gate, (self.num_experts, batch_size, seq_len, self.hidden_size // 2)) + self.gate_proj_bias
+        gate = ttnn.clamp(gate, min=None, max=self.limit)
+
+        up_proj2 = ttnn.permute(self.up_proj, (1, 0, 2, 3))
+        up2 = ttnn.sparse_matmul(
+            hidden_states2,
+            up_proj2,
+            sparsity=routing_weights2,
+            nnz=self.num_experts_per_tok,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
+        )
+        up2 = ttnn.reshape(up2, (self.num_experts, batch_size, seq_len, self.hidden_size // 2)) + self.up_proj_bias
+        up2 = ttnn.clamp(up2, min=-self.limit, max=self.limit)
+
+        glu = gate * ttnn.sigmoid(gate * self.alpha)
+        down_in0 = (up2 + 1) * glu
+        down_in0 = ttnn.reshape(down_in0, (1, seq_len, self.num_experts, self.hidden_size // 2))
+        # next_states = ttnn.matmul(((up2 + 1) * glu), self.down_proj) + self.down_proj_bias
+
+        down_proj2 = ttnn.permute(self.down_proj, (1, 0, 2, 3))
+        breakpoint()
+        down2 = ttnn.sparse_matmul(
+            down_in0,
+            down_proj2,
+            sparsity=routing_weights2,
+            nnz=self.num_experts_per_tok,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
+        )
+        next_states = (
+            ttnn.reshape(down2, (self.num_experts, batch_size, seq_len, self.hidden_size)) + self.down_proj_bias
+        )
+
+        routing_weights = ttnn.permute(routing_weights, (1, 0))
+        routing_weights = ttnn.reshape(routing_weights, (self.num_experts, batch_size, seq_len, 1))
+
         next_states = next_states * routing_weights
         next_states = ttnn.sum(next_states, dim=0)
 
