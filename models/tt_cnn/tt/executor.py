@@ -28,6 +28,9 @@ class Executor(ABC):
 
 class ModelExecutor(Executor):
     def __init__(self, model: Callable, device, l1_input_memory_config, cq_id=0):
+        """
+        Executor that runs a model on a single command-queue.
+        """
         self.model = model
         self.device = device
         self.cq_id = cq_id
@@ -38,7 +41,7 @@ class ModelExecutor(Executor):
 
     def compile(self, host_input):
         """
-        Compiles the model by running it once and then captures a trace.
+        Compiles the model by running it once.
         """
         self._validate_input(host_input)
         self._execute_single(host_input)
