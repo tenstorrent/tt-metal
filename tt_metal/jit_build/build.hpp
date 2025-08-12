@@ -10,17 +10,12 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <string_view>
-#include <thread>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "data_format.hpp"
-#include "hostdevcommon/common_values.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
 #include "jit_build_options.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_backend_api_types.hpp"
-#include "utils.hpp"
 
 namespace tt {
 enum class ARCH;
@@ -68,8 +63,6 @@ public:
 
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};
-    std::string arch_name_;
-    std::string aliased_arch_name_;
 
     // Paths
     std::string root_;
@@ -132,16 +125,17 @@ protected:
     void weaken(const std::string& log_file, const std::string& out_path) const;
     void copy_kernel(const std::string& kernel_in_path, const std::string& op_out_path) const;
     void extract_zone_src_locations(const std::string& log_file) const;
+    void finish_init(HalProgrammableCoreType core_type, HalProcessorClassType processor_class);
 
 public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
     virtual ~JitBuildState() = default;
-    void finish_init();
 
     void build(const JitBuildSettings* settings) const;
 
-    const std::string& get_out_path() const { return this->out_path_; };
+    const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; };
+    ;
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
