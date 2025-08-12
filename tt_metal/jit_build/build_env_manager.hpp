@@ -24,8 +24,8 @@ using ProgCoreMapping =
 struct DeviceBuildEnv {
     uint32_t build_key = 0;
     JitBuildEnv build_env;
-    JitBuildStateSet firmware_build_states;
-    JitBuildStateSet kernel_build_states;
+    std::vector<JitBuildState> firmware_build_states;
+    std::vector<JitBuildState> kernel_build_states;
 };
 
 // Singleton class to generate and hold build environments, build keys, and build states.
