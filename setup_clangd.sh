@@ -63,7 +63,6 @@ validate_directories() {
         "$ROOT_DIR/tests"
         "$ROOT_DIR/$ARCH_LLK_ROOT"
         "$ROOT_DIR/tests/firmware/riscv/common"
-        "$ROOT_DIR/tests/firmware/riscv/$CHIP_ARCH"
     )
 
     for dir in "${dirs_to_check[@]}"; do
@@ -141,7 +140,6 @@ $ROOT_DIR/tests/sfpi/compiler/riscv32-tt-elf/include/c++/12.4.0/riscv32-tt-elf
 -isystem
 $ROOT_DIR/tests/sfpi/include
 -I$ROOT_DIR/tests/firmware/riscv/common
--I$ROOT_DIR/tests/firmware/riscv/$CHIP_ARCH
 -I$ROOT_DIR/tests/hw_specific/$CHIP_ARCH/inc
 -I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc
 -I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc/sfpu
