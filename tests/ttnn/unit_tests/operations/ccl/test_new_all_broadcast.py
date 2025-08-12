@@ -77,7 +77,6 @@ def run_all_broadcast_impl(
     output_shard_shape=None,
     output_shard_grid=None,
     tensor_mem_layout=None,
-    use_cluster_axis_api=False,
     cluster_axis=None,
     use_barrier=False,
 ):
@@ -284,6 +283,9 @@ def test_all_broadcast(
     function_level_defaults,
     use_barrier,
 ):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
     run_all_broadcast_impl(
         t3k_mesh_device,
         num_devices,
@@ -388,6 +390,9 @@ def test_all_broadcast_sharded(
     tensor_mem_layout,
     use_barrier,
 ):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
     run_all_broadcast_impl(
         t3k_mesh_device,
         num_devices,

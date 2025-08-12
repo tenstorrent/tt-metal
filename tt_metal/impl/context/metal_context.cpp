@@ -500,6 +500,7 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 
 void MetalContext::initialize_control_plane() {
     if (custom_mesh_graph_desc_path_.has_value()) {
+        log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
         TT_FATAL(
             std::filesystem::exists(mesh_graph_desc_path),
@@ -510,6 +511,7 @@ void MetalContext::initialize_control_plane() {
         this->construct_control_plane(mesh_graph_desc_path);
         return;
     }
+    log_debug(tt::LogDistributed, "Using default mesh graph descriptor.");
 
     auto cluster_type = cluster_->get_cluster_type();
     auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type);
@@ -926,6 +928,8 @@ void MetalContext::initialize_firmware(
     uint32_t zero = 0;
     cluster_->write_core(
         &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
+    uint32_t go_message_index_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+    cluster_->write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
 }
 
 void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {

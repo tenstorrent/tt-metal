@@ -33,7 +33,17 @@ void bind_normalization_layernorm_operation(py::module& module) {
         module,
         ttnn::layer_norm,
         R"doc(
-            Compute layer_norm over :attr:`input_tensor`.
+            Compute layer norm over :attr:`input_tensor`.
+            See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
+
+            .. math::
+
+                \text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
+
+            Where:
+                - :math:`\mu` and :math:`\sigma^2` are the mean and variance of the input tensor, respectively
+                - :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively
+                - :math:`\epsilon` is a small constant
 
 
         Args:
@@ -49,10 +59,68 @@ void bind_normalization_layernorm_operation(py::module& module) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig)
 
+            Returns:
+                ttnn.Tensor: the output tensor.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
+        Note:
+            Supported data types and layouts by tensor:
 
+            .. list-table:: input_tensor
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32, BFLOAT8_B
+                 - TILE
+
+            .. list-table:: residual_input_tensor
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32, BFLOAT8_B
+                 - TILE
+
+            .. list-table:: weight (gamma) and bias (beta)
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            .. list-table:: stats (POST_ALL_GATHER only)
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16
+                 - TILE
+
+            .. list-table:: output_tensor
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32, BFLOAT8_B (typically matches input; PRE_ALL_GATHER produces BF16)
+                 - TILE
+
+            Rank: input rank must be >= 1. See Limitations for additional sharding/distributed constraints.
+
+        Limitations:
+            - All input tensors must be on-device.
+            - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
+            - If `residual_input_tensor` is provided, it must match the input's padded shape.
+            - `weight`/`bias` tensors:
+              - If TILE: last padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
+              - If ROW_MAJOR: last padded dim must be TILE_WIDTH and the stick count must align with the input width.
+            - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
+
+        Example:
+            .. code-block:: python
+
+                input_tensor = ttnn.rand([32, 64], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+                output_tensor = ttnn.layer_norm(input_tensor)
 
         )doc",
 

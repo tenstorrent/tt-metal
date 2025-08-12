@@ -862,13 +862,25 @@ void FreshProfilerDeviceLog() {
 #endif
 }
 
+constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
+constexpr uint32_t DEVICE_OP_ID_NUM_BITS = 31;
+
+// Given the base (host assigned id) for a program running on multiple devices, generate a unique per-device
+// id by coalescing the physical_device id with the program id.
+// For ops running on device, the MSB is 0. For host-fallback ops, the MSB is 1. This avoids aliasing.
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op) {
-    // Given the base (host assigned id) for a program running on multiple devices, generate a unique per-device
-    // id by coalescing the physical_device id with the program id.
-    // For ops running on device, the MSB is 0. For host-fallback ops, the MSB is 1. This avoids aliasing.
-    constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
-    constexpr uint32_t DEVICE_OP_ID_NUM_BITS = 31;
     return (is_host_fallback_op << DEVICE_OP_ID_NUM_BITS) | (base_program_id << DEVICE_ID_NUM_BITS) | device_id;
+}
+
+// Decode per device program ID to get encoded values (base program id, device id, and a flag indicating whether
+// it's a host-fallback op).
+DeviceProgramId DecodePerDeviceProgramID(uint32_t encoded_device_program_id) {
+    DeviceProgramId device_program_id;
+    device_program_id.device_id = encoded_device_program_id & ((1 << DEVICE_ID_NUM_BITS) - 1);
+    device_program_id.base_program_id =
+        (encoded_device_program_id & ((uint32_t)(1 << DEVICE_OP_ID_NUM_BITS) - 1)) >> DEVICE_ID_NUM_BITS;
+    device_program_id.is_host_fallback_op = encoded_device_program_id >> DEVICE_OP_ID_NUM_BITS;
+    return device_program_id;
 }
 
 }  // namespace detail
