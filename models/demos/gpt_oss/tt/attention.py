@@ -131,7 +131,7 @@ class Attention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def __call__(self, x: ttnn.Tensor, mask, rope_stuff):
+    def __call__(self, x: ttnn.Tensor, mask, rope_stuff, position_idx=None):
         batch_size, seq_len, hidden_size = x.shape
 
         tt_q = ttnn.matmul(x, self.q_proj) + self.q_proj_bias
@@ -159,10 +159,10 @@ class Attention:
             sm_scale=self.scaling,
             tt_mask=mask,
             tt_cache=self.cache,
+            position_idx=position_idx,
         )
 
         tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj) + self.o_proj_bias
-        print(tt_out.shape)
         tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         if self.mesh_device.shape[1] > 1:

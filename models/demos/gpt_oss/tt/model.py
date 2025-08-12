@@ -46,6 +46,7 @@ class Model:
         input_ids,
         attention_masks,
         position_embeddings,
+        position_idx=None,
     ):
         input_embeds = ttnn.embedding(input_ids, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
 
@@ -56,6 +57,7 @@ class Model:
                 hidden_states,
                 attention_mask=mask,
                 position_embeddings=position_embeddings,
+                position_idx=position_idx,
             )
 
         hidden_states = self.norm(hidden_states)
