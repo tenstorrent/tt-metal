@@ -229,7 +229,7 @@ namespace {
 
 Tensor llama_all_gather_matmul_async_impl(
     const Tensor& input_tensor,
-    const Tensor& input_tensor_b,
+    const Tensor& input1,
     const Tensor& intermediate_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
@@ -281,7 +281,7 @@ Tensor llama_all_gather_matmul_async_impl(
 
     operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
         input_tensor,
-        input_tensor_b,
+        input1,
         /*parameters=*/
         operations::matmul::Matmul{
             program_config,
@@ -305,7 +305,7 @@ Tensor llama_all_gather_matmul_async_impl(
     //     .at(0);
     auto tensors_out = tt::tt_metal::operation::run(
         llama_all_gather_matmul_async_struct,
-        {input_tensor, input_tensor_b, intermediate_tensor},
+        {input_tensor, input1, intermediate_tensor},
         optional_input_tensors,
         optional_output_tensors);
     tensors_out.at(1).deallocate(true);

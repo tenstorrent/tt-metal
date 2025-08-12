@@ -100,7 +100,7 @@ struct LlamaAllGatherMatmulAsync {
 // llama All Gather MM Variants
 tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_sharded(
     const Tensor& input_tensor,
-    const Tensor& input_tensor_b,
+    const Tensor& input1,
     Tensor& output_tensor,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
@@ -120,7 +120,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
-    const Tensor& input_tensor_a,
+    const Tensor& input0,
     const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
@@ -138,7 +138,7 @@ namespace ccl {
 
 Tensor llama_all_gather_matmul_async(
     const Tensor& input_tensor,
-    const Tensor& input_tensor_b,
+    const Tensor& input1,
     const Tensor& intermediate_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,

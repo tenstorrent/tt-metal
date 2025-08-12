@@ -38,7 +38,7 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_sharded(
     const Tensor& input_tensor,
-    const Tensor& input_tensor_b,
+    const Tensor& input1,
     Tensor& output_tensor,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
@@ -66,7 +66,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     auto tensor_slicer =
         ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, intermediate_tensor, dim, ring_index);
     const uint32_t num_transfers = ring_size;
-    const uint32_t weight_tensor_width = input_tensor_b.padded_shape()[3] / 32;
+    const uint32_t weight_tensor_width = input1.padded_shape()[3] / 32;
 
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
         ttnn::experimental::ccl::MatmulFusedOpSignaler(
@@ -430,7 +430,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
         ttnn::operations::llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
             program,
             aggregated_tensor,         // in0
-            {input_tensor_b},          // in1
+            {input1},                  // in1
             std::nullopt,              // bias
             {output_tensor},           // out0
             false,                     // broadcast_batch
@@ -458,7 +458,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
-            const auto& input_b = input_tensors[1];
+            const auto& input1 = input_tensors[1];
 
             const auto& mm_output = output_tensors[0];
             const auto& intermediate = input_tensors[2];
@@ -496,7 +496,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
                 matmul_override_runtime_arguments_callback.value()(
                     operation,
                     program,
-                    {aggregated, input_b}, /* all gather output tensor, weight tensor */
+                    {aggregated, input1}, /* all gather output tensor, weight tensor */
                     optional_input_tensors,
                     {mm_output} /* matmul output tensor */
                 );

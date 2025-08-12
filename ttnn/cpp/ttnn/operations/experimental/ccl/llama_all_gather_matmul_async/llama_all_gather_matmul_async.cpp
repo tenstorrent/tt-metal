@@ -12,7 +12,7 @@ namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& input_tensor_b,
+    const ttnn::Tensor& input1,
     const ttnn::Tensor& intermediate_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
@@ -29,7 +29,7 @@ ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     return ttnn::operations::experimental::ccl::llama_all_gather_matmul_async(
         input_tensor,
-        input_tensor_b,
+        input1,
         intermediate_tensor,
         dim,
         cluster_axis,

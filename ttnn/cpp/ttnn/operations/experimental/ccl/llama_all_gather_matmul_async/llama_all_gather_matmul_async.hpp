@@ -14,8 +14,8 @@ namespace operations::experimental::ccl {
 
 struct ExecuteAllGatherMatmulAsync {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor_a,
-        const ttnn::Tensor& input_tensor_b,
+        const ttnn::Tensor& input0,
+        const ttnn::Tensor& input1,
         const ttnn::Tensor& intermediate_tensor,
         const int32_t dim,
         const uint32_t cluster_axis,
