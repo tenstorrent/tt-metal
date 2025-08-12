@@ -1431,18 +1431,18 @@ class ModelArgs:
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
         self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
-
-        self.sliding_window_pattern = (
-            len(text_config["layer_types"])
-            if "layer_types" in text_config and text_config["layer_types"] is not None
-            else 1
-        )
+        layer_types = text_config["layer_types"] if "layer_types" in text_config else None
 
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
+
+        self.sliding_window_pattern = (
+            [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
+        )
+
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
