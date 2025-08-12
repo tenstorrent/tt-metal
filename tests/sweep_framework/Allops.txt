@@ -362,7 +362,6 @@ ttnn.real_bw
 ttnn.reallocate
 ttnn.reciprocal
 ttnn.reciprocal_bw
-ttnn.reduce_scatter
 ttnn.reglu
 ttnn.relu
 ttnn.relu6

@@ -9,6 +9,8 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import skip_for_grayskull
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+
 
 def is_unsupported_case(input_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
     elem_size = 2 if input_dtype == ttnn.bfloat16 else 1
@@ -39,32 +41,36 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    output_tensor_mesh = ttnn.reduce_scatter(
-        input_tensor_mesh,
-        dim=dim,
-        math_op=math_op,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        num_workers=n_worker,
-        num_buffers_per_channel=n_buffer,
-        topology=topology,
-    )
+    pytest.skip(LEGACY_SKIP)
+    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # output_tensor_mesh = ttnn.reduce_scatter(
+    #     input_tensor_mesh,
+    #     dim=dim,
+    #     math_op=math_op,
+    #     num_links=num_links,
+    #     memory_config=output_mem_config,
+    #     num_workers=n_worker,
+    #     num_buffers_per_channel=n_buffer,
+    #     topology=topology,
+    # )
     ttnn.synchronize_device(t3k_mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
     for i in range(num_iters):
-        output_tensor_mesh = ttnn.reduce_scatter(
-            input_tensor_mesh,
-            dim=dim,
-            math_op=math_op,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            num_workers=n_worker,
-            num_buffers_per_channel=n_buffer,
-            topology=topology,
-        )
+        pytest.skip(LEGACY_SKIP)
+        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # output_tensor_mesh = ttnn.reduce_scatter(
+        #     input_tensor_mesh,
+        #     dim=dim,
+        #     math_op=math_op,
+        #     num_links=num_links,
+        #     memory_config=output_mem_config,
+        #     num_workers=n_worker,
+        #     num_buffers_per_channel=n_buffer,
+        #     topology=topology,
+        # )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(t3k_mesh_device)
 
@@ -138,14 +144,16 @@ def run_reduce_scatter_test(
         )
     else:
         for i in range(num_iters):
-            output_tensor_mesh = ttnn.reduce_scatter(
-                input_tensor_mesh,
-                dim=dim,
-                math_op=math_op,
-                num_links=num_links,
-                memory_config=mem_config,
-                topology=topology,
-            )
+            pytest.skip(LEGACY_SKIP)
+            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # output_tensor_mesh = ttnn.reduce_scatter(
+            #     input_tensor_mesh,
+            #     dim=dim,
+            #     math_op=math_op,
+            #     num_links=num_links,
+            #     memory_config=mem_config,
+            #     topology=topology,
+            # )
 
             ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
@@ -469,14 +477,16 @@ def run_reduce_scatter_sharded_test(
         )
     else:
         for i in range(num_iters):
-            output_tensor_mesh = ttnn.reduce_scatter(
-                input_tensor_mesh,
-                dim=dim,
-                math_op=math_op,
-                num_links=num_links,
-                memory_config=output_mem_config,
-                topology=topology,
-            )
+            pytest.skip(LEGACY_SKIP)
+            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # output_tensor_mesh = ttnn.reduce_scatter(
+            #     input_tensor_mesh,
+            #     dim=dim,
+            #     math_op=math_op,
+            #     num_links=num_links,
+            #     memory_config=output_mem_config,
+            #     topology=topology,
+            # )
 
             ttnn.synchronize_device(t3k_mesh_device)
             logger.info(f"Done iteration {i}")
