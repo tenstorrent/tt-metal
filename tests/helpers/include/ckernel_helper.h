@@ -4,6 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
+
+#include "risc_attribs.h"
+#include "tensix.h"
+
 namespace ckernel
 {
 volatile std::uint32_t tt_reg_ptr *pc_buf_base     = reinterpret_cast<volatile std::uint32_t *>(PC_BUF_BASE);
