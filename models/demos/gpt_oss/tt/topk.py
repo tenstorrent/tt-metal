@@ -1,4 +1,5 @@
 import ttnn
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
 def topk_router(g, experts_per_token):
@@ -16,15 +17,25 @@ def topk_router(g, experts_per_token):
 
 
 class TopKRouter:
-    def __init__(self, mesh_device, hf_config, state_dict):
+    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None):
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
-        self.weight = ttnn.from_torch(
-            state_dict["weight"].transpose(0, 1), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        self.weight = ttnn.as_tensor(
+            state_dict["weight"].transpose(0, 1),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.bias = ttnn.from_torch(
-            state_dict["bias"].unsqueeze(0), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        self.bias = ttnn.as_tensor(
+            state_dict["bias"].unsqueeze(0),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "bias"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # NOTE: bad outputs when I provide any reasonable compute config
