@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <cstdint>
 #include <cstring>
 
 #include "dataflow_api.h"
@@ -88,7 +89,7 @@ FORCE_INLINE void generate_bcast_scaler(uint32_t cb_scaler, uint32_t scaler) {
     union {
         float f;
         uint32_t u;
-    } u;
+    } u = {};
     u.u = scaler;
     cb_reserve_back(cb_scaler, 1);
     auto ptr = reinterpret_cast<T*>(get_write_ptr(cb_scaler));
@@ -215,8 +216,13 @@ FORCE_INLINE void generate_mask_h(uint32_t cb_mask, uint32_t mask_h) {
     Scalar one = {};
     Scalar zero = {};
 
-    one.f = 1.0f;
-    zero.f = 0.0f;
+    if constexpr (std::is_same_v<T, int32_t>) {
+        one.u = 1;
+        zero.u = 0;
+    } else {
+        one.f = 1.0f;
+        zero.f = 0.0f;
+    }
 
     cb_reserve_back(cb_mask, 1);
     auto ptr = reinterpret_cast<T*>(get_write_ptr(cb_mask));
@@ -250,8 +256,13 @@ FORCE_INLINE void generate_mask_w(uint32_t cb_mask, uint32_t mask_w) {
     Scalar one = {};
     Scalar zero = {};
 
-    one.f = 1.0f;
-    zero.f = 0.0f;
+    if constexpr (std::is_same_v<T, int32_t>) {
+        one.u = 1;
+        zero.u = 0;
+    } else {
+        one.f = 1.0f;
+        zero.f = 0.0f;
+    }
 
     cb_reserve_back(cb_mask, 1);
     auto ptr = reinterpret_cast<T*>(get_write_ptr(cb_mask));
@@ -280,79 +291,10 @@ FORCE_INLINE void generate_mask_w(uint32_t cb_mask, uint32_t mask_w) {
     cb_push_back(cb_mask, 1);
 }
 
-// TODO: Template the generate_mask function to support different data types
-FORCE_INLINE void generate_int_mask_h(uint32_t cb_mask, uint32_t mask_h) {
-    Scalar one;
-    Scalar zero;
-
-    one.u = 1;
-    zero.u = 0;
-
-    cb_reserve_back(cb_mask, 1);
-    auto ptr = reinterpret_cast<int32_t*>(get_write_ptr(cb_mask));
-
-    // Calculate mask heights for top and bottom subtiles
-    const uint32_t mask_h_top = (mask_h >= 16) ? 16 : mask_h;        // subtiles 0, 1
-    const uint32_t mask_h_bottom = (mask_h < 16) ? 0 : mask_h - 16;  // subtiles 2, 3
-
-    // Define subtile offsets: [0, 256, 512, 768] for subtiles [0, 1, 2, 3]
-    constexpr uint32_t subtile_offsets[4] = {0, 256, 512, 768};
-
-    for (uint32_t w = 0; w < 16; w++) {
-        // sub tile 0 (top-left)
-        fill_subtile_mask_h<int32_t>(ptr, w, subtile_offsets[0], mask_h_top, one, zero);
-
-        // sub tile 1 (top-right)
-        fill_subtile_mask_h<int32_t>(ptr, w, subtile_offsets[1], mask_h_top, one, zero);
-
-        // sub tile 2 (bottom-left)
-        fill_subtile_mask_h<int32_t>(ptr, w, subtile_offsets[2], mask_h_bottom, one, zero);
-
-        // sub tile 3 (bottom-right)
-        fill_subtile_mask_h<int32_t>(ptr, w, subtile_offsets[3], mask_h_bottom, one, zero);
-    }
-
-    cb_push_back(cb_mask, 1);
-}
-
-FORCE_INLINE void generate_int_mask_w(uint32_t cb_mask, uint32_t mask_w) {
-    Scalar one;
-    Scalar zero;
-
-    one.u = 1;
-    zero.u = 0;
-
-    cb_reserve_back(cb_mask, 1);
-    auto ptr = reinterpret_cast<int32_t*>(get_write_ptr(cb_mask));
-
-    // Calculate mask widths for left and right subtiles
-    const uint32_t mask_w_left = (mask_w >= 16) ? 16 : mask_w;      // subtiles 0, 2
-    const uint32_t mask_w_right = (mask_w < 16) ? 0 : mask_w - 16;  // subtiles 1, 3
-
-    // Define subtile offsets: [0, 256, 512, 768] for subtiles [0, 1, 2, 3]
-    constexpr uint32_t subtile_offsets[4] = {0, 256, 512, 768};
-
-    for (uint32_t h = 0; h < 16; h++) {
-        // sub tile 0 (top-left)
-        fill_subtile_mask_w<int32_t>(ptr, h, subtile_offsets[0], mask_w_left, one, zero);
-
-        // sub tile 1 (top-right)
-        fill_subtile_mask_w<int32_t>(ptr, h, subtile_offsets[1], mask_w_right, one, zero);
-
-        // sub tile 2 (bottom-left)
-        fill_subtile_mask_w<int32_t>(ptr, h, subtile_offsets[2], mask_w_left, one, zero);
-
-        // sub tile 3 (bottom-right)
-        fill_subtile_mask_w<int32_t>(ptr, h, subtile_offsets[3], mask_w_right, one, zero);
-    }
-
-    cb_push_back(cb_mask, 1);
-}
-
 FORCE_INLINE void generate_mask_h_w(
     uint32_t cb_mask_h_w, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
-    Scalar one;
-    Scalar zero;
+    Scalar one = {};
+    Scalar zero = {};
 
     one.f = 1.0f;
     zero.f = 0.0f;
@@ -500,7 +442,7 @@ FORCE_INLINE void generate_mask_h_w_if_needed(uint32_t cb_mask_h_w, uint32_t ori
 }
 
 FORCE_INLINE void mask_tile_hw(uint32_t l1_addr, uint32_t mask_h = 32, uint32_t mask_w = 32) {
-    Scalar zero;
+    Scalar zero = {};
     zero.f = 0.0f;
     const auto u16_zero = uint16_t(zero.u >> 16);
 
@@ -563,8 +505,8 @@ FORCE_INLINE void mask_tile_if_need(uint32_t l1_addr, uint32_t origin_h, uint32_
 FORCE_INLINE void generate_mask_tiles(
     uint32_t cb_mask, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
     constexpr uint32_t num_mask_tiles = 3;
-    Scalar one;
-    Scalar zero;
+    Scalar one = {};
+    Scalar zero = {};
 
     one.f = 1.0f;
     zero.f = 0.0f;
