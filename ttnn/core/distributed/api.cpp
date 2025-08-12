@@ -15,7 +15,6 @@
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <ttnn/distributed/distributed_tensor_config.hpp>
-#include <ttnn/distributed/host_ccl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <ttnn/distributed/types.hpp>
@@ -67,8 +66,7 @@ void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_de
 std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::HostStorage>(tensor.storage())) {
         std::vector<ttnn::Tensor> tensors;
-        auto gathered_tensor= host_ccl::all_gather(tensor);
-        const auto& distributed_buffer = gathered_tensor.host_storage().buffer();
+        const auto& distributed_buffer = tensor.host_storage().buffer();
         distributed_buffer.apply(
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;

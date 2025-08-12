@@ -129,11 +129,7 @@ void MeshBuffer::initialize_device_buffers() {
     };
 
     for (auto& [coord, device_buffer] : buffers_) {
-        if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
-            if (mesh_device->is_local(coord)) {
-                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(init_device_buffer_at_address(coord));
-            }
-        }
+        device_buffer = init_device_buffer_at_address(coord);
     }
 }
 
@@ -171,17 +167,10 @@ MeshDevice* MeshBuffer::device() const {
 }
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    return buffers_.at(device_coord).value().get();
+    return buffers_.at(device_coord).get();
 }
 
-Buffer* MeshBuffer::get_reference_buffer() const {
-    for (const auto& buffer : buffers_.values()) {
-        if (buffer.is_local()) {
-            return buffer.value().get();
-        }
-    }
-    TT_THROW("MeshBuffer: Tried to get reference buffer, but no local buffer found");
-}
+Buffer* MeshBuffer::get_reference_buffer() const { return buffers_.values().front().get(); }
 
 Buffer* MeshBuffer::get_backing_buffer() const {
     if (auto owned_state = std::get_if<OwnedBufferState>(&state_)) {

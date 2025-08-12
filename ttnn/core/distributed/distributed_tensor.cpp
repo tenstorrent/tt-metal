@@ -27,7 +27,6 @@
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
-#include "ttnn/distributed/host_ccl.hpp"
 
 namespace ttnn::distributed {
 namespace {
@@ -371,8 +370,7 @@ public:
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const {
         const auto cpu_tensor = tensor.cpu();
-        auto all_gather_tensor = host_ccl::all_gather(cpu_tensor);
-        const auto& src_buffer = all_gather_tensor.host_storage().buffer();
+        const auto& src_buffer = cpu_tensor.host_storage().buffer();
 
         auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
         auto dst_buffer = tt::tt_metal::DistributedHostBuffer::create(distribution_shape_);
