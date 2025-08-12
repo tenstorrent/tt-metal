@@ -19,8 +19,10 @@ from models.demos.siglip.reference.functional_ttnn import siglip_attention_ttnn
 @pytest.mark.parametrize("attention_func", [siglip_attention, siglip_attention_ttnn])
 def test_attention(attention_func):
     config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
-    if hasattr(config, "vision_config"):
-        config = config.vision_config
+    assert hasattr(
+        config, "vision_config"
+    ), f"Unexpected model config provided. Expected a vision_config field to be present in: {config}"
+    config = config.vision_config
 
     reference_attention = SiglipSdpaAttention(config=config)
 
