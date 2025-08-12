@@ -52,7 +52,7 @@ jobs:
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 5,
             benchmark-timeout: 5,
-            runner-label: bh-quietbox,
+            runner-label: bh-LLMBox,
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
@@ -115,7 +115,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ inputs.runner-label == 'BH-LLMBox' && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/huggingface' }}:/mnt/MLPerf/huggingface:ro
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
