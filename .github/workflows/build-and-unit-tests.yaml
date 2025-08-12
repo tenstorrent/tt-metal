@@ -104,7 +104,6 @@ jobs:
           echo "LSPCI -vv output:"
           sudo lspci -d 1e52: -vvv
           pip install git+https://github.com/tenstorrent/tt-exalens
-          tt-exalens --use-noc1 --commands "go -l e0,4; noc status; x"
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

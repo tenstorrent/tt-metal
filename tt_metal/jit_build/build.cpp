@@ -75,9 +75,10 @@ static void write_successful_jit_build_marker(const JitBuildState& build, const 
 }
 
 static void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
-    if (dir_path.compare(git_hash_path) != 0) {
-        std::filesystem::remove_all(dir_path);
-    }
+    // if (dir_path.compare(git_hash_path) != 0) {
+    log_info(tt::LogBuildKernels, "Removing built cache: {}", dir_path);
+    std::filesystem::remove_all(dir_path);
+    // }
 }
 
 std::string get_default_root_path() {
