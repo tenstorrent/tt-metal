@@ -116,8 +116,6 @@ FactoryParameters get_factory_parameters(
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
 
-    const auto& input_shape = input.padded_shape();
-
     auto dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
     uint32_t nbytes = datum_size(data_format);
@@ -128,8 +126,8 @@ FactoryParameters get_factory_parameters(
     // face_r_dim to only tilize the necessary number of rows, thus we can make the in_cb height smaller
     uint32_t num_tilized_rows =
         kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw : tt::constants::TILE_HEIGHT;
-    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
-    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::FACE_WIDTH);
+    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::TILE_WIDTH);
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::FACE_WIDTH);
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool last_tile_is_partial =

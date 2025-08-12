@@ -123,7 +123,7 @@ static Tensor pool2d_invoke(
                                                                                       : 8U;
         }
 
-        ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
+        ttnn::Shape input_tensor_shape = input_tensor.logical_shape();
         uint32_t input_tensor_width_snapped_to_channels_alignment =
             tt::round_up(input_tensor_shape[3], num_cores_c * input_channels_alignment);
 
@@ -162,10 +162,7 @@ static Tensor pool2d_invoke(
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     uint32_t output_c = channels;
-    uint32_t output_c_padded = tt::round_up(
-        output_c,
-        num_cores_c *
-            (input_tensor.dtype() == DataType::BFLOAT8_B ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2));
+    uint32_t output_c_padded = tt::round_up(output_c, tt::constants::TILE_WIDTH / 2);
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,
