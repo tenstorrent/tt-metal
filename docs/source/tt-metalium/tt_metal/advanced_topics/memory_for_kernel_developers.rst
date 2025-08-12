@@ -85,13 +85,13 @@ RISC-V cores can only access their private memory and the local shared SRAM dire
     // for writing
     noc_async_write(l1_buffer_addr, noc_addr, dram_buffer_size);
 
-This works for all tiles on the NoC (as long as the address maps to valid memory). If the NoC request goes to a Tensix or Ethernet tile, it accesses their SRAM; if to a DRAM tile, it accesses DRAM; to the PCIe controller, it accesses the peripheral. Thus on Tensix the real address is a tuple of (x, y, addr).
+The same scheme works for all tiles on the NoC (as long as the address maps to valid memory). If the NoC request goes to a Tensix or Ethernet tile, it accesses their SRAM; if to a DRAM tile, it accesses DRAM; to the PCIe controller, it accesses the peripheral. Thus on Tensix the real address is a tuple of (x, y, addr).
 
 Accessing DRAM is straightforward. The following creates a read request of size 0x100 to DRAM tile D1 at address 0x1000:
 
 .. code-block:: cpp
 
-    uint64_t noc_addr = get_noc_addr(0, 0, 0x1000);
+    uint64_t noc_addr = get_noc_addr_from_bank_id<true>(0, 0x1000);
     noc_async_read(noc_addr, l1_buffer_addr, 0x100);
 
 From the information above, the following is true on Wormhole (and analogous for other generation of processors):
@@ -101,26 +101,53 @@ From the information above, the following is true on Wormhole (and analogous for
 * Address 0x1000 is within the first 1GB, so the 1st channel of the GDDR chip is used
 * Using all 6 DRAM controllers simultaneously provides the full 12GB capacity
 
-Memory Layout
+Tensor Layout
 -------------
+
+Tensors are the primary data structure that Metalium is designed to work with, though they are not strictly the only supported data structure. Tensors are multi-dimensional arrays used to represent various types of data, from images to text. As the fundamental data structure in modern machine learning frameworks, tensors provide flexibility and power for diverse computational tasks. Metalium is designed to facilitate efficient tensor operations.
+
+Multiple tensor memory layouts exist, with traditional systems using either C-style row-major or Fortran-style column-major ordering. Metalium supports C-style row-major ordering but uses a custom tiled layout for optimal computation performance on the Tensix core. This tiled layout reduces silicon area, power consumption, and memory bandwidth by matching the Tensix core's compute units and memory architecture.
+
+Due to the lack of a linear, flat address space, data placement (onto each memory resource) requires explicit decisions about distribution and chunk size. Distribution will be discussed in a future section. The chunk size, or the amount of data stored before switching to the next storage location, is referred to as the **page size**.
+
+In row-major layout, a single row of the tensor occupies one page, enabling simpler programming and lower logic overhead for common patterns of data access.
+
+.. figure:: /images/tenstorrent-row-major-memory-layout.webp
+    :alt: The row-major memory layout of a tensor.
+    :align: center
+    :scale: 65%
+
+    The row-major memory layout of a tensor. The data is stored in a single contiguous block of memory, with the last dimension varying the fastest.
+
+In contrast, the tiled layout provides optimal performance for computations on the Tensix core. It divides the tensor into smaller tiles, typically 2D tiles of size 32x32 (padded as needed). Each tile is stored in a separate page, enabling efficient access patterns that align with the Tensix core's internal compute units. See :ref:`Tile documentation<Tiles>` for details on the tile layout and its implications.
+
+
+.. figure:: /images/tenstorrent-tile-memory-layout.webp
+    :alt: The tiled memory layout of a tensor.
+    :align: center
+    :scale: 65%
+
+    The tiled memory layout of a tensor.
+
+
+Memory placement
+----------------
 
 Due to the lack of a single linear address space, data placement requires explicit decisions about location and distribution across available resources. The following factors determine optimal data placement:
 
 * **Target tile selection**: Which specific tile should store each piece of data
-* **Memory hierarchy**: Whether data should reside in DRAM or SRAM based on access patterns and capacity requirements
-* **Data partitioning**: How to divide data structures across multiple tiles
-* **Granularity**: The size of each partition (also called page size)
+* **Memory type**: Whether data should reside in DRAM or SRAM based on access patterns and capacity requirements
 * **Access pattern optimization**: Minimizing NoC traffic by placing frequently accessed data close to consuming cores
-* **Compatability across generations**: Ensuring kernels can run on different Tenstorrent generations with varying memory configurations, without code changes
+* **Compatibility across generations**: Ensuring kernels can run on different Tenstorrent generations with varying memory configurations, without code changes
 
-There is no one-size-fits-all solution for data placement. The optimal strategy depends on the specific kernel and its access patterns.
+There is no one-size-fits-all solution for data placement. The optimal strategy depends on the specific kernel, its access patterns and the underlying hardware architecture.
 
 Lock step allocation
 ~~~~~~~~~~~~~~~~~~~~
 
-Each generation of Tenstorrent processors has a different memory configuration. For example, Wormhole has 6 DRAM controllers with 2 GB each, while Blackhole has 8 controllers with 4 GB each. Passing in a separate address for each DRAM controller to a kernel is not practical. Similarly, providing 64 addresses for each Tensix core (as on a Wormhole n150) when using SRAM is not feasible.
+Each generation of Tenstorrent processors has a different memory configuration. For example, Wormhole has 6 DRAM controllers with 2 GB each, while Blackhole has 8 controllers with 4 GB each. Passing in a separate address for each DRAM controller to a kernel is not practical nor scalable. Similarly, providing 64 addresses for each Tensix core (as on a Wormhole n150) for data residing on SRAM is not feasible.
 
-Lock-step allocation solves this problem. During allocation, the buffer size is divided and rounded up by the number of DRAM controllers. Allocation assumes the processor has only 1/N of the total memory. The resulting address is then shared across all DRAM tiles, effectively multiplying the available space. This approach ensures that a single pointer can uniquely identify an object, regardless of the underlying memory configuration. The same applies to SRAM allocation, where the address is shared across all Tensix cores.
+Lock-step allocation solves this problem. For DRAM allocation, the buffer size is divided and rounded up by the number of DRAM tiles. Allocation assumes the processor has only 1/N of the total memory. The resulting address is then shared across all DRAM tiles, effectively multiplying the available space and restoring the allocated area to the requested amount. This approach ensures that a single pointer (plus the memory type, which is known before kernel execution) can uniquely identify an object, regardless of the underlying memory configuration. The same applies to SRAM allocation, where the address is shared across all Tensix cores.
 
 
 .. figure:: /images/tenstorrent-lock-step-allocation-cross-banks.webp
@@ -129,15 +156,15 @@ Lock-step allocation solves this problem. During allocation, the buffer size is 
 
     The lock-step where single address can be used across multiple DRAM tiles. At the cost of some memory waste.
 
-This approach has inherent trade-offs. When allocating X bytes on one DRAM controller, all other controllers must reserve the same amount. Additionally, if the allocation size is not evenly divisible by the number of controllers, some banks will contain unused space. Despite these limitations, the programming model simplification justifies the overhead - kernels receive a single address parameter instead of N hardware-dependent pointers, at the cost of some memory waste and explicit specification of the storage pattern.
+Lock step allocation has inherent trade-offs. When allocating X bytes on one DRAM controller, all other controllers must reserve the same amount. Additionally, if the allocation size is not evenly divisible by the number of controllers, some banks will contain unused space. Despite these limitations, the programming model simplification justifies the overhead - kernels receive a single address parameter instead of N hardware-dependent pointers, at the cost of some memory waste and explicit specification of the storage pattern.
 
 
 Interleaved memory
 ~~~~~~~~~~~~~~~~~~
 
-Interleaved is the simplest memory allocation scheme. Where data is distributed evenly across all available memory banks at ``page_size`` granularity. This approach is the most generic and works well for most kernels. It ensures that data is evenly distributed across all memory banks and not hot-spotted on any single one. At the cost of less efficient memory access patterns for certain operations such as matrix multiplication and convolution, where locality is paramount.
+Interleaved is the simplest memory placement scheme. Where data is round-robined across all available memory resource at ``page_size`` granularity. This approach is the most generic and works well for most kernels. It ensures that data is evenly distributed across all memory banks and not hot-spotted on any single one. At the cost of less efficient memory access patterns for certain operations such as matrix multiplication and convolution, where locality is paramount.
 
-The following example is a typical interleaved memory allocation for a DRAM buffer. It allocates a buffer of size ``tile_size_bytes * n_tiles`` bytes. The ``page_size`` is set to the size of a tile, which 2KiB for bfloat16 tiles. This means that each DRAM controller will store a tile of data, and the next tile will be stored on the next DRAM controller, and so on.
+The following example is a typical interleaved memory allocation for a DRAM buffer. It allocates a buffer of size ``tile_size_bytes * n_tiles`` bytes. The ``page_size`` is set to the size of a tile, which 2KiB for bfloat16 tiles - each DRAM controller will hold a tile of data, and the next tile will be stored on the next DRAM controller, and so on.
 
 .. code-block:: cpp
 
@@ -154,6 +181,10 @@ The following example is a typical interleaved memory allocation for a DRAM buff
     auto src0_dram_buffer = CreateBuffer(dram_config);
     auto in0_addr = src0_dram_buffer->address();
 
+    // Tell the kernel how to access the memory
+    std::vector<uint32_t> compile_time_args; // passed to kernel during kernel setup
+    TensorAccessorArgs(*src0_dram_buffer).append_to(compile_time_args);
+
 The above code allocats 64 tiles of size 2KiB each, for a total of 128KiB. Across DRAM controllers. We can visualize the allocation (as an 1D array) as follows:
 
 .. figure:: /images/tenstorrent-interleaved-allocation-64-tiles-wh.webp
@@ -164,21 +195,19 @@ The above code allocats 64 tiles of size 2KiB each, for a total of 128KiB. Acros
     Allocation of 64 tiles of bfloat16 in interleaved memory on Wormhole (6 DRAM controller). Each tile is 1024 elements of bfloat16, or 2KiB. The allocation round-robins across the 6 DRAM controllers.
 
 
-As this is a standard allocation. Instead of manually calculating the address and tile coorindates, utilties are provided to enable easy access. `InterleavedAddrGenFast` enables   efficient, random access to interleaved memory. Allowing tile/page sized granularity for reach and writes.
+As interleaved memory is the most common allocation scheme. Instead of manually calculating the address and tile coordinates, utilities are provided to enable easy access. ``TensorAccessor`` enables efficient, random access to interleaved memory. Allowing tile/page sized granularity for read and writes.
 
 .. code-block:: cpp
 
-    const InterleavedAddrGenFast</*dram=*/true> in0 = {
-        .bank_base_address = in0_addr,         // The base address of the buffer
-        .page_size = tile_size_bytes,          // The size of a buffer page
-        .data_format = DataFormat::Float16_b,  // The data format it holds
-    };
+    // access parameters are passed in compile time, starting from parameter 0
+    constexpr auto in0_args = TensorAccessorArgs<0>();
+    const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
     ...
 
     for (uint32_t i = 0; i < n_tiles; i++) {
         cb_reserve_back(cb_in0, 1);
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-        noc_async_read_tile(i, in0, cb_in0_addr); // read a the i-th tile from the interleaved buffer
+        noc_async_read_tile(i, in0, cb_in0_addr); // read the i-th tile from the interleaved buffer
 
         noc_async_read_barrier();
         cb_push_back(cb_in0, 1);
@@ -187,7 +216,7 @@ As this is a standard allocation. Instead of manually calculating the address an
 SRAM buffers
 ~~~~~~~~~~~~
 
-Besides DRAM, It is also possible to allocate buffers in SRAM. This is useful for small buffers that need to be accessed with high bandwidth, low latency and high locality. SRAM provides much higher bandwidth and lower latency than DRAM, making it ideal for intermediate data that needs to be accessed frequently during computation. However, SRAM is a very limited resource, so it is important to use it wisely and deallocate as soon as it is no longer needed.
+It is also possible to allocate buffers in SRAM. This is useful for small buffers that need to be accessed with high bandwidth, low latency and high locality. SRAM provides much higher bandwidth and lower latency than DRAM, making it ideal for intermediate data that needs to be accessed frequently during computation. However, SRAM is a very limited resource, so it is important to use it wisely and deallocate as soon as it is no longer needed.
 
 Allocating on SRAM is exactly the same as allocating on DRAM, except that the buffer type is set to ``BufferType::L1``. The following example allocates the same buffer as above, but in SRAM instead of DRAM. In this case, the round-robin allocation is done across all Tensix cores instead of DRAM controllers.
 
@@ -197,25 +226,26 @@ Allocating on SRAM is exactly the same as allocating on DRAM, except that the bu
         .device = device,
         .size = tile_size_bytes * n_tiles,
         .page_size = tile_size_bytes,
-        .buffer_type = tt_metal::BufferType::L1};
+        .buffer_type = tt_metal::BufferType::L1}; // change here
 
     auto src0_sram_buffer = CreateBuffer(sram_config);
     auto in0_addr = src0_sram_buffer->address();
 
-To access the SRAM buffer, you can use the same `InterleavedAddrGenFast` utility as for DRAM buffers. But set the template parameter to ``false`` indicating that the buffer is in SRAM.
+    std::vector<uint32_t> compile_time_args;
+    // The knowledge that the buffer lives on SRAM is captured
+    TensorAccessorArgs(*src0_sram_buffer).append_to(compile_time_args);
+
+As allocation type and scheme is known at compile time. The same ``TensorAccessor`` helper can be used to access the SRAM buffer with 0 change to the kernel.
 
 .. code-block:: cpp
 
-    // Indicate to the library that this is an SRAM buffer
-    //                                vvvvvvv
-    const InterleavedAddrGenFast</*dram=*/false> in0 = {
-        .bank_base_address = in0_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b,
-    };
+    // Nothing changes compared to reading from DRAM as allocation on DRAM or SRAM is know before
+    // kernel compilation.
+    // Whether accessing DRAM or SRAM is stored in TensorAccessorArgs.
+    constexpr auto in0_args = TensorAccessorArgs<0>();
+    const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
     ...
 
-    // The rest of the code is the same as for DRAM buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
         cb_reserve_back(cb_in0, 1);
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
@@ -233,6 +263,7 @@ Interleaved memory, while simple and generic, does not always provide optimal pe
 .. figure:: /images/tenstorrent-wormhole-interleaved-noc-path-congestion.webp
     :alt: NoC congestion under DRAM access
     :align: center
+    :scale: 65%
 
     It is possible to have contention on the NoC when multiple packets try to traverse the same link.
 
@@ -258,49 +289,28 @@ Sharding is usually only done for SRAM buffers.
     auto cord_grid = device->compute_with_storage_grid_size();
     auto spec = ShardSpec(
         CoreRange({0, 0}, {cord_grid.y - 1, cord_grid.x - 1}), // Core range
-        {height_tiles, width_tiles}                          // Canonical tensor shape
+        {height_tiles, width_tiles}                            // Canonical tensor shape
     );
     auto shard_spec = ShardSpecBuffer(
         spec,
         {tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT}, // Page shape
-        {height_tiles, width_tiles}                               // Tensor 2D shape in pages
+        {height_tiles, width_tiles}                              // Tensor 2D shape in pages
     );
     auto memory_config = ShardedBufferConfig {
         .device = device,
-        .size = n_tiles * tile_size_bytes, // Total size in bytes
-        .page_size = width_tiles * tile_size_bytes,       // Size of unit being interleaved
+        .size = n_tiles * tile_size_bytes,                // Total size in bytes
+        .page_size = tile_size_bytes,
         .shard_parameters = shard_spec,
     };
 
     auto buf = CreateBuffer(memory_config);
 
+    std::vector<TensorAccessorArgs> compile_time_args;
+    TensorAccessorArgs(*buf).append_to(compile_time_args);
 
-For now accessing sharded memory must be done manually. You must understand the used sharding scheme and the physical distribution of the data. It is recommended refer to various operator implementations to see how to access sharded memory.
+
+Accessing of sharded memory is done exactly like accessing interleaved memory. ``TensorAccessor`` enables efficient, random access to sharded memory. Allowing tile/page sized granularity for read and writes.
 
 .. note::
 
     Note the concepts (DRAM vs SRAM, interleaved vs sharded) are independent of each other. You can have interleaved DRAM buffers (most common), interleaved SRAM buffers (often used for temporary data), sharded SRAM buffers (for specific use cases where they benifit from the bandwidth) and sharded DRAM buffers (rarely used, but possible). The best approach depends on the specific kernel and its access patterns.
-
-Tensor Layout
-~~~~~~~~~~~~~
-
-Tensors are the primary data structure that Metalium is designed to work with, though they are not strictly required. Tensors are multi-dimensional arrays used to represent various types of data, from images to text. As the fundamental data structure in modern machine learning frameworks, tensors provide flexibility and power for diverse computational tasks. Metalium is designed to facilitate efficient tensor operations.
-
-Multiple tensor memory layouts exist, with traditional systems using either C-style row-major or Fortran-style column-major ordering. Metalium defaults to C-style row-major ordering but uses a custom tiled layout for optimal Tensix core performance. This tiled layout reduces silicon area, power consumption, and memory bandwidth by matching the Tensix core's compute units and memory architecture.
-
-In row-major layout, a single tensor row typically occupies one page, enabling a single NoC request to fetch an entire row since most operations process data row-wise.
-
-.. figure:: /images/tenstorrent-row-major-memory-layout.webp
-    :alt: The row-major memory layout of a tensor.
-    :align: center
-
-    The row-major memory layout of a tensor. The data is stored in a single contiguous block of memory, with the last dimension varying the fastest.
-
-In contrast, the tiled layout divides the tensor into smaller tiles, most commonly 2D tiles of size 32x32 (and padded if needed). This layout is designed to match the Tensix core's compute units. Each tile is stored in a separate page, allowing for efficient access patterns that match the Tensix core's compute units.
-
-
-.. figure:: /images/tenstorrent-tile-memory-layout.webp
-    :alt: The tiled memory layout of a tensor.
-    :align: center
-
-    The tiled memory layout of a tensor.
