@@ -106,6 +106,35 @@ struct WormholeEfficientStack {
     }
 };
 
+template <typename T, size_t SIZE>
+struct OnePassIterator {
+    T* current_ptr;
+    T* end_ptr;
+
+    OnePassIterator(T* base_ptr, size_t n_elements) : current_ptr(base_ptr), end_ptr(base_ptr + n_elements) {}
+
+    FORCE_INLINE T* get_current_ptr() const { return current_ptr; }
+    FORCE_INLINE void increment() {
+        current_ptr++;
+    }
+
+    FORCE_INLINE bool is_done() const { return current_ptr == end_ptr; }
+};
+
+template <typename T, size_t SIZE>
+struct BarrelIterator {
+    T* base_ptr;
+    uint8_t current_idx;
+
+    BarrelIterator(T* base_ptr) : base_ptr(base_ptr), current_idx(0){}
+
+    FORCE_INLINE T* get_current_ptr() const { return base_ptr + current_idx; }
+    FORCE_INLINE T get_current_value() const { return *(base_ptr + current_idx); }
+    FORCE_INLINE void increment() {
+        current_idx = wrap_increment<SIZE, T>();
+    }
+};
+
 template <size_t N_CHUNKS, size_t CHUNK_N_PKTS>
 struct ChannelBuffersPool {
     using chunk_t = EthChannelBuffer<CHUNK_N_PKTS>;
