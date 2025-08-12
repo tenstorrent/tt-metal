@@ -64,6 +64,17 @@ struct ExecuteUnaryWithFloatParameter {
 };
 
 template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithTwoFloatParameter {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float parameter_a,
+        float parameter_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithVariantFloatIntParameter {
     template <typename T>
     static Tensor invoke(
@@ -333,6 +344,12 @@ struct Tanh {
         ttnn::operations::unary::ExecuteUnaryWithFloatParameter<                      \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
+#define REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation<                             \
+        "ttnn::" #operation_name,                                                         \
+        ttnn::operations::unary::ExecuteUnaryWithTwoFloatParameter<                       \
+            ttnn::operations::unary::UnaryOpType::operation_type>>();
+
 #define REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(operation_name, operation_type, data_type) \
     constexpr auto operation_name = ttnn::register_operation<                                      \
         "ttnn::" #operation_name,                                                                  \
@@ -420,6 +437,9 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(eq_unary, UNARY_EQ);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ge_unary, UNARY_GE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(le_unary, UNARY_LE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(celu, CELU);
+
+// Unaries with two float parameter
+REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(threshold, THRESHOLD);
 
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);

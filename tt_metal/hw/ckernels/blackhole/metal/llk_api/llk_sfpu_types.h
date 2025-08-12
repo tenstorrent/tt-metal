@@ -115,6 +115,7 @@ enum SfpuType {
     lcm,
     softshrink,
     hardsigmoid,
+    threshold,
     where,
     softsign,
     celu

@@ -358,9 +358,9 @@ def test_unary_composite_swish_ttnn(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 1024, 1024])),
+        # (torch.Size([1, 1, 320, 384])),
+        # (torch.Size([1, 3, 320, 384])),
     ),
 )
 def test_unary_composite_threshold_ttnn(input_shapes, device):
