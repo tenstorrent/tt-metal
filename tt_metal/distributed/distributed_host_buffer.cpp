@@ -115,12 +115,10 @@ DistributedHostBuffer DistributedHostBuffer::transform(
         shards.size(), distributed::MaybeRemote<Shard>::remote());
 
     // Group replicated shard indices together
-    std::unordered_map<void*, std::vector<size_t>> shard_group_indices;
+    std::unordered_map<const std::byte*, std::vector<size_t>> shard_group_indices;
     for (size_t shard_index : indices_to_process) {
         const auto bytes = shards[shard_index]->buffer.view_bytes();
-        void* key = const_cast<void*>(static_cast<const void*>(bytes.data()));
-        shard_group_indices.try_emplace(key, std::vector<size_t>());
-        shard_group_indices[key].push_back(shard_index);
+        shard_group_indices[bytes.data()].push_back(shard_index);
     }
 
     // Transform one HostBuffer per shard group
