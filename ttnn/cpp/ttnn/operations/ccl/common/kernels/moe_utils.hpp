@@ -69,6 +69,8 @@ enum class Polarity : uint8_t {
     POSITIVE,
 };
 
+inline Polarity reverse(Polarity p) { return p == Polarity::POSITIVE ? Polarity::NEGATIVE : Polarity::POSITIVE; }
+
 // check if the target is along the same axis as the source if the axis is configured
 template <uint32_t LinearizedSrcMeshCoord, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
 bool is_configured_target(uint32_t linearized_dest_mesh_coord) {
@@ -137,6 +139,19 @@ uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t lineari
            topological_distance<Topology>(src_col, dest_col, MeshCols);
 }
 
+uint32_t polar_compare(
+    uint32_t positive_distance,
+    uint32_t positive_direction,
+    uint32_t negative_distance,
+    uint32_t negative_direction,
+    Polarity polarity) {
+    if (polarity == Polarity::POSITIVE) {
+        return positive_distance <= negative_distance ? positive_direction : negative_direction;
+    } else {
+        return positive_distance < negative_distance ? positive_direction : negative_direction;
+    }
+}
+
 template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
 uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord, Polarity default_polarity) {
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
@@ -151,39 +166,22 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             // with wrap around, we can go either East or West. Choose the shorter route
             uint32_t east_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::POSITIVE);
             uint32_t west_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::NEGATIVE);
-            if (default_polarity == Polarity::POSITIVE) {
-                return east_distance <= west_distance ? eth_chan_directions::EAST : eth_chan_directions::WEST;
-            } else {
-                return east_distance < west_distance ? eth_chan_directions::WEST : eth_chan_directions::EAST;
-            }
-        }
-    } else if (src_col == dest_col) {
-        if constexpr (!has_wrap_around<Topology>()) {
-            return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
-        } else {
-            // with wrap around, we can go either North or South. Choose the shorter route
-            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::POSITIVE);
-            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::NEGATIVE);
-            if (default_polarity == Polarity::POSITIVE) {
-                return south_distance <= north_distance ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
-            } else {
-                return south_distance < north_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
-            }
+            return polar_compare(
+                east_distance, eth_chan_directions::EAST, west_distance, eth_chan_directions::WEST, default_polarity);
         }
     } else {
-        // when diagonal, we go North or South first, then East or West
-        // so we route either North or South
         if constexpr (!has_wrap_around<Topology>()) {
             return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route
             uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::POSITIVE);
             uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::NEGATIVE);
-            if (default_polarity == Polarity::POSITIVE) {
-                return south_distance <= north_distance ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
-            } else {
-                return south_distance < north_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
-            }
+            return polar_compare(
+                south_distance,
+                eth_chan_directions::SOUTH,
+                north_distance,
+                eth_chan_directions::NORTH,
+                default_polarity);
         }
     }
 }
@@ -365,14 +363,13 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
     uint32_t payload_l1_address,
     uint64_t noc_payload_write_address,
     int32_t size_bytes,
-    const uint32_t alignment,
-    Polarity default_polarity) {
+    const uint32_t alignment) {
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     packet_header->to_chip_unicast(distance);
 
     uint32_t route =
-        get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord, default_polarity);
+        get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord, Polarity::NEGATIVE);
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         fabric_connections[route], packet_header, payload_l1_address, noc_payload_write_address, size_bytes, alignment);
 }
@@ -393,14 +390,13 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     int32_t size_bytes,
     const uint32_t alignment,
     uint16_t increment_value,
-    bool flush,
-    Polarity default_polarity) {
+    bool flush) {
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     packet_header->to_chip_unicast(distance);
 
     uint32_t route =
-        get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord, default_polarity);
+        get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord, Polarity::NEGATIVE);
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
         packet_header,
@@ -421,8 +417,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     const uint32_t linearized_dest_mesh_coord,
     uint64_t noc_remote_semaphore_address,
     uint16_t increment_value,
-    bool flush,
-    Polarity default_polarity) {
+    bool flush) {
     // Set up packet header for semaphore increment
     packet_header->to_noc_unicast_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, 32, flush});
@@ -432,7 +427,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     packet_header->to_chip_unicast(distance);
 
     uint32_t route =
-        get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord, default_polarity);
+        get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord, Polarity::NEGATIVE);
 
     // Send only the packet header (for semaphore increment)
     fabric_connections[route].wait_for_empty_write_slot();
@@ -499,14 +494,7 @@ inline void send_init_semaphore_to_configured_targets(
                     LinearizedSrcMeshCoord,
                     Topology,
                     MeshRows,
-                    MeshCols>(
-                    fabric_connections,
-                    packet_header,
-                    device_idx,
-                    init_noc_semaphore_addr,
-                    1,
-                    false,
-                    Polarity::POSITIVE);
+                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
             } else {
                 const auto& dest_chip_id = dest_chip_ids[device_idx];
                 const auto& dest_mesh_id = dest_mesh_ids[device_idx];
