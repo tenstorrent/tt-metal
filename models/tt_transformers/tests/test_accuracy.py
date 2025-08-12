@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import ag_on_padded_dim_3
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
@@ -111,6 +112,7 @@ def get_accuracy_thresholds(model_args, optimizations):
         pytest.param(False, id="reference_text"),
     ],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_tt_model_acc(
     prefill_len,
     decode_len,
@@ -316,17 +318,14 @@ def test_tt_model_acc(
         )
 
         if tt_model.args.num_devices > 1:
-            if tt_model.args.is_galaxy:
-                tt_out_gathered = ttnn.all_gather(
-                    tt_out,
-                    dim=3,
-                    num_links=tt_model.args.num_all_gather_links,
-                    cluster_axis=0,
-                    mesh_device=mesh_device,
-                    topology=tt_model.args.ccl_topology(),
-                )
-            else:
-                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+            tt_out_gathered = ag_on_padded_dim_3(
+                tt_out,
+                tt_model.tt_ccl,
+                cluster_axis=0 if tt_model.args.is_galaxy else None,
+                num_links=tt_model.args.num_all_gather_links if tt_model.args.is_galaxy else 1,
+                topology=tt_model.args.ccl_topology() if tt_model.args.is_galaxy else ttnn.Topology.Linear,
+            )
+
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out

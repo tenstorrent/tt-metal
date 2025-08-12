@@ -8,6 +8,7 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.ccl import TT_CCL, ag_on_padded_dim_3
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
@@ -41,6 +42,8 @@ class Transformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
+        self.tt_ccl = TT_CCL(self.mesh_device)
+
         self.embd = Embedding(
             mesh_device=mesh_device,
             args=args,
@@ -64,6 +67,7 @@ class Transformer(LightweightModule):
             TransformerBlock(
                 args=args,
                 mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 dtype=dtype,
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
@@ -90,14 +94,17 @@ class Transformer(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
+            self.tt_ccl,
             args.is_galaxy,
         )
 
         self.lm_head = LMHead(
             args=args,
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             dtype=dtype,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
@@ -338,17 +345,14 @@ class Transformer(LightweightModule):
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
-            if self.args.is_galaxy:
-                tt_logits = ttnn.all_gather(
-                    tt_logits,
-                    dim=3,
-                    num_links=2,
-                    cluster_axis=0,
-                    mesh_device=self.mesh_device,
-                    topology=self.args.ccl_topology(),
-                )
-            else:
-                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
+            tt_logits = ag_on_padded_dim_3(
+                tt_logits,
+                self.tt_ccl,
+                cluster_axis=0 if self.args.is_galaxy else None,
+                num_links=2 if self.args.is_galaxy else 1,
+                topology=self.args.ccl_topology(),
+            )
+
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
