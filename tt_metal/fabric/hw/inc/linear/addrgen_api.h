@@ -81,7 +81,6 @@ FORCE_INLINE void to_noc_unicast_write(
     uint32_t offset = 0) {
     auto noc_address = addrgen_detail::get_noc_address(d, id, offset);
     pkt_hdr->to_noc_unicast_write(NocUnicastCommandHeader{noc_address}, page_size);
-
     validate_max_payload_size(page_size);
 }
 
@@ -94,12 +93,12 @@ FORCE_INLINE void to_noc_unicast_write(
 
 template <typename AddrGenType>
 FORCE_INLINE void to_noc_fused_unicast_write_atomic_inc(
+    uint32_t page_size,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
     const NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
     const uint32_t id,
     const AddrGenType& d,
     uint32_t offset = 0) {
-    auto page_size = addrgen_detail::get_page_size(d);
     auto noc_address = addrgen_detail::get_noc_address(d, id, offset);
 
     pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
@@ -108,6 +107,17 @@ FORCE_INLINE void to_noc_fused_unicast_write_atomic_inc(
         page_size);
 
     validate_max_payload_size(page_size);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void to_noc_fused_unicast_write_atomic_inc(
+    volatile PACKET_HEADER_TYPE* pkt_hdr,
+    const NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    const uint32_t id,
+    const AddrGenType& d,
+    uint32_t offset = 0) {
+    auto page_size = addrgen_detail::get_page_size(d);
+    to_noc_fused_unicast_write_atomic_inc(page_size, pkt_hdr, atomic_inc_spec, id, d, offset);
 }
 
 template <typename AddrGenType>
