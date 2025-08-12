@@ -30,9 +30,6 @@ def test_div_zero(device, val_a, val_b, dtype):
     z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_div)
 
-    print(f"z_torch: \n{z_torch}")
-    print(f"tt_out: \n{tt_out}")
-
     # Note: torch.equal return false for if both tensors are nan
     # This is why we use assert_with_ulp to test for equality
     assert_with_ulp(z_torch, tt_out, 0, allow_nonfinite=True)
