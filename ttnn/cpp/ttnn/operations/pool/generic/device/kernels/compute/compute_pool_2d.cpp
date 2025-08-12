@@ -78,8 +78,11 @@ void MAIN {
     if constexpr (!return_indices) {
         tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
             in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
+        pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
+    } else {
+        transpose_wh_init(in_cb_id_0, out_cb_id);
+        pack_untilize_dest_init<1>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
     }
-    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
