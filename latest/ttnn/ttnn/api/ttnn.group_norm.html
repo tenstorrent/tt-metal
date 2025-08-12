@@ -20,6 +20,8 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -138,7 +140,20 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">group_norm</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.group_norm',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.group_norm_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.group_norm" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Compute group_norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
+<p>Computes group_norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
+See <a class="reference external" href="https://arxiv.org/abs/1803.08494">Group Normalization</a> for more details.</p>
+<div class="math notranslate nohighlight">
+\[\text{group_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta\]</div>
+<dl class="simple">
+<dt>Where:</dt>
+<dd>
+<ul class="simple">
+<li><p><span class="math notranslate nohighlight">\(\mu\)</span> and <span class="math notranslate nohighlight">\(\sigma^2\)</span> are the mean and variance of the input tensor, respectively</p></li>
+<li><p><span class="math notranslate nohighlight">\(\gamma\)</span> and <span class="math notranslate nohighlight">\(\beta\)</span> are the learnable scale and shift parameters, respectively</p></li>
+<li><p><span class="math notranslate nohighlight">\(\epsilon\)</span> is a small constant.</p></li>
+</ul>
+</dd>
+</dl>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -149,17 +164,17 @@
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>num_groups</strong> (<em>int</em>) – </p></li>
-<li><p><strong>epsilon</strong> (<em>float</em>) – 1e-12.</p></li>
+<li><p><strong>num_groups</strong> (<em>int</em>) – Number of groups to split the channels into. Must evenly divide C.</p></li>
+<li><p><strong>epsilon</strong> (<em>float</em>) – Defaults to <cite>1e-12</cite>.</p></li>
 <li><p><strong>input_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>core_grid</strong> (<em>CoreGrid</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>core_grid</strong> (<em>CoreGrid</em><em>, </em><em>optional</em>) – Must be specified; automatic grid selection is not supported. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>inplace</strong> (<em>bool</em><em>, </em><em>optional</em>) – Defaults to <cite>True</cite>.</p></li>
 <li><p><strong>output_layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>num_out_blocks</strong> (<em>int</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>num_out_blocks</strong> (<em>int</em><em>, </em><em>optional</em>) – Applies to unsharded runs to split work across cores; ignored for sharded inputs. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the op. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
@@ -167,6 +182,134 @@
 </dt>
 <dd class="field-odd">
 <p><em>ttnn.Tensor</em> – the output tensor.</p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The supported input data types and layouts:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">input_tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16
+- TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id3">
+<caption>
+<span class="caption-text">weight (gamma) and bias (beta)</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16
+- ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id4">
+<caption>
+<span class="caption-text">input_mask</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, BFLOAT8_B
+- TILE</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id5">
+<caption>
+<span class="caption-text">output_tensor</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16
+- TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl>
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>Inputs are 4D tensors already allocated on device.</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is of shape [N, 1, H*W, C]</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">gamma</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">beta</span></code> must be provided</p></li>
+<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, N*H*W must be a multiple of the tile size (32) and C must be a multiple of <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_groups</span></code>.</p></li>
+<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_mask</span></code>, C must match the number of groups, H must match a tile’s height, and W must be a multiple of a tile’s width.</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">inplace</span></code> is not supported for TILE-layout inputs and requires input and output layouts to be identical.</p></li>
+<li><p>When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.</p></li>
+<li><p>Width-sharding is not supported (use height or block sharding)</p></li>
+</ul>
+<p>Example:</p>
+<blockquote>
+<div>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">tile_size</span> <span class="o">=</span> <span class="mi">32</span>
+<span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">480</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span>
+<span class="n">grid_size</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreGrid</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">x</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">num_out_blocks</span> <span class="o">=</span> <span class="mi">1</span>
+
+<span class="n">num_groups</span> <span class="o">=</span> <span class="mi">8</span> <span class="c1"># This must be a multiple of grid_size.y (1 in this example)</span>
+
+<span class="n">input_tensor_row_major</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="n">N</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">H</span><span class="o">*</span><span class="n">W</span><span class="p">,</span> <span class="n">C</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">input_tensor_tilized</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tilize_with_zero_padding</span><span class="p">(</span><span class="n">input_tensor_row_major</span><span class="p">,</span> <span class="n">use_multicore</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="c1"># input mask</span>
+<span class="n">width_per_group</span> <span class="o">=</span> <span class="n">C</span> <span class="o">//</span> <span class="n">num_groups</span> <span class="c1"># C must be a multiple of num_groups</span>
+<span class="n">max_tiles_group_can_span</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">+</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">((</span><span class="n">width_per_group</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">/</span> <span class="n">tile_size</span><span class="p">)</span>
+<span class="n">input_mask_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_groups</span><span class="p">,</span> <span class="n">tile_size</span><span class="p">,</span> <span class="n">max_tiles_group_can_span</span> <span class="o">*</span> <span class="n">tile_size</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT8_B</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># gamma/beta</span>
+<span class="n">values_per_chunk</span> <span class="o">=</span> <span class="n">C</span> <span class="o">//</span> <span class="n">grid_size</span><span class="o">.</span><span class="n">y</span> <span class="c1"># 480 / 1 = 480. Note that 480 is a multiple of 32, so no padding up to the next tile is needed.</span>
+<span class="n">values_per_chunk_per_tile</span> <span class="o">=</span> <span class="n">values_per_chunk</span> <span class="o">//</span> <span class="n">tile_size</span> <span class="c1"># 480 / 32 = 15</span>
+
+<span class="n">gamma_beta</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">values_per_chunk_per_tile</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># groupnorm</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">group_norm</span><span class="p">(</span>
+    <span class="n">input_tensor_tilized</span><span class="p">,</span>
+    <span class="n">num_groups</span><span class="o">=</span><span class="n">num_groups</span><span class="p">,</span>
+    <span class="n">input_mask</span><span class="o">=</span><span class="n">input_mask_tensor</span><span class="p">,</span>
+    <span class="n">weight</span><span class="o">=</span><span class="n">gamma_beta</span><span class="p">,</span>
+    <span class="n">bias</span><span class="o">=</span><span class="n">gamma_beta</span><span class="p">,</span>
+    <span class="n">output_layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">core_grid</span><span class="o">=</span><span class="n">grid_size</span><span class="p">,</span>
+    <span class="n">inplace</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="n">num_out_blocks</span><span class="o">=</span><span class="n">num_out_blocks</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
 </dd>
 </dl>
 </dd>

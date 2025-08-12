@@ -138,7 +138,12 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">rms_norm</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.rms_norm',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.rms_norm_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.rms_norm" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Compute rms_norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
+<dl class="simple">
+<dt>Computes RMS norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</dt>
+<dd>
+<p>See <a class="reference external" href="https://arxiv.org/pdf/1910.07467">Root Mean Square Layer Normalization</a> for more details.</p>
+</dd>
+</dl>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -164,6 +169,104 @@
 <p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported data types and layouts by tensor:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">input_tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id3">
+<caption>
+<span class="caption-text">residual_input_tensor</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id4">
+<caption>
+<span class="caption-text">weight (gamma) and bias (beta)</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id5">
+<caption>
+<span class="caption-text">output_tensor</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B (matching input)</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<p>Rank: input rank must be &gt;= 1.</p>
+</div>
+<dl class="simple">
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>All input tensors must be on-device.</p></li>
+<li><p>Unsharded tensors must be interleaved, sharded inputs cannot be height-sharded.</p></li>
+<li><p>If <cite>residual_input_tensor</cite> is provided, it must match the input’s padded shape.</p></li>
+<li><p><cite>weight</cite>/<cite>bias</cite> tensors:
+- If TILE: last padded dim must match input’s last padded dim.
+- If ROW_MAJOR: last padded dim must be TILE_WIDTH.</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">h</span><span class="p">,</span> <span class="n">w</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span>
+<span class="n">batch_size</span> <span class="o">=</span> <span class="mi">1</span>
+
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">w</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">weight</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="n">w</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rms_norm</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">weight</span><span class="o">=</span><span class="n">weight</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 

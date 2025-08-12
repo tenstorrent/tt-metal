@@ -20,6 +20,8 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -326,17 +328,84 @@
 <dd>
 <p>ttnn.Tensor, dim: int, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -&gt; ttnn.Tensor</p>
 <p>Compute softmax over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p>
+<div class="math notranslate nohighlight">
+\[\sigma(z_i) = \frac{e^{z_{i}}}{\sum_{j=1}^K e^{z_{j}}} \ \ \ for\ i=1,2,\dots,K\]</div>
 <p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: the input tensor
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>: the dimension along which to compute softmax.</p>
 <p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: the memory configuration for the output tensor. If not provided, the memory configuration of the input tensor is used.
 :keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">compute_kernel_config</span></code>: the compute kernel configuration for the op. If not provided, the default configuration of the op is used.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported data types and layouts by tensor:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">input_tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id3">
+<caption>
+<span class="caption-text">mask (optional)</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, BFLOAT8_B</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id4">
+<caption>
+<span class="caption-text">output_tensor</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>matches input_tensor dtype</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="simple">
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>All tensors must be on-device.</p></li>
+<li><p>Unsharded inputs are interleaved; sharded runs require M and K to be divisible by TILE_WIDTH.</p></li>
+<li><p>If a mask is provided:
+- If sharded: mask must have identical padded shape to input.
+- If unsharded and ROW_MAJOR: last padded dim must be TILE_WIDTH; broadcast dims must be 1 except the last two; padded last two dims must align to input’s width tiles and TILE_WIDTH.</p></li>
+</ul>
+</dd>
+</dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">])</span>
-<span class="go">ttnn.Tensor([ 0.0310059, 0.0310059, 0.0310059], dtype=bfloat16 )</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
