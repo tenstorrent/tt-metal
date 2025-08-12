@@ -31,7 +31,7 @@ target_sources(
     mesh_socket_components
     PRIVATE
         mesh_socket_yaml_parser.cpp
-        mesh_socket_test_runner.cpp
+        mesh_socket_test_context.cpp
         socket_send_recv_utils.cpp
 )
 
@@ -62,9 +62,9 @@ set_target_properties(
 target_link_libraries(multi_host_fabric_tests PRIVATE multi_host_fabric)
 
 # Create separate executable for mesh socket tests
-add_executable(mesh_socket_test_main mesh_socket_test_main.cpp)
+add_executable(test_mesh_socket_main mesh_socket_test_main.cpp)
 set_target_properties(
-    mesh_socket_test_main
+    test_mesh_socket_main
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
@@ -72,7 +72,7 @@ set_target_properties(
 
 # Link the mesh socket test main with required libraries
 target_link_libraries(
-    mesh_socket_test_main
+    test_mesh_socket_main
     PRIVATE
         mesh_socket_components
         test_metal_common_libs
@@ -80,7 +80,7 @@ target_link_libraries(
 )
 
 target_include_directories(
-    mesh_socket_test_main
+    test_mesh_socket_main
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests

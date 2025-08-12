@@ -13,7 +13,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric.hpp>
 
-#include <random>
 #include <algorithm>
 
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
@@ -47,7 +46,8 @@ bool test_socket_send_recv(
     tt_metal::distributed::MeshSocket& socket,
     uint32_t data_size,
     uint32_t page_size,
-    uint32_t num_txns) {
+    uint32_t num_txns,
+    std::optional<std::mt19937> gen) {
     using namespace tt::tt_metal::distributed::multihost;
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
@@ -71,31 +71,32 @@ bool test_socket_send_recv(
 
     std::vector<uint32_t> src_vec_per_core(data_size / sizeof(uint32_t));
 
-    // Exchange seed between sender and receiver
-    uint32_t seed = 0;
-    if (distributed_context->rank() == sender_rank) {
-        seed = std::chrono::steady_clock::now().time_since_epoch().count();
-        if (sender_rank != recv_rank) {
-            log_info(tt::LogTest, "Sending seed to rank {}", *recv_rank);
+    if (gen.has_value()) {
+        log_info(tt::LogTest, "Using provided generator");
+    } else {
+        // Exchange seed between sender and receiver and create local generator
+        uint32_t seed;
+        if (distributed_context->rank() == sender_rank) {
+            seed = std::chrono::steady_clock::now().time_since_epoch().count();
+            log_info(tt::LogTest, "Sending seed {} to rank {}", seed, *recv_rank);
             distributed_context->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 recv_rank,                                    // send to receiver host
                 tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
             );
+        } else if (distributed_context->rank() == recv_rank) {
+            log_info(tt::LogTest, "Receiving seed from rank {}", *sender_rank);
+            distributed_context->recv(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                sender_rank,                                  // recv from sender host
+                tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
+            );
         }
-    } else if (distributed_context->rank() == recv_rank) {
-        log_info(tt::LogTest, "Receiving seed from rank {}", *sender_rank);
-        distributed_context->recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
-            sender_rank,                                  // recv from sender host
-            tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
-        );
+        log_info(tt::LogTest, "Using seed: {}", seed);
+        gen = std::mt19937(seed);
     }
-    log_info(tt::LogTest, "Seed: {}", seed);
-
-    std::mt19937 gen(seed);
     std::uniform_int_distribution<uint32_t> dis(0, UINT32_MAX);
-    std::generate(src_vec_per_core.begin(), src_vec_per_core.end(), [&]() { return dis(gen); });
+    std::generate(src_vec_per_core.begin(), src_vec_per_core.end(), [&]() { return dis(gen.value()); });
     std::vector<uint32_t> src_vec;
     src_vec.reserve(data_size * sender_core_range_set.num_cores() / sizeof(uint32_t));
 

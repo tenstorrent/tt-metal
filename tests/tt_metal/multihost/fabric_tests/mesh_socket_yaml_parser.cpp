@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <random>
 #include <set>
-#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_runner.hpp"
+#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_context.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -66,16 +66,17 @@ MeshSocketTestConfiguration MeshSocketYamlParser::parse_file(const std::string& 
     MeshSocketTestConfiguration config;
 
     // Parse optional physical mesh configuration
-    if (root["physical_mesh"]) {
+    if (root["physical_mesh"].IsDefined()) {
         config.physical_mesh_config = parse_physical_mesh(root["physical_mesh"]);
     }
 
     // Parse fabric configuration (required)
-    TT_FATAL(root["fabric_config"], "Missing required 'fabric_config' section");
+    TT_FATAL(root["fabric_config"].IsDefined(), "Missing required 'fabric_config' section");
     config.fabric_config = parse_fabric_config(root["fabric_config"]);
 
     // Parse tests (required)
-    TT_FATAL(root["tests"] && root["tests"].IsSequence(), "Missing or invalid 'tests' section - must be a list");
+    TT_FATAL(
+        root["tests"].IsDefined() && root["tests"].IsSequence(), "Missing or invalid 'tests' section - must be a list");
 
     // Parse YAML -> TestConfig (no expansion at parse time)
     config.tests = parse_raw_test_configs(root["tests"]);
@@ -95,11 +96,11 @@ std::vector<TestConfig> MeshSocketYamlParser::parse_raw_test_configs(const YAML:
 }
 
 std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_configs(
-    const std::vector<TestConfig>& test_configs, const MeshSocketTestRunner& test_runner) {
+    const std::vector<TestConfig>& test_configs, const MeshSocketTestContext& test_context) {
     std::vector<ParsedTestConfig> parsed_configs;
 
     for (const auto& test_config : test_configs) {
-        auto expanded_configs = expand_test_config(test_config, test_runner);
+        auto expanded_configs = expand_test_config(test_config, test_context);
         parsed_configs.insert(parsed_configs.end(), expanded_configs.begin(), expanded_configs.end());
     }
 
@@ -107,7 +108,7 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_configs(
 }
 
 std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
-    const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
+    const TestConfig& test_config, const MeshSocketTestContext& test_context) {
     std::vector<ParsedTestConfig> parsed_configs;
 
     // Validate that we have either explicit sockets or pattern expansions, but not both
@@ -143,14 +144,15 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
 
             // Validate each socket configuration
             for (const auto& socket_config : parsed_config.sockets) {
-                validate_socket_config(socket_config, test_runner);
+                validate_socket_config(socket_config, test_context);
             }
 
             parsed_configs.emplace_back(std::move(parsed_config));
-        } else if (test_config.pattern_expansions
-                       .has_value()) {  // Expand patterns and add to sockets, cannot have both
-            for (const auto& pattern : test_config.pattern_expansions.value()) {
-                auto expanded_sockets = expand_pattern(pattern, test_config, test_runner);
+        } else if (test_config.pattern_expansions.has_value()) {
+            for (size_t i = 0; i < test_config.pattern_expansions.value().size(); ++i) {
+                const auto& pattern = test_config.pattern_expansions.value()[i];
+                auto expanded_sockets = expand_pattern(pattern, test_config, test_context);
+                test_name += "_pattern_" + std::to_string(i);
                 parsed_configs.emplace_back(ParsedTestConfig{
                     .name = test_name,
                     .num_iterations = test_config.num_iterations,
@@ -169,9 +171,12 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
 }
 
 std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(
-    const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
+    // TODO: Add support for other patterns
+    const PatternExpansionConfig& pattern,
+    const TestConfig& test_config,
+    const MeshSocketTestContext& test_context) {
     switch (pattern.type) {
-        case PatternType::AllToAll: return expand_all_to_all_pattern(pattern, test_config, test_runner);
+        case PatternType::AllToAll: return expand_all_to_all_pattern(pattern, test_config, test_context);
         default: TT_THROW("Unknown pattern type");
     }
 }
@@ -179,11 +184,11 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(
 // Parametrize on fifo size, page size, and data size
 
 std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(
-    const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
+    const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestContext& test_context) {
     std::vector<TestSocketConfig> sockets;
 
-    const auto& mesh_graph = test_runner.get_mesh_graph();
-    const auto& rank_to_mesh_id = test_runner.get_rank_to_mesh_mapping();
+    const auto& mesh_graph = test_context.get_mesh_graph();
+    const auto& rank_to_mesh_id = test_context.get_rank_to_mesh_mapping();
     const CoreCoord& core_coord = pattern.core_coord;
 
     // Create all-to-all connections between ranks
@@ -335,6 +340,7 @@ TestSocketConfig MeshSocketYamlParser::parse_socket_config(const YAML::Node& nod
     TT_FATAL(node["receiver_rank"].IsDefined(), "Socket missing required 'receiver_rank' field");
     socket.sender_rank = Rank{node["sender_rank"].as<uint32_t>()};
     socket.receiver_rank = Rank{node["receiver_rank"].as<uint32_t>()};
+    TT_FATAL(socket.sender_rank != socket.receiver_rank, "Sender and receiver ranks must be different");
 
     return socket;
 }
@@ -476,11 +482,11 @@ void MeshSocketYamlParser::validate_memory_config(const MemoryConfig& memory) {
 }
 
 void MeshSocketYamlParser::validate_socket_config(
-    const TestSocketConfig& socket_config, const MeshSocketTestRunner& test_runner) {
-    const auto& distributed_context = test_runner.get_distributed_context();
-    const auto& mesh_graph = test_runner.get_mesh_graph();
-    const auto& rank_to_mesh_mapping = test_runner.get_rank_to_mesh_mapping();
-    const auto& mesh_device = test_runner.get_mesh_device();
+    const TestSocketConfig& socket_config, const MeshSocketTestContext& test_context) {
+    const auto& distributed_context = test_context.get_distributed_context();
+    const auto& mesh_graph = test_context.get_mesh_graph();
+    const auto& rank_to_mesh_mapping = test_context.get_rank_to_mesh_mapping();
+    const auto& mesh_device = test_context.get_mesh_device();
 
     auto world_size = *distributed_context->size();
 

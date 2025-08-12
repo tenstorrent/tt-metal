@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
+#include <random>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric.hpp>
@@ -36,7 +37,8 @@ bool test_socket_send_recv(
     tt::tt_metal::distributed::MeshSocket& socket,
     uint32_t data_size,
     uint32_t page_size,
-    uint32_t num_txns = 20);
+    uint32_t num_txns = 20,
+    std::optional<std::mt19937> gen = std::nullopt);
 
 // Configuration for Multi-Host Socket Tests
 struct SocketTestConfig {

@@ -8,7 +8,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"
-#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_runner.hpp"
+#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_context.hpp"
 
 using namespace tt::tt_fabric::mesh_socket_tests;
 
@@ -39,14 +39,14 @@ int main(int argc, char* argv[]) {
     }
 
     // Create and run the test runner
-    log_info(tt::LogTest, "Creating MeshSocketTestRunner...");
-    MeshSocketTestRunner runner(config);
+    log_info(tt::LogTest, "Creating MeshSocketTestContext...");
+    MeshSocketTestContext test_context(config);
 
     // Initialize the runner (sets up fabric and MeshDevice)
-    runner.initialize();
+    test_context.initialize();
 
     // Run all tests defined in the configuration
-    runner.run_all_tests();
+    test_context.run_all_tests();
 
     // Cleanup is handled automatically by destructor
     return 0;

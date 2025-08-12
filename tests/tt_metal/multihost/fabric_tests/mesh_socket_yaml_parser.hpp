@@ -117,7 +117,7 @@ private:
 };
 
 // Forward declaration
-class MeshSocketTestRunner;
+class MeshSocketTestContext;
 
 // Main YAML parser class
 class MeshSocketYamlParser {
@@ -128,7 +128,7 @@ public:
     // Two-stage parsing: YAML -> TestConfig -> ParsedTestConfig
     static std::vector<TestConfig> parse_raw_test_configs(const YAML::Node& tests_node);
     static std::vector<ParsedTestConfig> expand_test_configs(
-        const std::vector<TestConfig>& test_configs, const MeshSocketTestRunner& test_runner);
+        const std::vector<TestConfig>& test_configs, const MeshSocketTestContext& test_context);
 
     // Print configuration for debugging
     static void print_test_configuration(const MeshSocketTestConfiguration& config);
@@ -147,11 +147,15 @@ private:
 
     // Pattern expansion methods
     static std::vector<ParsedTestConfig> expand_test_config(
-        const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
+        const TestConfig& test_config, const MeshSocketTestContext& test_context);
     static std::vector<TestSocketConfig> expand_pattern(
-        const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
+        const PatternExpansionConfig& pattern,
+        const TestConfig& test_config,
+        const MeshSocketTestContext& test_context);
     static std::vector<TestSocketConfig> expand_all_to_all_pattern(
-        const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
+        const PatternExpansionConfig& pattern,
+        const TestConfig& test_config,
+        const MeshSocketTestContext& test_context);
 
     // Memory config expansion methods
     static std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);
@@ -164,7 +168,8 @@ private:
 
     // Validation helper methods
     static void validate_memory_config(const MemoryConfig& memory);
-    static void validate_socket_config(const TestSocketConfig& socket_config, const MeshSocketTestRunner& test_runner);
+    static void validate_socket_config(
+        const TestSocketConfig& socket_config, const MeshSocketTestContext& test_context);
 
     // Error handling
     static void throw_parse_error(const std::string& message, const YAML::Node& node = YAML::Node());

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_runner.hpp"
+#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_context.hpp"
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 
 #include <algorithm>
@@ -15,21 +15,28 @@
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
-MeshSocketTestRunner::MeshSocketTestRunner(const MeshSocketTestConfiguration& config) :
+MeshSocketTestContext::MeshSocketTestContext(const MeshSocketTestConfiguration& config) :
     config_(config), expanded_tests_(), mesh_device_(nullptr), control_plane_ptr_(nullptr) {
-    log_info(tt::LogTest, "MeshSocketTestRunner created with {} tests", config_.tests.size());
+    log_info(tt::LogTest, "MeshSocketTestContext created with {} tests", config_.tests.size());
 }
 
-MeshSocketTestRunner::~MeshSocketTestRunner() { cleanup(); }
+MeshSocketTestContext::~MeshSocketTestContext() { cleanup(); }
 
-void MeshSocketTestRunner::initialize() {
-    log_info(tt::LogTest, "Initializing MeshSocketTestRunner...");
+void MeshSocketTestContext::initialize() {
+    log_info(tt::LogTest, "Initializing MeshSocketTestContext...");
 
     if (config_.physical_mesh_config.has_value()) {
         initialize_and_validate_custom_physical_config(config_.physical_mesh_config.value());
     }
 
     distributed_context_ = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+
+    // Assert that we have more than one rank in the distributed world
+    TT_FATAL(
+        *distributed_context_->size() > 1,
+        "Distributed world size must be greater than 1, but got {}",
+        *distributed_context_->size());
+
     local_rank_ = distributed_context_->rank();
     log_info(tt::LogTest, "local_rank {}", *local_rank_);
 
@@ -44,12 +51,13 @@ void MeshSocketTestRunner::initialize() {
     log_info(tt::LogTest, "MeshDevice created successfully with shape: {}", mesh_device_->shape());
 
     rank_to_mesh_mapping_ = create_rank_to_mesh_mapping();
+    share_seed();
     expand_test_configurations();
 
-    log_info(tt::LogTest, "MeshSocketTestRunner initialization completed successfully");
+    log_info(tt::LogTest, "MeshSocketTestContext initialization completed successfully");
 }
 
-void MeshSocketTestRunner::run_all_tests() {
+void MeshSocketTestContext::run_all_tests() {
     log_info(tt::LogTest, "Running all {} expanded tests...", expanded_tests_.size());
 
     for (size_t i = 0; i < expanded_tests_.size(); ++i) {
@@ -65,36 +73,36 @@ void MeshSocketTestRunner::run_all_tests() {
     log_info(tt::LogTest, "All {} tests completed successfully!", expanded_tests_.size());
 }
 
-void MeshSocketTestRunner::cleanup() {
-    log_info(tt::LogTest, "Cleaning up MeshSocketTestRunner...");
+void MeshSocketTestContext::cleanup() {
+    log_info(tt::LogTest, "Cleaning up MeshSocketTestContext...");
 
     if (mesh_device_) {
         mesh_device_->close();
         mesh_device_.reset();
     }
-    log_info(tt::LogTest, "MeshSocketTestRunner cleanup completed");
+    log_info(tt::LogTest, "MeshSocketTestContext cleanup completed");
 }
 
-const tt::tt_fabric::MeshGraph& MeshSocketTestRunner::get_mesh_graph() const {
+const tt::tt_fabric::MeshGraph& MeshSocketTestContext::get_mesh_graph() const {
     TT_FATAL(control_plane_ptr_, "Control plane not initialized");
     return control_plane_ptr_->get_mesh_graph();
 }
 
-const std::unordered_map<Rank, tt::tt_fabric::MeshId>& MeshSocketTestRunner::get_rank_to_mesh_mapping() const {
+const std::unordered_map<Rank, tt::tt_fabric::MeshId>& MeshSocketTestContext::get_rank_to_mesh_mapping() const {
     return rank_to_mesh_mapping_;
 }
 
 const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
-MeshSocketTestRunner::get_distributed_context() const {
+MeshSocketTestContext::get_distributed_context() const {
     return distributed_context_;
 }
 
-const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& MeshSocketTestRunner::get_mesh_device() const {
+const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& MeshSocketTestContext::get_mesh_device() const {
     TT_FATAL(mesh_device_, "Mesh device not initialized");
     return mesh_device_;
 }
 
-void MeshSocketTestRunner::initialize_and_validate_custom_physical_config(
+void MeshSocketTestContext::initialize_and_validate_custom_physical_config(
     const PhysicalMeshConfig& physical_mesh_config) {
     const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
     const auto host_rank_str = std::string(std::getenv("TT_HOST_RANK"));
@@ -121,7 +129,7 @@ void MeshSocketTestRunner::initialize_and_validate_custom_physical_config(
         physical_mesh_config.mesh_descriptor_path, chip_to_eth_coord_mapping);
 }
 
-void MeshSocketTestRunner::run_test(const ParsedTestConfig& test) {
+void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
     if (!should_participate_in_test(test)) {
         log_info(tt::LogTest, "Current rank not participating in test '{}'", test.name);
         return;
@@ -147,11 +155,11 @@ void MeshSocketTestRunner::run_test(const ParsedTestConfig& test) {
     distributed_context_->barrier();
 }
 
-void MeshSocketTestRunner::setup_fabric_configuration() {
+void MeshSocketTestContext::setup_fabric_configuration() {
     log_info(tt::LogTest, "Setting up fabric configuration...");
 
     tt::tt_fabric::FabricConfig fabric_config;
-
+    // TODO: Add support for other Fabric Configs as well
     switch (config_.fabric_config.topology) {
         case tt::tt_fabric::Topology::Mesh:
             switch (config_.fabric_config.routing_type) {
@@ -165,7 +173,7 @@ void MeshSocketTestRunner::setup_fabric_configuration() {
     tt::tt_fabric::SetFabricConfig(fabric_config);
 }
 
-void MeshSocketTestRunner::expand_test_configurations() {
+void MeshSocketTestContext::expand_test_configurations() {
     log_info(tt::LogTest, "Expanding test configurations...");
 
     expanded_tests_ = MeshSocketYamlParser::expand_test_configs(config_.tests, *this);
@@ -174,7 +182,7 @@ void MeshSocketTestRunner::expand_test_configurations() {
         tt::LogTest, "Expanded {} tests into {} test configurations", config_.tests.size(), expanded_tests_.size());
 }
 
-std::vector<tt::tt_metal::distributed::MeshSocket> MeshSocketTestRunner::create_sockets_for_test(
+std::vector<tt::tt_metal::distributed::MeshSocket> MeshSocketTestContext::create_sockets_for_test(
     const ParsedTestConfig& test) {
     std::vector<tt::tt_metal::distributed::MeshSocket> sockets;
 
@@ -185,15 +193,13 @@ std::vector<tt::tt_metal::distributed::MeshSocket> MeshSocketTestRunner::create_
         if (is_sender || is_receiver) {
             auto mesh_socket_config = convert_to_socket_config(socket_config, test.memory_config);
             sockets.emplace_back(mesh_device_, mesh_socket_config);
-
-            log_info(tt::LogTest, "Created socket: rank {} as {}", *local_rank_, is_sender ? "sender" : "receiver");
         }
     }
 
     return sockets;
 }
 
-tt::tt_metal::distributed::SocketConfig MeshSocketTestRunner::convert_to_socket_config(
+tt::tt_metal::distributed::SocketConfig MeshSocketTestContext::convert_to_socket_config(
     const TestSocketConfig& test_socket_config, const ParsedMemoryConfig& memory_config) {
     std::vector<tt::tt_metal::distributed::SocketConnection> connections;
     for (const auto& conn_config : test_socket_config.connections) {
@@ -215,14 +221,14 @@ tt::tt_metal::distributed::SocketConfig MeshSocketTestRunner::convert_to_socket_
     return config;
 }
 
-tt::tt_metal::distributed::SocketConnection MeshSocketTestRunner::convert_to_socket_connection(
+tt::tt_metal::distributed::SocketConnection MeshSocketTestContext::convert_to_socket_connection(
     const SocketConnectionConfig& connection_config) {
     return tt::tt_metal::distributed::SocketConnection{
         .sender_core = {connection_config.sender.mesh_coord, connection_config.sender.core_coord},
         .receiver_core = {connection_config.receiver.mesh_coord, connection_config.receiver.core_coord}};
 }
 
-void MeshSocketTestRunner::execute_socket_test(
+void MeshSocketTestContext::execute_socket_test(
     tt::tt_metal::distributed::MeshSocket& socket, const ParsedTestConfig& test) {
     // Use the existing test_socket_send_recv function from socket_send_recv_utils.cpp
     TT_FATAL(
@@ -231,12 +237,13 @@ void MeshSocketTestRunner::execute_socket_test(
             socket,
             test.memory_config.data_size,
             test.memory_config.page_size,
-            test.memory_config.num_transactions),
+            test.memory_config.num_transactions,
+            gen_),
         "Socket test {} failed",
         test.name);
 }
 
-bool MeshSocketTestRunner::should_participate_in_test(const ParsedTestConfig& test) const {
+bool MeshSocketTestContext::should_participate_in_test(const ParsedTestConfig& test) const {
     for (const auto& socket_config : test.sockets) {
         if (socket_config.sender_rank == local_rank_ || socket_config.receiver_rank == local_rank_) {
             return true;
@@ -245,7 +252,7 @@ bool MeshSocketTestRunner::should_participate_in_test(const ParsedTestConfig& te
     return false;
 }
 
-void MeshSocketTestRunner::log_test_execution(
+void MeshSocketTestContext::log_test_execution(
     const ParsedTestConfig& test, size_t socket_index, size_t total_sockets) const {
     log_info(tt::LogTest, "Executing socket {}/{} for test '{}'", socket_index + 1, total_sockets, test.name);
     log_info(
@@ -255,11 +262,13 @@ void MeshSocketTestRunner::log_test_execution(
         test.memory_config.page_size,
         test.memory_config.fifo_size);
 }
-
-std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestRunner::create_rank_to_mesh_mapping() {
-    // Use distributed context allgather to share mesh_ids across ranks
-    // Since rank to mesh is 1-to-1, each rank sends its mesh_id and we receive all mesh_ids
-    // Does not work with Big Mesh case
+/*
+    We assume rank to mesh is 1-to-1, each rank sends its mesh_id and we receive all mesh_ids
+    Sockets APIs will need to change to use mesh_id instead of rank to supprot Big Mesh x Multi Mesh case
+    Need this to generate high level patterns such as all to all, since we need to know the mesh_ id to
+    know the number of devices per host.
+*/
+std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_rank_to_mesh_mapping() {
     auto world_size = *distributed_context_->size();
 
     std::vector<std::byte> recv_buffer(sizeof(uint32_t) * world_size);
@@ -271,6 +280,13 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestRunner::create_ran
     for (uint32_t rank = 0; rank < world_size; ++rank) {
         uint32_t mesh_id_val;
         std::memcpy(&mesh_id_val, recv_buffer.data() + rank * sizeof(uint32_t), sizeof(uint32_t));
+        TT_FATAL(
+            !std::any_of(
+                rank_to_mesh_id.begin(),
+                rank_to_mesh_id.end(),
+                [&mesh_id_val](const auto& pair) { return *(pair.second) == mesh_id_val; }),
+            "Mesh id {} is already in use",
+            mesh_id_val);
         rank_to_mesh_id[Rank{rank}] = tt::tt_fabric::MeshId{mesh_id_val};
     }
 
@@ -279,6 +295,36 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestRunner::create_ran
     }
 
     return rank_to_mesh_id;
+}
+
+void MeshSocketTestContext::share_seed() {
+    uint32_t seed;
+
+    if (*local_rank_ == 0) {
+        // Rank 0 generates and sends the seed
+        seed = std::chrono::steady_clock::now().time_since_epoch().count();
+        log_info(tt::LogTest, "Rank 0 generated seed: {}", seed);
+
+        // Send seed to all other ranks
+        for (uint32_t rank = 1; rank < *distributed_context_->size(); ++rank) {
+            distributed_context_->send(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Tag{0});
+        }
+    } else {
+        // All other ranks receive the seed from rank 0
+        log_info(tt::LogTest, "Rank {} receiving seed from rank 0", *local_rank_);
+        distributed_context_->recv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+            tt::tt_metal::distributed::multihost::Rank{0},
+            tt::tt_metal::distributed::multihost::Tag{0});
+        log_info(tt::LogTest, "Rank {} received seed: {}", *local_rank_, seed);
+    }
+
+    // Initialize the random number generator with the shared seed
+    gen_.seed(seed);
+    log_info(tt::LogTest, "Random number generator initialized with seed: {}", seed);
 }
 
 }  // namespace tt::tt_fabric::mesh_socket_tests
