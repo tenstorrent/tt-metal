@@ -185,7 +185,7 @@ def run_llama_all_gather_matmul_impl(
     logger.info(f"N_padded {N_padded}")
 
     in0_block_h = M // ttnn.TILE_SIZE
-    in0_block_w = K_in // output_num_cores // ttnn.TILE_SIZE
+    in0_block_w = K_in // cluster_shape[cluster_axis] // ttnn.TILE_SIZE
     while (K_in / ttnn.TILE_SIZE) % in0_block_w != 0:
         in0_block_w -= 1
 
@@ -234,9 +234,6 @@ def run_llama_all_gather_matmul_impl(
 
     # Intermediate shapes
     intermediate_num_cores = cluster_shape[cluster_axis]
-    # intermediate_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-    #     ttnn.CoreCoord(1, 1), intermediate_num_cores, SUB_DEVICE_CRS, row_wise=False
-    # )
     intermediate_core_range_set = ttnn.CoreRangeSet(
         [
             ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 3)),
@@ -312,7 +309,6 @@ def run_llama_all_gather_matmul_impl(
     )
 
     in1_tensor = torch.randn(in1_shape)
-    # in1_tensor = torch.ones(in1_shape) * 3
     tt_in1_tensor = ttnn.from_torch(
         in1_tensor,
         device=mesh_device,
