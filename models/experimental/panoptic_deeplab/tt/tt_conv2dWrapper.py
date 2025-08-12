@@ -75,6 +75,10 @@ class TtConv2dParameters:
         return self.weight.shape[-2], self.weight.shape[-1]
 
 
+CHANNEL_SLICE_THRESHOLD = 2048
+CHANNEL_SLICE_FACTOR = 4  # Or 4, or 8, depending on memory pressure. Must be a divisor of the channels.
+
+
 class TtConv2d:
     """
     Limitations of DRAM slicing (slice_count > 1), taken from https://github.com/tenstorrent/tt-metal/pull/19686:
@@ -113,58 +117,152 @@ class TtConv2d:
     ) -> tuple[ttnn.Tensor, list[int]]:
         (batch_size, height, width, _) = x.shape
 
-        k = SLICE_COUNT_FACTOR.get((self._in_channels, self._out_channels, height * width), 1)
-        slice_count = -(-k * batch_size // 1024)
+        # ==================================================================
+        # ### NEW: Channel Slicing Logic ###
+        # ==================================================================
+        if self._in_channels >= CHANNEL_SLICE_THRESHOLD:
+            print(f"--- Running Conv2d with Channel Slicing (factor={CHANNEL_SLICE_FACTOR}) ---")
 
-        if slice_count > 1:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            # 1. Ensure channels are divisible by the slice factor
+            assert (
+                self._in_channels % CHANNEL_SLICE_FACTOR == 0
+            ), f"Input channels ({self._in_channels}) must be divisible by CHANNEL_SLICE_FACTOR ({CHANNEL_SLICE_FACTOR})"
 
-        def call_conv2d(t: ttnn.Tensor, w: ttnn.Tensor, b: ttnn.Tensor | None) -> _Conv2dRawResult:
-            output, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
-                input_tensor=t,
-                weight_tensor=w,
-                bias_tensor=b,
-                in_channels=self._in_channels,
-                out_channels=self._out_channels,
-                device=t.device(),
-                kernel_size=list(self._kernel_size),
-                stride=list(self._stride),
-                padding=list(self._padding),
-                batch_size=batch_size,
-                input_height=height,
-                input_width=width,
-                dilation=list(self._dilation),
-                return_output_dim=True,
-                return_weights_and_bias=True,
-                conv_config=conv_config,
-                memory_config=memory_config,
-                slice_config=(
-                    ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=slice_count)
-                    if slice_count > 1
-                    else None
-                ),
-                dtype=ttnn.bfloat16,
-            )
+            split_in_channels = self._in_channels // CHANNEL_SLICE_FACTOR
 
-            return _Conv2dRawResult(
-                output=output,
-                output_height=output_height,
-                output_width=output_width,
-                prepared_weight=prepared_weight,
-                prepared_bias=prepared_bias,
-            )
+            if not ttnn.is_tensor_storage_on_device(self._weight):
+                self._weight = ttnn.to_device(self._weight, self._device)
+            # 2. Split the input and weight tensors along the input channel dimension
+            # Input 'x' is NHWC, so channel is dim 3
+            input_slices = ttnn.split(x, split_size=split_in_channels, dim=3)
+            print(input_slices[0].shape)
+            # Weight is (out_channels, in_channels, kH, kW), so channel is dim 1
+            weight_slices = ttnn.split(self._weight, split_size=split_in_channels, dim=1)
+            print(weight_slices[0].shape)
+            accumulated_output = None
+            output_height, output_width = 0, 0  # To store the output dimensions
 
-        results = call_conv2d(x, self._weight, self._bias)
+            for i in range(CHANNEL_SLICE_FACTOR):
+                print(f"  Processing channel slice {i+1}/{CHANNEL_SLICE_FACTOR}...")
+                weight_slice_cpu = weight_slices[i]
 
-        x = results.output
-        self._weight = results.prepared_weight
-        self._bias = results.prepared_bias
+                if not ttnn.is_tensor_storage_on_device(weight_slices[i]):
+                    weight_slices[i] = ttnn.prepare_conv_weights(
+                        weight_tensor=weight_slice_cpu,
+                        input_memory_config=memory_config,
+                        input_layout=x.get_layout(),
+                        weights_format="OIHW",  # Missing
+                        in_channels=split_in_channels,
+                        out_channels=self._out_channels,
+                        batch_size=batch_size,
+                        input_height=height,
+                        input_width=width,
+                        kernel_size=list(self._kernel_size),
+                        stride=list(self._stride),
+                        padding=list(self._padding),
+                        dilation=list(self._dilation),
+                        has_bias=self._bias is not None,
+                        groups=1,  # Missing
+                        device=self._device,  # Missing
+                        input_dtype=x.dtype,
+                        output_dtype=ttnn.bfloat16,
+                        conv_config=conv_config,
+                    )
+                    weight_slices[i] = ttnn.to_device(weight_slices[i], self._device)
 
-        if slice_count > 1:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+                input_slice = input_slices[i]
+                weight_slice = weight_slices[i]
 
-        shape = [batch_size, results.output_height, results.output_width, self._out_channels]
-        return x, shape
+                # Perform conv on the slice. Bias is added *after* accumulation.
+                # Note: We do not return prepared weights here for simplicity, matching the template.
+                output_slice, [output_height, output_width] = ttnn.conv2d(
+                    input_tensor=input_slice,
+                    weight_tensor=weight_slice,
+                    bias_tensor=None,  # Bias is added once at the end
+                    in_channels=split_in_channels,  # IMPORTANT: use the sliced channel count
+                    out_channels=self._out_channels,
+                    device=self._device,
+                    kernel_size=list(self._kernel_size),
+                    stride=list(self._stride),
+                    padding=list(self._padding),
+                    batch_size=batch_size,
+                    input_height=height,
+                    input_width=width,
+                    dilation=list(self._dilation),
+                    return_output_dim=True,
+                    return_weights_and_bias=False,  # We manage weights manually
+                    conv_config=conv_config,
+                    memory_config=memory_config,
+                    dtype=ttnn.bfloat16,
+                )
+
+                if i == 0:
+                    accumulated_output = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
+                else:
+                    accumulated_output = ttnn.add(
+                        output_slice, accumulated_output, memory_config=memory_config, output_tensor=accumulated_output
+                    )
+                    output_slice.deallocate(True)
+
+            # 4. Add the bias tensor once after all slices have been accumulated
+            if self._bias is not None:
+                accumulated_output = ttnn.add(accumulated_output, self._bias, output_tensor=accumulated_output)
+
+            # 5. Return the final tensor and its shape
+            final_shape = [batch_size, output_height, output_width, self._out_channels]
+            return accumulated_output, final_shape
+
+        # ==================================================================
+        # ### ORIGINAL: Width Slicing Logic (for smaller convolutions) ###
+        # ==================================================================
+        else:
+            k = SLICE_COUNT_FACTOR.get((self._in_channels, self._out_channels, height * width), 1)
+            slice_count = -(-k * batch_size // 1024)
+            if slice_count > 1:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+            def call_conv2d(t: ttnn.Tensor, w: ttnn.Tensor, b: ttnn.Tensor | None) -> _Conv2dRawResult:
+                output, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
+                    input_tensor=t,
+                    weight_tensor=w,
+                    bias_tensor=b,
+                    in_channels=self._in_channels,
+                    out_channels=self._out_channels,
+                    device=t.device(),
+                    kernel_size=list(self._kernel_size),
+                    stride=list(self._stride),
+                    padding=list(self._padding),
+                    batch_size=batch_size,
+                    input_height=height,
+                    input_width=width,
+                    dilation=list(self._dilation),
+                    return_output_dim=True,
+                    return_weights_and_bias=True,
+                    conv_config=conv_config,
+                    memory_config=memory_config,
+                    slice_config=(
+                        ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=slice_count)
+                        if slice_count > 1
+                        else None
+                    ),
+                    dtype=ttnn.bfloat16,
+                )
+                return _Conv2dRawResult(
+                    output=output,
+                    output_height=output_height,
+                    output_width=output_width,
+                    prepared_weight=prepared_weight,
+                    prepared_bias=prepared_bias,
+                )
+
+            results = call_conv2d(x, self._weight, self._bias)
+            x = results.output
+            self._weight = results.prepared_weight
+            self._bias = results.prepared_bias
+            if slice_count > 1:
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            shape = [batch_size, results.output_height, results.output_width, self._out_channels]
+            return x, shape
 
     def __call__(
         self,

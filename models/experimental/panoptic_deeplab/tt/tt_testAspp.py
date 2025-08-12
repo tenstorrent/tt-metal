@@ -11,10 +11,10 @@ from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, in_channels, out_channels, input_height, input_width, dilations, norm, activation, dropout",
+    "batch_size, in_channels, out_channels, input_height, input_width, dilations, norm, activation, dropout, pool_kernel_size",
     [
         # Basic test cases
-        (1, 256, 256, 32, 32, [6, 12, 18], "ln", "relu", 0.0),
+        (1, 2048, 256, 32, 64, [6, 12, 18], "ln", "relu", 0.0, (32, 64)),
         # (1, 512, 256, 16, 16, [6, 12, 18], "ln", "relu", 0.0),
         # (2, 256, 128, 64, 64, [3, 6, 9], "", "relu", 0.0),  # No norm case
         # # Different dilation patterns
@@ -35,11 +35,19 @@ def test_ttnn_aspp(
     norm,
     activation,
     dropout,
+    pool_kernel_size,
 ):
     torch.manual_seed(0)
 
+    # My previous weights initialization:
+    # "weight": torch.randn(out_channels, in_channels, kernel_size, kernel_size, dtype=torch.bfloat16),
+
+    shared_weight_tensor_kernel1 = torch.randn(out_channels, in_channels, 1, 1, dtype=torch.bfloat16)
+    shared_weight_tensor_kernel3 = torch.randn(out_channels, in_channels, 3, 3, dtype=torch.bfloat16)
+    shared_weight_tensor_kernel1_output5 = torch.randn(out_channels, 5 * out_channels, 1, 1, dtype=torch.bfloat16)
+
     # Create input tensor
-    torch_input = torch.randn(batch_size, in_channels, input_height, input_width, dtype=torch.bfloat16)
+    torch_input = torch.randn(batch_size, in_channels, input_height, input_width, dtype=torch.bfloat16)  # NCHW format
 
     # PyTorch reference model (your PyTorch ASPP implementation)
     torch_model = ASPP(
@@ -48,11 +56,14 @@ def test_ttnn_aspp(
         dilations=dilations,
         norm="LN" if norm == "ln" else "",
         activation=torch.nn.ReLU() if activation == "relu" else torch.nn.SiLU(),
-        pool_kernel_size=(4, 4),  # Using global pooling
+        pool_kernel_size=pool_kernel_size,  # Using global pooling
         dropout=dropout,
+        shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
+        shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
+        shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
     )
     torch_model = torch_model.to(dtype=torch.bfloat16)
-    torch_model.eval()  # Set to evaluation mode ; Not existing I think
+    torch_model.eval()  # Set to evaluation mode
     torch_output = torch_model(torch_input)
 
     # Convert to TTNN format (NHWC)
@@ -69,7 +80,10 @@ def test_ttnn_aspp(
         norm=norm,
         activation=activation,
         dropout=dropout,
-        pool_kernel_size=(4, 4),  # Use a fixed pooling kernel size for testing
+        pool_kernel_size=pool_kernel_size,
+        shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
+        shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
+        shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
     )
 
     # Run TTNN model
@@ -122,6 +136,7 @@ def test_ttnn_aspp_basic_functionality(device):
     )
 
     ttnn_output = ttnn_model(ttnn_input)
+    ttnn_output = ttnn.permute(ttnn_output, (0, 3, 1, 2))
 
     # Basic checks
     assert ttnn_output is not None
