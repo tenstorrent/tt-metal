@@ -19,6 +19,7 @@ def run_with_trace(
     multi_device_global_semaphore,
     num_iter=20,
     subdevice_id=None,
+    barrier_semaphore=None,
 ):
     # Compile Run
     logger.info("Compiling model")
@@ -29,6 +30,7 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
+        barrier_semaphore=barrier_semaphore,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -43,6 +45,7 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
+            barrier_semaphore=barrier_semaphore,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -74,8 +77,8 @@ def run_all_broadcast_impl(
     output_shard_shape=None,
     output_shard_grid=None,
     tensor_mem_layout=None,
-    use_cluster_axis_api=False,
     cluster_axis=None,
+    use_barrier=False,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -96,6 +99,9 @@ def run_all_broadcast_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    barrier_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+    ]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"input_shard_shape: {input_shard_shape}")
@@ -191,9 +197,10 @@ def run_all_broadcast_impl(
             input_tensor_mesh_list[0],
             num_links,
             output_mem_config,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
+            multi_device_global_semaphore=ccl_semaphore_handles[i],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
+            barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
         )
         tt_out_tensor_list.append(tt_out_tensor)
     else:
@@ -205,6 +212,7 @@ def run_all_broadcast_impl(
                 memory_config=output_mem_config,
                 topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
+                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
             )
             tt_out_tensor_list.append(tt_out_tensors)
 
@@ -260,6 +268,7 @@ def run_all_broadcast_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize("use_barrier", [True, False])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_broadcast(
     t3k_mesh_device,
@@ -272,7 +281,11 @@ def test_all_broadcast(
     mem_config,
     num_iters,
     function_level_defaults,
+    use_barrier,
 ):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
     run_all_broadcast_impl(
         t3k_mesh_device,
         num_devices,
@@ -285,6 +298,7 @@ def test_all_broadcast(
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
+        use_barrier=use_barrier,
     )
 
 
@@ -358,6 +372,7 @@ def test_all_broadcast(
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("use_barrier", [True, False])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_broadcast_sharded(
     t3k_mesh_device,
@@ -373,7 +388,11 @@ def test_all_broadcast_sharded(
     output_shard_shape,
     output_shard_grid,
     tensor_mem_layout,
+    use_barrier,
 ):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
     run_all_broadcast_impl(
         t3k_mesh_device,
         num_devices,
@@ -390,4 +409,5 @@ def test_all_broadcast_sharded(
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
+        use_barrier=use_barrier,
     )

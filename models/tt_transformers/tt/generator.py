@@ -54,6 +54,7 @@ class Generator:
         self.tokenizer = tokenizer
         self.formatter = formatter
         self.data_parallel = len(self.model)
+        self.prev_page_table = None
 
     # Note: This function is called by vLLM
     def prefill_forward_text(
@@ -252,17 +253,17 @@ class Generator:
 
         tt_tokens = []
         tt_current_pos = []
-        tt_rot_mats = []
+        tt_rot_mat_idxs = []
         tt_page_table = []
 
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
-            tt_tokens_i, tt_current_pos_i, tt_rot_mats_i, tt_page_table_i = self.model[i].prepare_inputs_decode(
+            tt_tokens_i, tt_current_pos_i, tt_rot_mat_idxs_i, tt_page_table_i = self.model[i].prepare_inputs_decode(
                 tokens[i], current_pos[i], user_page_table
             )
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mats.append(tt_rot_mats_i)
+            tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
 
         for i in range(self.data_parallel):
@@ -270,7 +271,7 @@ class Generator:
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
-                rot_mats=tt_rot_mats[i],
+                rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
@@ -314,47 +315,14 @@ class Generator:
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            transformed_inputs = self.model[i].transform_decode_inputs_device(*(device_inputs[i]))
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
-                    *transformed_inputs, kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
+                    *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
         return trace_ids, tt_out_trace, *device_inputs
-
-    def _decode_forward_trace_text(
-        self,
-        trace_ids,
-        device_inputs,
-        tt_out_trace,
-        tokens,
-        current_pos,
-        page_table=None,
-    ):
-        """
-        Executes the trace for the decode_forward method but does not read back outputs.
-        """
-        host_inputs = []
-        for i in range(self.data_parallel):
-            user_page_table = page_table[i] if page_table is not None else None
-            host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
-            host_inputs.append(host_inputs_i)
-
-        to_device = []
-        for i in range(self.data_parallel):
-            to_device.append(
-                copy_host_to_device(
-                    host_tensors=host_inputs[i],
-                    device_tensors=device_inputs[i],
-                )
-            )
-        device_inputs = to_device
-        for i, trace_id in trace_ids.items():
-            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-
-        return tt_out_trace
 
     def _easy_trace_text(
         self,
@@ -375,16 +343,27 @@ class Generator:
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
 
-        trace_logits_rm = self._decode_forward_trace_text(
-            self.trace_ids_text,
-            self.trace_inputs_text,
-            self.trace_output_text,
-            tokens,
-            current_pos,
-            page_table=page_table,
-        )
+        reset_inputs = not argmax_on_device
+        if self.prev_page_table is None or any(
+            not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
+        ):
+            reset_inputs = True
+            self.prev_page_table = page_table
 
-        return trace_logits_rm
+        if reset_inputs:
+            for i in range(self.data_parallel):
+                user_page_table = page_table[i] if page_table is not None else None
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+
+                copy_host_to_device(
+                    host_tensors=host_inputs_i,
+                    device_tensors=self.trace_inputs_text[i],
+                )
+
+        for i, trace_id in self.trace_ids_text.items():
+            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+
+        return self.trace_output_text
 
     def _prefill_forward_single_user(
         self,
