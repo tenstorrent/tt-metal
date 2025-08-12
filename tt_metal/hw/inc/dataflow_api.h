@@ -24,6 +24,7 @@
 #include "dev_msgs.h"
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/assert.h"
 
 // clang-format off
 /**

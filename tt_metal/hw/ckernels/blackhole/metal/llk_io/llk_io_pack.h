@@ -11,6 +11,7 @@
 #include "stream_interface.h"
 #include "stream_io_map.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/assert.h"
 
 using namespace ckernel;
 
