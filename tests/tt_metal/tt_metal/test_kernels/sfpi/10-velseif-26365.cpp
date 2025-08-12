@@ -28,25 +28,29 @@ void MAIN {
 #if COMPILE_FOR_TRISC == 1  // compute
 #include "pre.inc"
     {
-        l_reg[LRegs::LReg3] = vFloat(0.0f);
+        vFloat v = 0.0f;
+        l_reg[LRegs::LReg3] = v;
         compc_26365();
         vUInt res = l_reg[LRegs::LReg3];
         FAIL_IF(res != 1);
     }
     {
-        l_reg[LRegs::LReg3] = vFloat(1.0f);
+        vFloat v = 1.0f;
+        l_reg[LRegs::LReg3] = v;
         compc_26365();
         vUInt res = l_reg[LRegs::LReg3];
         FAIL_IF(res != 2);
     }
     {
-        l_reg[LRegs::LReg3] = vFloat(2.0f);
+        vFloat v = 2.0f;
+        l_reg[LRegs::LReg3] = v;
         compc_26365();
         vUInt res = l_reg[LRegs::LReg3];
         FAIL_IF(res != 2);
     }
     {
-        l_reg[LRegs::LReg3] = vFloat(3.0f);
+        vFloat v = 3.0f;
+        l_reg[LRegs::LReg3] = v;
         compc_26365();
         vUInt res = l_reg[LRegs::LReg3];
         FAIL_IF(res != 0);
