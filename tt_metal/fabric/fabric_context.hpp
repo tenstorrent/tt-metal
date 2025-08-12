@@ -42,6 +42,9 @@ public:
     // Get fabric tensix config for mux configuration
     tt::tt_fabric::FabricTensixDatamoverConfig& get_fabric_tensix_config() const;
 
+    // Initialize fabric tensix config (call after routing tables are configured)
+    void initialize_tensix_config();
+
     void set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers);
     uint32_t get_num_fabric_initialized_routers(chip_id_t chip_id) const;
 

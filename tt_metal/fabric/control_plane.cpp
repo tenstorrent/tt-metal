@@ -1602,6 +1602,11 @@ FabricContext& ControlPlane::get_fabric_context() const {
 
 void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
 
+void ControlPlane::initialize_fabric_tensix_config() {
+    TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
+    this->fabric_context_->initialize_tensix_config();
+}
+
 void ControlPlane::initialize_intermesh_eth_links() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     // If intermesh links are not enabled, set all intermesh_eth_links_ to empty
@@ -2117,7 +2122,7 @@ void ControlPlane::populate_fabric_connection_info(
 
         // Convert logical core to virtual coordinates for NOC access (similar to write_to_all_tensix_cores)
         CoreCoord mux_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
-            physical_chip_id, mux_core_logical, CoreType::TENSIX);
+            physical_chip_id, mux_core_logical, CoreType::WORKER);
 
         // Get the RISC ID that handles this ethernet channel
         auto risc_id = tensix_config.get_risc_id_for_channel(eth_channel_id);

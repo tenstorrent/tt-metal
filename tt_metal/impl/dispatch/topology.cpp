@@ -1189,6 +1189,8 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
         return nullptr;
     }
 
+    log_info(tt::LogTest, "DEBUG: Compile all tensix builders");
+
     // Compile all tensix builders
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
         tt::tt_fabric::FabricTensixConfig::DISABLED) {

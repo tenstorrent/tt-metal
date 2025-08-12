@@ -105,8 +105,8 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     // Calculate available L1 space for tensix cores
     uint32_t l1_base = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-    uint32_t l1_size =
-        hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
+    uint32_t l1_size = hal.get_dev_size(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     // Get L1 alignment requirement
     size_t l1_alignment = hal.get_alignment(tt::tt_metal::HalMemType::L1);

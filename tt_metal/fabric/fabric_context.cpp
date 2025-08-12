@@ -145,8 +145,8 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
         tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
         tt::tt_fabric::FabricEriscDatamoverAxis::Long);
 
-    // Initialize fabric tensix config for mux configuration
-    tensix_config_ = std::make_unique<tt::tt_fabric::FabricTensixDatamoverConfig>();
+    // Tensix config will be initialized later after routing tables are configured
+    tensix_config_ = nullptr;
 
     this->num_devices = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
@@ -272,6 +272,18 @@ std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_addre
 tt::tt_fabric::FabricTensixDatamoverConfig& FabricContext::get_fabric_tensix_config() const {
     TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
     return *tensix_config_.get();
+}
+
+void FabricContext::initialize_tensix_config() {
+    TT_FATAL(tensix_config_ == nullptr, "Trying to re-initialize fabric tensix config");
+
+    // Check if tensix config should be enabled
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // Now it's safe to call get_active_fabric_eth_channels() because
+        // configure_routing_tables_for_fabric_ethernet_channels() has already run
+        tensix_config_ = std::make_unique<tt::tt_fabric::FabricTensixDatamoverConfig>();
+    }
 }
 
 std::pair<uint32_t, uint32_t> FabricContext::get_fabric_tensix_termination_address_and_signal() const {

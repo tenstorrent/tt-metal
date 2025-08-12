@@ -487,6 +487,11 @@ void MetalContext::initialize_fabric_config() {
     }
     control_plane.configure_routing_tables_for_fabric_ethernet_channels(
         this->fabric_config_, this->fabric_reliability_mode_);
+
+    // Initialize fabric tensix config after routing tables are configured
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        control_plane.initialize_fabric_tensix_config();
+    }
 }
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const {
