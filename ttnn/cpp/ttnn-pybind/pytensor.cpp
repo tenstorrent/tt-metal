@@ -46,7 +46,6 @@
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
-
 struct PyFromTorchConversionInput {
     std::string torch_dtype;
     DataType optional_data_type;
@@ -358,10 +357,13 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
 
     // Early exit conditions -- on-device strategy is not supported
 
-    if ((tensor.attr("numel")().cast<std::uint64_t>() == 0) || (tensor.attr("dim")().cast<std::uint64_t>() == 0) ||
+    if (!has_device ||
+        // Device is required
+        (tensor.attr("numel")().cast<std::uint64_t>() == 0) || (tensor.attr("dim")().cast<std::uint64_t>() == 0) ||
         // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
         // the tensor must be constructed on host.
         memory_config.is_sharded() ||
+        // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
         (optional_tile.has_value() && (((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
                                        ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))) ||
         // on-device tiling operation expects 32x32 row
@@ -493,21 +495,23 @@ Tensor convert_python_tensor_to_tt_tensor_on_device(
 
     output = tt::tt_metal::set_tensor_id(output);
 
-    if (strategy.torch_convert_dtype) {
-        if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout.value()) {
-            output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
+    auto set_layout = [&](Layout target) {
+        if (output.layout() != target) {
+            output = ttnn::to_layout(output, target, std::nullopt, memory_config);
         }
-    } else {
-        if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
-            if (output.layout() != Layout::TILE) {
-                output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, memory_config);
-            }
+    };
 
-            output = ttnn::typecast(output, optional_data_type.value());
-
-            if (optional_layout.has_value() && output.layout() != optional_layout.value()) {
-                output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
-            }
+    if (strategy.torch_convert_dtype) {
+        // Conversion was done on device, only need to adjust layout
+        if (optional_layout.has_value()) {
+            set_layout(optional_layout.value());
+        }
+    } else if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
+        // Need to perform final data conversion on device, typecast requires TILE layout.
+        set_layout(Layout::TILE);
+        output = ttnn::typecast(output, optional_data_type.value());
+        if (optional_layout.has_value()) {
+            set_layout(optional_layout.value());
         }
     }
 
