@@ -54,13 +54,13 @@ pytest --disable-warnings models/demos/vgg_unet/demo/demo.py::test_demo_dp
 #### Single Device (BS=1):
 Use the following command to run the performant evaluation with Trace+2CQs:
 ```sh
-pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet
+pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet
 ```
 
 #### Multi Device (DP=2, n300):
 Use the following command to run the performant evaluation with Trace+2CQs:
 ```sh
-pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
+pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
 ```
 
 ## Details

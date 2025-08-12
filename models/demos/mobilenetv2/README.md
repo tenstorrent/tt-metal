@@ -49,12 +49,12 @@ pytest --disable-warnings models/demos/mobilenetv2/demo/demo.py::test_mobilenetv
 ### Performant Data evaluation with Trace+2CQ
 #### Single Device (BS=10):
 ```
-pytest --disable-warnings models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval
+pytest --disable-warnings models/demos/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval
 ```
 
 #### Multi Device (DP=2, n300):
 ```
-pytest --disable-warnings models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp
+pytest --disable-warnings models/demos/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp
 ```
 Note: The model is evaluated with 512 samples.
 
