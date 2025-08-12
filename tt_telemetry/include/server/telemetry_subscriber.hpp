@@ -3,7 +3,7 @@
 /*
  * telemetry_subscriber.hpp
  *
- * Interface for a telemetry consumer that accepts snapshots of telemetry data via HandoffHandle.
+ * Interface for a telemetry consumer that accepts snapshots of telemetry data.
  */
 
  #include <server/telemetry_snapshot.hpp>
