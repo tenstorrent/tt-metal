@@ -461,8 +461,8 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
             const auto& input_b = input_tensors[1];
 
             const auto& mm_output = output_tensors[0];
-            const auto& intermediate = output_tensors[1];
-            const auto& aggregated = output_tensors[2];
+            const auto& intermediate = input_tensors[2];
+            const auto& aggregated = output_tensors[1];
 
             auto semaphore =
                 static_cast<const ttnn::LlamaAllGatherMatmulAsync*>(operation)->all_gather_params.semaphore;

@@ -27,6 +27,7 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor0,
                const ttnn::Tensor& input_tensor1,
+               const ttnn::Tensor& intermediate_tensor,
                const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
@@ -41,8 +42,9 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
                const std::optional<const DataType> dtype,
                const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
                 return self(
-                    input_tensor0,  // in0 for matmul, need AG first
-                    input_tensor1,  // in1 for matmul
+                    input_tensor0,        // in0 for matmul, need AG first
+                    input_tensor1,        // in1 for matmul
+                    intermediate_tensor,  // intermediate tensor for AG operation
                     dim,
                     cluster_axis,
                     mesh_device,
@@ -60,6 +62,7 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
             },
             py::arg("input_tensor0"),
             py::arg("input_tensor1"),
+            py::arg("intermediate_tensor"),
             py::arg("dim"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
@@ -89,6 +92,7 @@ void py_bind_llama_all_gather_matmul_async(pybind11::module& module) {
         Args:
             input_tensor0 (ttnn.Tensor): multi-device tensor.
             input_tensor1 (ttnn.Tensor): multi-device tensor.
+            intermediate_tensor (ttnn.Tensor): intermediate tensor for the All-Gather operation.
             dim (int): Dimension to perform All-Gather operation.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather-replicate operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather-replicate operation on.
