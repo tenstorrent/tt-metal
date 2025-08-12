@@ -64,7 +64,6 @@ def calculate_max_valid_cores_for_group_norm(num_groups: int, num_channels: int,
         f"tiles={num_tiles}, group_width={group_width}"
     )
 
-    # Test from maximum cores (8) down to 1
     max_cores_to_test = 8
     for num_cores in range(max_cores_to_test, 0, -1):
         # Check if tiles can be evenly distributed across cores
@@ -75,7 +74,6 @@ def calculate_max_valid_cores_for_group_norm(num_groups: int, num_channels: int,
         tiles_per_core = num_tiles // num_cores
         channels_per_core = tiles_per_core * tile_width
 
-        # Check if groups can be evenly distributed
         if channels_per_core % group_width != 0:
             logger.debug(
                 f"  cores={num_cores}: SKIP - channels_per_core ({channels_per_core}) "
