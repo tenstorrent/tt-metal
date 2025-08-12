@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 # coding=utf-8
 # Copyright 2024 Google AI and The HuggingFace Team. All rights reserved.
 #
