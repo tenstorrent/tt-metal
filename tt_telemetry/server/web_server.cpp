@@ -1,173 +1,20 @@
-//TODO next: mock telemetry provider should NOT write to subscriber if it is busy. We must track busy state in release handler.
-//           remove std::queue<> in consumer
-
-#include <thread>
-#include <mutex>
 #include <atomic>
 #include <chrono>
-#include <random>
 #include <fstream>
-#include <sstream>
 #include <iostream>
-#include <vector>
+#include <mutex>
 #include <queue>
-#include <initializer_list>
+#include <sstream>
+#include <thread>
+#include <vector>
 
 #include <httplib.h>
 
 #include <server/json_messages.hpp>
 #include <server/telemetry_subscriber.hpp>
+#include <server/mock_telemetry_provider.hpp>
 
 using json = nlohmann::json;
-
-class MockTelemetryProvider {
-private:
-    static constexpr auto UPDATE_INTERVAL_SECONDS = std::chrono::seconds(5);
-
-    // Telemetry metrics state
-    const std::vector<std::string> metric_names_ = {
-        "foo_bar_baz1",
-        "foo_bar_baz2",
-        "foo_bar_baz3",
-        "foo_glorp_cpu1",
-        "foo_glorp_cpu2",
-        "foo_glorp_cpu3"
-    };
-    std::vector<bool> metric_values_;
-
-    // Snapshot and distribution to consumers
-    std::mutex mtx_;
-    std::queue<TelemetrySnapshot *> available_buffers_;
-    std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers_;
-    std::atomic<bool> stopped_{false};
-
-    // Random number generators for generating random updates
-    std::random_device rd_;
-    std::mt19937 gen_;
-    std::uniform_int_distribution<> bool_dist_;
-    std::uniform_int_distribution<> metric_dist_;
-    std::uniform_int_distribution<> num_updates_dist_;
-
-    std::thread thread_;
-
-    void return_buffer_to_pool(TelemetrySnapshot *buffer) {
-        if (stopped_.load()) {
-            return;
-        }
-
-        // Clear buffer and return to pool
-        buffer->clear();
-        std::lock_guard<std::mutex> lock(mtx_);
-        available_buffers_.push(buffer);
-    }
-
-    std::shared_ptr<TelemetrySnapshot> create_new_handoff_buffer(TelemetrySnapshot *buffer) {
-        return std::shared_ptr<TelemetrySnapshot>(
-            buffer,
-            [this](TelemetrySnapshot *buffer) {
-                // Custom deleter: do not delete, just return to pool. We use shared_ptr for its
-                // thread-safe reference counting, allowing a buffer to be passed to multiple
-                // consumers.
-                std::cout << "[MockTelemetryProvider] Released buffer" << std::endl;
-                return_buffer_to_pool(buffer);
-            }
-        );
-    }
-
-    std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
-        std::lock_guard<std::mutex> lock(mtx_);
-
-        TelemetrySnapshot *buffer;
-        if (!available_buffers_.empty()) {
-            // Get a free buffer
-            buffer = available_buffers_.front();
-            available_buffers_.pop();
-            std::cout << "[MockTelemetryProvider] Got buffer from pool" << std::endl;
-        } else {
-            // Pool exhausted, create new buffer
-            buffer = new TelemetrySnapshot();
-            std::cout << "[MockTelemetryProvider] Allocated new buffer" << std::endl;
-        }
-
-        // Return a RAII handle that will automatically return buffer to pool
-        return create_new_handoff_buffer(buffer);
-    }
-
-    void create_random_updates(std::shared_ptr<TelemetrySnapshot> delta) {
-        int num_updates = num_updates_dist_(gen_);
-        
-        // Select random endpoints to update
-        for (int i = 0; i < num_updates; ++i) {
-            size_t idx = metric_dist_(gen_);
-            bool new_value = bool_dist_(gen_) & 1;
-            
-            // Only add to updates if state actually changes
-            if (metric_values_[idx] != new_value) {
-                metric_values_[idx] = new_value;
-                delta->metric_indices.push_back(idx);
-                delta->metric_values.push_back(new_value);
-            }
-        }
-
-        std::cout << "[MockTelemetryProvider] Updated: " << delta->metric_indices.size() << " values pending" << std::endl;
-    }
-
-    void update_telemetry_randomly() {
-        // Send initial snapshot to subscriber
-        std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
-        snapshot->clear();
-        snapshot->is_absolute = true;
-        for (size_t i = 0; i < metric_names_.size(); i++) {
-            snapshot->metric_indices.push_back(i);
-            snapshot->metric_names.push_back(metric_names_[i]);
-            snapshot->metric_values.push_back(metric_values_[i]);
-        }
-
-        for (auto &subscriber: subscribers_) {
-            subscriber->on_telemetry_ready(snapshot);
-        }
-
-        // Send periodic updates
-        while (!stopped_.load()) {
-            // We will now produce a delta snapshot
-            std::shared_ptr<TelemetrySnapshot> delta = get_writeable_buffer();
-            delta->clear();
-            delta->is_absolute = false;
-
-            // Fill it with updates
-            create_random_updates(delta);
-
-            // Push to subscribers
-            for (auto &subscriber: subscribers_) {
-                subscriber->on_telemetry_ready(delta);
-            }
-
-            std::this_thread::sleep_for(UPDATE_INTERVAL_SECONDS);
-        }
-    }
-
-public:
-    explicit MockTelemetryProvider(std::initializer_list<std::shared_ptr<TelemetrySubscriber>> subscribers)
-        : subscribers_(subscribers)
-        , gen_(rd_())
-        , bool_dist_(0, 1)
-        , metric_dist_(0, metric_names_.size() - 1)
-        , num_updates_dist_(1, 4) {
-        // Init telemetry randomly
-        size_t num_metrics = metric_names_.size();
-    
-        metric_values_.clear();
-        metric_values_.reserve(num_metrics);
-        
-        for (size_t i = 0; i < num_metrics; ++i) {
-            bool initial_value = bool_dist_(gen_) & 1;
-            metric_values_.push_back(initial_value);
-        }
-
-        // Start update thread
-        thread_ = std::thread(&MockTelemetryProvider::update_telemetry_randomly, this);
-    }
-};
 
 class TelemetryServer: public TelemetrySubscriber {
 private:
@@ -185,78 +32,100 @@ private:
     std::mutex snapshot_mutex_;
     std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
+    // Send snapshot to all new clients and move those clients to the client list. This must be run
+    // from the main client thread.
+    void handle_new_clients() {
+        std::lock_guard<std::mutex> lock(clients_mutex_);
+        if (new_sse_clients_.size() == 0) {
+            return;
+        }
+
+        // Construct snapshot from current data
+        TelemetrySnapshot full_snapshot;
+        full_snapshot.is_absolute = true;
+        for (const auto &[index, name]: metric_name_by_index_) {
+            full_snapshot.metric_indices.push_back(index);
+            full_snapshot.metric_names.push_back(name);
+            full_snapshot.metric_values.push_back(metric_value_by_index_[index]);
+        }
+        json j = full_snapshot;
+        std::string message = "data: " + j.dump() + "\n\n";
+
+        // Send to all new clients and move those clients to the client list
+        auto it = new_sse_clients_.begin();
+        while (it != new_sse_clients_.end()) {
+            if (!(*it)->write(message.c_str(), message.size())) {
+                // Client disconnected
+                it = new_sse_clients_.erase(it);
+            } else {
+                // Add client
+                sse_clients_.push_back(*it);
+                ++it;
+            }
+        }
+        new_sse_clients_.clear();
+    }
+
+    // Get snapshot if one is ready
+    std::shared_ptr<TelemetrySnapshot> get_next_snapshot() {
+        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+
+        std::shared_ptr<TelemetrySnapshot> snapshot;
+        if (!pending_snapshots_.empty()) {
+            snapshot = std::move(pending_snapshots_.front());
+            pending_snapshots_.pop();
+        }
+        return snapshot;
+    }
+
+    void update_telemetry_state_from_snapshot(std::shared_ptr<TelemetrySnapshot> snapshot) {
+        //TODO: assert vectors are equal length
+        if (snapshot->is_absolute) {
+            // Absolute snapshot -- replace everything with new data
+            metric_name_by_index_.clear();
+            metric_value_by_index_.clear();
+        }
+
+        for (size_t i = 0; i < snapshot->metric_indices.size(); i++) {
+            size_t idx = snapshot->metric_indices[i];
+            if (snapshot->metric_names.size() > 0) {
+                // Names were included, which indicates new metrics added!
+                metric_name_by_index_[idx] = snapshot->metric_names[i];
+            }
+            metric_value_by_index_[idx] = snapshot->metric_values[i];
+        }
+    }
+
+    void send_snapshot_to_clients(std::shared_ptr<TelemetrySnapshot> snapshot) {
+        // Serialize
+        json j = *snapshot;
+        std::string message = "data: " + j.dump() + "\n\n";
+        
+        // Send to all, removing any disconnected clients
+        std::lock_guard<std::mutex> lock(clients_mutex_);
+        auto it = sse_clients_.begin();
+        while (it != sse_clients_.end()) {
+            if (!(*it)->write(message.c_str(), message.size())) {
+                // Client disconnected
+                it = sse_clients_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Main client thread
     void broadcast_telemetry() {
         while (running_) {
-            // Get snapshot from telemetry producer thread, if one is ready
-            std::shared_ptr<TelemetrySnapshot> current_snapshot;
-            {
-                std::lock_guard<std::mutex> lock(snapshot_mutex_);
-                if (!pending_snapshots_.empty()) {
-                    current_snapshot = std::move(pending_snapshots_.front());
-                    pending_snapshots_.pop();
-                }
-            }
-
-            // If no snapshot, sleep and try again
-            if (!current_snapshot) {
+            handle_new_clients();
+            std::shared_ptr<TelemetrySnapshot> snapshot = get_next_snapshot();
+            if (!snapshot) {
+                // No snapshot, sleep a while
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 continue;
             }
-
-            // Process snapshot: update internal copy of telemetry data
-            //TODO: assert vectors are equal length
-            if (current_snapshot->is_absolute) {
-                // Absolute snapshot -- replace everything with new data
-                metric_name_by_index_.clear();
-                metric_value_by_index_.clear();
-            }
-
-            for (size_t i = 0; i < current_snapshot->metric_indices.size(); i++) {
-                size_t idx = current_snapshot->metric_indices[i];
-                if (current_snapshot->metric_names.size() > 0) {
-                    // Names were included, which indicates new metrics added!
-                    metric_name_by_index_.insert({ idx, current_snapshot->metric_names[i] });
-                }
-                metric_value_by_index_.insert({ idx, current_snapshot->metric_values[i] });
-            }
-
-            // Forward to all clients
-            json j = *current_snapshot;
-            std::string message = "data: " + j.dump() + "\n\n";
-            std::lock_guard<std::mutex> lock(clients_mutex_);
-            auto it = sse_clients_.begin();
-            while (it != sse_clients_.end()) {
-                if (!(*it)->write(message.c_str(), message.size())) {
-                    // Client disconnected
-                    it = sse_clients_.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-
-            // Handle any new clients by creating a complete snapshot for them, then add them to 
-            // the permanent client list
-            TelemetrySnapshot full_snapshot;
-            full_snapshot.is_absolute = true;
-            for (const auto &[index, name]: metric_name_by_index_) {
-                full_snapshot.metric_indices.push_back(index);
-                full_snapshot.metric_names.push_back(name);
-                full_snapshot.metric_values.push_back(metric_value_by_index_[index]);
-            }
-            j = full_snapshot;
-            message = "data: " + j.dump() + "\n\n";
-            it = new_sse_clients_.begin();
-            while (it != new_sse_clients_.end()) {
-                if (!(*it)->write(message.c_str(), message.size())) {
-                    // Client disconnected
-                    it = new_sse_clients_.erase(it);
-                } else {
-                    // Add client
-                    sse_clients_.push_back(*it);
-                    ++it;
-                }
-            }
-            new_sse_clients_.clear();
+            update_telemetry_state_from_snapshot(snapshot);
+            send_snapshot_to_clients(snapshot);
         }
     }
 
@@ -417,18 +286,32 @@ public:
     }
 };
 
+static void run_server(std::shared_ptr<TelemetryServer> server, uint16_t port) {
+    try {
+        server->start(port);
+    } catch (const std::exception& e) {
+        std::cerr << "Server error: " << e.what() << std::endl;
+    }
+}
+
 bool run_web_server() {
     auto server = std::make_shared<TelemetryServer>();
     auto server2 = std::make_shared<TelemetryServer>();
     MockTelemetryProvider mock_provider{server, server2};
+
+    auto t1 = std::thread(run_server, server, 5555);
+    auto t2 = std::thread(run_server, server2, 8086);
+
+    t1.join();
+    t2.join();
     
-    try {
-        server->start(8080);
-        //server2->start(8080);
-    } catch (const std::exception& e) {
-        std::cerr << "Server error: " << e.what() << std::endl;
-        return false;
-    }
+    // try {
+    //     server->start(8086);
+    //     //server2->start(8080);
+    // } catch (const std::exception& e) {
+    //     std::cerr << "Server error: " << e.what() << std::endl;
+    //     return false;
+    // }
 
     return true;
 }
