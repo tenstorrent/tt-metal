@@ -235,9 +235,8 @@ public:
     Buffer* buffer() const;
 
     // Returns true if the tensor is empty.
-    // An empty tensor is a tensor with a physical shape of (0, 0)
-    // or with empty buffer.
-    // Filled with zeroes is considered allocated.
+    // Tensor is considered empty if its volume is 0
+    // or deallocated.
     bool is_empty() const;
 
     // Returns device `Storage`.
