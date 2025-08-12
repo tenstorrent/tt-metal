@@ -1,10 +1,11 @@
 from torch import nn
 
 import ttnn
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, mesh_device, hf_config, state_dict):
+    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None):
         super().__init__()
         torch_weight = state_dict["weight"]
         # self.is_distributed = mesh_device.shape[1] > 1
@@ -14,6 +15,7 @@ class RMSNorm(nn.Module):
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -2))
             if self.is_distributed

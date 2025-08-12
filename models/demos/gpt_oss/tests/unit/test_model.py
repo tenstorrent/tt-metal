@@ -15,6 +15,7 @@ from ...tt.ccl import CCLManager
 from ...tt.model import Model
 from ...tt.rope import ApplyRotaryPosEmb
 
+tensor_cache_dir = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16") + "/ttnn_cache"
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 tokenizer = load_tokenizer(local_weights_path)
 
@@ -391,6 +392,7 @@ def test_model(
         padding="max_length",
         max_length=seq_len,
     )
+    inputs.input_ids = inputs.input_ids[..., :seq_len]
     print(f"Input ids: {inputs.input_ids}")
     print(f"Detokenized input: {tokenizer.decode(inputs.input_ids[0])}")
 
@@ -417,7 +419,9 @@ def test_model(
     # Initialize TT model
     ccl_manager = CCLManager(mesh_device)
     print("Initializing TT model")
-    tt_model = Model(mesh_device, config, model_state_dict, ccl_manager, dtype=dtype)
+    tt_model = Model(
+        mesh_device, config, model_state_dict, ccl_manager, dtype=dtype, tensor_cache_path=tensor_cache_dir
+    )
     print("TT model initialized successfully")
 
     # Run forward passes
