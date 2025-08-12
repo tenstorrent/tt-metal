@@ -254,7 +254,7 @@ def test_tt_model_acc(
         tt_out = tt_model(
             prefill_input,
             current_pos=None,
-            rot_mats=rot_mats_prefill,
+            rot_mats_global=rot_mats_prefill,
             user_id=batch_id,
             mode="prefill",
             page_table=page_table_tt,
@@ -312,7 +312,7 @@ def test_tt_model_acc(
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             mode="decode",
             page_table=page_table_tt,
         )

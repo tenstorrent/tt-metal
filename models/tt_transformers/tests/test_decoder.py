@@ -181,7 +181,7 @@ def test_decoder_inference(
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             mode="decode",
             page_table=page_table_tt,
         )
