@@ -14,7 +14,7 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-namespace unit_tests::dm::core_to_core {
+namespace unit_tests::dm::core_from_core {
 // Test config, i.e. test parameters
 struct OneFromOneConfig {
     uint32_t test_id = 0;
@@ -24,6 +24,8 @@ struct OneFromOneConfig {
     uint32_t transaction_size_pages = 0;
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
+    NOC noc_id = NOC::RISCV_1_default;
+    uint32_t num_virtual_channels = 1;
 
     // TODO: Add the following parameters
     //  1. Virtual Channel
@@ -70,7 +72,8 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
         (uint32_t)l1_base_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)transaction_size_bytes,
-        (uint32_t)test_config.test_id};
+        (uint32_t)test_config.test_id,
+        (uint32_t)test_config.num_virtual_channels};
 
     // Kernels
     auto requestor_kernel = CreateKernel(
@@ -79,7 +82,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
         master_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .noc = test_config.noc_id,
             .compile_args = requestor_compile_args});
 
     // Runtime Arguments
@@ -123,11 +126,51 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
 
     return pcc;
 }
-}  // namespace unit_tests::dm::core_to_core
 
-/* ========== Test case for one from one data movement; Test id = 5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
-    // Physical Constrains
+void directed_ideal_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_id,
+    CoreCoord master_core_coord,
+    CoreCoord subordinate_core_coord,
+    NOC noc_id = NOC::RISCV_1_default) {
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    // Parameters
+    // Ideal: Less transactions, more data per transaction
+    uint32_t num_of_transactions = 1;
+    uint32_t transaction_size_pages = max_transmittable_pages / num_of_transactions;
+
+    // Test config
+    OneFromOneConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .subordinate_core_coord = subordinate_core_coord,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = noc_id,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
+void packet_sizes_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_id,
+    CoreCoord master_core_coord,
+    CoreCoord subordinate_core_coord,
+    NOC noc_id = NOC::RISCV_1_default) {
+    // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
@@ -135,10 +178,6 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages =
         arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
-
-    // Cores
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord subordinate_core_coord = {1, 1};
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
@@ -148,14 +187,15 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
             }
 
             // Test config
-            unit_tests::dm::core_to_core::OneFromOneConfig test_config = {
-                .test_id = 5,
+            OneFromOneConfig test_config = {
+                .test_id = test_id,
                 .master_core_coord = master_core_coord,
                 .subordinate_core_coord = subordinate_core_coord,
                 .num_of_transactions = num_of_transactions,
                 .transaction_size_pages = transaction_size_pages,
                 .page_size_bytes = page_size_bytes,
                 .l1_data_format = DataFormat::Float16_b,
+                .noc_id = noc_id,
             };
 
             // Run
@@ -166,39 +206,149 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     }
 }
 
-/* ========== Test case for one from one data movement; Test id = 51 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
-    uint32_t test_id = 51;  // Arbitrary test ID
-
-    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+void virtual_channels_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_id,
+    CoreCoord master_core_coord = {0, 0},
+    CoreCoord subordinate_core_coord = {1, 1}) {
+    // Physical Constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-    // Adjustable Parameters
-    // Ideal: Less transactions, more data per transaction
-    uint32_t num_of_transactions = 1;
-    uint32_t transaction_size_pages = max_transmittable_pages / num_of_transactions;
-    // Cores
-    /*
-        Any two cores that are next to each other on the torus
-         - May be worth considering the performance of this test with different pairs of adjacent cores
-    */
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord subordinate_core_coord = {0, 1};
 
-    // Test Config
-    unit_tests::dm::core_to_core::OneFromOneConfig test_config = {
+    std::uint32_t max_num_pages_per_transaction = 1 << 12;
+    std::uint32_t num_of_transactions = 256;  // Constant value
+    std::uint32_t max_num_virtual_channels = 4;
+
+    // Loop through:
+    // 1. NOCs (NOC_0, NOC_1)
+    // 2. Size of transactions
+    // 3. Numbers of virtual channels
+    for (NOC noc_id : {NOC::NOC_0, NOC::NOC_1}) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_num_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            for (uint32_t num_virtual_channels = 1; num_virtual_channels <= max_num_virtual_channels;
+                 num_virtual_channels++) {
+                if (pages_per_transaction > max_transmittable_pages) {
+                    continue;
+                }
+
+                // Test config
+                OneFromOneConfig test_config = {
+                    .test_id = test_id,
+                    .master_core_coord = master_core_coord,
+                    .subordinate_core_coord = subordinate_core_coord,
+                    .num_of_transactions = num_of_transactions,
+                    .transaction_size_pages = pages_per_transaction,
+                    .page_size_bytes = bytes_per_page,
+                    .l1_data_format = DataFormat::Float16_b,
+                    .noc_id = noc_id,
+                    .num_virtual_channels = num_virtual_channels,
+                };
+
+                // Run
+                for (unsigned int id = 0; id < num_devices_; id++) {
+                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                }
+            }
+        }
+    }
+}
+
+void custom_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_id,
+    CoreCoord master_core_coord,
+    CoreCoord subordinate_core_coord,
+    uint32_t num_of_transactions,
+    uint32_t pages_per_transaction,
+    uint32_t num_virtual_channels,
+    NOC noc_id = NOC::RISCV_1_default) {
+    // Physical Constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    if (pages_per_transaction > max_transmittable_pages) {
+        log_trace(LogTest, "Skipping test due to page size limitations");
+        return;
+    }
+
+    // Test config
+    OneFromOneConfig test_config = {
         .test_id = test_id,
         .master_core_coord = master_core_coord,
         .subordinate_core_coord = subordinate_core_coord,
         .num_of_transactions = num_of_transactions,
-        .transaction_size_pages = transaction_size_pages,
-        .page_size_bytes = page_size_bytes,
+        .transaction_size_pages = pages_per_transaction,
+        .page_size_bytes = bytes_per_page,
         .l1_data_format = DataFormat::Float16_b,
+        .noc_id = noc_id,
+        .num_virtual_channels = num_virtual_channels,
     };
 
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
         EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
+}
+
+}  // namespace unit_tests::dm::core_from_core
+
+/* ========== Test case for one from one data movement; Test id = 5 ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
+    uint32_t test_id = 5;
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {1, 1};
+
+    unit_tests::dm::core_from_core::packet_sizes_test(
+        arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord);
+}
+
+/* ========== Test case for one from one data movement; Test id = 51 ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
+    uint32_t test_id = 51;
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    unit_tests::dm::core_from_core::directed_ideal_test(
+        arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord);
+}
+
+TEST_F(DeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
+    // Test ID (Arbitrary)
+    uint32_t test_id = 151;
+
+    unit_tests::dm::core_from_core::virtual_channels_test(
+        arch_,
+        devices_,
+        num_devices_,
+        test_id,
+        CoreCoord(0, 0),  // Master Core
+        CoreCoord(0, 1)   // Subordinate Core
+    );
+}
+
+TEST_F(DeviceFixture, TensixDataMovementOneFromOneCustom) {
+    uint32_t test_id = 160;
+
+    // Parameters
+    uint32_t num_of_transactions = 256;
+    uint32_t pages_per_transaction = 1;
+    uint32_t num_virtual_channels = 4;
+
+    unit_tests::dm::core_from_core::custom_test(
+        arch_,
+        devices_,
+        num_devices_,
+        test_id,
+        CoreCoord(0, 0),  // Master Core
+        CoreCoord(0, 1),  // Subordinate Core
+        num_of_transactions,
+        pages_per_transaction,
+        num_virtual_channels);
 }
 
 }  // namespace tt::tt_metal
