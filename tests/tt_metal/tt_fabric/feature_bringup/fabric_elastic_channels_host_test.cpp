@@ -107,9 +107,10 @@ struct DeviceTestResources {
     std::vector<CoreCoord> worker_cores_vec;
     CoreCoord eth_core;
     tt_metal::Program program;
-    uint32_t worker_ack_semaphore_id;
-    uint32_t worker_new_chunk_semaphore_id;
-    uint32_t worker_src_buffer_address;
+    uint32_t worker_ack_semaphore_id = std::numeric_limits<uint32_t>::max();
+    uint32_t worker_new_chunk_semaphore_id = std::numeric_limits<uint32_t>::max();
+    uint32_t worker_src_buffer_address = std::numeric_limits<uint32_t>::max();
+    uint32_t erisc_write_out_buffer_address = std::numeric_limits<uint32_t>::max();
     std::vector<uint32_t> erisc_flow_control_semaphore_ids;
 };
 
@@ -224,6 +225,11 @@ void set_worker_runtime_args(
     
     for (size_t i = 0; i < device_resources.worker_cores_vec.size(); i++) {
         auto worker_core = device_resources.worker_cores_vec[i];
+
+        TT_FATAL(device_resources.worker_ack_semaphore_id != std::numeric_limits<uint32_t>::max(), "worker_ack_semaphore_id is not set");
+        TT_FATAL(device_resources.worker_new_chunk_semaphore_id != std::numeric_limits<uint32_t>::max(), "worker_new_chunk_semaphore_id is not set");
+        TT_FATAL(device_resources.worker_src_buffer_address != std::numeric_limits<uint32_t>::max(), "worker_src_buffer_address is not set");
+
         std::vector<uint32_t> rt_args = {
             config.total_messages,
             device_resources.worker_src_buffer_address,
@@ -418,6 +424,22 @@ TestResources create_test_resources(
 
         device_resource.worker_ack_semaphore_id = tt_metal::CreateSemaphore(device_resource.program, device_resource.worker_cores, 0, CoreType::WORKER);
         device_resource.worker_new_chunk_semaphore_id = tt_metal::CreateSemaphore(device_resource.program, device_resource.worker_cores, 0, CoreType::WORKER);
+
+
+        auto worker_src_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::InterleavedBufferConfig{
+            .device = device_resource.device,
+            .size = config.n_workers * config.message_size,
+            .page_size = config.n_workers * config.message_size,
+            .buffer_type = tt::tt_metal::BufferType::L1
+        });
+        auto erisc_write_out_dest_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::InterleavedBufferConfig{
+            .device = device_resource.device,
+            .size = config.n_workers * config.message_size,
+            .page_size = config.n_workers * config.message_size,
+            .buffer_type = tt::tt_metal::BufferType::L1
+        });
+        device_resource.worker_src_buffer_address = worker_src_buffer->address();
+        device_resource.erisc_write_out_buffer_address = erisc_write_out_dest_buffer->address();
     }
 
     return resources;
