@@ -76,9 +76,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        for (auto [device_id, device_ptr] : devices_) {
-            tt::tt_metal::CloseDevice(device_ptr);
-        }
+        tt::tt_metal::detail::CloseDevices(devices_);
     }
 
     std::map<chip_id_t, tt_metal::IDevice*> devices_;
@@ -363,11 +361,17 @@ int main(int argc, char** argv) {
 
     N300TestDevice test_fixture;
 
-    const auto& device_0 = test_fixture.devices_.at(2);
+    const auto& device_0 = test_fixture.devices_.at(0);
     const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
-    TT_ASSERT(eth_sender_core_iter != active_eth_cores.end());
+    TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
+    while (eth_sender_core_iter != active_eth_cores.end() and
+           not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), *eth_sender_core_iter)) {
+        eth_sender_core_iter++;
+    }
+    TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
     auto eth_sender_core = *eth_sender_core_iter;
+    TT_FATAL(device_0->is_active_ethernet_core(eth_sender_core), "Not an active ethernet core {}", eth_sender_core);
 
     auto [device_id, eth_receiver_core] = device_0->get_connected_ethernet_core(eth_sender_core);
     const auto& device_1 = test_fixture.devices_.at(device_id);

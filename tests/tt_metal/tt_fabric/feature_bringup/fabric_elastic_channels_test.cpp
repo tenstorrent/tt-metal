@@ -97,16 +97,16 @@ void process_send_side(
         uint64_t end_cycles;
         if (can_release_chunk) {  // 22 cycles!??!?! (44 -> 22 if I don't include the branch condition in the timing)
 
-            // start_cycles = eth_read_wall_clock();
+            start_cycles = eth_read_wall_clock();
             auto chunk = open_chunks_cb.pop();  // avg 7.3 cycles
-            // end_cycles = eth_read_wall_clock();
             send_pool.return_chunk(chunk);  // 16 cycles
             current_chunk_ack_index = BufferIndex{0};
+            end_cycles = eth_read_wall_clock();
         }
         sender_mark_ack_processed();
         if (can_release_chunk) {
             timing_stats->release_count++;
-            // timing_stats->total_release_cycles += (end_cycles - start_cycles);
+            timing_stats->total_release_cycles += (end_cycles - start_cycles);
         }
         messages_acked++;
         unacked_sends--;
@@ -139,12 +139,12 @@ void process_send_side(
     if ((open_chunks_cb.is_empty() || current_chunk_slot_index == CHUNK_N_PKTS) && !send_pool.is_empty()) {
         current_chunk_slot_index = BufferIndex{0};
         // Acquire new chunk - measure timing
+        uint64_t start_cycles = eth_read_wall_clock();
         auto new_chunk = send_pool.get_free_chunk();
-        // uint64_t start_cycles = eth_read_wall_clock();
         open_chunks_cb.push(new_chunk);
-        // uint64_t end_cycles = eth_read_wall_clock();
+        uint64_t end_cycles = eth_read_wall_clock();
 
-        // timing_stats->total_acquire_cycles += (end_cycles - start_cycles);
+        timing_stats->total_acquire_cycles += (end_cycles - start_cycles);
         timing_stats->acquire_count++;
     }
 }
