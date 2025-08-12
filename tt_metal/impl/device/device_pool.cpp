@@ -253,6 +253,7 @@ void DevicePool::initialize(
     _inst->using_fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
 
     std::vector<chip_id_t> device_ids_to_open = device_ids;
+    _inst->add_devices_to_pool(device_ids_to_open);
     // Never skip for TG Cluster
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     bool skip = !is_galaxy;
@@ -330,7 +331,6 @@ void DevicePool::initialize(
 
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
-    _inst->add_devices_to_pool(device_ids_to_open);
     _inst->init_firmware_on_active_devices();
 }
 

@@ -53,6 +53,11 @@ public:
     // Check if a RISC ID is active (has channels)
     bool is_risc_id_active(size_t risc_id) const;
 
+    // Get translated fabric mux cores
+    const std::unordered_set<CoreCoord>& get_translated_fabric_mux_cores() const {
+        return translated_fabric_mux_cores_;
+    }
+
     // Wrapper APIs for mux config access - these take device_id, eth_chan_id and channel_id (channels inside a mux)
     size_t get_local_flow_control_semaphore_address(
         chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
@@ -63,6 +68,9 @@ public:
 private:
     // Logical fabric tensix cores (will get from device-specific core descriptor when needed)
     std::vector<CoreCoord> logical_fabric_mux_cores_;
+
+    // Translated fabric tensix cores (for coordinate system matching with tensix cores)
+    std::unordered_set<CoreCoord> translated_fabric_mux_cores_;
 
     // based on the number of channels used, get the number of risc needed per tensix
     size_t num_used_riscs_per_tensix_;

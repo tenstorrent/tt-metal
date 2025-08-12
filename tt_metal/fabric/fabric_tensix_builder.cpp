@@ -38,13 +38,15 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     const bool is_TG =
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG);
 
-    chip_id_t device_id = 0;
+    const auto& all_active_devices = tt::DevicePool::instance().get_all_active_devices();
+    TT_FATAL(!all_active_devices.empty(), "No active devices found in DevicePool");
+
+    auto device_id = all_active_devices.front()->id();
     if (is_TG) {
         // For TG systems, use a non-MMIO device for fabric mux cores
-        for (chip_id_t dev_id = 0; dev_id < num_devices; ++dev_id) {
-            auto device = tt::DevicePool::instance().get_active_device(dev_id);
+        for (const auto& device : all_active_devices) {
             if (device && !device->is_mmio_capable()) {
-                device_id = dev_id;
+                device_id = device->id();
                 break;
             }
         }
@@ -57,17 +59,48 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "No logical fabric mux cores found for device {}", device_id);
 
+    // Initialize translated mux cores (coordinates should be same across devices)
+    auto device = tt::DevicePool::instance().get_active_device(device_id);
+    TT_FATAL(device != nullptr, "Device {} not found in DevicePool", device_id);
+    if (device != nullptr) {
+        for (const auto& logical_core : logical_fabric_mux_cores_) {
+            CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
+            translated_fabric_mux_cores_.insert(translated_core);
+        }
+        log_info(tt::LogTest, "DEBUG: Initialized {} translated fabric mux cores", translated_fabric_mux_cores_.size());
+    }
+
     // Get maximum number of active ethernet channels from control plane across all devices
     size_t max_eth_channels = 0;
 
-    // Create per-device channel mappings using real ethernet channel IDs
-    for (chip_id_t dev_id = 0; dev_id < num_devices; ++dev_id) {
-        if (!(is_TG && tt::DevicePool::instance().get_active_device(dev_id)->is_mmio_capable())) {
+    // First pass: find max_eth_channels
+    for (const auto& device : all_active_devices) {
+        if (!(is_TG && device->is_mmio_capable())) {
+            auto dev_id = device->id();
             auto dev_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
 
             // Get all active ethernet channels for this device
             auto active_channels = control_plane.get_active_fabric_eth_channels(dev_fabric_node_id);
             max_eth_channels = std::max(max_eth_channels, active_channels.size());
+        }
+    }
+
+    TT_FATAL(max_eth_channels > 0, "No active ethernet channels found in the system");
+    TT_FATAL(!logical_fabric_mux_cores_.empty(), "logical_fabric_mux_cores_ is empty before division");
+
+    // Calculate number of configs per core and riscs needed BEFORE using them
+    num_configs_per_core_ =
+        (max_eth_channels + logical_fabric_mux_cores_.size() - 1) / logical_fabric_mux_cores_.size();
+    num_used_riscs_per_tensix_ = num_configs_per_core_;
+
+    // Second pass: create per-device channel mappings using real ethernet channel IDs
+    for (const auto& device : all_active_devices) {
+        if (!(is_TG && device->is_mmio_capable())) {
+            auto dev_id = device->id();
+            auto dev_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+
+            // Get all active ethernet channels for this device
+            auto active_channels = control_plane.get_active_fabric_eth_channels(dev_fabric_node_id);
 
             // Initialize per-device mappings
             eth_chan_to_core_index_[dev_id] = std::unordered_map<size_t, size_t>();
@@ -89,12 +122,23 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
         }
     }
 
-    TT_FATAL(max_eth_channels > 0, "No active ethernet channels found in the system");
+    // Debug logging
+    log_info(tt::LogTest, "DEBUG: num_configs_per_core_ = {}", num_configs_per_core_);
+    log_info(tt::LogTest, "DEBUG: num_used_riscs_per_tensix_ = {}", num_used_riscs_per_tensix_);
 
-    // Calculate number of configs per core
-    num_configs_per_core_ =
-        (max_eth_channels + logical_fabric_mux_cores_.size() - 1) / logical_fabric_mux_cores_.size();
-    num_used_riscs_per_tensix_ = num_configs_per_core_;
+    // Debug log eth_chan_to_risc_id_
+    for (const auto& [dev_id, channel_map] : eth_chan_to_risc_id_) {
+        for (const auto& [eth_chan_id, risc_id] : channel_map) {
+            log_info(tt::LogTest, "DEBUG: eth_chan_to_risc_id_[{}][{}] = {}", dev_id, eth_chan_id, risc_id);
+        }
+    }
+
+    // Debug log eth_chan_to_core_index_
+    for (const auto& [dev_id, channel_map] : eth_chan_to_core_index_) {
+        for (const auto& [eth_chan_id, core_index] : channel_map) {
+            log_info(tt::LogTest, "DEBUG: eth_chan_to_core_index_[{}][{}] = {}", dev_id, eth_chan_id, core_index);
+        }
+    }
 }
 
 void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
@@ -139,11 +183,19 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Calculate buffers per channel based on available space and max channels
     size_t space_needed_for_max_channels = num_channels_ * buffer_size_bytes_full_size_channel_;
-    num_buffers_per_channel_ = space_per_risc / space_needed_for_max_channels;
+    num_buffers_per_channel_ = std::bit_floor(space_per_risc / space_needed_for_max_channels);
 
     // Set base addresses for each RISC ID with proper L1 alignment
     for (size_t risc_id = 0; risc_id < num_used_riscs_per_tensix_; ++risc_id) {
         base_l1_addresses_[risc_id] = l1_base + (risc_id * space_per_risc);
+    }
+
+    // Debug logging
+    log_info(tt::LogTest, "DEBUG: num_buffers_per_channel_ = {}", num_buffers_per_channel_);
+
+    // Debug log base_l1_addresses_
+    for (const auto& [risc_id, address] : base_l1_addresses_) {
+        log_info(tt::LogTest, "DEBUG: base_l1_addresses_[{}] = {}", risc_id, address);
     }
 }
 
@@ -360,9 +412,68 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args() cons
 }
 
 std::vector<uint32_t> FabricTensixDatamoverBuilder::get_runtime_args(tt::tt_metal::Program& program) const {
+    log_info(tt::LogTest, "FabricTensixDatamoverBuilder::get_runtime_args called");
+    log_info(
+        tt::LogTest,
+        "  local_fabric_node_id: mesh_id={}, chip_id={}",
+        local_fabric_node_id_.mesh_id,
+        local_fabric_node_id_.chip_id);
+    log_info(
+        tt::LogTest,
+        "  remote_fabric_node_id: mesh_id={}, chip_id={}",
+        remote_fabric_node_id_.mesh_id,
+        remote_fabric_node_id_.chip_id);
+    log_info(tt::LogTest, "  link_idx: {}", link_idx_);
+    log_info(tt::LogTest, "  my_core_logical: x={}, y={}", my_core_logical_.x, my_core_logical_.y);
+    log_info(tt::LogTest, "  ethernet_channel_id: {}", ethernet_channel_id_);
+    log_info(tt::LogTest, "  risc_id: {}", risc_id_);
+    log_info(tt::LogTest, "  noc_x: {}, noc_y: {}", noc_x_, noc_y_);
+
     // Get runtime args from the underlying mux config
-    return fabric_mux_config_->get_fabric_mux_run_time_args(
+    auto args = fabric_mux_config_->get_fabric_mux_run_time_args(
         local_fabric_node_id_, remote_fabric_node_id_, link_idx_, program, {my_core_logical_});
+
+    log_info(tt::LogTest, "Runtime args breakdown:");
+
+    if (args.size() > 0) {
+        size_t idx = 0;
+
+        // First arg is num_regions_to_clear
+        log_info(tt::LogTest, "  num_regions_to_clear: {}", args[idx++]);
+        uint32_t num_regions = args[0];
+
+        // Next are address/size pairs for regions to clear
+        for (uint32_t i = 0; i < num_regions && idx + 1 < args.size(); ++i) {
+            log_info(tt::LogTest, "  region[{}]_address: {}", i, args[idx++]);
+            log_info(tt::LogTest, "  region[{}]_size: {}", i, args[idx++]);
+        }
+
+        // Remaining args are from append_fabric_connection_rt_args
+        if (idx < args.size()) {
+            log_info(tt::LogTest, "  fabric_connection_args starting at index {}", idx);
+
+            // Based on append_worker_to_fabric_edm_sender_rt_args, these should be:
+            if (idx < args.size()) {
+                log_info(tt::LogTest, "  eth_channel: {}", args[idx++]);
+            }
+            if (idx < args.size()) {
+                log_info(tt::LogTest, "  sender_worker_terminate_semaphore_id: {}", args[idx++]);
+            }
+            if (idx < args.size()) {
+                log_info(tt::LogTest, "  sender_worker_buffer_index_semaphore_id: {}", args[idx++]);
+            }
+
+            // Log any remaining args
+            while (idx < args.size()) {
+                log_info(tt::LogTest, "  additional_arg[{}]: {}", idx, args[idx]);
+                idx++;
+            }
+        }
+    }
+
+    log_info(tt::LogTest, "Total runtime args count: {}", args.size());
+
+    return args;
 }
 
 }  // namespace tt::tt_fabric
