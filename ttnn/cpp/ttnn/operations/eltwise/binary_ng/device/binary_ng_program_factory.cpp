@@ -5,6 +5,7 @@
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
@@ -642,16 +643,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         c_data_format,
         c_sharded ? c_buffer : nullptr);
 
-    uint32_t a_is_dram = a_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    uint32_t b_is_dram = false;
-    uint32_t c_is_dram = c_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
     // WRITER KERNEL
     auto writer_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar;
     auto compute_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar;
     if (b.has_value()) {
-        b_is_dram = b_buffer->buffer_type() == tt_metal::BufferType::DRAM;
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
@@ -674,11 +670,14 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             operation_attributes.subtile_broadcast_type, reader_defines);
         writer_kernel = KernelName::WriterNoBcastNg;
     }
-    auto writer_kernel_id = tt_metal::CreateKernel(
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
+    tt::tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
         all_device_cores,
-        tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
@@ -730,11 +729,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             .defines = std::move(compute_kernel_defines)});
 
     // READER KERNEL
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b_buffer != nullptr ? *b_buffer : *a_buffer).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
+    tt::tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding, b_is_dram}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

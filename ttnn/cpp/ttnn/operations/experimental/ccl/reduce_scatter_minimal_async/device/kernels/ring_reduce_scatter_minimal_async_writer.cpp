@@ -13,7 +13,7 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
-#include "minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -273,12 +273,8 @@ void kernel_main() {
                                     pages_read_in_row = 0;
                                 }
 
-                                uint64_t remote_noc0_dest_noc_addr_tile_one =
-                                    get_noc_addr(tile_one_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                                uint64_t remote_noc0_dest_noc_addr_tile_two =
-                                    get_noc_addr(tile_two_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-                                scatter_write_and_advance_local_read_address_for_fabric<
+                                scatter_write_for_fabric_write<
+                                    true,
                                     fabric_mux_num_buffers_per_channel>(
                                     intermediate_addrgen,
                                     tile_one_id,
@@ -299,10 +295,7 @@ void kernel_main() {
                                     pages_read_in_row = 0;
                                 }
 
-                                uint64_t remote_noc0_dest_noc_addr =
-                                    get_noc_addr(tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-                                write_and_advance_local_read_address_for_fabric<fabric_mux_num_buffers_per_channel>(
+                                write_for_fabric_write<true,fabric_mux_num_buffers_per_channel>(
                                     intermediate_addrgen,
                                     tile_id,
                                     pkt_hdr,
@@ -431,6 +424,9 @@ void kernel_main() {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
     }
+
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
     if constexpr (is_termination_master) {

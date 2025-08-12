@@ -110,14 +110,10 @@ public:
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
 
     // Returns true if the view is fully local, i.e. all devices in the view are local.
-    bool fully_local() const;
-
-    // Returns true if the view is fully local, i.e. all devices in the view are local.
     // Throws if the coordinate is out of bounds of this view.
     bool is_local(const MeshCoordinate& coord) const;
 
 private:
-    bool fully_local_ = true;
     DistributedMeshContainer<IDevice*> devices_;
     MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids_;
     tt::tt_fabric::MeshId mesh_id_;
