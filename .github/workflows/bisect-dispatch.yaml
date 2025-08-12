@@ -46,7 +46,7 @@ on:
       timeout:
         required: true
         type: string
-        description: "Timeout (eg: 5m, 1h)"
+        description: "Timeout for one iteration (eg: 5m, 1h)"
       patch:
         required: false
         type: string
