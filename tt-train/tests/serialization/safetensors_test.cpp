@@ -6,8 +6,12 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 std::string get_test_data_dir() {
-    const char* env_var = std::getenv("TEST_DATA_DIR");
+    const char* env_var = std::getenv("TEST_LOCAL_DATA_DIR");
     return (env_var) ? std::string(env_var) : std::string(TEST_DATA_DIR);
 }
 
@@ -24,10 +28,6 @@ inline std::vector<float> bytes_to_floats_copy(std::span<const std::byte> bytes)
 }
 
 TEST(SafeTensorsTest, LoadSimpleMlp) {
-#include <string>
-#include <unordered_map>
-#include <vector>
-
     const std::unordered_map<std::string, std::vector<float>> test_params = {
         // net.0.weight: shape (4, 2), row-major
         {"net.0.weight", {0.3930f, 0.8285f, 0.8702f, 0.8824f, 0.1990f, -0.8696f, 0.0920f, -0.6256f}},
