@@ -171,7 +171,7 @@ def test_sd35_new_pipeline_performance(
                 negative_prompt_2=[negative_prompt],
                 negative_prompt_3=[negative_prompt],
                 num_inference_steps=num_inference_steps,
-                seed=i,  # Different seed for each run
+                seed=0,  # Different seed for each run
                 traced=True,
             )
             images[0].save(f"sd35_new_{image_w}_{image_h}_perf_run{i}.png")
