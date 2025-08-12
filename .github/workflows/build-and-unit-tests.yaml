@@ -57,7 +57,7 @@ jobs:
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150b') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label))
+        ((inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     container:
