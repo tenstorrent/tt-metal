@@ -62,7 +62,7 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     v_endif;
 
     if constexpr (!FAST_APPROX) {
-        v_if(in < 0.0F) {  // Reload for register pressure
+        v_if(in < 0.0F) {
             result = -std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and -inf for bf16
         }
         v_endif;
