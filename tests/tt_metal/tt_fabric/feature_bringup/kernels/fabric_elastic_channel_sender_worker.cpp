@@ -33,8 +33,23 @@ struct SenderChannelView {
 
 
 
+struct FabricWriterAdapter {
+    SenderChannelView sender_channel_view;
+    OnePassIterator<
+    
+};
+
+
 void kernel_main() {
 
+    size_t n_pkts = get_arg_val<size_t>(0);
+    
+
+    for (size_t i = 0; i < n_pkts; i++) {
+
+
+
+    }
 
 
 }
