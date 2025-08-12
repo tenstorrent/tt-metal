@@ -63,7 +63,7 @@ ttnn::Tensor all_broadcast_composite_all_gather(
         input_tensor,
         multi_device_global_semaphore[0],
         num_links,
-        input_tensor.memory_config(),
+        memory_config,
         ttnn::ccl::Topology::Linear,
         cluster_axis,
         subdevice_id,
