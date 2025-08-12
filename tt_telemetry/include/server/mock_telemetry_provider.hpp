@@ -15,9 +15,12 @@
  #include <chrono>
  #include <initializer_list>
  #include <mutex>
+ #include <queue>
  #include <random>
  #include <thread>
  #include <vector>
+
+ #include <server/telemetry_subscriber.hpp>
 
  class MockTelemetryProvider {
     private:

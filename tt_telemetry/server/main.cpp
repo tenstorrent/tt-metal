@@ -36,6 +36,7 @@
 #include <telemetry/ethernet_link.hpp>
 #include <telemetry/ethernet_helpers.hpp>
 #include <telemetry/print_helpers.hpp>
+#include <server/mock_telemetry_provider.hpp>
 #include <server/web_server.hpp>
 
 
@@ -43,7 +44,7 @@
  Main
 **************************************************************************************************/
 
-int main() {
+static void test_print_link_health() {
     const tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
     const tt::Cluster &cluster = instance.get_cluster();
     const std::map<
@@ -88,9 +89,30 @@ int main() {
             std::cout << "  " << endpoint << ": " << (is_ethernet_endpoint_up(cluster, endpoint) ? "UP" : "DOWN") << std::endl;
         }
     }
+}
+
+int main() {
+    test_print_link_health();
 
     // Web server
-    run_web_server();
+    std::future<bool> web_server;
+    std::shared_ptr<TelemetrySubscriber> web_server_subscriber;
+    std::tie(web_server, web_server_subscriber) = run_web_server(5555);
+
+    // Web server #2 (testing the ability of our producer to supply two consumers)
+    std::future<bool> web_server2;
+    std::shared_ptr<TelemetrySubscriber> web_server2_subscriber;
+    std::tie(web_server2, web_server2_subscriber) = run_web_server(8086);
+
+    // Fake telemetry
+    MockTelemetryProvider mock_telemetry{web_server_subscriber, web_server2_subscriber};
+    
+    // Run until finished
+    bool web_server_succeeded = web_server.get();
+    bool web_server2_succeeded = web_server2.get();
+    if (!web_server_succeeded || !web_server2_succeeded) {
+        return 1;
+    }
 
     return 0;
 }

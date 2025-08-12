@@ -10,9 +10,11 @@
 
 #include <httplib.h>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include <server/json_messages.hpp>
 #include <server/telemetry_subscriber.hpp>
-#include <server/mock_telemetry_provider.hpp>
+#include <server/web_server.hpp>
 
 using json = nlohmann::json;
 
@@ -286,32 +288,20 @@ public:
     }
 };
 
-static void run_server(std::shared_ptr<TelemetryServer> server, uint16_t port) {
+static bool web_server_thread(std::shared_ptr<TelemetryServer> server, uint16_t port) {
     try {
         server->start(port);
     } catch (const std::exception& e) {
-        std::cerr << "Server error: " << e.what() << std::endl;
+        log_fatal(tt::LogAlways, "Web server error: {}", e.what());
+        return false;
     }
-}
-
-bool run_web_server() {
-    auto server = std::make_shared<TelemetryServer>();
-    auto server2 = std::make_shared<TelemetryServer>();
-    MockTelemetryProvider mock_provider{server, server2};
-
-    auto t1 = std::thread(run_server, server, 5555);
-    auto t2 = std::thread(run_server, server2, 8086);
-
-    t1.join();
-    t2.join();
-    
-    // try {
-    //     server->start(8086);
-    //     //server2->start(8080);
-    // } catch (const std::exception& e) {
-    //     std::cerr << "Server error: " << e.what() << std::endl;
-    //     return false;
-    // }
-
     return true;
 }
+
+std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_web_server(uint16_t port) {
+    auto server = std::make_shared<TelemetryServer>();
+    auto subscriber = static_pointer_cast<TelemetrySubscriber>(server);
+    auto future = std::async(std::launch::async, web_server_thread, server, port);
+    return std::make_pair(std::move(future), subscriber);
+}
+
