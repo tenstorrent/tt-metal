@@ -108,6 +108,7 @@ while [[ "$found" = "false" ]]; do
    attempt=1
    while [ $attempt -le $max_retries ]; do
       echo "Test attempt $attempt for commit $(git rev-parse HEAD)"
+      echo "Running test: $test"
       timeout "$timeout_duration_iteration" bash -c "$test"
       timeout_rc=$?
       if [ $timeout_rc -eq 0 ]; then
