@@ -12,6 +12,7 @@ class TtLlamaImageTransformer(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -24,11 +25,13 @@ class TtLlamaImageTransformer(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.gated = gated
 
         self.resblocks = [
             TtLlamaImageTransformerBlock(
                 mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 state_dict=state_dict,
                 state_dict_prefix=f"{state_dict_prefix}resblocks.{i}.",
                 weight_cache_path=weight_cache_path,

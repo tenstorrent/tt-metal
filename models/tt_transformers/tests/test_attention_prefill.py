@@ -11,6 +11,7 @@ import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import get_rot_mats
@@ -52,6 +53,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
         # 1024 * 64,
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_inference(
     max_seq_len,
     paged_attention,
@@ -124,8 +126,10 @@ def test_attention_inference(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = Attention(
         mesh_device,
+        tt_ccl,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
