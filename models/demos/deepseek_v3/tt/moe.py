@@ -20,7 +20,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import even_int_div
 from models.demos.deepseek_v3.utils.run_config import (
-    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
     ModelState,
@@ -28,9 +27,10 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 
 
-class MoE(AbstractModule):
+class MoE(SharedStateAddOn, AbstractModule):
     """MoE module from DeepSeek-R1.
     See the `AbstractModule` docstring for usage info.
     """
@@ -102,7 +102,6 @@ class MoE(AbstractModule):
                 "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
                 "num_links": ccl.get_max_links(1),
             },
-            MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
 
     @classmethod

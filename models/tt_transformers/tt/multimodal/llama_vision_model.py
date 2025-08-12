@@ -13,6 +13,7 @@ from PIL import Image as PIL_Image
 from torch import Tensor
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
@@ -121,6 +122,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         self.model_dim = configuration.dim
 
         self.mesh_device = mesh_device
+        self.tt_ccl = TT_CCL(self.mesh_device)
         self.state_dict = state_dict
         self.weight_cache_path = weight_cache_path
         self.dtype = dtype
@@ -131,6 +133,7 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         self.vision_model = TtLlamaCrossAttentionTransformerVision(
             mesh_device,
+            self.tt_ccl,
             state_dict,
             "vision_model.",
             weight_cache_path=configuration.weight_cache_path(dtype),
@@ -141,6 +144,7 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         self.text_model = TtLlamaCrossAttentionTransformerText(
             mesh_device,
+            self.tt_ccl,
             state_dict,
             state_dict_prefix="text_model.",
             weight_cache_path=configuration.weight_cache_path(ttnn.bfloat8_b),
