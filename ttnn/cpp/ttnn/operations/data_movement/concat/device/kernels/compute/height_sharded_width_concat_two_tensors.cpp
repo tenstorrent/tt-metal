@@ -71,7 +71,7 @@ void MAIN {
 
         reconfig_data_format_srca(concat_cb);
         pack_reconfig_data_format(output_transpose_cb);
-        if (output_num_tiles_width <= MAX_BATCH_SIZE) {
+        if constexpr (output_num_tiles_width <= MAX_BATCH_SIZE) {
             transpose<output_num_tiles_width>(concat_cb, output_transpose_cb);
         } else {
             for (uint32_t j = 0; j < output_num_tiles_width; j++) {
