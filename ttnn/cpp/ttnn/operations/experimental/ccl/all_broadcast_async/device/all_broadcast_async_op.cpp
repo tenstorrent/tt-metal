@@ -146,7 +146,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->barrier_semaphore);
+        this->barrier_semaphore,
+        this->using_persistent_buffers);
 }
 
 tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -162,6 +163,7 @@ tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std:
         this->topology,
         this->cluster_axis,
         this->barrier_semaphore.has_value(),
+        this->using_persistent_buffers,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -204,6 +206,9 @@ std::vector<Tensor> all_broadcast_async_impl(
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
+    // all_broadcast_async currently doesn't support using persistent buffers
+    bool using_persistent_buffers = true;
+
     return tt::tt_metal::operation::run(
         ttnn::AllBroadcastAsync(
             devices,
@@ -214,7 +219,8 @@ std::vector<Tensor> all_broadcast_async_impl(
             multi_device_global_semaphore,
             sub_device_id,
             cluster_axis,
-            barrier_semaphore),
+            barrier_semaphore,
+            using_persistent_buffers),
         {input_tensor});
 }
 

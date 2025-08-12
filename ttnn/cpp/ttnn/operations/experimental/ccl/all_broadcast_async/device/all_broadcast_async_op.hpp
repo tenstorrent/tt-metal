@@ -35,6 +35,7 @@ struct AllBroadcastAsync {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
     const std::optional<GlobalSemaphore>& barrier_semaphore;
+    bool using_persistent_buffers;
 
     AllBroadcastAsync(
         std::vector<IDevice*> devices,
@@ -45,7 +46,8 @@ struct AllBroadcastAsync {
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis,
-        const std::optional<GlobalSemaphore>& barrier_semaphore) :
+        const std::optional<GlobalSemaphore>& barrier_semaphore,
+        bool using_persistent_buffers) :
         devices(std::move(devices)),
         num_links(num_links),
         ring_size(ring_size),
@@ -54,7 +56,8 @@ struct AllBroadcastAsync {
         semaphore(semaphore),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
-        barrier_semaphore(barrier_semaphore) {}
+        barrier_semaphore(barrier_semaphore),
+        using_persistent_buffers(using_persistent_buffers) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -97,7 +100,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<GlobalSemaphore>& barrier_semaphore);
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers);
 
 namespace operations::experimental::ccl {
 

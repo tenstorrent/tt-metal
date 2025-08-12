@@ -50,7 +50,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers) {
     tt::tt_metal::Program program{};
 
     auto mesh_device = input_tensor.mesh_device();
@@ -245,17 +246,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         uint32_t output_tile_id_start = input_tile_id_start;
         uint32_t output_tile_id_end = input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensors[ring_index].buffer()->address(),  // tensor_address0  //HERE
-            semaphore.address(),                             // out_ready_sem_bank_addr (absolute address)
-            output_tile_id_start * num_width_shards,         // tile_id_start
-            output_tile_id_end * num_width_shards,           // tile_id_end
-            wait_output_semaphore,                           // wait_output_semaphore
-            reset_global_semaphore,                          // reset_global_semaphore
-            drain_sync_core.x,                               // out_ready_sem_noc0_x
-            drain_sync_core.y,                               // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,                        // out_ready_sem_wait_value
-            barrier_semaphore.has_value(),                   // use_barrier
-            barrier_semaphore.has_value()                    // barrier_sem
+            output_tensors[ring_index].buffer()->address(),              // tensor_address0  //HERE
+            semaphore.address(),                                         // out_ready_sem_bank_addr (absolute address)
+            output_tile_id_start * num_width_shards,                     // tile_id_start
+            output_tile_id_end * num_width_shards,                       // tile_id_end
+            wait_output_semaphore,                                       // wait_output_semaphore
+            reset_global_semaphore,                                      // reset_global_semaphore
+            drain_sync_core.x,                                           // out_ready_sem_noc0_x
+            drain_sync_core.y,                                           // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,                                    // out_ready_sem_wait_value
+            barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier
+            barrier_semaphore.has_value()                                // barrier_sem
                 ? barrier_semaphore.value().address()
                 : 0,
             barrier_core.x,  // barrier_sem_noc0_x
