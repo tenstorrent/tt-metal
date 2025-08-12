@@ -8,13 +8,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("use_scaled_embedding", (False, True))
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -32,7 +33,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
+def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc, use_scaled_embedding):
     dtype = ttnn.bfloat16
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
@@ -41,20 +42,32 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
     state_dict = model_args.load_state_dict()
     tokenizer = model_args.tokenizer
 
+    if use_scaled_embedding:
+        model_args.embed_scale = model_args.dim**0.5
+        logger.info(f"Using scaled embedding with scale {model_args.embed_scale}")
+
     reference_emb = model_args.reference_embedding()
+
     if model_args.is_vision():
         layer_name = "text_model.tok_embeddings.weight"
     else:
         layer_name = "tok_embeddings.weight"
     reference_emb.load_state_dict({"emb.weight": state_dict[layer_name]})
 
-    tt_emb = Embedding(
-        mesh_device=mesh_device,
-        args=model_args,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        state_dict=state_dict,
-        dtype=dtype,
-    )
+    emb_kwargs = {
+        "mesh_device": mesh_device,
+        "args": model_args,
+        "weight_cache_path": model_args.weight_cache_path(dtype),
+        "state_dict": state_dict,
+        "dtype": dtype,
+    }
+    if use_scaled_embedding:
+        emb_kwargs["embed_scale"] = model_args.embed_scale
+        emb_cls = ScaledEmbedding
+    else:
+        emb_cls = Embedding
+
+    tt_emb = emb_cls(**emb_kwargs)
 
     prompts = ["Joy"] * 32
     pt_input = torch.tensor([model_args.encode_prompt(prompt, instruct=False) for prompt in prompts])
