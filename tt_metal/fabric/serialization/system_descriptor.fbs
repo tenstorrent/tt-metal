@@ -1,0 +1,32 @@
+include "intermesh_link_table.fbs";
+
+namespace tt.tt_fabric.flatbuffer;
+
+table RemoteEthConnection {
+    local_chan: EthChanDescriptor;
+    remote_host: string;
+    remote_chan: EthChanDescriptor;
+}
+
+table EthConnectivityDescriptor {
+    host_name: string;
+    local_eth_connections: [EthernetLink];  // maps local to remote channels
+    remote_eth_connections: [RemoteEthConnection];  // maps local to (host, remote)
+}
+
+table ASICDescriptor {
+    unique_id: uint64;
+    tray_id: uint32;
+}
+
+table HostASICGroup {
+    host_name: string;
+    asics: [ASICDescriptor];
+}
+
+table SystemDescriptor {
+    host_asic_groups: [HostASICGroup];  // represents the map<string, vector<ASICDescriptor>>
+    eth_connectivity_descs: [EthConnectivityDescriptor];
+}
+
+root_type SystemDescriptor;

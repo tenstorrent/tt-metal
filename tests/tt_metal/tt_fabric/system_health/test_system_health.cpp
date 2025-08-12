@@ -16,6 +16,8 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
+#include "tt_metal/fabric/intermesh_constants.hpp"
+#include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
 #include <tt_stl/caseless_comparison.hpp>
 #include <yaml-cpp/yaml.h>
 
@@ -219,52 +221,99 @@ std::string build_local_connectivity_desc_yaml(
     return emitter.c_str();
 }
 
-struct EthConnectivityDescriptor {
-    std::string host_name;
-    std::unordered_map<tt::tt_fabric::EthChanDescriptor, tt::tt_fabric::EthChanDescriptor> local_eth_connections;
-    std::unordered_map<tt::tt_fabric::EthChanDescriptor, std::pair<std::string, tt::tt_fabric::EthChanDescriptor>>
-        remote_eth_connections;
-};
-
-struct ASICDescriptor struct SystemDescriptor {
-    std::unordered_map<std::string, std::vector<uint64_t>> asic_ids;
-
-    std::vector<EthConnectivityDesc> eth_connectivity_descs;
-};
-
 TEST(Cluster, GetLocalEthernetConnectivity) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& eth_connections = cluster.get_ethernet_connections();
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
-
-    std::unordered_map<std::string, std::unordered_map<uint64_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>> local_eth_connectivity;
-    std::unordered_map<std::string, std::unordered_map<uint64_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>> remote_eth_connectivity;
 
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
     std::string hostname_str = std::string(hostname);
 
-    local_eth_connectivity[hostname_str] = {};
-    // Get Host Local Ethernet Connectivity
-    for (auto& [src, conn] : eth_connections) {
+    tt::tt_fabric::EthConnectivityDescriptor eth_connectivity_desc;
+    std::vector<tt::tt_fabric::ASICDescriptor> asic_descriptors;
+
+    eth_connectivity_desc.host_name = hostname_str;
+    // Populate local ethernet connections and ASIC descriptors
+    for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = chip_unique_ids.at(src);
-        local_eth_connectivity[hostname_str][src_unique_id] = {};
+        asic_descriptors.push_back(
+            tt::tt_fabric::ASICDescriptor(src_unique_id, cluster.get_physical_slot(src).value()));
         for (auto& [chan, dst] : conn) {
-            local_eth_connectivity[hostname_str][src_unique_id][chan] = {chip_unique_ids.at(std::get<0>(dst)), std::get<1>(dst)};
+            eth_connectivity_desc
+                .local_eth_connections[tt::tt_fabric::EthChanDescriptor{.board_id = src_unique_id, .chan_id = chan}] =
+                tt::tt_fabric::EthChanDescriptor{
+                    .board_id = chip_unique_ids.at(std::get<0>(dst)), .chan_id = std::get<1>(dst)};
         }
     }
 
-    // Get Cross-Host Ethernet Connectivity
-    remote_eth_connectivity[hostname_str] = {};
+    const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
+
+    uint64_t local_board_id = 0;
+    uint64_t remote_board_id = 0;
+    uint32_t remote_chan_id = 0;
 
     for (auto chip : cluster.user_exposed_chip_ids()) {
-        auto src_unique_id = chip_unique_ids.at(src);
-        remote_eth_connectivity[hostname_str][src_unique_id] = {};
-        for (auto link : cluster.get_intermesh_eth_links(chip)) {
-
+        if (control_plane.has_intermesh_links(chip)) {
+            for (auto [eth_coord, link] : control_plane.get_intermesh_eth_links(chip)) {
+                tt_cxy_pair virtual_eth_core(
+                    chip, cluster.get_virtual_coordinate_from_logical_coordinates(chip, eth_coord, CoreType::ETH));
+                cluster.read_core(
+                    &remote_board_id,
+                    sizeof(uint64_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::REMOTE_BOARD_ID_OFFSET);
+                cluster.read_core(
+                    &remote_chan_id,
+                    sizeof(uint32_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::REMOTE_ETH_CHAN_ID_OFFSET);
+                eth_connectivity_desc.remote_eth_connections[tt::tt_fabric::EthChanDescriptor{
+                    .board_id = chip_unique_ids.at(chip), .chan_id = link}] =
+                    std::make_pair(
+                        "UNKNOWN",
+                        tt::tt_fabric::EthChanDescriptor{.board_id = remote_board_id, .chan_id = remote_chan_id});
+            }
         }
     }
-    build_local_connectivity_desc_yaml(local_eth_connectivity, "local_ethernet_connectivity.yaml");
+
+    tt::tt_fabric::SystemDescriptor system_desc;
+    system_desc.asic_ids[hostname_str] = std::move(asic_descriptors);
+    system_desc.eth_connectivity_descs.push_back(std::move(eth_connectivity_desc));
+
+    auto serialized_sys_desc = serialize_system_descriptor_to_bytes(system_desc);
+    auto deserialized_sys_desc = deserialize_system_descriptor_from_bytes(serialized_sys_desc);
+    TT_FATAL(deserialized_sys_desc.asic_ids == system_desc.asic_ids, "Deserialized ASIC IDs do not match original");
+
+    for (auto desc_idx = 0; desc_idx < deserialized_sys_desc.eth_connectivity_descs.size(); desc_idx++) {
+        const auto& deserialized_desc = deserialized_sys_desc.eth_connectivity_descs[desc_idx];
+        const auto& original_desc = system_desc.eth_connectivity_descs[desc_idx];
+
+        for (const auto& [local_chan, remote_chan] : deserialized_desc.local_eth_connections) {
+            TT_FATAL(
+                original_desc.local_eth_connections.count(local_chan) > 0,
+                "Local channel {} not found in original descriptor",
+                local_chan);
+            TT_FATAL(
+                original_desc.local_eth_connections.at(local_chan) == remote_chan,
+                "Remote channel for local channel {} does not match original",
+                local_chan);
+        }
+
+        for (const auto& [local_chan, remote_pair] : deserialized_desc.remote_eth_connections) {
+            TT_FATAL(
+                original_desc.remote_eth_connections.count(local_chan) > 0,
+                "Local channel {} not found in original descriptor",
+                local_chan);
+            TT_FATAL(
+                original_desc.remote_eth_connections.at(local_chan) == remote_pair,
+                "Remote pair for local channel {} does not match original",
+                local_chan);
+        }
+    }
+    // build_local_connectivity_desc_yaml(local_eth_connectivity, "local_ethernet_connectivity.yaml");
 }
 
 TEST(Cluster, ReportIntermeshLinks) {
