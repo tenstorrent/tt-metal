@@ -17,9 +17,4 @@ namespace tt::tt_fabric {
 #define ROUTING_MODE_LOW_LATENCY 0x0080
 #define ROUTING_MODE_DYNAMIC 0x0100
 
-// PUSH/PULL is for 2D and will be
-// TODO: remove when tt_fabric removes these notion
-#define ROUTING_MODE_PUSH 0x0200
-#define ROUTING_MODE_PULL 0x0400
-
 }  // namespace tt::tt_fabric
