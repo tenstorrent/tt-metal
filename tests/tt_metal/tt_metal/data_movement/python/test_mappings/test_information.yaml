@@ -134,9 +134,6 @@ tests:
   55:
     name: "Loopback Directed Ideal"
 
-  60:
-    name: "All to All Packet Sizes"
-
   61:
     name: "DRAM Interleaved Page Numbers"
 
@@ -163,9 +160,6 @@ tests:
 
   69:
     name: "L1 Interleaved Page Write Numbers"
-
-  70:
-    name: "All from All Packet Sizes"
 
   71:
     name: "L1 Interleaved Page Directed Ideal"
@@ -220,3 +214,15 @@ tests:
       the performance starts to fluctuate due to head-of-line blocking and unfairness in the NOC.
       Performance fluctuates because the flush disturbes the steady state and will randomly create
       traffic that sometimes has head of line blocking, and sometimes not.
+
+  300:
+    name: "All to All Directed Ideal"
+
+  301:
+    name: "All to All Packet Sizes"
+
+  310:
+    name: "All from All Directed Ideal"
+
+  311:
+    name: "All from All Packet Sizes"
