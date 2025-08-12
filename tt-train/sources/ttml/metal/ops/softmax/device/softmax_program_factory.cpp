@@ -139,7 +139,6 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // get the number of inner dimension
@@ -184,24 +183,23 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
-    auto target_indexes_data_format = tt::DataFormat::UInt32;
 
-    auto cb_input = create_circular_buffer(
+    create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    auto cb_mask = create_circular_buffer(
+    create_circular_buffer(
         program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    auto cb_max_mask = create_circular_buffer(
+    create_circular_buffer(
         program, all_cores, kMaxMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    auto cb_reduction_scaler = create_circular_buffer(
+    create_circular_buffer(
         program, all_cores, KReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_mat_mul_reduce = create_circular_buffer(
+    create_circular_buffer(
         program, all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_max_value_before_reduction = create_circular_buffer(
+    create_circular_buffer(
         program,
         all_cores,
         kMaxValueBeforeReductionCbIndex,
@@ -209,7 +207,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         bfloat16_single_tile_size_bytes,
         kMaxValueBeforeReductionTiles);
 
-    auto cb_max_value_after_reduction = create_circular_buffer(
+    create_circular_buffer(
         program,
         all_cores,
         kMaxValueAfterReductionCbIndex,
@@ -217,10 +215,10 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         bfloat16_single_tile_size_bytes,
         kNumMaxValueAfterReductionTiles);
 
-    auto cb_exp_input = create_circular_buffer(
+    create_circular_buffer(
         program, all_cores, kExpCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    auto cb_exp_sum_before_reduction = create_circular_buffer(
+    create_circular_buffer(
         program,
         all_cores,
         kExpSumBeforeReductionCbIndex,
@@ -228,7 +226,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         float32_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
-    auto cb_exp_sum_after_refuction = create_circular_buffer(
+    create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,
@@ -236,7 +234,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         float32_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
-    auto cb_output = create_circular_buffer(
+    create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
     // -------------------------------------------------------------------------
