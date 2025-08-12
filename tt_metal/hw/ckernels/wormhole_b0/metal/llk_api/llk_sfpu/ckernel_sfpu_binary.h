@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_rounding_ops.h"
+#include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
 
 using namespace sfpi;
