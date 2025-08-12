@@ -77,6 +77,20 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
+          # Health check loop
+          for i in {1..10}; do
+            echo "Health check attempt $i"
+            if tt-smi -r && ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}; then
+              echo "Health checks passed"
+              break
+            fi
+            if [ $i -eq 10 ]; then
+              echo "Health checks failed after 10 attempts"
+              exit 1
+            fi
+            echo "Health checks failed, retrying..."
+            sleep 5
+          done
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
