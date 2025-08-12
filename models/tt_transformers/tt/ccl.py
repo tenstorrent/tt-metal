@@ -325,6 +325,9 @@ def tt_sharded_distributed_rmsnorm(
 # This functionality is in development, and when ready should replace this workaround
 def ag_on_padded_dim_3(inp, tt_ccl, cluster_axis, num_links, topology):
     if inp.shape[3] % 32 != 0:
+        input_dtype = inp.dtype
+        if input_dtype == ttnn.bfloat8_b:
+            inp = ttnn.typecast(inp, ttnn.bfloat16)
         inp = ttnn.to_layout(inp, layout=ttnn.ROW_MAJOR_LAYOUT)
         all_broadcast_output_tensors = ttnn.experimental.all_broadcast_async(
             inp,
@@ -336,7 +339,10 @@ def ag_on_padded_dim_3(inp, tt_ccl, cluster_axis, num_links, topology):
         )
         all_gather_output_tensor = ttnn.concat(all_broadcast_output_tensors, dim=3)
         [ttnn.deallocate(all_broadcast_output_tensor) for all_broadcast_output_tensor in all_broadcast_output_tensors]
-        return ttnn.to_layout(all_gather_output_tensor, ttnn.TILE_LAYOUT)
+        all_gather_output_tensor = ttnn.to_layout(all_gather_output_tensor, ttnn.TILE_LAYOUT)
+        if input_dtype == ttnn.bfloat8_b:
+            all_gather_output_tensor = ttnn.typecast(all_gather_output_tensor, ttnn.bfloat8_b)
+        return all_gather_output_tensor
     else:
         return ttnn.experimental.all_gather_async(
             inp,
