@@ -283,14 +283,12 @@ Mesh: [
   id: 0,
   board: SingleChip,
   device_topology: [1, 1],
-  host_topology: [1, 1],
-  host_ranks: [[0]]},
+  host_topology: [1, 1]},
 {
   id: 1,
   board: SingleChip,
   device_topology: [1, 1],
-  host_topology: [1, 1],
-  host_ranks: [[1]]}
+  host_topology: [1, 1]}
 ]
 
 Graph: []
