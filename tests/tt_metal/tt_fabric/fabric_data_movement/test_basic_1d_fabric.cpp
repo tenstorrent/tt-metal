@@ -1887,8 +1887,12 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) 
 
     fixture->RunProgramNonblocking(receiver_device, receiver_program);
     fixture->RunProgramNonblocking(sender_device, sender_program);
+
+    log_info(tt::LogTest, "WaitForSingleProgramDone ");
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+
+    log_info(tt::LogTest, "Done WaitForSingleProgramDone ");
 
     // Validate results by reading from L1 memory
     std::vector<uint32_t> sender_status;

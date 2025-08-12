@@ -286,19 +286,13 @@ void FabricContext::initialize_tensix_config() {
     }
 }
 
-std::pair<uint32_t, uint32_t> FabricContext::get_fabric_tensix_termination_address_and_signal() const {
+std::pair<uint32_t, uint32_t> FabricContext::get_fabric_tensix_termination_address_and_signal(size_t risc_id) const {
     TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
+    TT_FATAL(tensix_config_->is_risc_id_active(risc_id), "RISC ID {} is not active in fabric tensix config", risc_id);
 
-    // Get termination signal from first active RISC ID (they should be the same) - much cleaner!
-    for (size_t risc_id = 0; risc_id < tensix_config_->get_num_riscs_per_core(); ++risc_id) {
-        if (tensix_config_->is_risc_id_active(risc_id)) {
-            auto mux_config = tensix_config_->get_mux_config(risc_id);
-            return std::make_pair(
-                mux_config->get_termination_signal_address(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-        }
-    }
-
-    TT_THROW("No active RISC IDs found in fabric tensix config");
+    auto mux_config = tensix_config_->get_mux_config(risc_id);
+    return std::make_pair(
+        mux_config->get_termination_signal_address(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 }
 
 }  // namespace tt::tt_fabric

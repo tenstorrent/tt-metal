@@ -770,6 +770,8 @@ bool DevicePool::close_device(chip_id_t device_id) {
 bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     ZoneScoped;
 
+    log_info(tt::LogTest, "close_devices ");
+
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
@@ -797,6 +799,8 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         mmio_devices_to_close.insert(mmio_device_id);
     }
 
+    log_info(tt::LogTest, "Synchronize ");
+
     // Global Sync across all devices that are being closed
     // We need to ensure that commands sent to each device have been completed
     // before closing any device + modifying routing info.
@@ -813,6 +817,8 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
             Synchronize(dev);    // Synchronize device
         }
     }
+
+    log_info(tt::LogTest, "ReadDeviceProfilerResults ");
 
     // TODO(MO): Remove when legacy non-mesh device is removed
     for (const chip_id_t device_id : devices_to_close) {
@@ -846,6 +852,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(dev_id);
     }
 
+    log_info(tt::LogTest, "Terminate fabric routers ");
     // Terminate fabric routers
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
@@ -854,11 +861,39 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();
         std::vector<uint32_t> termination_signal(1, signal);
 
-        // from fabric context, get terminal signal, all mux cores should get the singal.
-        // loop for all devices,
-        // check the number of configs per core (number of risc used)
-        // WriteToDeviceL1 to those addresses
-        // does a l1_barrier to make sure those signal landed.
+        // Terminate fabric tensix configs (mux cores) if enabled
+        bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                     tt::tt_fabric::FabricTensixConfig::DISABLED;
+        if (tensix_config_enabled) {
+            const auto& tensix_config = fabric_context.get_fabric_tensix_config();
+
+            for (const auto& dev : this->get_all_active_devices()) {
+                if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                    continue;
+                }
+
+                // Loop through all active RISC IDs and send termination signals to mux cores
+                for (size_t risc_id = 0; risc_id < tensix_config.get_num_riscs_per_core(); ++risc_id) {
+                    if (!tensix_config.is_risc_id_active(risc_id)) {
+                        continue;
+                    }
+
+                    auto [tensix_termination_address, tensix_signal] =
+                        fabric_context.get_fabric_tensix_termination_address_and_signal(risc_id);
+                    std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
+                    auto mux_core = tensix_config.get_core_for_channel(dev->id(), risc_id);
+
+                    log_info(
+                        tt::LogTest, "terminate mux on dev {}, with address {}", dev->id(), tensix_termination_address);
+
+                    tt_metal::detail::WriteToDeviceL1(
+                        dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::TENSIX);
+                }
+
+                // L1 barrier to ensure all termination signals are delivered
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(dev->id());
+            }
+        }
 
         for (const auto& dev : this->get_all_active_devices()) {
             if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {

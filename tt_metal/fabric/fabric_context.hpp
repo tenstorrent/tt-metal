@@ -60,7 +60,7 @@ public:
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
     // Get termination signal for fabric tensix mux cores
-    std::pair<uint32_t, uint32_t> get_fabric_tensix_termination_address_and_signal() const;
+    std::pair<uint32_t, uint32_t> get_fabric_tensix_termination_address_and_signal(size_t risc_id) const;
 
 private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;

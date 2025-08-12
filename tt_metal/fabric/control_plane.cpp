@@ -1344,7 +1344,7 @@ static void write_to_worker_or_fabric_tensix_cores(
     if (tensix_config_enabled) {
         const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
         const auto& tensix_config = fabric_context.get_fabric_tensix_config();
-        mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
+        mux_cores_translated = tensix_config.get_translated_fabric_or_dispatch_mux_cores();
     }
 
     size_t mux_cores_written = 0;

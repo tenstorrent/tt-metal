@@ -56,6 +56,8 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     tt::tt_metal::DispatchCoreConfig dispatch_core_config =
         tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     logical_fabric_mux_cores_ = tt::get_logical_fabric_mux_cores(device_id, num_hw_cqs, dispatch_core_config);
+    // TODO: once we merge the mux cores from dispatch to fabric, we can remove this.
+    logical_dispatch_mux_cores_ = tt::get_logical_dispatch_cores(device_id, num_hw_cqs, dispatch_core_config);
 
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "No logical fabric mux cores found for device {}", device_id);
 
@@ -65,9 +67,16 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     if (device != nullptr) {
         for (const auto& logical_core : logical_fabric_mux_cores_) {
             CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
-            translated_fabric_mux_cores_.insert(translated_core);
+            translated_fabric_or_dispatch_mux_cores_.insert(translated_core);
         }
-        log_info(tt::LogTest, "DEBUG: Initialized {} translated fabric mux cores", translated_fabric_mux_cores_.size());
+        for (const auto& logical_core : logical_dispatch_mux_cores_) {
+            CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
+            translated_fabric_or_dispatch_mux_cores_.insert(translated_core);
+        }
+        log_info(
+            tt::LogTest,
+            "DEBUG: Initialized {} translated fabric mux cores",
+            translated_fabric_or_dispatch_mux_cores_.size());
     }
 
     // Get maximum number of active ethernet channels from control plane across all devices
