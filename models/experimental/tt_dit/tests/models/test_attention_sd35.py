@@ -12,6 +12,7 @@ from ...utils.check import assert_quality
 from ...models.transformers.attention_sd35 import SD35JointAttention
 from ...parallel.manager import CCLManager
 from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from ...utils.padding import PaddingConfig
 
 
 @pytest.mark.parametrize(
@@ -24,8 +25,19 @@ from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as Tor
         [(2, 1), 1, 0],
         [(2, 2), 0, 1],
         [(2, 2), 1, 0],
-        # [(2, 4), 0, 1], # fails because we don't have padded heads yet
+        [(2, 4), 0, 1],  # fails because we don't have padded heads yet
         [(2, 4), 1, 0],
+    ],
+    ids=[
+        "1x1sp0tp1",
+        "1x2sp0tp1",
+        "1x2sp1tp0",
+        "2x1sp0tp1",
+        "2x1sp1tp0",
+        "2x2sp0tp1",
+        "2x2sp1tp0",
+        "2x4sp0tp1",
+        "2x4sp1tp0",
     ],
     indirect=["mesh_device"],
 )
@@ -61,15 +73,6 @@ def test_sd35_joint_attention(
     eps = 1e-6
 
     # Create Torch model
-    # torch_model = TorchAttention(
-    #     query_dim=query_dim,
-    #     dim_head=head_dim,
-    #     heads=heads,
-    #     out_dim=query_dim,
-    #     qk_norm="rms_norm",
-    #     added_kv_proj_dim=query_dim,
-    #     context_pre_only=context_pre_only,
-    # ).to(torch_dtype)
     parent_torch_model = TorchSD3Transformer2DModel.from_pretrained(
         f"stabilityai/stable-diffusion-3.5-large", subfolder="transformer", torch_dtype=torch_dtype
     )
@@ -96,6 +99,11 @@ def test_sd35_joint_attention(
 
     parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
 
+    if heads % tp_factor != 0:
+        padding_config = PaddingConfig.from_tensor_parallel_factor(heads, head_dim, tp_factor)
+    else:
+        padding_config = None
+
     # Create TT model
     tt_model = SD35JointAttention(
         query_dim=query_dim,
@@ -109,6 +117,7 @@ def test_sd35_joint_attention(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        padding_config=padding_config,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 

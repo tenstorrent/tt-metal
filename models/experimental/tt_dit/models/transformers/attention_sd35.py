@@ -7,6 +7,7 @@ import ttnn
 from ...layers.normalization import RMSNorm
 from ...layers.linear import ColParallelLinear
 from ...utils.substate import substate
+from ...utils.padding import pad_weight_tensor
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
@@ -25,10 +26,14 @@ class SD35JointAttention:
         init=False,
         ccl_manager=None,
         parallel_config=None,
+        padding_config=None,
     ):
         self.query_dim = query_dim
         self.head_dim = head_dim
         self.heads = heads
+        self.padding_config = padding_config
+        self.padded_heads = padding_config.target_heads if padding_config is not None else heads
+
         self.out_dim = out_dim if out_dim is not None else query_dim
         # Note: added_kv_proj_dim should be passed as parameter, using query_dim as default
         self.added_kv_proj_dim = query_dim
@@ -37,9 +42,10 @@ class SD35JointAttention:
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
-        self.n_local_heads = self.heads // self.parallel_config.tensor_parallel.factor
+        self.n_local_heads = self.padded_heads // self.parallel_config.tensor_parallel.factor
 
-        self.inner_dim = out_dim if out_dim is not None else head_dim * heads
+        self.inner_dim = out_dim if out_dim is not None else head_dim * self.heads
+        self.padded_inner_dim = head_dim * self.padded_heads
         rms_kwargs = {
             "embedding_dim": head_dim,
             "norm_eps": eps,
@@ -55,7 +61,7 @@ class SD35JointAttention:
         # Fused QKV projection
         self.to_qkv = ColParallelLinear(
             query_dim,
-            3 * self.inner_dim,
+            3 * self.padded_inner_dim,
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -65,7 +71,7 @@ class SD35JointAttention:
         # Implementing joint attention
         self.add_qkv_proj = ColParallelLinear(
             self.added_kv_proj_dim,
-            3 * self.inner_dim,
+            3 * self.padded_inner_dim,
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -73,7 +79,7 @@ class SD35JointAttention:
         )
 
         self.to_out = ColParallelLinear(
-            self.inner_dim,
+            self.padded_inner_dim,
             self.out_dim,
             bias=out_bias,
             mesh_device=mesh_device,
@@ -84,7 +90,7 @@ class SD35JointAttention:
         if self.context_pre_only is not None and not self.context_pre_only:
             # TODO: Use `out_context_dim` parameter if given
             self.to_add_out = ColParallelLinear(
-                self.inner_dim,
+                self.padded_inner_dim,
                 self.out_dim,
                 bias=out_bias,
                 mesh_device=mesh_device,
@@ -115,11 +121,16 @@ class SD35JointAttention:
             def _merge_tensors(q, k, v):
                 n_dev = self.parallel_config.tensor_parallel.factor
                 q, k, v = q.T, k.T, v.T
+                # Pad QKV weights and biases to match the padded heads
+                if self.padding_config is not None:
+                    q = pad_weight_tensor(q, self.padding_config, pad_output_dim=True)
+                    k = pad_weight_tensor(k, self.padding_config, pad_output_dim=True)
+                    v = pad_weight_tensor(v, self.padding_config, pad_output_dim=True)
                 q = q.reshape(q.shape[0], n_dev, self.n_local_heads, self.head_dim)
                 k = k.reshape(k.shape[0], n_dev, self.n_local_heads, self.head_dim)
                 v = v.reshape(v.shape[0], n_dev, self.n_local_heads, self.head_dim)
                 qkv = torch.cat([q, k, v], dim=2)
-                qkv = qkv.reshape(qkv.shape[0], 3 * self.heads * self.head_dim)
+                qkv = qkv.reshape(qkv.shape[0], 3 * self.padded_heads * self.head_dim)
                 qkv = qkv.T
                 return qkv
 
@@ -134,6 +145,15 @@ class SD35JointAttention:
                 out_state["bias"] = bias
             return out_state
 
+        def pad_dense_out(state):
+            # Pad dense output weights and biases to match the padded heads
+            weight = state["weight"].T
+            bias = state["bias"]
+            if self.padding_config is not None:
+                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+            weight = weight.T
+            return {"weight": weight, "bias": bias}
+
         self.norm_q.load_state_dict(substate(state_dict, "norm_q"))
         self.norm_k.load_state_dict(substate(state_dict, "norm_k"))
         qkv_state = reshape_and_merge_qkv(
@@ -144,9 +164,9 @@ class SD35JointAttention:
             substate(state_dict, "add_q_proj"), substate(state_dict, "add_k_proj"), substate(state_dict, "add_v_proj")
         )
         self.add_qkv_proj.load_state_dict(add_qkv_state)
-        self.to_out.load_state_dict(substate(state_dict, "to_out.0"))
+        self.to_out.load_state_dict(pad_dense_out(substate(state_dict, "to_out.0")))
         if self.context_pre_only is not None and not self.context_pre_only:
-            self.to_add_out.load_state_dict(substate(state_dict, "to_add_out"))
+            self.to_add_out.load_state_dict(pad_dense_out(substate(state_dict, "to_add_out")))
         self.norm_added_q.load_state_dict(substate(state_dict, "norm_added_q"))
         self.norm_added_k.load_state_dict(substate(state_dict, "norm_added_k"))
 
@@ -157,7 +177,7 @@ class SD35JointAttention:
         """
 
         qkv_1BNF = self.to_qkv(spatial_1BND)
-        local_heads = self.heads // self.parallel_config.tensor_parallel.factor
+        local_heads = self.n_local_heads
         q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(qkv_1BNF, 0), num_heads=local_heads, transpose_key=False
         )
