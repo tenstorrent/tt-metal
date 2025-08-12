@@ -3,7 +3,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-import fvcore.nn.weight_init as weight_init
 import warnings
 
 TORCH_VERSION = tuple(int(x) for x in torch.__version__.split(".")[:2])
@@ -136,6 +135,9 @@ class ASPP(nn.Module):
         pool_kernel_size=None,
         dropout: float = 0.0,
         use_depthwise_separable_conv=False,
+        shared_weight_tensor_kernel1: torch.Tensor,
+        shared_weight_tensor_kernel3: torch.Tensor,
+        shared_weight_tensor_kernel1_output5: torch.Tensor,
     ):
         """
         Args:
@@ -165,43 +167,49 @@ class ASPP(nn.Module):
         assert len(dilations) == 3, "ASPP expects 3 dilations, got {}".format(len(dilations))
         self.pool_kernel_size = pool_kernel_size
         self.dropout = dropout
-        use_bias = norm == ""
+        use_bias = False
+        # use_bias = norm == ""
+
+        self.shared_weight_tensor_kernel1 = shared_weight_tensor_kernel1
+        self.shared_weight_tensor_kernel3 = shared_weight_tensor_kernel3
+        self.shared_weight_tensor_kernel1_output5 = shared_weight_tensor_kernel1_output5
+
         self.convs = nn.ModuleList()
         # conv 1x1
-        self.convs.append(
-            Conv2d(
+        conv = Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=1,
+            bias=use_bias,
+            norm=get_norm(norm, out_channels),
+            activation=deepcopy(activation),
+        )
+        conv.weight.data = self.shared_weight_tensor_kernel1
+        self.convs.append(conv)
+
+        # atrous convs
+        for dilation in dilations:
+            conv = Conv2d(
                 in_channels,
                 out_channels,
-                kernel_size=1,
+                kernel_size=3,
+                padding=dilation,
+                dilation=dilation,
                 bias=use_bias,
                 norm=get_norm(norm, out_channels),
                 activation=deepcopy(activation),
             )
-        )
-        weight_init.c2_xavier_fill(self.convs[-1])
-        # atrous convs
-        for dilation in dilations:
-            self.convs.append(
-                Conv2d(
-                    in_channels,
-                    out_channels,
-                    kernel_size=3,
-                    padding=dilation,
-                    dilation=dilation,
-                    bias=use_bias,
-                    norm=get_norm(norm, out_channels),
-                    activation=deepcopy(activation),
-                )
-            )
-            weight_init.c2_xavier_fill(self.convs[-1])
+            conv.weight.data = self.shared_weight_tensor_kernel3
+            self.convs.append(conv)
         # image pooling
         # We do not add BatchNorm because the spatial resolution is 1x1,
         # the original TF implementation has BatchNorm.
+        conv = Conv2d(in_channels, out_channels, kernel_size=1, bias=use_bias, activation=deepcopy(activation))
+        conv.weight.data = self.shared_weight_tensor_kernel1
         image_pooling = nn.Sequential(
             nn.AvgPool2d(kernel_size=pool_kernel_size, stride=1),
-            Conv2d(in_channels, out_channels, 1, bias=True, activation=deepcopy(activation)),
+            conv,
         )
-        weight_init.c2_xavier_fill(image_pooling[1])
         self.convs.append(image_pooling)
 
         self.project = Conv2d(
@@ -212,7 +220,7 @@ class ASPP(nn.Module):
             norm=get_norm(norm, out_channels),
             activation=deepcopy(activation),
         )
-        weight_init.c2_xavier_fill(self.project)
+        self.project.weight.data = self.shared_weight_tensor_kernel1_output5
 
     def forward(self, x):
         size = x.shape[-2:]
@@ -226,7 +234,32 @@ class ASPP(nn.Module):
         for conv in self.convs:
             res.append(conv(x))
         res[-1] = F.interpolate(res[-1], size=size, mode="bilinear", align_corners=False)
+        print("Pooled conv PYTORCH!!")
+        print(res[4])
+        print(res[4].shape)
+        return res[4]
+        for tensor in res:
+            print("Tensor shape in ASPP forward pass:", tensor.shape)
+
+        print("Each branch output tensor")
+        print()
+        for tensor in res:
+            print(tensor)
+            print()
+        print("End of each branch output tensor")
+
         res = torch.cat(res, dim=1)
         res = self.project(res)
         res = F.dropout(res, self.dropout, training=self.training) if self.dropout > 0 else res
+
+        print("Final output tensor after project and dropout in Pytorch ASPP")
+        print()
+        for tensor in res:
+            print(tensor)
+            print()
+
+        print("Final res")
+        print(res)
+        print(res.shape)
+
         return res
