@@ -107,18 +107,7 @@ std::vector<Tensor> all_broadcast_async(
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
-
-std::vector<Tensor> all_broadcast_async(
-    const Tensor& input_tensor,
-    uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    ttnn::ccl::Topology topology,
-    const GlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 

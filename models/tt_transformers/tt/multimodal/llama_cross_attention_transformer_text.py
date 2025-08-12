@@ -14,7 +14,7 @@ from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.tt_transformers.tt.rope import RotarySetup
-from models.utility_functions import nearest_32
+from models.utility_functions import is_blackhole, nearest_32
 
 
 def _get_full_row_masked_out_mask(
@@ -36,6 +36,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -48,6 +49,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         assert self.vocab_size > 0
         self.n_layers = configuration.n_layers
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.model_config = configuration.get_model_config()
         self.grid_size = configuration.max_grid_size
@@ -75,8 +77,10 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 is_distributed=configuration.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                tt_ccl=self.tt_ccl,
             ),
             configuration,
+            self.tt_ccl,
         )
 
         # TODO: Generalize LMHead, maybe use llama_model's single-tile-sequence LMHead
@@ -135,6 +139,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             block = TransformerBlock(
                 configuration,
                 mesh_device,
+                self.tt_ccl,
                 dtype,
                 state_dict,
                 layer_id,
@@ -147,6 +152,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 xa_layer_id = self.fusion_schedule.index(layer_id)
                 block = TtLlamaCrossAttentionTransformerBlock(
                     mesh_device,
+                    self.tt_ccl,
                     state_dict,
                     f"{state_dict_prefix}cross_attention_layers.{xa_layer_id}.",
                     weight_cache_path,
@@ -338,7 +344,23 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             )
 
             if self.configuration.num_devices > 1:
-                output = ttnn.all_gather(output, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                # TODO: 26411
+                # Remove this blackhole condition once fabric CCLs are working on blackhole
+                if is_blackhole():
+                    output = ttnn.all_gather(output, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                else:
+                    output = ttnn.experimental.all_gather_async(
+                        output,
+                        persistent_output_buffer=None,
+                        dim=3,
+                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                        num_links=1,
+                        topology=ttnn.Topology.Linear,
+                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                        chunks_per_sync=10,
+                        num_workers_per_link=2,
+                        num_buffers_per_channel=2,
+                    )
             outputs.append(output)
 
         output = ttnn.concat(outputs, dim=-1)
