@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
-import os
 import random
 import re
 import time
@@ -11,128 +10,9 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import requests
 import torch
 import torchvision
 from loguru import logger
-
-
-def letterbox(
-    img,
-    new_shape=(640, 640),
-    color=(114, 114, 114),
-    auto=False,
-    scaleFill=True,
-    scaleup=True,
-    stride=32,
-):
-    shape = img.shape[:2]
-    if isinstance(new_shape, int):
-        new_shape = (new_shape, new_shape)
-    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-    if not scaleup:
-        r = min(r, 1.0)
-    ratio = r, r
-    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]
-    if auto:
-        dw, dh = np.mod(dw, stride), np.mod(dh, stride)
-    elif scaleFill:
-        dw, dh = 0.0, 0.0
-        new_unpad = (new_shape[1], new_shape[0])
-        ratio = new_shape[1] / shape[1], new_shape[0] / shape[0]
-    dw /= 2
-    dh /= 2
-    if shape[::-1] != new_unpad:
-        img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
-    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
-    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
-    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
-    return img  # , ratio, (dw, dh)
-
-
-IMG_FORMATS = {"bmp", "dng", "jpeg", "jpg", "mpo", "png", "tif", "tiff", "webp", "pfm", "heic"}
-
-
-def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
-    return cv2.imdecode(np.fromfile(filename, np.uint8), flags)
-
-
-class LoadImages:
-    def __init__(self, path, batch=1, img_size=640, stride=32):
-        files = []
-        for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
-            a = str(Path(p).absolute())
-            if os.path.isdir(a):
-                for f in os.listdir(a):
-                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
-                        files.append(os.path.join(a, f))
-            elif os.path.isfile(a):
-                files.append(a)
-            else:
-                raise FileNotFoundError(f"{p} does not exist or is not a valid file/directory")
-
-        images = []
-        for f in files:
-            suffix = f.split(".")[-1].lower()
-            if suffix in IMG_FORMATS:
-                images.append(f)
-        ni = len(images)
-        self.img_size = img_size
-        self.stride = stride
-        self.files = images
-        self.nf = ni
-        self.ni = ni
-        self.bs = batch
-        self.mode = "image"
-        assert self.nf > 0, f"No images found in {p}. Supported formats are: {img_formats}"
-
-    def __iter__(self):
-        self.count = 0
-        return self
-
-    def __next__(self):
-        paths, imgs, info = [], [], []
-        while len(imgs) < self.bs:
-            if self.count >= self.nf:
-                if imgs:
-                    return paths, imgs, info
-                else:
-                    raise StopIteration
-
-            path = self.files[self.count]
-            im0 = imread(path)
-            if im0 is None:
-                logger.warning(f"WARNING ⚠️ Image Read Error {path}")
-            else:
-                paths.append(path)
-                imgs.append(im0)
-                info.append(f"image {self.count + 1}/{self.nf} {path}: ")
-            self.count += 1
-            if self.count >= self.ni:
-                break
-
-        return paths, imgs, info
-
-    def __len__(self):
-        return self.nf
-
-
-def load_coco_class_names():
-    url = "https://raw.githubusercontent.com/pjreddie/darknet/master/data/coco.names"
-    path = f"models/demos/yolov4/demo/coco.names"
-    response = requests.get(url)
-    try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return response.text.strip().split("\n")
-    except requests.RequestException:
-        pass
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return [line.strip() for line in f.readlines()]
-
-    raise Exception("Failed to fetch COCO class names from both online and local sources.")
 
 
 def plot_one_box(x, img, color=None, label=None, line_thickness=3):
@@ -268,25 +148,6 @@ def increment_path(path, exist_ok=True, sep=""):
         return f"{path}{sep}{n}"
 
 
-def pre_transform(im, res):
-    return [letterbox(x, res) for x in im]
-
-
-def preprocess(im, res):
-    device = "cpu"
-    not_tensor = not isinstance(im, torch.Tensor)
-    if not_tensor:
-        im = np.stack(pre_transform(im, res))
-        im = im[..., ::-1].transpose((0, 3, 1, 2))
-        im = np.ascontiguousarray(im)
-        im = torch.from_numpy(im)
-
-    im = im.half() if device != "cpu" else im.float()
-    if not_tensor:
-        im /= 255
-    return im
-
-
 def postprocess(preds, img, orig_imgs, batch, names, path, dataset, save_dir="models/demos/yolov7/demo/runs/detect"):
     args = {"conf": 0.5, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
     save_txt = False
@@ -301,7 +162,7 @@ def postprocess(preds, img, orig_imgs, batch, names, path, dataset, save_dir="mo
     )
 
     results = []
-    from models.experimental.yolo_eval.utils import Results
+    from models.demos.utils.common_demo_utils import Results
 
     for i, det in enumerate(pred):
         im0 = orig_imgs[i] if isinstance(orig_imgs, list) else orig_imgs

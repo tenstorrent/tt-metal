@@ -2,179 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-import os
-from datetime import datetime
-from pathlib import Path
 
-import cv2
-import numpy as np
-import requests
 import torch
 import torchvision
-from loguru import logger
 
-
-def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
-    return cv2.imdecode(np.fromfile(filename, np.uint8), flags)
-
-
-IMG_FORMATS = {"bmp", "dng", "jpeg", "jpg", "mpo", "png", "tif", "tiff", "webp", "pfm", "heic"}
-
-
-class LoadImages:
-    def __init__(self, path, batch=1, vid_stride=1):
-        files = []
-        for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
-            a = str(Path(p).absolute())
-            if os.path.isdir(a):
-                for f in os.listdir(a):
-                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
-                        files.append(os.path.join(a, f))
-            elif os.path.isfile(a):
-                files.append(a)
-            else:
-                raise FileNotFoundError(f"{p} does not exist or is not a valid file/directory")
-
-        images = []
-        for f in files:
-            suffix = f.split(".")[-1].lower()
-            if suffix in IMG_FORMATS:
-                images.append(f)
-        ni = len(images)
-
-        self.files = images
-        self.nf = ni
-        self.ni = ni
-        self.mode = "image"
-        self.vid_stride = vid_stride
-        self.bs = batch
-        if self.nf == 0:
-            raise FileNotFoundError(f"No images or videos found in {p}")
-
-    def __iter__(self):
-        self.count = 0
-        return self
-
-    def __next__(self):
-        paths, imgs, info = [], [], []
-        while len(imgs) < self.bs:
-            if self.count >= self.nf:
-                if imgs:
-                    return paths, imgs, info
-                else:
-                    raise StopIteration
-
-            path = self.files[self.count]
-            im0 = imread(path)
-            if im0 is None:
-                logger.warning(f"WARNING ⚠️ Image Read Error {path}")
-            else:
-                paths.append(path)
-                imgs.append(im0)
-                info.append(f"image {self.count + 1}/{self.nf} {path}: ")
-            self.count += 1
-            if self.count >= self.ni:
-                break
-
-        return paths, imgs, info
-
-    def _new_video(self, path):
-        self.frame = 0
-        self.cap = cv2.VideoCapture(path)
-        self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
-        if not self.cap.isOpened():
-            raise FileNotFoundError(f"Failed to open video {path}")
-        self.frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) / self.vid_stride)
-
-    def __len__(self):
-        return math.ceil(self.nf / self.bs)
-
-
-def LetterBox(img, new_shape=(320, 320), auto=False, scaleup=True, center=True, stride=32):
-    shape = img.shape[:2]
-    if isinstance(new_shape, int):
-        new_shape = (new_shape, new_shape)
-
-    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-    if not scaleup:
-        r = min(r, 1.0)
-
-    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]
-    if auto:
-        dw, dh = np.mod(dw, stride), np.mod(dh, stride)
-
-    if center:
-        dw /= 2
-        dh /= 2
-
-    if shape[::-1] != new_unpad:
-        img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
-    top, bottom = int(round(dh - 0.1)) if center else 0, int(round(dh + 0.1))
-    left, right = int(round(dw - 0.1)) if center else 0, int(round(dw + 0.1))
-    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
-
-    return img
-
-
-def pre_transform(im, res):
-    return [LetterBox(img=x, new_shape=res) for x in im]
-
-
-def preprocess(im, res):
-    device = "cpu"
-    not_tensor = not isinstance(im, torch.Tensor)
-    if not_tensor:
-        im = np.stack(pre_transform(im, res))
-        im = im[..., ::-1].transpose((0, 3, 1, 2))
-        im = np.ascontiguousarray(im)
-        im = torch.from_numpy(im)
-
-    im = im.half() if device != "cpu" else im.float()
-    if not_tensor:
-        im /= 255
-    return im
-
-
-def empty_like(x):
-    return (
-        torch.empty_like(x, dtype=torch.float32) if isinstance(x, torch.Tensor) else np.empty_like(x, dtype=np.float32)
-    )
-
-
-def xywh2xyxy(x):
-    assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
-    y = empty_like(x)
-    xy = x[..., :2]
-    wh = x[..., 2:] / 2
-    y[..., :2] = xy - wh
-    y[..., 2:] = xy + wh
-    return y
-
-
-def plot_box_and_label(
-    image, lw, box, label="", color=(128, 128, 128), txt_color=(255, 255, 255), font=cv2.FONT_HERSHEY_COMPLEX
-):
-    # Add one xyxy box to image with label
-    p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
-    cv2.rectangle(image, p1, p2, color, thickness=lw, lineType=cv2.LINE_AA)
-    if label:
-        tf = max(lw - 1, 1)  # font thickness
-        w, h = cv2.getTextSize(label, 0, fontScale=lw / 3, thickness=tf)[0]  # text width, height
-        outside = p1[1] - h - 3 >= 0  # label fits outside box
-        p2 = p1[0] + w, p1[1] - h - 3 if outside else p1[1] + h + 3
-        cv2.rectangle(image, p1, p2, color, -1, cv2.LINE_AA)  # filled
-        cv2.putText(
-            image,
-            label,
-            (p1[0], p1[1] - 2 if outside else p1[1] + h + 2),
-            font,
-            lw / 3,
-            txt_color,
-            thickness=tf,
-            lineType=cv2.LINE_AA,
-        )
+from models.demos.utils.common_demo_utils import Results, xywh2xyxy
 
 
 def rescale(ori_shape, boxes, target_shape):
@@ -256,26 +88,6 @@ def non_max_suppression(
     return output
 
 
-def Boxes(data):
-    return {"xyxy": data[:, :4], "conf": data[:, -2], "cls": data[:, -1]}
-
-
-def Results(orig_img, path, names, boxes):
-    return {"orig_img": orig_img, "path": path, "names": names, "boxes": Boxes(boxes)}
-
-
-def clip_boxes(boxes, shape):
-    if isinstance(boxes, torch.Tensor):
-        boxes[..., 0] = boxes[..., 0].clamp(0, shape[1])
-        boxes[..., 1] = boxes[..., 1].clamp(0, shape[0])
-        boxes[..., 2] = boxes[..., 2].clamp(0, shape[1])
-        boxes[..., 3] = boxes[..., 3].clamp(0, shape[0])
-    else:
-        boxes[..., [0, 2]] = boxes[..., [0, 2]].clip(0, shape[1])
-        boxes[..., [1, 3]] = boxes[..., [1, 3]].clip(0, shape[0])
-    return boxes
-
-
 def postprocess(preds, img, orig_imgs, batch, names, conf=0.25, max_det=300):
     args = {"conf": conf, "iou": 0.7, "agnostic_nms": False, "max_det": max_det, "classes": None}
 
@@ -287,61 +99,7 @@ def postprocess(preds, img, orig_imgs, batch, names, conf=0.25, max_det=300):
 
     results = []
     for pred, orig_img, img_path in zip(preds, orig_imgs, batch[0]):
-        if pred.numel() == 0:
-            # If not prediction for a image
-            results.append(Results(orig_img, path=img_path, names=names, boxes=torch.full((1, 6), -1)))
-            continue
         pred[:, :4] = rescale(img.shape[2:], pred[:, :4], orig_img.shape)
         results.append(Results(orig_img, path=img_path, names=names, boxes=pred))
 
     return results
-
-
-def load_coco_class_names():
-    url = "https://raw.githubusercontent.com/pjreddie/darknet/master/data/coco.names"
-    path = f"models/demos/yolov4/demo/coco.names"
-    try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return response.text.strip().split("\n")
-    except requests.RequestException:
-        pass
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return [line.strip() for line in f.readlines()]
-
-    raise Exception("Failed to fetch COCO class names from both online and local sources.")
-
-
-def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
-    model_save_dir = os.path.join(save_dir, model_name)
-    os.makedirs(model_save_dir, exist_ok=True)
-
-    image = cv2.imread(image_path)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    if model_name == "torch_model":
-        bounding_box_color, label_color = (0, 255, 0), (0, 255, 0)
-    else:
-        bounding_box_color, label_color = (255, 0, 0), (255, 255, 0)
-
-    boxes = result["boxes"]["xyxy"]
-    scores = result["boxes"]["conf"]
-    classes = result["boxes"]["cls"]
-    names = result["names"]
-
-    for box, score, cls in zip(boxes, scores, classes):
-        x1, y1, x2, y2 = map(int, box)
-        label = f"{names[int(cls)]} {score.item():.2f}"
-        cv2.rectangle(image, (x1, y1), (x2, y2), bounding_box_color, 3)
-        cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2)
-
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_name = f"prediction_{timestamp}.jpg"
-    output_path = os.path.join(model_save_dir, output_name)
-
-    cv2.imwrite(output_path, image)
-
-    logger.info(f"Predictions saved to {output_path}")
