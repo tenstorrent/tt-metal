@@ -89,7 +89,7 @@ TensorAccessorArgs::TensorAccessorArgs(const Buffer& buffer, tensor_accessor::Ar
     } else {
         args_config_ = tensor_accessor::ArgConfig::None;
     }
-    args_config_.set(tensor_accessor::ArgConfig::IsDram, buffer.is_dram());
+    args_config_.set(tensor_accessor::ArgConfig::IsDram, buffer.buffer_type() == BufferType::DRAM);
 
     if (args_config_.test(tensor_accessor::ArgConfig::RuntimeRank)) {
         TT_FATAL(
