@@ -43,7 +43,7 @@ class RotarySetup(LightweightModule):
         self.datatype = datatype
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
-        cos_matrix, sin_matrix = compute_gather_cos_sin(
+        self.cos_matrix_pt, self.sin_matrix_pt = compute_gather_cos_sin(
             dhead=head_dim,
             end=max_seq_len * 2,
             theta=rope_theta,
@@ -51,8 +51,10 @@ class RotarySetup(LightweightModule):
             orig_context_len=rope_scaling.original_max_position_embeddings if rope_scaling is not None else None,
             position_ids=torch.arange(max_seq_len),
         )
-
-        self.set_cos_sin(cos_matrix, sin_matrix)
+        # [INFO] Qwen2.5 VL produces cos and sin matrices with shape [batch_size, 1, seq_len, head_dim]; clone to allocate memory for the expanded tensor
+        self.cos_matrix_pt = self.cos_matrix_pt.expand(self.batch_size, -1, -1, -1).clone()
+        self.sin_matrix_pt = self.sin_matrix_pt.expand(self.batch_size, -1, -1, -1).clone()
+        self.setup_cos_sin()
 
         self.batch_grid = (
             ttnn.CoreGrid(y=4, x=8)
@@ -102,41 +104,43 @@ class RotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
-    def set_cos_sin(self, cos_matrix, sin_matrix):
+    def update_cos_sin(self):
         # [INFO] we avoid re-allocating the cos_matrix and sin_matrix tensors to allow for correct processing of captured trace
-        if hasattr(self, "cos_matrix"):
-            assert (
-                cos_matrix.shape == self.cos_matrix.shape
-            ), "cos_matrix must be the same size as the existing cos_matrix"
-            assert (
-                sin_matrix.shape == self.sin_matrix.shape
-            ), "sin_matrix must be the same size as the existing sin_matrix"
-
-            for mat, mat_tt in zip((cos_matrix, sin_matrix), (self.cos_matrix, self.sin_matrix)):
-                mat = ttnn.from_torch(
-                    mat,
-                    device=None,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=self.datatype,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-                )
-                mat = ttnn.unsqueeze_to_4D(mat)
-                ttnn.copy_host_to_device_tensor(mat, mat_tt)
-        else:
-            for mat, attr_name in zip((cos_matrix, sin_matrix), ("cos_matrix", "sin_matrix")):
-                setattr(
-                    self,
-                    attr_name,
+        assert hasattr(self, "cos_matrix")
+        assert hasattr(self, "sin_matrix")
+        assert (
+            self.cos_matrix_pt.shape == self.cos_matrix.shape
+        ), "cos_matrix must be the same size as the existing cos_matrix"
+        assert (
+            self.sin_matrix_pt.shape == self.sin_matrix.shape
+        ), "sin_matrix must be the same size as the existing sin_matrix"
+        for mat, mat_tt in zip((self.cos_matrix_pt, self.sin_matrix_pt), (self.cos_matrix, self.sin_matrix)):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.unsqueeze_to_4D(
                     ttnn.from_torch(
-                        mat.expand(
-                            self.batch_size, -1, -1, -1
-                        ),  # [INFO] Qwen2.5 VL produces cos and sin matrices with shape [batch_size, 1, seq_len, head_dim]
-                        device=self.device,
+                        mat,
+                        device=None,
                         layout=ttnn.TILE_LAYOUT,
                         dtype=self.datatype,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-                    ),
-                )
+                    )
+                ),
+                mat_tt,
+            )
+
+    def setup_cos_sin(self):
+        for mat, attr_name in zip((self.cos_matrix_pt, self.sin_matrix_pt), ("cos_matrix", "sin_matrix")):
+            setattr(
+                self,
+                attr_name,
+                ttnn.from_torch(
+                    mat,
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=self.datatype,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                ),
+            )
 
     def get_rot_idxs(self, position_idxs, on_host=False):
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"

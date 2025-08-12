@@ -43,7 +43,7 @@ class Generator:
     def formatter(self):
         return self._ttt_generator.formatter
 
-    def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
+    def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
@@ -62,11 +62,11 @@ class Generator:
                 page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
             logits = self.__prefill_forward_single_user_text(
-                # prefill_ids,
-                tokens[user_id : user_id + 1],  # todo)) use this if the above padding is not used
+                tokens[user_id : user_id + 1],
                 page_table=page_table_user if page_table is not None else None,
                 user_id=user_id,
                 last_token_idx=last_token_idx,
+                rot_mats=rot_mats,
                 kv_cache=kv_cache,
             )
 
@@ -97,7 +97,7 @@ class Generator:
             sampling_params=sampling_params,
         )
 
-    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None):
+    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None):
         seq_len = tokens.shape[1]
         use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
         if use_chunked_prefill:
@@ -166,6 +166,7 @@ class Generator:
         else:
             prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
                 tokens,
+                rot_mats=rot_mats,
                 page_table=page_table,
             )
 
