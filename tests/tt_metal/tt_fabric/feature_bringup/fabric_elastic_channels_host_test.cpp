@@ -35,6 +35,8 @@
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 
+#include <tt-metalium/kernel_types.hpp>
+
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 using namespace tt;
@@ -95,86 +97,156 @@ struct TestConfig {
     bool bidirectional_mode;
     uint32_t message_size;
     uint32_t total_messages;
+    uint32_t n_workers;
 };
 
+
+struct DeviceTestResources {
+    tt_metal::IDevice* device;
+    CoreRangeSet worker_cores;
+    std::vector<CoreCoord> worker_cores_vec;
+    CoreCoord eth_core;
+    tt_metal::Program program;
+    uint32_t worker_ack_semaphore_id;
+    uint32_t worker_new_chunk_semaphore_id;
+    uint32_t worker_src_buffer_address;
+    std::vector<uint32_t> erisc_flow_control_semaphore_ids;
+};
+
+
+struct TestResources {
+    DeviceTestResources local_device;
+    DeviceTestResources remote_device;
+};
+
+
+void create_worker_kernels(
+    tt_metal::Program &program0, 
+    tt_metal::Program &program1, 
+    size_t n_sender_workers, 
+    std::vector<tt_metal::KernelHandle>& local_sender_worker_kernels, 
+    std::vector<tt_metal::KernelHandle>& remote_sender_worker_kernels,
+    const TestConfig& config
+) {
+
+    std::vector<uint32_t> ct_args = {
+        config.n_chunks,
+        config.chunk_n_pkts,
+    };
+
+    CoreRangeSet sender_worker_cores;
+
+    for (size_t i = 0; i < n_sender_workers; i++) {
+        auto local_sender_worker_kernel = tt_metal::CreateKernel(
+            program1,
+            "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channel_sender_worker.cpp",
+            sender_worker_cores,
+            tt::tt_metal::WriterDataMovementConfig(ct_args));
+
+        auto remote_sender_worker_kernel = tt_metal::CreateKernel(
+            program1,
+            "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channel_sender_worker.cpp",
+            sender_worker_cores,
+            tt::tt_metal::WriterDataMovementConfig(ct_args));
+    }
+}
+
 std::tuple<tt_metal::Program, tt_metal::Program> build(
-    tt_metal::IDevice* device0,
-    tt_metal::IDevice* device1,
-    CoreCoord eth_sender_core,
-    CoreCoord eth_receiver_core,
+    TestResources& test_resources,
     const TestConfig& config,
-    tt_metal::KernelHandle& local_kernel,
-    tt_metal::KernelHandle& remote_kernel) {
+    tt_metal::KernelHandle& local_erisc_kernel,
+    tt_metal::KernelHandle& remote_erisc_kernel,
+    std::vector<tt_metal::KernelHandle>& local_sender_worker_kernels,
+    std::vector<tt_metal::KernelHandle>& remote_sender_worker_kernels) {
+
     tt_metal::Program program0;
     tt_metal::Program program1;
 
+    size_t n_sender_workers = config.n_workers;
     // Compile-time arguments - match kernel expectations:
     // get_compile_time_arg_val(0) = N_CHUNKS
     // get_compile_time_arg_val(1) = RX_N_PKTS
     // get_compile_time_arg_val(2) = CHUNK_N_PKTS
     // get_compile_time_arg_val(3) = PACKET_SIZE
     // get_compile_time_arg_val(4) = BIDIRECTIONAL_MODE
+    // get_compile_time_arg_val(5) = N_SRC_CHANS
     uint32_t rx_n_pkts = config.rx_chunk_n_pkts;
-    std::vector<uint32_t> compile_time_args = {
+    std::vector<uint32_t> erisc_kernel_compile_time_args = {
         config.n_chunks,           // N_CHUNKS
         rx_n_pkts,                 // RX_N_PKTS
         config.chunk_n_pkts,       // CHUNK_N_PKTS
         config.packet_size,        // PACKET_SIZE
-        config.bidirectional_mode  // BIDIRECTIONAL_MODE
+        config.bidirectional_mode, // BIDIRECTIONAL_MODE
+        n_sender_workers           // N_SRC_CHANS
     };
 
-    // Remove BIDIRECTIONAL_MODE from defines since it's now a compile-time arg
-    std::map<std::string, std::string> defines = {};
-
-    // Runtime arguments
-    auto rt_args = [&](bool send_channels_at_offset_0) -> std::vector<uint32_t> {
-        uint32_t base_addr = static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED));
-
-        // Calculate buffer sizes and addresses
-        uint32_t send_buffer_size = config.n_chunks * config.chunk_n_pkts * config.packet_size;
-        uint32_t timing_stats_addr = base_addr + 32;          // Place in unreserved space before send buffers
-        uint32_t send_buffer_base = timing_stats_addr + 128;  // Start after handshake area
-
-        // Align receive buffer start to 16B boundary after send buffers
-        uint32_t recv_buffer_base = tt::align(send_buffer_base + send_buffer_size, 16);
-
-        // Calculate timing stats address in unreserved space before send buffers
-
-        return std::vector<uint32_t>{
-            base_addr,  // handshake_addr
-            config.total_messages,
-            config.message_size,
-            static_cast<uint32_t>(send_channels_at_offset_0),
-            send_buffer_base,
-            recv_buffer_base,
-            timing_stats_addr};
-    };
-
-    local_kernel = tt_metal::CreateKernel(
+    local_erisc_kernel = tt_metal::CreateKernel(
         program0,
         "tests/tt_metal/tt_fabric/feature_bringup/fabric_elastic_channels_test.cpp",
-        eth_sender_core,
+        test_resources.local_device.eth_core,
         tt_metal::EthernetConfig{
-            .noc = tt_metal::NOC::RISCV_0_default, .compile_args = compile_time_args, .defines = defines});
+            .noc = tt_metal::NOC::RISCV_0_default, .compile_args = erisc_kernel_compile_time_args});
 
-    remote_kernel = tt_metal::CreateKernel(
+    remote_erisc_kernel = tt_metal::CreateKernel(
         program1,
         "tests/tt_metal/tt_fabric/feature_bringup/fabric_elastic_channels_test.cpp",
-        eth_receiver_core,
+        test_resources.remote_device.eth_core,
         tt_metal::EthernetConfig{
-            .noc = tt_metal::NOC::RISCV_0_default, .compile_args = compile_time_args, .defines = defines});
+            .noc = tt_metal::NOC::RISCV_0_default, .compile_args = erisc_kernel_compile_time_args});
+
+    if (n_sender_workers > 0) {
+        create_worker_kernels(
+            program0,
+            program1,
+            n_sender_workers,
+            local_sender_worker_kernels,
+            remote_sender_worker_kernels,
+            config);
+    }
 
     // Compile programs
     try {
-        tt::tt_metal::detail::CompileProgram(device0, program0);
-        tt::tt_metal::detail::CompileProgram(device1, program1);
+        tt::tt_metal::detail::CompileProgram(test_resources.local_device.device, program0);
+        tt::tt_metal::detail::CompileProgram(test_resources.remote_device.device, program1);
     } catch (std::exception& e) {
         log_error(tt::LogTest, "Failed compile: {}", e.what());
         throw e;
     }
 
     return std::tuple<tt_metal::Program, tt_metal::Program>{std::move(program0), std::move(program1)};
+}
+
+void set_worker_runtime_args(
+    DeviceTestResources& device_resources,
+    std::vector<tt_metal::KernelHandle>& worker_kernels,
+    const TestConfig& config) {
+    auto eth_core_virtual = device_resources.device->ethernet_core_from_logical_core(device_resources.eth_core);
+    
+    for (size_t i = 0; i < device_resources.worker_cores_vec.size(); i++) {
+        auto worker_core = device_resources.worker_cores_vec[i];
+        std::vector<uint32_t> rt_args = {
+            config.total_messages,
+            device_resources.worker_src_buffer_address,
+            eth_core_virtual.x,
+            eth_core_virtual.y,
+            device_resources.erisc_flow_control_semaphore_ids.at(i),
+            config.message_size,
+            device_resources.worker_new_chunk_semaphore_id    
+        };
+
+        tt_metal::SetRuntimeArgs(device_resources.program, worker_kernels.at(i), worker_core, rt_args);
+    }
+}
+
+
+void set_worker_runtime_args(
+    TestResources& test_resources,
+    std::vector<tt_metal::KernelHandle>& local_sender_worker_kernels,
+    std::vector<tt_metal::KernelHandle>& remote_sender_worker_kernels,
+    const TestConfig& config) {
+
+    set_worker_runtime_args(test_resources.local_device, local_sender_worker_kernels, config);
+    set_worker_runtime_args(test_resources.remote_device, remote_sender_worker_kernels, config);
 }
 
 TimingStats read_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_t handshake_addr) {
@@ -195,16 +267,13 @@ TimingStats read_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_
 }
 
 void run_test(
-    tt_metal::IDevice* device0,
-    tt_metal::IDevice* device1,
-    tt_metal::Program& program0,
-    tt_metal::Program& program1,
-    tt_metal::KernelHandle local_kernel,
-    tt_metal::KernelHandle remote_kernel,
-    CoreCoord eth_sender_core,
-    CoreCoord eth_receiver_core,
+    TestResources& test_resources,
+    tt_metal::KernelHandle local_erisc_kernel,
+    tt_metal::KernelHandle remote_erisc_kernel,
+    std::vector<tt_metal::KernelHandle>& local_sender_worker_kernels,
+    std::vector<tt_metal::KernelHandle>& remote_sender_worker_kernels,
     const TestConfig& config) {
-    auto rt_args = [&](bool send_channels_at_offset_0) -> std::vector<uint32_t> {
+    auto rt_args = [&](bool send_channels_at_offset_0, DeviceTestResources& device_resources) -> std::vector<uint32_t> {
         uint32_t base_addr = static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED));
 
@@ -218,14 +287,19 @@ void run_test(
         // Calculate timing stats address in unreserved space before send buffers
         uint32_t timing_stats_addr = base_addr + 0x800;  // Place in unreserved space before send buffers
 
-        return std::vector<uint32_t>{
+        std::vector<uint32_t> rt_args = {
             base_addr,  // handshake_addr
             config.total_messages,
             config.message_size,
             static_cast<uint32_t>(send_channels_at_offset_0),
             send_buffer_base,
             recv_buffer_base,
-            timing_stats_addr};
+            timing_stats_addr,
+            device_resources.worker_ack_semaphore_id,
+            device_resources.worker_new_chunk_semaphore_id,
+            device_resources.erisc_flow_control_semaphore_ids.size()};
+        std::copy(device_resources.erisc_flow_control_semaphore_ids.begin(), device_resources.erisc_flow_control_semaphore_ids.end(), std::back_inserter(rt_args));
+        return rt_args;
     };
 
     log_info(tt::LogTest, "Running Fabric Elastic Channels Test...");
@@ -239,23 +313,27 @@ void run_test(
         config.message_size,
         config.total_messages);
 
-    tt_metal::SetRuntimeArgs(program0, local_kernel, eth_sender_core, rt_args(true));
-    tt_metal::SetRuntimeArgs(program1, remote_kernel, eth_receiver_core, rt_args(false));
+    tt_metal::SetRuntimeArgs(test_resources.local_device.program, local_erisc_kernel, test_resources.local_device.eth_core, rt_args(true, test_resources.local_device));
+    tt_metal::SetRuntimeArgs(test_resources.remote_device.program, remote_erisc_kernel, test_resources.remote_device.eth_core, rt_args(false, test_resources.remote_device));
+
+    if (config.n_workers > 0) {
+        set_worker_runtime_args(test_resources, local_sender_worker_kernels, remote_sender_worker_kernels, config);
+    }
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(device0, program0); });
-        std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(device1, program1); });
+        std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(test_resources.local_device.device, test_resources.local_device.program); });
+        std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(test_resources.remote_device.device, test_resources.remote_device.program); });
 
         th2.join();
         th1.join();
     } else {
-        tt_metal::EnqueueProgram(device0->command_queue(), program0, false);
-        tt_metal::EnqueueProgram(device1->command_queue(), program1, false);
+        tt_metal::EnqueueProgram(test_resources.local_device.device->command_queue(), test_resources.local_device.program, false);
+        tt_metal::EnqueueProgram(test_resources.remote_device.device->command_queue(), test_resources.remote_device.program, false);
 
-        tt_metal::Finish(device0->command_queue());
-        tt_metal::Finish(device1->command_queue());
+        tt_metal::Finish(test_resources.local_device.device->command_queue());
+        tt_metal::Finish(test_resources.remote_device.device->command_queue());
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -264,8 +342,8 @@ void run_test(
     // Read timing statistics from both devices
     uint32_t handshake_addr = static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED));
-    TimingStats stats0 = read_timing_stats(device0, eth_sender_core, handshake_addr);
-    TimingStats stats1 = read_timing_stats(device1, eth_receiver_core, handshake_addr);
+    TimingStats stats0 = read_timing_stats(test_resources.local_device.device, test_resources.local_device.eth_core, handshake_addr);
+    TimingStats stats1 = read_timing_stats(test_resources.remote_device.device, test_resources.remote_device.eth_core, handshake_addr);
 
     // Report results
     log_info(tt::LogTest, "Test completed in {} microseconds", duration.count());
@@ -315,15 +393,45 @@ void run_test(
     log_info(tt::LogTest, "  Throughput: {:.2f} GB/s", throughput_GB_s);
 }
 
+TestResources create_test_resources(
+    tt_metal::IDevice* device_0, 
+    tt_metal::IDevice* device_1, 
+    CoreCoord eth_sender_core, 
+    CoreCoord eth_receiver_core, 
+    const TestConfig& config) {
+
+    TestResources resources;
+    resources.local_device.device = device_0;
+    resources.remote_device.device = device_1;
+
+    for (auto &device_resource_reference : {std::ref(resources.local_device), std::ref(resources.remote_device)}) {
+        auto& device_resource = device_resource_reference.get();
+        auto& worker_cores = device_resource.worker_cores;
+        auto& worker_cores_vec = device_resource.worker_cores_vec;
+        worker_cores_vec.reserve(config.n_workers);
+        worker_cores = CoreRange(CoreCoord(0, 0), CoreCoord(0, config.n_workers - 1));
+        worker_cores_vec = corerange_to_cores(worker_cores);
+        for (auto &worker_core : worker_cores_vec) {
+            // one per worker
+            device_resource.erisc_flow_control_semaphore_ids.push_back(tt_metal::CreateSemaphore(device_resource.program, device_resource.eth_core, 0, CoreType::ETH));
+        }
+
+        device_resource.worker_ack_semaphore_id = tt_metal::CreateSemaphore(device_resource.program, device_resource.worker_cores, 0, CoreType::WORKER);
+        device_resource.worker_new_chunk_semaphore_id = tt_metal::CreateSemaphore(device_resource.program, device_resource.worker_cores, 0, CoreType::WORKER);
+    }
+
+    return resources;
+}
+
 int main(int argc, char** argv) {
     // Command line argument parsing
     // Usage: fabric_elastic_channels_host_test <n_chunks> <chunk_n_pkts> <packet_size> <bidirectional> <message_size>
     // <total_messages>
-    if (argc < 8) {
+    if (argc < 9) {
         log_error(
             tt::LogTest,
             "Usage: {} <n_chunks> <chunk_n_pkts> <rx_chunk_n_pkts> <packet_size> <bidirectional> <message_size> "
-            "<total_messages>",
+            "<total_messages> <n_workers>",
             argv[0]);
         return -1;
     }
@@ -337,6 +445,7 @@ int main(int argc, char** argv) {
     config.bidirectional_mode = std::stoi(argv[arg_idx++]) != 0;
     config.message_size = std::stoi(argv[arg_idx++]);
     config.total_messages = std::stoi(argv[arg_idx++]);
+    config.n_workers = std::stoi(argv[arg_idx++]);
 
     // Validate arguments
     if (config.message_size > config.packet_size) {
@@ -382,18 +491,20 @@ int main(int argc, char** argv) {
         tt_metal::KernelHandle local_kernel;
         tt_metal::KernelHandle remote_kernel;
 
+        std::vector<tt_metal::KernelHandle> local_sender_worker_kernels;
+        std::vector<tt_metal::KernelHandle> remote_sender_worker_kernels;
+
+        auto test_resources = create_test_resources(device_0, device_1, eth_sender_core, eth_receiver_core, config);
+
         auto [program0, program1] =
-            build(device_0, device_1, eth_sender_core, eth_receiver_core, config, local_kernel, remote_kernel);
+            build(test_resources, config, local_kernel, remote_kernel, local_sender_worker_kernels, remote_sender_worker_kernels);
 
         run_test(
-            device_0,
-            device_1,
-            program0,
-            program1,
+            test_resources, 
             local_kernel,
             remote_kernel,
-            eth_sender_core,
-            eth_receiver_core,
+            local_sender_worker_kernels,
+            remote_sender_worker_kernels,
             config);
 
         success = true;

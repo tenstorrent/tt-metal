@@ -106,19 +106,24 @@ struct WormholeEfficientStack {
     }
 };
 
-template <typename T, size_t SIZE>
+template <typename T, size_t SIZE, size_t INCREMENT_SIZE = 1>
 struct OnePassIterator {
     T* current_ptr;
     T* end_ptr;
 
-    OnePassIterator(T* base_ptr, size_t n_elements) : current_ptr(base_ptr), end_ptr(base_ptr + n_elements) {}
+    OnePassIterator() : current_ptr(nullptr), end_ptr(nullptr) {}
 
     FORCE_INLINE T* get_current_ptr() const { return current_ptr; }
     FORCE_INLINE void increment() {
-        current_ptr++;
+        current_ptr += INCREMENT_SIZE;
     }
 
     FORCE_INLINE bool is_done() const { return current_ptr == end_ptr; }
+
+    FORCE_INLINE void reset_to(T* base_ptr) {
+        current_ptr = base_ptr;
+        end_ptr = base_ptr + (SIZE * INCREMENT_SIZE);
+    }
 };
 
 template <typename T, size_t SIZE>

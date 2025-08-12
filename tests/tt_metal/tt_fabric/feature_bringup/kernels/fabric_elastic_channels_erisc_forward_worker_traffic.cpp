@@ -16,13 +16,17 @@
 constexpr size_t N_CHUNKS = get_compile_time_arg_val(0);
 constexpr size_t RX_N_PKTS = get_compile_time_arg_val(1);
 constexpr size_t CHUNK_N_PKTS = get_compile_time_arg_val(2);
-constexpr size_t PACKET_SIZE = get_compile_time_arg_val(3);
+constexpr size_t PACKET_SIZE_BYTES = get_compile_time_arg_val(3);
 constexpr bool BIDIRECTIONAL_MODE = get_compile_time_arg_val(4);
+constexpr size_t N_SRC_CHANS = get_compile_time_arg_val(5);
 
 constexpr int32_t pkts_received_stream_id = 0;  // read by receiver, written by sender
 constexpr int32_t pkts_acked_stream_id = 1;     // read by sender, written by receiver
 
-using namespace tt::tt_fabric;
+static_assert(PACKET_SIZE_BYTES % sizeof(uint32_t) == 0, "PACKET_SIZE_BYTES must be a multiple of sizeof(uint32_t)");
+
+// Points to a chunk and steps through the addresses
+using chunk_forward_iterator_t  = tt::tt_fabric::OnePassIterator<size_t*, CHUNK_N_PKTS, PACKET_SIZE_BYTES / sizeof(uint32_t)>
 
 // Timing tracking structure
 struct TimingStats {
@@ -77,8 +81,9 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
 template <typename OpenChunksCbT, typename SendPoolT>
 void process_send_side(
     volatile TimingStats* timing_stats,
-    BufferIndex& current_chunk_slot_index,
-    BufferIndex& current_chunk_ack_index,
+    // For now we can keep these flat?
+    chunk_forward_iterator_t& current_chunk_ptr,
+    BufferIndex& current_chunk_ack_index,  
     OpenChunksCbT& open_chunks_cb,
     SendPoolT& send_pool,
     size_t& unacked_sends,
@@ -114,11 +119,11 @@ void process_send_side(
 
     // Try to send from current chunk
     if (!eth_txq_is_busy() && unacked_sends < RX_N_PKTS && messages_sent < messages_to_send &&
-        !open_chunks_cb.is_empty() && current_chunk_slot_index < CHUNK_N_PKTS) {
+        !open_chunks_cb.is_empty() && !current_chunk_ptr.is_done()) {
         auto current_buffer = open_chunks_cb.peek_front();
 
         // Fill packet data
-        auto src_addr = current_buffer->get_buffer_address(current_chunk_slot_index);
+        auto src_addr = current_chunk_ptr.get_current_ptr();
         auto dest_addr = receiver_buffer_addresses[sender_view_rx_buf_wr_ptr.get_buffer_index()];
 
         // Send packet using the buffer's channel ID
@@ -128,7 +133,7 @@ void process_send_side(
         }
         notify_remote_receiver_of_new_packet();
 
-        current_chunk_slot_index = BufferIndex{static_cast<uint8_t>(current_chunk_slot_index.get() + 1)};
+        current_chunk_ptr.increment();
         messages_sent++;
 
         sender_view_rx_buf_wr_ptr.increment();
@@ -136,11 +141,19 @@ void process_send_side(
     }
 
     // Acquire new chunk if current chunk is full
-    if ((open_chunks_cb.is_empty() || current_chunk_slot_index == CHUNK_N_PKTS) && !send_pool.is_empty()) {
-        current_chunk_slot_index = BufferIndex{0};
+    if ((open_chunks_cb.is_empty() || current_chunk_ptr.is_done()) && !send_pool.is_empty()) {
         // Acquire new chunk - measure timing
         uint64_t start_cycles = eth_read_wall_clock();
         auto new_chunk = send_pool.get_free_chunk();
+
+        // Currently we only support one-deep open chunks
+        size_t new_chunk_base_address = new_chunk->get_buffer_address(0);
+        size_t new_chunk_field_for_sender = new_chunk_base_address | SENDER_CHANNEL_ID_MASK;
+        // notify the worker about new chunk availability
+        noc_inline_write(new_chunk_field_for_sender, src_ch_new_chunk_addrs[sender_channel_id]);
+
+        current_chunk_ptr.reset_to(new_chunk_base_address);
+
         open_chunks_cb.push(new_chunk);
         uint64_t end_cycles = eth_read_wall_clock();
 
@@ -153,6 +166,7 @@ void kernel_main() {
     init_ptr_val(pkts_received_stream_id, 0);
     init_ptr_val(pkts_acked_stream_id, 0);
 
+
     uint32_t arg_idx = 0;
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t total_messages = get_arg_val<uint32_t>(arg_idx++);
@@ -161,6 +175,23 @@ void kernel_main() {
     const uint32_t send_buffer_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t recv_buffer_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t timing_stats_addr = get_arg_val<uint32_t>(arg_idx++);
+
+    uint32_t *remote_src_noc_x_ords = get_arg_addr(arg_idx);
+    arg_idx += N_SRC_CHANS;
+    uint32_t *remote_src_noc_y_ords = get_arg_addr(arg_idx);
+    arg_idx += N_SRC_CHANS;
+    uint32_t *remote_src_semaphore_ack_addrs = get_arg_addr(arg_idx);
+    arg_idx += N_SRC_CHANS;
+    uint32_t *remote_src_new_chunk_addrs = get_arg_addr(arg_idx);
+    arg_idx += N_SRC_CHANS;
+
+    using noc_addr_t = uint64_t;
+    std::array<noc_addr_t, N_SRC_CHANS> src_ch_semaphore_addrs;
+    std::array<noc_addr_t, N_SRC_CHANS> src_ch_new_chunk_addrs;
+    for (size_t i = 0; i < N_SRC_CHANS; i++) {
+        src_ch_semaphore_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], remote_src_semaphore_ack_addrs[i]);
+        src_ch_new_chunk_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], remote_src_new_chunk_addrs[i]);
+    }
 
     // Initialize timing stats at address provided by host
     timing_stats = reinterpret_cast<volatile TimingStats*>(timing_stats_addr);
@@ -173,20 +204,21 @@ void kernel_main() {
 
     // Initialize pools dynamically based on N_CHUNKS
     std::array<std::tuple<size_t, uint8_t>, N_CHUNKS> send_buffers;
+    std::array<chunk_forward_iterator_t, N_SRC_CHANS> sender_channel_wrptrs;
     std::array<size_t, RX_N_PKTS> recv_buffer_addresses;
 
     for (uint32_t i = 0; i < N_CHUNKS; i++) {
-        send_buffers[i] = std::make_tuple(send_buffer_base + i * PACKET_SIZE * CHUNK_N_PKTS, static_cast<uint8_t>(i));
+        send_buffers[i] = std::make_tuple(send_buffer_base + i * PACKET_SIZE_BYTES * CHUNK_N_PKTS, static_cast<uint8_t>(i));
     }
     for (uint32_t i = 0; i < RX_N_PKTS; i++) {
-        recv_buffer_addresses[i] = recv_buffer_base + i * PACKET_SIZE;
+        recv_buffer_addresses[i] = recv_buffer_base + i * PACKET_SIZE_BYTES;
     }
 
     ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS> send_pool;
-    send_pool.init(send_buffers, PACKET_SIZE, sizeof(eth_channel_sync_t));
+    send_pool.init(send_buffers, PACKET_SIZE_BYTES, sizeof(eth_channel_sync_t));
 
     // Set up channels for bidirectional communication if enabled
-    const uint32_t messages_per_direction = total_messages;
+    const uint32_t messages_per_direction = total_messages * N_SRC_CHANS;
 
     // Setup handshake
 
@@ -200,53 +232,74 @@ void kernel_main() {
     uint32_t idle_count = 0;
     const uint32_t idle_max = 100000;
 
-    BufferIndex current_chunk_slot_index = BufferIndex{0};
+    // BufferIndex current_chunk_slot_index = BufferIndex{0}; // replaced with `sender_channel_wrptrs`
     BufferIndex current_chunk_ack_index = BufferIndex{0};
 #if defined(ARCH_WORMHOLE)
     // acq: 6.00
     // rel: 9.5
-    WormholeEfficientCircularBuffer<typename ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>
-        open_chunks_cb;
+    std::array<
+        WormholeEfficientCircularBuffer<typename ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>,
+        N_SRC_CHANS>
+        open_chunks_cbs;
 #else
     // acq: 17
     // rel: 4
-    CircularBuffer<typename ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS> open_chunks_cb;
+    std::array<
+        CircularBuffer<typename ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>,
+        N_SRC_CHANS>
+        open_chunks_cbs;
 #endif
+
 
     ChannelBufferPointer<RX_N_PKTS> sender_view_rx_buf_wr_ptr;
     size_t unacked_sends = 0;
+    bool n_sender_channels_done = 0;
+    std::array<bool, N_SRC_CHANS> completed_sender_channels;
+    std::array<bool, N_SRC_CHANS> sender_channels_acks_received;
     {
         DeviceZoneScopedN("FABRIC-ELASTIC-CHANNELS-TEST");
 
         auto test_start_cycles = eth_read_wall_clock();
 
-        while (messages_acked < total_messages_target || messages_received < total_messages_target) {
+        while (n_sender_channels_done < N_SRC_CHANS || messages_received < total_messages_target) {
             bool made_progress = false;
+            for (size_t i = 0; i < N_SRC_CHANS; i++) {
+                if (!completed_sender_channels[i]) {
+                    process_send_side(
+                        timing_stats,
+                        sender_channel_wrptrs[i],
+                        current_chunk_ack_index,
+                        open_chunks_cbs,
+                        send_pool,
+                        unacked_sends,
+                        messages_sent,
+                        messages_acked,
+                        total_messages_target,
 
-            if (BIDIRECTIONAL_MODE || is_sender_offset_0) {
-                process_send_side(
-                    timing_stats,
-                    current_chunk_slot_index,
-                    current_chunk_ack_index,
-                    open_chunks_cb,
-                    send_pool,
-                    unacked_sends,
-                    messages_sent,
-                    messages_acked,
-                    total_messages_target,
+                        recv_buffer_addresses,
+                        sender_view_rx_buf_wr_ptr,
+                        message_size);
 
-                    recv_buffer_addresses,
-                    sender_view_rx_buf_wr_ptr,
-                    message_size);
-            }
-            if (BIDIRECTIONAL_MODE || !is_sender_offset_0) {
-                // Receiver logic - also use ChannelBuffersPool
-                auto num_unprocessed_packets = get_receiver_num_unprocessed_packets();
-                if (num_unprocessed_packets > 0 && !eth_txq_is_busy()) {
-                    receiver_mark_packet_processed();
-                    sender_view_rx_buf_wr_ptr.increment();
-                    messages_received++;
-                    send_ack_to_sender();
+                    if (messages_acked >= total_messages_target) {
+                        completed_sender_channels[i] = true;
+                        n_sender_channels_done++;
+
+                        made_progress = true;
+                    }
+                }
+
+                // Put the receiver channel servicing here to keep the processing balanced
+                if (BIDIRECTIONAL_MODE || !is_sender_offset_0) {
+                    // Receiver logic - also use ChannelBuffersPool
+                    auto num_unprocessed_packets = get_receiver_num_unprocessed_packets();
+                    if (num_unprocessed_packets > 0 && !eth_txq_is_busy()) {
+                        receiver_mark_packet_processed();
+                        sender_view_rx_buf_wr_ptr.increment();
+                        messages_received++;
+                        send_ack_to_sender();
+
+                        made_progress = true;
+                    }
                 }
             }
 
@@ -261,6 +314,7 @@ void kernel_main() {
                 }
             }
         }
+
 
         auto test_end_cycles = eth_read_wall_clock();
         timing_stats->total_test_cycles = test_end_cycles - test_start_cycles;
