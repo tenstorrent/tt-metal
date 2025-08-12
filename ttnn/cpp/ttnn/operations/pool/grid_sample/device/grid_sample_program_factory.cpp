@@ -5,6 +5,7 @@
 #include <math.h>
 #include <cstdint>
 #include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "grid_sample_op.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -119,18 +120,16 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         (std::uint32_t)input_cb_index,              // input CB index
         (std::uint32_t)grid_cb_index,               // grid CB index
         (std::uint32_t)scalar_cb_index,             // scalar CB index
-        (std::uint32_t)src_is_dram,                 // input is DRAM
-        (std::uint32_t)grid_is_dram,                // grid is DRAM
         (std::uint32_t)aligned_input_stick_nbytes,  // input stick size
-        (std::uint32_t)src_size_is_power_of_two,
-        (std::uint32_t)src_log2_size,
-        (std::uint32_t)aligned_grid_stick_nbytes,  // grid stick size
-        (std::uint32_t)grid_size_is_power_of_two,
-        (std::uint32_t)grid_log2_size,
+        (std::uint32_t)aligned_grid_stick_nbytes,   // grid stick size
         (std::uint32_t)input_height,
         (std::uint32_t)input_width,
         (std::uint32_t)(output_height * output_width),  // output_hw_size at index 13
     };
+
+    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+
+    tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(reader_compile_time_args);
 
     const uint32_t MAX_TILES_PER_REDUCTION = 8;
 
@@ -218,12 +217,11 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,              // output CB index
-        (std::uint32_t)dst_is_dram,                  // output is DRAM
         (std::uint32_t)aligned_output_stick_nbytes,  // output stick size
-        (std::uint32_t)dst_size_is_power_of_two,
-        (std::uint32_t)dst_log2_size,
-        (std::uint32_t)out_ntiles_c  // number of tiles per channel (for ntiles_c pages per stick)
+        (std::uint32_t)in_ntiles_c                   // number of tiles per channel (for ntiles_c pages per stick)
     };
+
+    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/reader_grid_sample_interleaved_start_id.cpp";
