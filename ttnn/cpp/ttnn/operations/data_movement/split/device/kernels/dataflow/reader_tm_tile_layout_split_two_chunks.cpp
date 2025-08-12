@@ -19,20 +19,26 @@ void kernel_main() {
     bool split_last_dim = (bool)get_arg_val<uint32_t>(2);
 
     // COMPILE TIME ARGS
-    constexpr uint32_t z = get_compile_time_arg_val(0);
-    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(1);
-    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(2);
-    constexpr uint32_t z_stride = get_compile_time_arg_val(3);
-    constexpr uint32_t y_stride = get_compile_time_arg_val(4);
-    constexpr auto in0_tensor_args = TensorAccessorArgs<5>();
+    // interleaved accessor args
+    constexpr uint32_t in0_is_dram = get_compile_time_arg_val(1);
+    constexpr uint32_t z = get_compile_time_arg_val(2);
+    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(3);
+    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(4);
+    constexpr uint32_t z_stride = get_compile_time_arg_val(5);
+    constexpr uint32_t y_stride = get_compile_time_arg_val(6);
 
     constexpr uint32_t out_num_tensors = 1;
     constexpr uint32_t cb_id_in0 = 0;
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
 
-    constexpr uint32_t onetile = 1;
+    constexpr bool in0_is_dram_bool = in0_is_dram == 1;
 
-    const auto s0 = TensorAccessor(in0_tensor_args, in0_tensor_addr, single_tile_size_bytes);
+    constexpr uint32_t onetile = 1;
+    constexpr bool tile_dtype_is_bfloat16 = get_compile_time_arg_val(0) == 1;
+    constexpr DataFormat data_format = (tile_dtype_is_bfloat16) ? DataFormat::Float16 : DataFormat::Bfp8_b;
+
+    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
+        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
 
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;

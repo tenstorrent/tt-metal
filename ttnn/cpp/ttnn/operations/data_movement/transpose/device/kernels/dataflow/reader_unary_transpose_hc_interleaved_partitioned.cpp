@@ -27,10 +27,10 @@ void kernel_main() {
     uint32_t ctoffs = get_arg_val<uint32_t>(12);
     uint32_t wt = get_arg_val<uint32_t>(13);
 
-    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(0);
-    constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(1);
-    constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
+    constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(2);
+    constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(3);
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
 
     constexpr uint32_t onetile = 1;
@@ -41,8 +41,10 @@ void kernel_main() {
     // we then reverse map this linear dest address to src address
 
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src_args, src0_addr, tile_bytes);
+    const DataFormat data_format = get_dataformat(cb_id_in0);
 
+    const InterleavedAddrGenFast<src0_is_dram> s0 = {
+        .bank_base_address = src0_addr, .page_size = tile_bytes, .data_format = data_format};
     uint32_t intermed_l1_scratch = MISALIGNED ? get_write_ptr(1) : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
     for (uint32_t t = 0; t < num_tiles; t++) {

@@ -21,24 +21,27 @@ void kernel_main() {
     const uint32_t padded_Y_diff_blocks = get_arg_val<uint32_t>(6);
     const uint32_t num_leftover_Y = get_arg_val<uint32_t>(7);
     const uint32_t num_unpadded_X = get_arg_val<uint32_t>(8);
-    const uint32_t padded_X_size = get_arg_val<uint32_t>(9);
-    const uint32_t num_blocks_w_input = get_arg_val<uint32_t>(10);
-    const uint32_t num_blocks_w_output = get_arg_val<uint32_t>(11);
-    const uint32_t num_blocks_w_diff = get_arg_val<uint32_t>(12);
-    const uint32_t block_row_size = get_arg_val<uint32_t>(13);
-    const uint32_t block_row_leftover_size = get_arg_val<uint32_t>(14);
+    const uint32_t unpadded_X_size = get_arg_val<uint32_t>(9);
+    const uint32_t padded_X_size = get_arg_val<uint32_t>(10);
+    const uint32_t num_blocks_w_input = get_arg_val<uint32_t>(11);
+    const uint32_t num_blocks_w_output = get_arg_val<uint32_t>(12);
+    const uint32_t num_blocks_w_diff = get_arg_val<uint32_t>(13);
+    const uint32_t block_row_size = get_arg_val<uint32_t>(14);
+    const uint32_t block_row_leftover_size = get_arg_val<uint32_t>(15);
 
     uint32_t stick_id = 0;
 
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(3) == 1;
 
     const uint32_t num_tiles_block_c =
         FLOAT32_DTYPE ? block_row_size / 128
                       : block_row_size / 64;  // Assuming 4 / 2 bytes per datum, there are 128 / 64 bytes per tile row
 
-    const auto s = TensorAccessor(dst_args, dst_addr, unpadded_X_size);
+    const auto s =
+        get_interleaved_addr_gen<dst_is_dram, stick_size_is_pow2>(dst_addr, unpadded_X_size, log_base_2_of_page_size);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
