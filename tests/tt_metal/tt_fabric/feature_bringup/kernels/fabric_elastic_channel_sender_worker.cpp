@@ -90,16 +90,18 @@ void kernel_main() {
     size_t arg_idx = 0;
     size_t n_pkts = get_arg_val<size_t>(arg_idx++);
     size_t src_addr = get_arg_val<size_t>(arg_idx++);
-    size_t dest_noc_x = get_arg_val<size_t>(arg_idx++);
-    size_t dest_noc_y = get_arg_val<size_t>(arg_idx++);
-    size_t dest_semaphore_bank_addr = get_arg_val<size_t>(arg_idx++);
+    size_t dest_eth_noc_x = get_arg_val<size_t>(arg_idx++);
+    size_t dest_eth_noc_y = get_arg_val<size_t>(arg_idx++);
     size_t payload_size = get_arg_val<size_t>(arg_idx++);
-    volatile uint32_t *next_chunk_ptr = get_arg_val<volatile uint32_t*>(arg_idx++);
+
+    volatile uint32_t *next_chunk_ptr = get_semaphore<CoreType::WORKER>(get_arg_val<uint32_t>(arg_idx++));
+    volatile uint32_t *from_eth_flow_control_ptr = get_semaphore<CoreType::ETH>(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t to_eth_flow_control_addr = get_semaphore<CoreType::ETH>(get_arg_val<uint32_t>(arg_idx++));
 
     
     FabricWriterAdapter<N_CHUNKS, CHUNK_N_PKTS> fabric_writer_adapter(next_chunk_ptr);
 
-    const uint64_t dest_sem_noc_addr = get_noc_addr(dest_noc_x, dest_noc_y, dest_semaphore_bank_addr);
+    const uint64_t dest_sem_noc_addr = get_noc_addr(dest_eth_noc_x, dest_eth_noc_y, to_eth_flow_control_addr);
     size_t pkts_sent = 0;
     while (pkts_sent < n_pkts) {
         if (fabric_writer_adapter.has_valid_destination()) {

@@ -82,6 +82,11 @@ template <typename OpenChunksCbT, typename SendPoolT>
 void process_send_side(
     volatile TimingStats* timing_stats,
     // For now we can keep these flat?
+
+    volatile uint32_t *local_src_ch_semaphore_ptr, // check this for new messages
+    uint64_t remote_src_ch_semaphore_ack_addr,     // send acks back here
+    uint64_t remote_src_new_chunk_noc_addr,        // send new chunk info here
+
     chunk_forward_iterator_t& current_chunk_ptr,
     BufferIndex& current_chunk_ack_index,  
     OpenChunksCbT& open_chunks_cb,
@@ -94,6 +99,9 @@ void process_send_side(
     ChannelBufferPointer<RX_N_PKTS>& sender_view_rx_buf_wr_ptr,
     size_t message_size) {
     // Process Ack
+
+    auto n_unsent_messages = *local_src_ch_semaphore_ptr;
+
     auto num_unprocessed_acks = get_sender_num_unprocessed_acks();
     if (num_unprocessed_acks > 0) {
         current_chunk_ack_index = BufferIndex{static_cast<uint8_t>(current_chunk_ack_index.get() + 1)};
@@ -109,6 +117,10 @@ void process_send_side(
             end_cycles = eth_read_wall_clock();
         }
         sender_mark_ack_processed();
+
+        // Send completion ack (space available) to sender 
+        noc_semaphore_inc(remote_src_ch_semaphore_ack_addr, 1);
+
         if (can_release_chunk) {
             timing_stats->release_count++;
             timing_stats->total_release_cycles += (end_cycles - start_cycles);
@@ -118,8 +130,10 @@ void process_send_side(
     }
 
     // Try to send from current chunk
-    if (!eth_txq_is_busy() && unacked_sends < RX_N_PKTS && messages_sent < messages_to_send &&
-        !open_chunks_cb.is_empty() && !current_chunk_ptr.is_done()) {
+    if (!eth_txq_is_busy() && n_unsent_messages > 0 && !open_chunks_cb.is_empty() && !current_chunk_ptr.is_done()) {
+        ASSERT(!open_chunks_cb.is_empty()); // should not be possible to receive a message if this is false
+        ASSERT(!current_chunk_ptr.is_done()); // should not be possible to receive a message if this is false
+
         auto current_buffer = open_chunks_cb.peek_front();
 
         // Fill packet data
@@ -150,7 +164,7 @@ void process_send_side(
         size_t new_chunk_base_address = new_chunk->get_buffer_address(0);
         size_t new_chunk_field_for_sender = new_chunk_base_address | SENDER_CHANNEL_ID_MASK;
         // notify the worker about new chunk availability
-        noc_inline_write(new_chunk_field_for_sender, src_ch_new_chunk_addrs[sender_channel_id]);
+        noc_inline_dw_write(remote_src_new_chunk_noc_addr, new_chunk_field_for_sender);
 
         current_chunk_ptr.reset_to(new_chunk_base_address);
 
@@ -184,13 +198,21 @@ void kernel_main() {
     arg_idx += N_SRC_CHANS;
     uint32_t *remote_src_new_chunk_addrs = get_arg_addr(arg_idx);
     arg_idx += N_SRC_CHANS;
+    uint32_t *dest_noc_buffer_addrs = get_arg_addr(arg_idx);
+    arg_idx += N_SRC_CHANS;
+    uint32_t *local_src_ch_semaphores = get_arg_addr(arg_idx);
+    arg_idx += N_SRC_CHANS;
 
     using noc_addr_t = uint64_t;
-    std::array<noc_addr_t, N_SRC_CHANS> src_ch_semaphore_addrs;
+    std::array<noc_addr_t, N_SRC_CHANS> remote_src_ch_semaphore_ack_addrs;
+    std::array<noc_addr_t, N_SRC_CHANS> local_src_ch_semaphore_addrs;
     std::array<noc_addr_t, N_SRC_CHANS> src_ch_new_chunk_addrs;
+    std::array<noc_addr_t, N_SRC_CHANS> dest_noc_write_addrs;
     for (size_t i = 0; i < N_SRC_CHANS; i++) {
-        src_ch_semaphore_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], remote_src_semaphore_ack_addrs[i]);
-        src_ch_new_chunk_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], remote_src_new_chunk_addrs[i]);
+        local_src_ch_semaphore_addrs[i] = get_semaphore<CoreType::ETH>(local_src_ch_semaphores[i]));
+        remote_src_ch_semaphore_ack_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<CoreType::Worker>(remote_src_semaphore_ack_addrs[i]));
+        src_ch_new_chunk_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<CoreType::Worker>(remote_src_new_chunk_addrs[i]));
+        dest_noc_write_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], dest_noc_buffer_addrs[i]);
     }
 
     // Initialize timing stats at address provided by host
@@ -267,6 +289,11 @@ void kernel_main() {
                 if (!completed_sender_channels[i]) {
                     process_send_side(
                         timing_stats,
+
+                        local_src_ch_semaphore_addrs[i], // check this for new messages
+                        remote_src_ch_semaphore_ack_addrs[i], // send acks back here
+                        src_ch_new_chunk_addrs[i], // send new chunk info here
+                        
                         sender_channel_wrptrs[i],
                         current_chunk_ack_index,
                         open_chunks_cbs,
