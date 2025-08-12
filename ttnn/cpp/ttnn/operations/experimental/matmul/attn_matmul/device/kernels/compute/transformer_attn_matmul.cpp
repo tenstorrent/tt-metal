@@ -42,6 +42,8 @@ void MAIN {
                     for (uint32_t kt = 0; kt < Kt; ++kt) {
                         if (tile_row_id == 0) {
                             cb_wait_front(cb_in0, kt + 1);
+                        } else {
+                            cb_wait_front(cb_in0, kt + 1);
                         }
                         cb_wait_front(cb_in1, onetile);
 
@@ -57,28 +59,26 @@ void MAIN {
                     tile_regs_release();
                     cb_push_back(cb_intermed0, onetile);
 
-                    // untilize tile and write to CBIndex::c_25
+                    // untilize tile and write to intermed1 - reordered for bfloat8_b stability
                     reconfig_data_format_srca(cb_in1, cb_intermed0);
                     cb_wait_front(cb_intermed0, onetile);
                     untilize_init(cb_intermed0);
                     cb_reserve_back(cb_intermed1, onetile);
                     untilize_block(cb_intermed0, onetile, cb_intermed1);
-                    cb_push_back(cb_intermed1, onetile);
-
-                    cb_pop_front(cb_intermed0, onetile);
                     untilize_uninit(cb_intermed0);
-
+                    cb_push_back(cb_intermed1, onetile);
+                    cb_pop_front(cb_intermed0, onetile);
                     reconfig_data_format_srca(cb_intermed0, cb_in1);
+
                     mm_init_short(cb_in0, cb_in1, transpose_hw);
                 }
                 cb_pop_front(cb_in0, Kt);
 
                 // cb_intermed2 comes from reader; untilized row-major tile
-                pack_reconfig_data_format(cb_intermed1, out_cb_id);
                 cb_wait_front(cb_intermed2, onetile);
                 cb_reserve_back(out_cb_id, onetile);
-
-                // tilize CB::intermed2 and write to CBIndex::c_16
+                // tilize CB::intermed2 and write to out_cb_id
+                pack_reconfig_data_format(cb_intermed1, out_cb_id);
                 tilize_init_short_with_dt(cb_in1, cb_intermed2, onetile, out_cb_id);
                 tilize_block(cb_intermed2, onetile, out_cb_id);
                 cb_push_back(out_cb_id, onetile);
