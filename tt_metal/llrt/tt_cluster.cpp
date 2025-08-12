@@ -171,6 +171,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
                 cluster_type = tt::tt_metal::ClusterType::P150_X2;
             } else if (cluster_desc->get_all_chips().size() == 4) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X4;
+            } else if (cluster_desc->get_all_chips().size() == 8) {
+                cluster_type = tt::tt_metal::ClusterType::P150_X8;
             }
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
