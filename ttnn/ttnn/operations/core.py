@@ -594,7 +594,7 @@ def as_tensor(
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     use_device_tilizer: bool = False,
-    enable_multihost_format: bool = True,
+    enable_multihost_format: bool = False,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
