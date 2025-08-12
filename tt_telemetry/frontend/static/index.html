@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hierarchical Telemetry Dashboard</title>
+    <title>Cluster Telemetry Dashboard</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -23,7 +23,7 @@
     </style>
 </head>
 <body>
-    <h1>System Telemetry Dashboard</h1>
+    <h1>Cluster Telemetry Dashboard</h1>
     <telemetry-dashboard></telemetry-dashboard>
 
     <script type="module">
@@ -85,6 +85,11 @@
                     min-height: 100px;
                 }
 
+                .status-box.level-any {
+                    font-size: 18px;
+                    min-height: 120px;
+                }
+
                 .status-box.not-clickable {
                     cursor: default;
                 }
@@ -118,7 +123,6 @@
                 super();
                 this.name = '';
                 this.status = true;
-                this.level = 1;
                 this.clickable = true;
             }
 
@@ -133,7 +137,7 @@
 
             render() {
                 const statusClass = this.status ? 'good' : 'bad';
-                const levelClass = `level-${this.level}`;
+                const levelClass = `level-any`;
                 const clickableClass = this.clickable ? '' : 'not-clickable';
 
                 return html`
@@ -161,29 +165,18 @@
                     margin: 0 auto;
                 }
 
-                .grid.level-1 {
-                    grid-template-columns: 1fr;
-                    max-width: 300px;
-                }
-
-                .grid.level-2 {
+                .grid.level-any {
                     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                }
-
-                .grid.level-3 {
-                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
                 }
             `;
 
             static properties = {
                 items: { type: Array },
-                level: { type: Number }
             };
 
             constructor() {
                 super();
                 this.items = [];
-                this.level = 1;
             }
 
             _handleBoxClick(event) {
@@ -195,8 +188,7 @@
             }
 
             render() {
-                const gridClass = `grid level-${this.level}`;
-                const isLeafLevel = this.level === 3;
+                const gridClass = `grid level-any`;
 
                 return html`
                     <div class="${gridClass}" @box-click="${this._handleBoxClick}">
@@ -204,8 +196,7 @@
                             <status-box 
                                 name="${item.name}"
                                 .status="${item.status}"
-                                .level="${this.level}"
-                                .clickable="${!isLeafLevel}">
+                                .clickable="true">
                             </status-box>
                         `)}
                     </div>
@@ -274,139 +265,138 @@
             `;
 
             static properties = {
-                currentLevel: { type: Number },
-                currentPath: { type: Array },
-                hostname: { type: String },
-                cpuCount: { type: Number },
-                conditionCount: { type: Number },
-                systemStatus: { type: Object }
+                currentPath: { type: Array }
             };
 
             constructor() {
                 super();
-                this.currentLevel = 1;
+
+
                 this.currentPath = [];
-                this.hostname = 'SERVER-01';
-                this.cpuCount = 4;
-                this.conditionCount = 4;
-                this.initializeSystemStatus();
+                this._eventSource = null;
+                this._telemetryStore = new HierarchicalTelemetryStore();
+
+                // Setup Server-Sent Events
+                this._setupSSE();
             }
 
-            initializeSystemStatus() {
-                this.systemStatus = {};
-                
-                for (let i = 0; i < this.cpuCount; i++) {
-                    const cpuName = `CPU${i}`;
-                    this.systemStatus[cpuName] = {};
+            _setupSSE() {
+                try {
+                    // Replace '/api/events' with your actual SSE endpoint
+                    this._eventSource = new EventSource('/api/stream');
                     
-                    for (let j = 0; j < this.conditionCount; j++) {
-                        const condName = `COND${j}`;
-                        this.systemStatus[cpuName][condName] = Math.random() > 0.7;
-                    }
+                    this._eventSource.onmessage = (event) => {
+                        let did_update = false;
+
+                        // Handle message
+                        try {
+                            const data = JSON.parse(event.data);
+
+                            const metric_indices = data["metric_indices"];
+                            const metric_names = data["metric_names"];    // optional, and indicates new telemetry metrics if present
+                            const metric_values = data["metric_values"];
+                            const is_absolute = data["is_absolute"];      // absolute update
+
+                            if (metric_indices.length != metric_values.length) {
+                                console.log(`SSE error: Received differing index and value counts (${metric_indices.length} vs. ${metric_values.length})`);
+                                return;
+                            }
+
+                            if (metric_names.length > 0 && metric_names.length != metric_indices.length) {
+                                console.log(`SSE error: Received differing name and index counts (${metric_names.length} vs. ${metric_indices.length})`);
+                                return;
+                            }
+
+                            if (metric_names.length > 0) {
+                                // Adding new
+                                for (let i = 0; i < metric_indices.length; i++) {
+                                    const path = metric_names[i];
+                                    const id = metric_indices[i];
+                                    const state = metric_values[i];
+                                    this._telemetryStore.addPath(path, id, state);
+                                    did_update = true;
+                                }
+                            } else {
+                                // Delta updates
+                                for (let i = 0; i < metric_indices.length; i++) {
+                                    const id = metric_indices[i];
+                                    const state = metric_values[i];
+                                    this._telemetryStore.updateState(id, state);
+                                    did_update = true;
+                                }
+                            }
+                        } catch (error) {
+                            // If it's not JSON, append as-is
+                            console.error(`SSE error: Error processing data: ${error}`);
+                        }
+
+                        if (did_update) {
+                            this.requestUpdate();
+                        }
+                    };
+
+                    this._eventSource.onerror = (error) => {
+                        console.error('SSE error:', error);
+                    };
+
+                    this._eventSource.onopen = () => {
+                        console.log('SSE connection opened');
+                    };
+                } catch (error) {
+                    console.error('Error setting up SSE:', error);
                 }
-            }
-
-            setCpuCount(count) {
-                this.cpuCount = count;
-                this.currentLevel = 1;
-                this.currentPath = [];
-                this.initializeSystemStatus();
-            }
-
-            setConditionCount(count) {
-                this.conditionCount = count;
-                this.currentLevel = 1;
-                this.currentPath = [];
-                this.initializeSystemStatus();
-            }
-
-            randomizeStatus() {
-                for (let cpuName in this.systemStatus) {
-                    for (let condName in this.systemStatus[cpuName]) {
-                        this.systemStatus[cpuName][condName] = Math.random() > 0.7;
-                    }
-                }
-                this.requestUpdate();
-            }
-
-            getStatusForCpu(cpuName) {
-                const conditions = this.systemStatus[cpuName];
-                return Object.values(conditions).every(status => status === true);
-            }
-
-            getOverallSystemStatus() {
-                for (let cpuName in this.systemStatus) {
-                    if (!this.getStatusForCpu(cpuName)) {
-                        return false;
-                    }
-                }
-                return true;
             }
 
             _handleGridBoxClick(event) {
+                // Append the thing we clicked on to the path
                 const itemName = event.detail.name;
+                const new_path = [ ...this.currentPath, itemName ].join("_");
+
+                console.log(`Clicked ${itemName}: new_path=${new_path}`);
                 
-                if (this.currentLevel === 1) {
-                    // From hostname to CPUs
-                    this.currentLevel = 2;
-                    this.currentPath = [this.hostname];
-                } else if (this.currentLevel === 2) {
-                    // From CPU to conditions
-                    this.currentLevel = 3;
-                    this.currentPath = [...this.currentPath, itemName];
+                // Get children, if any, to drill in deeper
+                const child_names = this._telemetryStore.getChildNames(new_path);
+                console.log(child_names);
+                if (child_names.length > 0) {
+                    this.currentPath = [...this.currentPath, itemName]; // descend one level deeper (don't use push, we need to mutate array to trigger state update)
                 }
             }
 
             _handleBackClick() {
-                if (this.currentLevel > 1) {
-                    this.currentLevel--;
-                    this.currentPath.pop();
+                if (this.currentPath.length > 0) {
+                    this.currentPath = this.currentPath.slice(0, -1);   // remove last
                 }
             }
 
             _getBreadcrumb() {
-                if (this.currentLevel === 1) {
-                    return 'System Overview';
-                } else if (this.currentLevel === 2) {
-                    return `${this.hostname} > CPUs`;
+                if (this.currentPath.length == 0) {
+                    return "Cluster Overview";
                 } else {
-                    return `${this.hostname} > ${this.currentPath[1]} > Conditions`;
+                    return this.currentPath.join(" > ");
                 }
             }
 
             _getCurrentItems() {
-                if (this.currentLevel === 1) {
-                    return [{
-                        name: this.hostname,
-                        status: this.getOverallSystemStatus()
-                    }];
-                } else if (this.currentLevel === 2) {
-                    const items = [];
-                    for (let i = 0; i < this.cpuCount; i++) {
-                        const cpuName = `CPU${i}`;
-                        items.push({
-                            name: cpuName,
-                            status: this.getStatusForCpu(cpuName)
-                        });
-                    }
-                    return items;
-                } else {
-                    // Level 3 - conditions for current CPU
-                    const currentCpu = this.currentPath[1];
-                    const items = [];
-                    for (let i = 0; i < this.conditionCount; i++) {
-                        const condName = `COND${i}`;
-                        items.push({
-                            name: condName,
-                            status: this.systemStatus[currentCpu][condName]
-                        });
-                    }
-                    return items;
+                // Get children of currently displayed path
+                const current_path = this.currentPath.join("_");
+                const item_names = this._telemetryStore.getChildNames(current_path);
+
+                // Create item boxes
+                const items = [];
+                for (const item_name of item_names) {
+                    const item_path = [...this.currentPath, item_name].join("_");
+                    items.push({
+                        name: item_name,
+                        status: this._telemetryStore.getState(item_path)
+                    });
                 }
+                return items;
             }
 
             render() {
+                console.log("Render", this._getCurrentItems());
                 return html`
+                    <!--
                     <div class="controls">
                         <button @click="${this.randomizeStatus}">Randomize Status</button>
                         <button @click="${() => this.setCpuCount(2)}">2 CPUs</button>
@@ -415,11 +405,12 @@
                         <button @click="${() => this.setConditionCount(3)}">3 Conditions</button>
                         <button @click="${() => this.setConditionCount(6)}">6 Conditions</button>
                     </div>
+                    -->
 
                     <div class="navigation">
                         <div class="breadcrumb">${this._getBreadcrumb()}</div>
                         <button class="back-button" 
-                                ?disabled="${this.currentLevel === 1}"
+                                ?disabled="${this.currentPath.length === 0}"
                                 @click="${this._handleBackClick}">
                             ← Back
                         </button>
@@ -427,7 +418,6 @@
 
                     <status-grid 
                         .items="${this._getCurrentItems()}"
-                        .level="${this.currentLevel}"
                         @grid-box-click="${this._handleGridBoxClick}">
                     </status-grid>
                 `;
@@ -438,34 +428,6 @@
         customElements.define('status-box', StatusBox);
         customElements.define('status-grid', StatusGrid);
         customElements.define('telemetry-dashboard', TelemetryDashboard);
-
-        // Test
-        let store = new HierarchicalTelemetryStore();
-        store.addPath("foo", 0, false);
-        store.addPath("a_b_c_11", 1, true);
-        store.addPath("a_b_c_22", 2, true);
-        store.addPath("a_b_c_33", 3, true);
-        store.addPath("e_1", 4, true);
-        store.addPath("e_2", 5, false);
-        store.addPath("a_b_d_11", 6, false);
-
-        let paths = [ 
-            "a_b_c_11", "a_b_c_22", "a_b_c_33", "a", "a_b", "a_b_c",
-            "a_b_d_11",
-            "e_1", "e_2", "e",
-            "foo",
-        ];
-        for (const path of paths) {
-            console.log(path, store.getState(path));
-        }
-        console.log(store._path_by_id);
-        console.log(store._state_by_path);
-        console.log(store._path_children);
-        console.log(store.getChildNames("a"));
-        console.log(store.getChildNames("a_b"));
-        console.log(store.getChildNames("a_b_c"));
-        console.log(store.getChildNames("a_b_c_11"));
-        console.log(store.getChildNames(""));
     </script>
 </body>
 </html>
