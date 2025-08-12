@@ -169,21 +169,25 @@ tt::tt_metal::operation::Hash MatmulReduceScatterAsync::compute_program_hash(
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->reduce_scatter_minimal_async_struct.semaphore.at(0).address();
 
     return tt::tt_metal::operation::hash_operation<MatmulReduceScatterAsync>(
         this->reduce_scatter_minimal_async_struct.dim,
         this->reduce_scatter_minimal_async_struct.num_links,
         this->reduce_scatter_minimal_async_struct.ring_size,
         this->reduce_scatter_minimal_async_struct.output_mem_config,
+        this->reduce_scatter_minimal_async_struct.intermediate_mem_config,
         this->reduce_scatter_minimal_async_struct.topology,
         this->reduce_scatter_minimal_async_struct.sub_device_id,
+        this->reduce_scatter_minimal_async_struct.barrier_semaphore.has_value(),
+        this->reduce_scatter_minimal_async_struct.using_persistent_buffers,
+        this->reduce_scatter_minimal_async_struct.chunks_per_sync,
+        this->reduce_scatter_minimal_async_struct.num_workers_per_link,
+        this->reduce_scatter_minimal_async_struct.num_buffers_per_channel,
         this->reduce_scatter_core_grid_offset,
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config,
-        semaphore_address);
+        input_memory_config);
 }
 
 namespace operations {
