@@ -12,7 +12,7 @@ from models.tt_transformers.tt.ccl import TT_CCL, ag_on_padded_dim_3
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.rope import RotarySetup
@@ -44,13 +44,19 @@ class Transformer(LightweightModule):
 
         self.tt_ccl = TT_CCL(self.mesh_device)
 
-        self.embd = Embedding(
-            mesh_device=mesh_device,
-            args=args,
-            weight_cache_path=args.weight_cache_path(dtype),
-            state_dict=state_dict,
-            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
-        )
+        embd_kwargs = {
+            "mesh_device": mesh_device,
+            "args": args,
+            "weight_cache_path": args.weight_cache_path(dtype),
+            "state_dict": state_dict,
+            "dtype": ttnn.bfloat16,  # Row major layout requires bfloat16
+        }
+        if self.args.embed_scale is not None:
+            embd_cls = ScaledEmbedding
+            embd_kwargs["embed_scale"] = self.args.embed_scale
+        else:
+            embd_cls = Embedding
+        self.embd = embd_cls(**embd_kwargs)
 
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
         self.rope_setup = ActualRopeSetupClass(
