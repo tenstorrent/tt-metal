@@ -157,6 +157,7 @@ bisect_loop() {
 #     exit 1
 # }
 
+export -f bisect_loop
 timeout "$timeout_duration_global" sh -c bisect_loop
 
 git bisect reset
