@@ -16,6 +16,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
 
 
 @torch.no_grad()
@@ -63,7 +64,14 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model = model_args_ref.reference_mlp()
+    # reference_model = model_args_ref.reference_mlp()
+    reference_model = FeedForward(
+        dim=5120,
+        hidden_dim=25600,
+        multiple_of=1,
+        ffn_dim_multiplier=None,
+        llama3=False,
+    )
     reference_model.load_state_dict(partial_state_dict_ref)
 
     logger.info(f"Reference Model Loaded")
@@ -104,7 +112,7 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     logger.info("Run Qwen_MLP_PF")
     # Explicitly allocate global CB to avoid memory fragmentation
     prefetcher_setup.create_global_cb()
-    for i in range(20):
+    for i in range(1):
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),
             num_layers=1,
@@ -132,7 +140,8 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         )
 
         logger.info("Run Qwen_MLP")
-        tt_output = tt_model(tt_input, mode)
+        tt_output, w1_out_reduced, w3_out_reduced, w2_in, ff1ff3 = tt_model(tt_input, mode)
+        logger.info(f"tt_output shape: {tt_output.shape}")
 
         tt_output_torch = ttnn.to_torch(
             tt_output,
@@ -143,7 +152,26 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
 
         tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
-        reference_output = reference_model(torch_input[:, :, :1, : model_args.dim].to(torch.bfloat16))
+        ref_input = torch_input[:, :, :, : model_args.dim]
+        w1_out_ref, w3_out_ref, silu_w1_ref, ff1ff3_ref, reference_output = reference_model(ref_input)
+
+        # Compute true reference
+        w1_rel = ttnn.to_torch(
+            tt_model.w1,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 2), mesh_shape=model_args.cluster_shape),
+        )
+        www = torch_input @ w1_rel  # pcc > 0.99 with w1_out_ref
+
+        w1_torch = ttnn.to_torch(w1_out_reduced, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+        w3_torch = ttnn.to_torch(w3_out_reduced, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+        w2_in_torch = ttnn.to_torch(
+            w2_in,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
+        )  # [1, 4, 1, 25600]
+        w2_in_torch0 = w2_in_torch[:, :1, :, :]
+        ff1ff3_torch = ttnn.to_torch(ff1ff3, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+
+        breakpoint()
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

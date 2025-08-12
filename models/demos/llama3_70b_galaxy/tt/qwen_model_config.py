@@ -356,7 +356,8 @@ class TtQwenModelArgs(TtModelArgs):
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
-            num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+            # num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+            num_cores_ln = 20
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
                 ttnn.create_sharded_memory_config(
@@ -364,12 +365,14 @@ class TtQwenModelArgs(TtModelArgs):
                         1,
                         1,
                         32,
-                        1536 // num_cores_ln,
+                        1280 // num_cores_ln,
                     ),
                     core_grid=ttnn.CoreRangeSet(
-                        {
+                        [
                             core_range,
-                        }
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),
+                        ]
                     ),
                     strategy=ttnn.ShardStrategy.WIDTH,
                     use_height_and_width_as_shard_shape=True,
@@ -961,7 +964,7 @@ class TtQwenModelArgs(TtModelArgs):
             # Use padded K and N
             self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=1280,
-                n=3840,
+                n=3200,
             )
 
             # Use padded K and N
@@ -972,9 +975,9 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["FF1_3_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
-                1,
-                32,
-                5120 // 4,
+                1,  # B
+                32,  # M
+                5120 // 4,  # K = 1280
                 3840,  # Use padded N
                 RING_SIZE,
             )
