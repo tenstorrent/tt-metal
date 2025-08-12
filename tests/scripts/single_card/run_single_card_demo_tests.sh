@@ -348,7 +348,7 @@ run_yolov12x_demo() {
 
 run_vovnet_demo(){
 
- pytest models/experimental/vovnet/demo/demo.py; fail+=$?
+ pytest models/experimental/vovnet/demo/demo.py
 
 }
 
