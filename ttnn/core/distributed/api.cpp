@@ -7,17 +7,17 @@
 #include <memory>
 
 #include <tt_stl/overloaded.hpp>
-#include "distributed/types.hpp"
-#include "tt-metalium/assert.hpp"
-#include "tt-metalium/distributed_host_buffer.hpp"
-#include "tt-metalium/mesh_coord.hpp"
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <ttnn/tensor/storage.hpp>
+#include <ttnn/tensor/tensor.hpp>
+#include <ttnn/tensor/host_buffer/functions.hpp>
+#include <ttnn/tensor/tensor_utils.hpp>
+#include <ttnn/distributed/distributed_tensor_config.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <ttnn/distributed/types.hpp>
 
 using namespace tt::tt_metal;
 
@@ -147,15 +147,6 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
         reference_shard.tensor_spec(),
         AllGatherTensor{},
         TensorTopology{});
-}
-
-std::vector<int> get_t3k_physical_device_ids_ring() {
-    using namespace tt::tt_metal::distributed;
-    auto& instance = SystemMesh::instance();
-    TT_FATAL(instance.shape() == instance.local_shape(), "System mesh must be fully local");
-    auto num_devices = instance.shape().mesh_size();
-    TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
-    return extract_locals(instance.get_mapped_devices(MeshShape(1, 8)).device_ids);
 }
 
 }  // namespace ttnn::distributed

@@ -62,7 +62,7 @@ jobs:
     runs-on: >-
       ${{
         ((inputs.runner-label == 'P150b') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job

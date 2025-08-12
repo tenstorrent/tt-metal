@@ -17,6 +17,7 @@ namespace ttnn::distributed::test {
 
 using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
+using tt::tt_metal::distributed::MeshMapperConfig;
 
 using TensorTopologyTest = GenericMeshDeviceFixture;
 using TensorTopology2x4Test = MeshDevice2x4Fixture;
@@ -26,18 +27,17 @@ TEST_F(TensorTopologyTest, SingleDevice) {
         TensorSpec(ttnn::Shape{1, 1, 1, 3}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_tensor = Tensor::from_vector(std::vector<float>{42.F, 13.F, -99.F}, tensor_spec);
 
-    const auto mesh_shape_override = MeshShape(1);
-    auto mapper = create_mesh_mapper(
-        *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Replicate{}},
-            .mesh_shape_override = mesh_shape_override,
-        });
+    const auto mesh_mapper_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Replicate{}},
+        .mesh_shape_override = MeshShape(1),
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, mesh_mapper_config);
     Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    // Tensor topology for tensor replicated across 2D (with override) should be same as mesh shape override
+    // Tensor topology for tensor replicated across 2D (with override) should be same as mesh mapper config
     const auto& tensor_topology = replicated_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_shape_override);
+    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     auto coord = MeshCoordinate(0);
 
@@ -65,18 +65,17 @@ TEST_F(TensorTopology2x4Test, Replicate2D) {
         TensorSpec(ttnn::Shape{1, 1, 1, 3}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_tensor = Tensor::from_vector(std::vector<float>{42.F, 13.F, -99.F}, tensor_spec);
 
-    const auto mesh_shape_override = MeshShape(2, 3);
-    auto mapper = create_mesh_mapper(
-        *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}},
-            .mesh_shape_override = mesh_shape_override,
-        });
+    const auto mesh_mapper_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}},
+        .mesh_shape_override = MeshShape(2, 3),
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, mesh_mapper_config);
     Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    // Tensor topology for tensor replicated across 2D (with override) should be same as mesh shape override
+    // Tensor topology for tensor replicated across 2D (with override) should be same as mesh mapper config
     const auto& tensor_topology = replicated_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_shape_override);
+    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     auto check_neighbors_2d = [&tensor_topology](const MeshCoordinate& coord) {
         EXPECT_EQ(tensor_topology.get_next_neighbor(coord, 0), tensor_topology.get_neighbor(coord, 1, 0));
@@ -146,6 +145,8 @@ TEST_F(TensorTopology2x4Test, Shard1DRowMajor) {
     // num_devices)
     const auto& tensor_topology = sharded_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.mesh_shape(), MeshShape(num_devices));
+    EXPECT_EQ(
+        tensor_topology.placements(), (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{1}}));
 
     const auto& mesh_coords = tensor_topology.mesh_coords();
     EXPECT_EQ(mesh_coords.size(), num_devices);
