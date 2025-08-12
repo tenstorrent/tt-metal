@@ -35,16 +35,15 @@ def reference_sdpa(Q, K, V, S, sm_scale, sliding_window=0):
         (128, 64, 8, 64),
         (512, 32, 4, 64),
     ],
-    ids=["gpt20B", "gpt20B_tp2"],
+    ids=["gpt20B_tp1", "gpt20B_tp2"],
 )
-@pytest.mark.parametrize("sliding_window", [0, 128])
+@pytest.mark.parametrize("sliding_window", [0, 128], ids=["regular", "sliding_window"])
 @pytest.mark.parametrize(
     "num_iters",
     [0, 16],
+    ids=["single", "multi"],
 )
 def test_sdpa(device, num_tokens, nh, nkv, dim, sliding_window, num_iters, reset_seeds):
-    device.disable_and_clear_program_cache()  # FIXME: Removing this causes a hang after a few iterations (GH Issue #26656)
-
     dtype = ttnn.bfloat16
 
     q, k, v = None, None, None
@@ -69,6 +68,9 @@ def test_sdpa(device, num_tokens, nh, nkv, dim, sliding_window, num_iters, reset
         mask = torch.triu(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=1)
         if sliding_window > 0:
             mask += torch.tril(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=-sliding_window)
+
+        if n > 0:
+            mask = mask[:, :, -1:, :]
 
         # Torch output
         reference_out = reference_sdpa(q, k, v, s, sm_scale, sliding_window)

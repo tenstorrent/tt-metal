@@ -109,6 +109,8 @@ def get_state_dict(model_path: str, prefix: str | None = None, dtype=torch.float
     if prefix is not None:
         weights_dict = {k[len(prefix) :]: v for k, v in weights_dict.items() if k.startswith(prefix)}
 
+    print(f"Loaded weights_dict with {len(weights_dict)} keys")
+
     if dtype == torch.float32:
         weights_dict = convert_bf16_to_fp32(weights_dict)
 

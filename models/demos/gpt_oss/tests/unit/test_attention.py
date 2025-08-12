@@ -21,6 +21,7 @@ local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/g
     "batch_size, seq_len,",
     [
         (1, 1),  # 20B config
+        (1, 32),  # 20B config
         (1, 256),  # 20B config
     ],
 )
