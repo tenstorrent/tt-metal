@@ -39,7 +39,7 @@ class Attention(LightweightModule):
         use_paged_kv_cache=False,
     ):
         super().__init__()
-        self.is_sliding = bool((layer_num + 1) % configuration.sliding_window_pattern)
+        self.is_sliding = configuration.sliding_window_pattern[layer_num]
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
