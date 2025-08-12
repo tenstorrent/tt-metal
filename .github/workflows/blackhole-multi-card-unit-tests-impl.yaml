@@ -30,16 +30,23 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [
-          {name: fabric 1D unit tests, cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*" },
-          {name: fabric 1D performance microbenchmarks, cmd: pytest tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py },
-          {name: fabric 2D fixture unit tests, cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*" },
-          {name: fabric system health tests, cmd: ./build/test/tt_metal/tt_fabric/test_system_health },
-          {name: cpp unit tests eth, cmd: ./build/test/tt_metal/unit_tests_eth },
-          {name: all gather nightly test, cmd: pytest tests/nightly/bh/ccl/all_gather_nightly.py -k "test_all_gather_nightly"},
-          {name: reduce scatter nightly test, cmd: pytest tests/nightly/bh/ccl/test_reduce_scatter_nightly.py -k "test_rs_nightly"},
-          # {name: t3000 fast fabric tests, cmd: "source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttfabric_tests" },
-        ]
+        test-group:
+          - name: fabric 1D unit tests
+            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+          - name: fabric 1D performance microbenchmarks
+            cmd: pytest tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py
+          - name: fabric 2D fixture unit tests
+            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+          - name: fabric system health tests
+            cmd: ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
+          - name: cpp unit tests eth
+            cmd: ./build/test/tt_metal/unit_tests_eth
+          - name: all gather nightly test
+            cmd: pytest tests/nightly/bh/ccl/all_gather_nightly.py -k "test_all_gather_nightly"
+          - name: reduce scatter nightly test
+            cmd: pytest tests/nightly/bh/ccl/test_reduce_scatter_nightly.py -k "test_rs_nightly"
+          # - name: t3000 fast fabric tests
+          #   cmd: "source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttfabric_tests"
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
