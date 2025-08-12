@@ -268,6 +268,7 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_ra
     for (uint32_t rank = 0; rank < world_size; ++rank) {
         uint32_t mesh_id_val;
         std::memcpy(&mesh_id_val, recv_buffer.data() + rank * sizeof(uint32_t), sizeof(uint32_t));
+        log_info(tt::LogTest, "Rank {} is in mesh {}", rank, mesh_id_val);
         TT_FATAL(
             !std::any_of(
                 rank_to_mesh_id.begin(),
@@ -276,10 +277,6 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_ra
             "Mesh id {} is already in use",
             mesh_id_val);
         rank_to_mesh_id[Rank{rank}] = tt::tt_fabric::MeshId{mesh_id_val};
-    }
-
-    for (const auto& [rank, mesh_id] : rank_to_mesh_id) {
-        log_info(tt::LogTest, "Rank {} is in mesh {}", *rank, *mesh_id);
     }
 
     return rank_to_mesh_id;
