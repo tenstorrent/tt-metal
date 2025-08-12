@@ -24,6 +24,10 @@ std::unique_ptr<ISocket> create_socket(
             socket_config.sender_rank = other_rank;
             socket_config.receiver_rank = socket_config.distributed_context->rank();
         }
+        fmt::println(
+            "Creating MPI socket with sender rank: {}, receiver rank: {}",
+            socket_config.sender_rank,
+            socket_config.receiver_rank);
         auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
         return std::make_unique<MPISocket>(mesh_socket);
     }

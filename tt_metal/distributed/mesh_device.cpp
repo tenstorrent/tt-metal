@@ -141,7 +141,9 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t num_command_queues,
     size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config) {
+    fmt::println("ScopedDevices constructor");
     auto local_devices = extract_locals(device_ids);
+    fmt::println("SCOPED DEVICES EXTRACTED LOCALS");
     opened_local_devices_ = tt::tt_metal::detail::CreateDevices(
         local_devices,
         num_command_queues,
@@ -153,7 +155,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
         /*init_profiler*/ false,
         /*use_max_eth_core_count_on_all_devices*/ true,
         /* initialize_fabric_and_dispatch_fw */ false);
-
+    fmt::println("SCOPED DEVICES OPENED LOCAL DEVICES");
     for (auto device_id : device_ids) {
         if (device_id.is_local()) {
             auto* device = opened_local_devices_.at(*device_id);
@@ -230,8 +232,11 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     size_t worker_l1_size) {
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
+        fmt::println("MESH DEVICE CREATE: {}", config.physical_device_ids().size());
         if (config.physical_device_ids().empty()) {
             auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+            fmt::println("MAPPED DEVICES FABRIC NODE IDS: {}", mapped_devices.fabric_node_ids);
+            fmt::println("MAPPED DEVICES MESH SHAPE: {}", mapped_devices.mesh_shape);
             return std::make_tuple(
                 std::make_shared<ScopedDevices>(
                     mapped_devices.device_ids,

@@ -234,11 +234,12 @@ void DevicePool::initialize(
     bool initialize_fabric_and_dispatch_fw) {
     // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
+    fmt::println("INSIDE DevicePool::initialize(");
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::MetalContext::instance().initialize(
         dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
-
+    fmt::println("HQ INITIALIZED");
     if (_inst == nullptr) {
         static DevicePool device_pool{};
         _inst = &device_pool;
@@ -260,6 +261,7 @@ void DevicePool::initialize(
 
     // Fabric requires all devices to be open even though dispatch
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+    fmt::println("BEFORE IF USING FAST DISPATCH");
     if (_inst->using_fast_dispatch) {
         // Check if fabric needs to be enabled (any remote devices).
         // Note, all devices must be open to use fabric. This check will happen in add_devices_to_pool.
@@ -281,9 +283,11 @@ void DevicePool::initialize(
             }
         }
     }
+    fmt::println("AFTER IF USING FAST DISPATCH");
 
     std::vector<chip_id_t> target_mmio_ids;
     for (const auto& device_id : device_ids_to_open) {
+        fmt::println("OPENING DEVICE ID: {}", device_id);
         TT_FATAL(
             tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(device_id) !=
                 tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
@@ -309,25 +313,29 @@ void DevicePool::initialize(
     // This call will be a no-op if fabric is disabled.
     // May be called again below
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
+    fmt::println("BEFORE FABRIC INITIALIZATION");
     if (any_remote_devices) {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+            fmt::println("BEFORE FABRIC CONFIG SET");
             tt::tt_fabric::SetFabricConfig(
                 tt::tt_fabric::FabricConfig::FABRIC_1D,
                 tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                 1);
+            fmt::println("AFTER FABRIC CONFIG SET");
             // Call initialize again because previously it was a no-op
             tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+            fmt::println("INITIALIZE FABRIC CONFIG CALLED");
             fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
         } else {
+            fmt::println("FABRIC IS NOT DISABLED????");
             // Use the same mode
             tt::tt_fabric::SetFabricConfig(
                 fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         }
         log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
     }
-
+    fmt::println("AFTER FABRIC INITIALIZATION");
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids_to_open);

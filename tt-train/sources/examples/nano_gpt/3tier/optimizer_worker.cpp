@@ -51,11 +51,13 @@ void receive_gradients_from_aggregator(
 }
 
 int main(int argc, char **argv) {
+    std::cout << "Running optimizer worker" << std::endl;
     auto &ctx = ttml::autograd::ctx();
+    std::cout << "Initializing distributed context" << std::endl;
     ctx.initialize_distributed_context(argc, argv);
+    std::cout << "done initializing distributed context" << std::endl;
     auto distributed_ctx = ctx.get_distributed_context();
-    auto socket_manager = SocketManager(SocketType::MPI);
-
+    std::cout << "Have distributed context" << std::endl;
     CLI::App app{"Multihost Example"};
     fmt::print("Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank());
     argv = app.ensure_utf8(argv);
@@ -64,8 +66,6 @@ int main(int argc, char **argv) {
 
     std::vector<int> aggregator_and_optimizer_ranks = {
         distributed_ctx->rank().get() - 1, distributed_ctx->rank().get()};
-
-    auto aggregator_and_optimizer_ctx = distributed_ctx->create_sub_context(aggregator_and_optimizer_ranks);
 
     bool ddp = false;
     bool enable_tp = false;
@@ -80,6 +80,8 @@ int main(int argc, char **argv) {
 
     auto yaml_config = YAML::LoadFile(config_name);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
+
+    auto socket_manager = SocketManager(config.socket_type);
 
     auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
     fmt::println(
@@ -122,6 +124,11 @@ int main(int argc, char **argv) {
     };
 
     auto optimizer = select_optimizer(config.use_moreh_adamw);
+
+    std::cout << "Aggregator and optimizer ranks: " << aggregator_and_optimizer_ranks[0] << ", "
+              << aggregator_and_optimizer_ranks[1] << std::endl;
+    auto aggregator_and_optimizer_ctx = distributed_ctx->create_sub_context(aggregator_and_optimizer_ranks);
+    std::cout << "Created aggregator and optimizer context" << std::endl;
 
     send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
 

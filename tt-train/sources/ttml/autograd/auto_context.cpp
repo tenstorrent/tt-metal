@@ -99,7 +99,9 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
     if (m_distributed_context) {
         throw std::runtime_error("MPIContext is already initialized.");
     }
+    std::cout << "Creating distributed context" << std::endl;
     tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
+    std::cout << "Done creating distributed context" << std::endl;
     m_distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 }
 

@@ -49,6 +49,14 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     auto multihost_config = yaml_config["multihost_config"];
     config.enable_mpi = multihost_config["enabled"].as<bool>(config.enable_mpi);
     config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(config.num_mh_workers);
+    auto socket_type_str = multihost_config["socket_type"].as<std::string>("mpi");
+    if (socket_type_str == "mpi") {
+        config.socket_type = ttnn::distributed::SocketType::MPI;
+    } else if (socket_type_str == "fabric") {
+        config.socket_type = ttnn::distributed::SocketType::FABRIC;
+    } else {
+        throw std::runtime_error("Unknown socket type: " + socket_type_str);
+    }
 
     return config;
 }

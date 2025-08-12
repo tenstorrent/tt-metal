@@ -6,6 +6,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
+#include <ttnn/distributed/create_socket.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
 
@@ -390,6 +391,7 @@ struct TrainingConfig {
     // mpi config
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
+    SocketType socket_type = SocketType::MPI;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -428,6 +430,15 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     if (auto multihost_config = yaml_config["multihost_config"]) {
         config.enable_mpi = multihost_config["enabled"].as<bool>(false);
         config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(0U);
+
+        auto socket_type_str = multihost_config["socket_type"].as<std::string>("mpi");
+        if (socket_type_str == "mpi") {
+            config.socket_type = SocketType::MPI;
+        } else if (socket_type_str == "fabric") {
+            config.socket_type = SocketType::FABRIC;
+        } else {
+            throw std::runtime_error("Unknown socket type: " + socket_type_str);
+        }
     }
     return config;
 }
@@ -529,6 +540,7 @@ int main(int argc, char **argv) {
         fmt::print("MPI config:\n");
         fmt::print("  enable_mpi: {}\n", config.enable_mpi);
         fmt::print("  num_mh_workers: {}\n", config.num_mh_workers);
+        fmt::print("  socket_type: {}\n", config.socket_type == SocketType::MPI ? "MPI" : "FABRIC");
     }
 
     if (enable_wandb) {
@@ -600,6 +612,8 @@ int main(int argc, char **argv) {
         });
     }
 
+    fmt::println("BEFORE SET SEED");
+
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
     if (config.enable_mpi) {
@@ -607,6 +621,7 @@ int main(int argc, char **argv) {
         auto seed = config.seed + static_cast<uint32_t>(rank);
         ttml::autograd::ctx().set_seed(seed);
     }
+    fmt::println("AFTER SET SEED");
     auto schedule_func = schedulers.at(config.scheduler_type);
 
     std::string text;
@@ -631,6 +646,7 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config);
 
+    fmt::println("BEFORE CREATE DATASET AND TOKENIZER");
     auto create_dataset_and_tokenizer =
         [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
             if (tokenizer_type == "char") {
@@ -655,9 +671,17 @@ int main(int argc, char **argv) {
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
-    initialize_device(device_config.mesh_shape, device_config.device_ids);
+    fmt::println("BEFORE DEVICE INITIALIZATION");
+
+    fmt::println("MESH SHAPE: {}, device ids {}", device_config.mesh_shape, device_config.device_ids);
+    // initialize_device(device_config.mesh_shape, device_config.device_ids);
+    fmt::println("AFTER DEVICE INITIALIZATION");
+
+    fmt::println("TEST 1");
 
     auto *device = &ttml::autograd::ctx().get_device();
+
+    fmt::println("TEST 2");
 
     struct CachedHostData {
         std::vector<uint32_t> data;
@@ -833,7 +857,8 @@ int main(int argc, char **argv) {
     auto select_optimizer =
         [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
-            return std::make_unique<RemoteOptimizer>(get_model_parameters(model), config.num_mh_workers);
+            return std::make_unique<RemoteOptimizer>(
+                get_model_parameters(model), config.num_mh_workers, config.socket_type);
         } else if (use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {

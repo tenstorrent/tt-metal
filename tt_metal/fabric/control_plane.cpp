@@ -879,7 +879,9 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
 
     // When running multi-host workloads, have all hosts in the system exchange their local intermesh link tables
     // with all other hosts in the system. This information is used to assign directions to intermesh links.
+    std::cout << "Calling Exchange Intermesh Link Tables" << std::endl;
     this->exchange_intermesh_link_tables();
+    std::cout << "Done Exchanging Intermesh Link Tables" << std::endl;
 
     const auto& intra_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
@@ -966,6 +968,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                         tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
                     // Look up connected chip's intermesh link table and grab local desc channel
                     // TODO: need to add validate to make sure there is bidrectional traffic
+                    fmt::println("CONTROL PLANE 909: I AM HERE");
                     for (const auto& [local_desc, peer_desc] :
                          peer_intermesh_link_tables_[mesh_id][connected_host_rank_id]) {
                         if (peer_desc.board_id == unique_chip_id) {
@@ -991,6 +994,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
             for (const auto& [_, fabric_chip_id] : local_mesh_chip_id_container) {
                 const auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
                 if (*(distributed_context.size()) > 1) {
+                    fmt::println("Assigning intermesh link directions for M{}D{}", mesh_id, fabric_chip_id);
                     this->assign_intermesh_link_directions_to_remote_host(fabric_node_id);
                 } else {
                     this->assign_intermesh_link_directions_to_local_host(fabric_node_id);
@@ -2016,27 +2020,33 @@ void ControlPlane::exchange_intermesh_link_tables() {
         if (my_rank == bcast_root) {
             // Issue the broadcast from the current process to all other processes in the world
             int local_table_size_bytes = serialized_table.size();  // Send txn size first
+            std::cout << "Broadcast from rank: " << my_rank << " with size: " << local_table_size_bytes << std::endl;
             distributed_context.broadcast(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&local_table_size_bytes), sizeof(local_table_size_bytes)),
                 distributed_context.rank());
-
+            std::cout << "sending payload" << std::endl;
             distributed_context.broadcast(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
                 distributed_context.rank());
+            std::cout << "Done broadcast" << std::endl;
         } else {
             // Acknowledge the broadcast issued by the root
             int remote_table_size_bytes = 0;  // Receive the size of the serialized descriptor
+            std::cout << "Broadcast read from rank: " << bcast_root << " to rank: " << my_rank << std::endl;
             distributed_context.broadcast(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&remote_table_size_bytes), sizeof(remote_table_size_bytes)),
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
+            std::cout << "Remote table size: " << remote_table_size_bytes << std::endl;
             serialized_remote_table.clear();
             serialized_remote_table.resize(remote_table_size_bytes);
+            std::cout << "Read remote table" << std::endl;
             distributed_context.broadcast(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_remote_table.data(), serialized_remote_table.size())),
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
+            std::cout << "Done broadcast read" << std::endl;
             tt_fabric::IntermeshLinkTable deserialized_remote_table =
                 tt::tt_fabric::deserialize_from_bytes(serialized_remote_table);
             peer_intermesh_link_tables_[deserialized_remote_table.local_mesh_id]

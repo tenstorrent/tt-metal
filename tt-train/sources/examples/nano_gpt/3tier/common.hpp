@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <ttnn/distributed/create_socket.hpp>
+
 #include "core/distributed/distributed.hpp"
 #include "models/gpt2.hpp"
 
@@ -36,6 +38,7 @@ struct TrainingConfig {
 
     bool enable_mpi = false;
     uint32_t num_mh_workers = 1U;
+    ttnn::distributed::SocketType socket_type = ttnn::distributed::SocketType::MPI;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config);

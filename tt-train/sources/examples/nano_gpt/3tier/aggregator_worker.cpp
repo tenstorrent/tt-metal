@@ -63,10 +63,10 @@ void send_weights_from_optimizer_to_workers(
 }
 
 int main(int argc, char **argv) {
+    std::cout << "Running aggregator worker" << std::endl;
     auto &ctx = ttml::autograd::ctx();
     ctx.initialize_distributed_context(argc, argv);
     auto distributed_ctx = ctx.get_distributed_context();
-    auto socket_manager = SocketManager(SocketType::MPI);
 
     CLI::App app{"Multihost Example"};
     fmt::print("Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank().get());
@@ -87,6 +87,7 @@ int main(int argc, char **argv) {
 
     auto yaml_config = YAML::LoadFile(config_name);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
+    auto socket_manager = SocketManager(config.socket_type);
 
     fmt::println("Aggregator config setup finished");
 
