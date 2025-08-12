@@ -12,10 +12,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE, get_mesh_mappers
-from models.demos.yolov4.post_processing import load_class_names, plot_boxes_cv2, post_processing
+from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, load_coco_class_names
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
+from models.demos.yolov4.post_processing import plot_boxes_cv2, post_processing
 from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
-from models.experimental.yolo_eval.utils import LoadImages
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
@@ -79,8 +79,7 @@ def run_yolov4(
     nms_thresh = 0.4
     boxes = post_processing(torch_images, conf_thresh, nms_thresh, tt_output)
 
-    namesfile = "models/demos/yolov4/resources/coco.names"
-    class_names = load_class_names(namesfile)
+    class_names = load_coco_class_names()
     output_dir = "yolov4_predictions"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -146,7 +145,7 @@ def run_yolov4_coco(
     boxes = post_processing(torch_images, conf_thresh, nms_thresh, tt_output)
 
     namesfile = "models/demos/yolov4/resources/coco.names"
-    class_names = load_class_names(namesfile)
+    class_names = load_coco_class_names(namesfile)
     output_dir = "yolov4_predictions"
     os.makedirs(output_dir, exist_ok=True)
     for i in range(batch_size):

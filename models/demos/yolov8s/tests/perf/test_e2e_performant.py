@@ -9,8 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE
-from models.demos.yolov8s.demo.demo_utils import get_mesh_mappers
 from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
