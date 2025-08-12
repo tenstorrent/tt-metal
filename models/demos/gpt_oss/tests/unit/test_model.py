@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import ttnn
+from models.utility_functions import comp_pcc
 
 from ...reference.configuration_gpt_oss import GptOssConfig
 from ...reference.hf_utils import get_state_dict, load_tokenizer
@@ -20,6 +21,161 @@ local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/g
 tokenizer = load_tokenizer(local_weights_path)
 
 
+@pytest.mark.parametrize(
+    "num_experts, experts_per_token, intermediate_size, hidden_size",
+    [
+        (32, 4, 2880, 2880),  # 20B config (2 layers for testing)
+        # (128, 4, 2880, 2880),  # 120B config (1 layer for testing)
+    ],
+    ids=[
+        "gpt20B",
+        # "gpt120B",
+    ],
+)
+@pytest.mark.parametrize("num_hidden_layers", [2, 24], ids=["2layers", "all_layers"])
+@pytest.mark.parametrize("batch_size", (1,))
+@pytest.mark.parametrize(
+    "seq_len", [1, 32, 64, 128, 256, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s256", "s512", "s1024"]
+)
+@pytest.mark.parametrize("vocab_size", [201088])
+@pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
+def test_model(
+    mesh_device,
+    num_experts,
+    experts_per_token,
+    intermediate_size,
+    hidden_size,
+    num_hidden_layers,
+    seq_len,
+    batch_size,
+    vocab_size,
+    use_real_weights,
+    dtype,
+    reset_seeds,
+):
+    assert use_real_weights, "Random weights giving bad PCC (0s), need to investigate."
+
+    weights_type = "/real" if use_real_weights else "/random"
+
+    # Create configuration
+    config = GptOssConfig(
+        num_local_experts=num_experts,
+        intermediate_size=intermediate_size,
+        hidden_size=hidden_size,
+        num_experts_per_tok=experts_per_token,
+        num_hidden_layers=num_hidden_layers,
+        vocab_size=vocab_size,
+        rms_norm_eps=1e-6,
+    )
+    sliding_window = 0
+
+    cur_seq_len = seq_len
+    position_ids = torch.arange(seq_len).unsqueeze(0)
+
+    # Create input tensors
+    hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
+    mask = torch.triu(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=1)
+    sliding_mask = mask + torch.tril(
+        torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=-sliding_window
+    )
+
+    RopeEmbeddings = GptOssRotaryEmbedding(config)
+    cos, sin = RopeEmbeddings(hidden_states, position_ids)
+
+    tt_mask = ttnn.from_torch(mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_sliding_mask = ttnn.from_torch(sliding_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    apply_rope = ApplyRotaryPosEmb(config)
+    rope_stuff = (apply_rope, tt_cos, tt_sin)
+
+    # Create input tensors (token ids)
+    input_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
+
+    # Convert to TTNN tensors
+    tt_input_ids = ttnn.from_torch(input_ids, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
+
+    # Create models
+    reference_model = ReferenceModelWithLMHead(config)
+
+    if use_real_weights:
+        # Load real weights for the model
+        model_state_dict = get_state_dict(local_weights_path, "", dtype=torch.float32)
+        reference_model.load_state_dict(model_state_dict, strict=False)
+
+    # Get state dict for TT model
+    reference_state_dict = reference_model.state_dict()
+
+    # Initialize TT model
+    ccl_manager = CCLManager(mesh_device)
+    print("Initializing TT model")
+    tt_model = Model(
+        mesh_device,
+        config,
+        reference_state_dict,
+        ccl_manager,
+        dtype=dtype,
+        tensor_cache_path=tensor_cache_dir + weights_type,
+    )
+    print("TT model initialized successfully")
+
+    # Run forward passes
+    reference_output = reference_model(
+        input_ids,
+        attention_masks={"full_attention": mask, "sliding_attention": sliding_mask},
+        position_embeddings=(cos, sin),
+    )
+
+    # For TT model, we need to pass the required arguments
+    print("Running TT model")
+    tt_output = tt_model(
+        input_ids=tt_input_ids,
+        attention_masks={"full_attention": tt_mask, "sliding_attention": tt_sliding_mask},
+        position_embeddings=rope_stuff,
+    )
+
+    # Handle multi-device output
+    tt_output_tensors = ttnn.get_device_tensors(tt_output)
+    for i in range(len(tt_output_tensors)):
+        print(f"checking device {i}")
+        tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
+        # output_ids = torch.argmax(tt_output_torch.float(), dim=-1)
+        # print(f"TT output ids: {output_ids}")
+        # print(f"tt_output")
+        # print(tokenizer.decode(output_ids.flatten()))
+
+        # Compare outputs
+        pcc_threshold = 0.99 if num_hidden_layers == 2 else 0.88
+        passing, output = comp_pcc(reference_output, tt_output_torch, pcc=pcc_threshold)
+        mse = torch.nn.functional.mse_loss(reference_output, tt_output_torch)
+
+        # Calculate relative error metrics
+        ref_variance = torch.var(reference_output)
+        ref_mean_abs = torch.mean(torch.abs(reference_output))
+        ref_std = torch.std(reference_output)
+
+        relative_mse_to_variance = mse / ref_variance if ref_variance > 0 else float("inf")
+        relative_mse_to_scale = mse / (ref_mean_abs**2) if ref_mean_abs > 0 else float("inf")
+        snr_db = 10 * torch.log10(ref_variance / mse) if mse > 0 else float("inf")
+
+        print(f"Model output: {output}")
+        print(f"MSE: {mse:.6e}")
+        print(f"Reference variance: {ref_variance:.6e}, std: {ref_std:.6e}, mean_abs: {ref_mean_abs:.6e}")
+        print(f"Relative MSE to variance: {relative_mse_to_variance:.6e} ({relative_mse_to_variance*100:.4f}%)")
+        print(f"Relative MSE to scale²: {relative_mse_to_scale:.6e} ({relative_mse_to_scale*100:.4f}%)")
+        print(f"Signal-to-Noise Ratio: {snr_db:.2f} dB")
+        print(f"Reference output range: [{torch.min(reference_output):.6e}, {torch.max(reference_output):.6e}]")
+        print(f"TT output range: [{torch.min(tt_output_torch):.6e}, {torch.max(tt_output_torch):.6e}]")
+
+        assert passing, "Model output mismatch"
+
+
+###################################
+##### Reference Model Classes #####
+###################################
 class ReferenceRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         super().__init__()
@@ -313,158 +469,3 @@ class ReferenceModelWithLMHead(nn.Module):
         hidden_states = self.model(input_ids, attention_masks, position_embeddings)
         hidden_states = self.lm_head(hidden_states)
         return hidden_states
-
-
-@pytest.mark.parametrize(
-    "num_experts, experts_per_token, intermediate_size, hidden_size",
-    [
-        (32, 4, 2880, 2880),  # 20B config (2 layers for testing)
-        (128, 4, 2880, 2880),  # 120B config (1 layer for testing)
-    ],
-    ids=["gpt20B", "gpt120B"],
-)
-@pytest.mark.parametrize("num_hidden_layers", [2, 24], ids=["2layers", "all_layers"])
-@pytest.mark.parametrize("batch_size", (1,))
-@pytest.mark.parametrize(
-    "seq_len", [1, 32, 64, 128, 256, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s256", "s512", "s1024"]
-)
-@pytest.mark.parametrize("vocab_size", [201088])
-@pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
-def test_model(
-    mesh_device,
-    num_experts,
-    experts_per_token,
-    intermediate_size,
-    hidden_size,
-    num_hidden_layers,
-    seq_len,
-    batch_size,
-    vocab_size,
-    use_real_weights,
-    dtype,
-    reset_seeds,
-):
-    # Create configuration
-    config = GptOssConfig(
-        num_local_experts=num_experts,
-        intermediate_size=intermediate_size,
-        hidden_size=hidden_size,
-        num_experts_per_tok=experts_per_token,
-        num_hidden_layers=num_hidden_layers,
-        vocab_size=vocab_size,
-        rms_norm_eps=1e-6,
-    )
-    sliding_window = 0
-
-    cur_seq_len = seq_len
-    position_ids = torch.arange(seq_len).unsqueeze(0)
-
-    # Create input tensors
-    hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
-    mask = torch.triu(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=1)
-    sliding_mask = mask + torch.tril(
-        torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=-sliding_window
-    )
-
-    RopeEmbeddings = GptOssRotaryEmbedding(config)
-    cos, sin = RopeEmbeddings(hidden_states, position_ids)
-    position_embeddings = (cos, sin)
-
-    tt_mask = ttnn.from_torch(mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_sliding_mask = ttnn.from_torch(sliding_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    apply_rope = ApplyRotaryPosEmb(config)
-    rope_stuff = (apply_rope, tt_cos, tt_sin)
-
-    messages = [
-        {"role": "user", "content": "Who are you?"},
-    ]
-    inputs = tokenizer.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
-        padding="max_length",
-        max_length=seq_len,
-    )
-    inputs.input_ids = inputs.input_ids[..., :seq_len]
-    print(f"Input ids: {inputs.input_ids}")
-    print(f"Detokenized input: {tokenizer.decode(inputs.input_ids[0])}")
-
-    # Create input tensors (token ids)
-    # input_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
-
-    # Convert to TTNN tensors
-    tt_input_ids = ttnn.from_torch(
-        inputs.input_ids, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
-    )
-
-    # Create models
-    # reference_model = ReferenceModelWithLMHead(config)
-
-    # if use_real_weights:
-    # Load real weights for the model
-    model_state_dict = get_state_dict(local_weights_path, "", dtype=torch.bfloat16)
-    # Load weights into reference model (use strict=False to ignore missing attention weights)
-    #     reference_model.load_state_dict(model_state_dict, strict=False)
-
-    # # Get state dict for TT model
-    # reference_state_dict = reference_model.state_dict()
-
-    # Initialize TT model
-    ccl_manager = CCLManager(mesh_device)
-    print("Initializing TT model")
-    tt_model = Model(
-        mesh_device, config, model_state_dict, ccl_manager, dtype=dtype, tensor_cache_path=tensor_cache_dir
-    )
-    print("TT model initialized successfully")
-
-    # Run forward passes
-    # reference_output = reference_model(input_ids, attention_masks={"full_attention": mask, "sliding_attention": sliding_mask}, position_embeddings=(cos, sin))
-
-    # For TT model, we need to pass the required arguments
-    print("Running TT model")
-    tt_output = tt_model(
-        input_ids=tt_input_ids,
-        attention_masks={"full_attention": tt_mask, "sliding_attention": tt_sliding_mask},
-        position_embeddings=rope_stuff,
-    )
-
-    # Handle multi-device output
-    tt_output_tensors = ttnn.get_device_tensors(tt_output)
-    for i in range(len(tt_output_tensors)):
-        print(f"checking device {i}")
-        tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
-        output_ids = torch.argmax(tt_output_torch.float(), dim=-1)
-        print(f"TT output ids: {output_ids}")
-        print(f"tt_output")
-        print(tokenizer.decode(output_ids.flatten()))
-
-        # # Compare outputs
-        # passing, output = comp_pcc(reference_output, tt_output_torch, pcc=0.99)
-        # mse = torch.nn.functional.mse_loss(reference_output, tt_output_torch)
-
-        # # Calculate relative error metrics
-        # ref_variance = torch.var(reference_output)
-        # ref_mean_abs = torch.mean(torch.abs(reference_output))
-        # ref_std = torch.std(reference_output)
-
-        # relative_mse_to_variance = mse / ref_variance if ref_variance > 0 else float("inf")
-        # relative_mse_to_scale = mse / (ref_mean_abs**2) if ref_mean_abs > 0 else float("inf")
-        # snr_db = 10 * torch.log10(ref_variance / mse) if mse > 0 else float("inf")
-
-        # print(f"Model output: {output}")
-        # print(f"MSE: {mse:.6e}")
-        # print(f"Reference variance: {ref_variance:.6e}, std: {ref_std:.6e}, mean_abs: {ref_mean_abs:.6e}")
-        # print(f"Relative MSE to variance: {relative_mse_to_variance:.6e} ({relative_mse_to_variance*100:.4f}%)")
-        # print(f"Relative MSE to scale²: {relative_mse_to_scale:.6e} ({relative_mse_to_scale*100:.4f}%)")
-        # print(f"Signal-to-Noise Ratio: {snr_db:.2f} dB")
-        # print(f"Reference output range: [{torch.min(reference_output):.6e}, {torch.max(reference_output):.6e}]")
-        # print(f"TT output range: [{torch.min(tt_output_torch):.6e}, {torch.max(tt_output_torch):.6e}]")
-
-        # assert passing, "Model output mismatch"

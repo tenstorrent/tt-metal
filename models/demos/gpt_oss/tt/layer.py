@@ -48,6 +48,7 @@ class DecoderLayer:
         hidden_states,
         attention_mask=None,
         position_embeddings=None,
+        position_idx=None,
     ):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -55,6 +56,7 @@ class DecoderLayer:
             x=hidden_states,
             mask=attention_mask,
             rope_stuff=position_embeddings,
+            position_idx=position_idx,
         )
         hidden_states = residual + hidden_states
 

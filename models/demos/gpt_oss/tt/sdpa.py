@@ -28,6 +28,7 @@ def sdpa(
     sm_scale: float,
     tt_mask: ttnn.Tensor = None,
     tt_cache: ttnn.Tensor = None,
+    position_idx: int = None,
 ) -> ttnn.Tensor:
     """
     Perform a single attention operation using the provided tensors.
@@ -64,6 +65,11 @@ def sdpa(
         tt_cache = [tt_k, tt_v]  # Cache for keys and values
     else:
         tt_k_back, tt_v_back = tt_cache
+
+        if position_idx is not None:
+            assert position_idx <= tt_k_back.shape[2], "position_idx exceeds cache length"
+            tt_k_back = tt_k_back[:, :, :position_idx, :]
+            tt_v_back = tt_v_back[:, :, :position_idx, :]
 
         tt_k = ttnn.concat([tt_k_back, tt_k], dim=2)  # (nkv, 1, cache_len + num_tokens, dim)
         tt_v = ttnn.concat([tt_v_back, tt_v], dim=2)  # (nkv, 1, cache_len + num_tokens, dim)
