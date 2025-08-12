@@ -52,6 +52,16 @@ Note: Output images will be saved in the `models/demos/yolov8s/demo/runs/<model_
   pytest pytest models/demos/yolov8s/demo/demo.py::test_demo_dp[wormhole_b0-res0-True-tt_model-1-models/demos/yolov8s/demo/images-device_params0]
   ```
 
+### Performant evaluation with Trace+2CQ
+
+- Use the following command to run the performant evaluation with Trace+2CQs:
+
+  ```
+  pytest models/demos/yolo_eval/evaluate.py::test_yolov8s[res0-device_params0-tt_model]
+  ```
+
+Note: The model is evaluated with 500 samples.
+
 ### Web Demo
 - Try the interactive web demo at [yolov8s/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8s/web_demo/README.md)
 
