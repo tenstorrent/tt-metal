@@ -67,20 +67,27 @@ int main(int argc, char **argv) {
     std::vector<int> aggregator_and_optimizer_ranks = {
         distributed_ctx->rank().get() - 1, distributed_ctx->rank().get()};
 
-    bool ddp = false;
-    bool enable_tp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
-    app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
-    app.add_option("-p,--tp", enable_tp, "Enable TP")->default_val(enable_tp);
 
     CLI11_PARSE(app, argc, argv);
 
-    // tensor parallel is not supported yet
-    three_tier_arch::initialize_device(ddp, enable_tp);
-
     auto yaml_config = YAML::LoadFile(config_name);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
+    three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
+    if (device_config.enable_tp) {
+        throw std::runtime_error("Tensor parallel is not supported in the optimizer worker.");
+    }
+
+    three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
+    if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
+            throw std::runtime_error(fmt::format(
+                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
+                device_config.mesh_shape));
+        }
+    }
     auto socket_manager = SocketManager(config.socket_type);
 
     auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
@@ -94,11 +101,12 @@ int main(int argc, char **argv) {
     auto *device = &ctx.get_device();
 
     auto num_devices = static_cast<uint32_t>(device->num_devices());
-    auto should_be_divisible_by = (enable_tp ? num_devices : 1U) * 32U;
+    auto should_be_divisible_by = (device_config.enable_tp ? num_devices : 1U) * 32U;
     vocab_size = round_up_to_tile(vocab_size, should_be_divisible_by);
     config.transformer_config.vocab_size = vocab_size;
 
-    auto create_model = [enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+    auto create_model =
+        [enable_tp = device_config.enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
         if (enable_tp) {
             return ttml::models::distributed::gpt2::create(config);
         }

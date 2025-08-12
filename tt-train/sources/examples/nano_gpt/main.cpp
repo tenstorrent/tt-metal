@@ -517,6 +517,15 @@ int main(int argc, char **argv) {
     EvalConfig eval_config = parse_eval_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
 
+    if (config.socket_type == SocketType::FABRIC) {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
+            throw std::runtime_error(fmt::format(
+                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
+                device_config.mesh_shape));
+        }
+    }
+
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
         ctx.initialize_distributed_context(argc, argv);
