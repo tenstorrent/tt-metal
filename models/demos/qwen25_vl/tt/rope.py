@@ -123,10 +123,6 @@ class RotarySetup(LightweightModule):
                 mat = ttnn.unsqueeze_to_4D(mat)
                 ttnn.copy_host_to_device_tensor(mat, mat_tt)
         else:
-            # [INFO] tt-transformers RotarySetup uses a single cos_matrix and sin_matrix for all batches
-            assert (
-                cos_matrix.shape[0] == 1 and sin_matrix.shape[0] == 1
-            ), "Init values of cos_matrix and sin_matrix must have batch size 1"
             for mat, attr_name in zip((cos_matrix, sin_matrix), ("cos_matrix", "sin_matrix")):
                 setattr(
                     self,
