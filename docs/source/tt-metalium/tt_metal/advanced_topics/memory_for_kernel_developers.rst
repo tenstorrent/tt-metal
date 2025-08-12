@@ -24,18 +24,18 @@ Refer to the `Baby RISC-V <https://github.com/tenstorrent/tt-isa-documentation/b
     // SRAM access pressure
     void kernel_main() {
         int a = 0; // lives on per-core private memory
-        // due to this, passing this the address of this variable to another core
+        // Because of this, passing the address of this variable to another core
         // will not work, as the other core does not have access to the private memory
-        // it lives on. And has the core has it's own private memory mapped at the same address
+        // it lives on. And has the core has its own private memory mapped at the same address
 
         // Variable `cb_idx` lives in per-core memory but points to a circular buffer in shared SRAM
         // Because shared SRAM is mapped in the core's address space, you can cast it to a pointer
         // and access it as if it were a regular memory.
         // However note that the RISC-V cores itself have low bandwidth to SRAM, the bulk of compute
-        // is done via periferals which have much higher bandwidth to SRAM.
+        // is done via peripherals which have much higher bandwidth to SRAM.
         cb_wait_front(tt::CBIndex::c_16, 1);
         uint32_t cb_addr = get_write_ptr(tt::CBIndex::c_16);
-        // Treating it as affress because the address is in shared SRAM
+        // Treating it as address because the address is in shared SRAM
         // DPRINT << ((uint32_t*)cb_addr)[0] << std::endl;
 
         // `dram_addr` is a DRAM address, however the address is not mapped in the RISC-V address space
@@ -72,27 +72,41 @@ For Wormhole, within each DRAM tile, the 1st channel is mapped to address 0 and 
 
     The DRAM tile connection to GDDR memory. Each DRAM tile has 2 channels, each with 1GB of memory.
 
-DMA requests via the NoC
-~~~~~~~~~~~~~~~~~~~~~~~~
+Memory access via the NoC
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 RISC-V cores can only access their private memory and the local shared SRAM directly. Accessing SRAM on other Tensix cores or DRAM requires sending DMA requests through the NoC. These requests specify the target tile's (x, y) coordinates and the address within that tile.
 
 .. code-block:: cpp
 
     uint64_t noc_addr = get_noc_addr(x, y, addr_on_target_tile);
-    noc_async_read(noc_addr, l1_buffer_addr, dram_buffer_size);
+    noc_async_read(noc_addr, ptr_l1_buffer, dram_buffer_size);
 
     // for writing
-    noc_async_write(l1_buffer_addr, noc_addr, dram_buffer_size);
+    noc_async_write(ptr_l1_buffer, noc_addr, dram_buffer_size);
 
-The same scheme works for all tiles on the NoC (as long as the address maps to valid memory). If the NoC request goes to a Tensix or Ethernet tile, it accesses their SRAM; if to a DRAM tile, it accesses DRAM; to the PCIe controller, it accesses the peripheral. Thus on Tensix the real address is a tuple of (x, y, addr).
+.. warning::
 
-Accessing DRAM is straightforward. The following creates a read request of size 0x100 to DRAM tile D1 at address 0x1000:
+    Private memory (including the stack) is only accessible by the core that owns it. NoC requests can only access shared SRAM addresses:
+
+    * Stack variables cannot be used as DMA source or destination
+    * L1 buffers (allocated in the host program) and circular buffers are accessible via NoC
+
+    e.g. The following will not work.
+
+    .. code-block::
+        // This WILL NOT work as arr lives on the stack this the private memory
+        int arr[8];
+        noc_async_read(noc_addr, uint32_t(&arr), sizeof(arr));
+
+The same scheme works for all tiles on the NoC (as long as the address maps to valid memory). If the NoC request goes to a Tensix or Ethernet tile, it accesses their SRAM; if to a DRAM tile, it accesses DRAM; to the PCIe controller, it accesses the peripheral. Thus making the real address a tuple of (``x``, ``y``, ``local_addr``).
+
+Accessing raw DRAM is straightforward. The following creates a read request of size 0x100 to DRAM tile D1 at address 0x1000:
 
 .. code-block:: cpp
 
     uint64_t noc_addr = get_noc_addr_from_bank_id<true>(0, 0x1000);
-    noc_async_read(noc_addr, l1_buffer_addr, 0x100);
+    noc_async_read(noc_addr, ptr_l1_buffer, 0x100);
 
 From the information above, the following is true on Wormhole (and analogous for other generation of processors):
 
@@ -100,6 +114,13 @@ From the information above, the following is true on Wormhole (and analogous for
 * Reading from different D1 tiles at the same address returns the same data
 * Address 0x1000 is within the first 1GB, so the 1st channel of the GDDR chip is used
 * Using all 6 DRAM controllers simultaneously provides the full 12GB capacity
+
+As the ``async`` naming in ``noc_async_read/write`` indicates. NoC requests are asynchronous, *may* complete out of order, and may or may not return immediately due to various factors. A barrier is needed to ensure that all read or write operations are complete before proceeding.
+
+.. code-block:: cpp
+
+    noc_async_read_barrier(); // Wait for all read operations to complete
+    noc_async_write_barrier(); // Wait for all write operations to complete
 
 Tensor Layout
 -------------
@@ -162,7 +183,7 @@ Lock step allocation has inherent trade-offs. When allocating X bytes on one DRA
 Interleaved memory
 ~~~~~~~~~~~~~~~~~~
 
-Interleaved is the simplest memory placement scheme. Where data is round-robined across all available memory resource at ``page_size`` granularity. This approach is the most generic and works well for most kernels. It ensures that data is evenly distributed across all memory banks and not hot-spotted on any single one. At the cost of less efficient memory access patterns for certain operations such as matrix multiplication and convolution, where locality is paramount.
+Interleaved is the simplest memory placement scheme. Data is round‑robined across all available memory resources at ``page_size`` granularity. This approach is the most generic and works well for most kernels. It ensures that data is evenly distributed across all memory banks and not hot-spotted on any single one. At the cost of less efficient memory access patterns for certain operations such as matrix multiplication and convolution, where locality is paramount.
 
 The following example is a typical interleaved memory allocation for a DRAM buffer. It allocates a buffer of size ``tile_size_bytes * n_tiles`` bytes. The ``page_size`` is set to the size of a tile, which 2KiB for bfloat16 tiles - each DRAM controller will hold a tile of data, and the next tile will be stored on the next DRAM controller, and so on.
 
@@ -185,14 +206,14 @@ The following example is a typical interleaved memory allocation for a DRAM buff
     std::vector<uint32_t> compile_time_args; // passed to kernel during kernel setup
     TensorAccessorArgs(*src0_dram_buffer).append_to(compile_time_args);
 
-The above code allocats 64 tiles of size 2KiB each, for a total of 128KiB. Across DRAM controllers. We can visualize the allocation (as an 1D array) as follows:
+The above code allocates 64 tiles of size 2KiB each, for a total of 128KiB. Across DRAM controllers. We can visualize the allocation (as a 1D array) as follows:
 
 .. figure:: /images/tenstorrent-interleaved-allocation-64-tiles-wh.webp
     :alt: Allocating 64 tiles of interleaved memory on Wormhole
     :align: center
     :width: 65%
 
-    Allocation of 64 tiles of bfloat16 in interleaved memory on Wormhole (6 DRAM controller). Each tile is 1024 elements of bfloat16, or 2KiB. The allocation round-robins across the 6 DRAM controllers.
+    Allocation of 64 tiles of bfloat16 in interleaved memory on Wormhole (6 DRAM controllers). Each tile is 1024 elements of bfloat16, or 2KiB. The allocation round-robins across the 6 DRAM controllers.
 
 
 As interleaved memory is the most common allocation scheme. Instead of manually calculating the address and tile coordinates, utilities are provided to enable easy access. ``TensorAccessor`` enables efficient, random access to interleaved memory. Allowing tile/page sized granularity for read and writes.
@@ -239,7 +260,7 @@ As allocation type and scheme is known at compile time. The same ``TensorAccesso
 
 .. code-block:: cpp
 
-    // Nothing changes compared to reading from DRAM as allocation on DRAM or SRAM is know before
+    // Nothing changes compared to reading from DRAM as allocation on DRAM or SRAM is known before
     // kernel compilation.
     // Whether accessing DRAM or SRAM is stored in TensorAccessorArgs.
     constexpr auto in0_args = TensorAccessorArgs<0>();
@@ -255,7 +276,7 @@ As allocation type and scheme is known at compile time. The same ``TensorAccesso
         cb_push_back(cb_in0, 1);
     }
 
-Sharded memory
+Sharded tensor
 ~~~~~~~~~~~~~~
 
 Interleaved memory, while simple and generic, does not always provide optimal performance for all kernels. It can lead to NoC contention since each link can only carry one packet at a time. When multiple packets attempt to traverse the same link, one must wait, causing delays and reduced throughput. The problem is true for both Interleaved DRAM and SRAM buffers. This is particularly problematic for high-bandwidth kernels with predictable access patterns, such as matrix multiplication or convolution. In these cases, more advanced memory allocation schemes that reduce contention and improve data locality often provide better performance.
@@ -280,32 +301,25 @@ Sharding is usually only done for SRAM buffers.
 
 .. code-block:: cpp
 
-    constexpr uint32_t height_tiles = 8; // Number of tiles in the height dimension
-    constexpr uint32_t width_tiles = 8;  // Number of tiles in the width dimension
-    constexpr uint32_t n_tiles = height_tiles * width_tiles;
-    constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-    constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
+    using namespace tt::constants;
+    ShardSpecBuffer shard_spec(
+        cores,                                            // The core grid on which data is distributed on
+        { uint32_t(tiles_per_core_width * TILE_HEIGHT),   // Width and height in bytes
+          uint32_t(tiles_per_core_height * TILE_WIDTH) },
+        ShardOrientation::ROW_MAJOR,                      // direction (across cores) to distribute shards
+        { TILE_HEIGHT, TILE_WIDTH },                      // Page size in elements
+        { height_tiles, width_tiles });                   // shape of the overall matrix/tensor in shards
 
-    auto cord_grid = device->compute_with_storage_grid_size();
-    auto spec = ShardSpec(
-        CoreRange({0, 0}, {cord_grid.y - 1, cord_grid.x - 1}), // Core range
-        {height_tiles, width_tiles}                            // Canonical tensor shape
-    );
-    auto shard_spec = ShardSpecBuffer(
-        spec,
-        {tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT}, // Page shape
-        {height_tiles, width_tiles}                              // Tensor 2D shape in pages
-    );
-    auto memory_config = ShardedBufferConfig {
+    // Allocate a sharded buffer in L1
+    auto buf = CreateBuffer(ShardedBufferConfig{
         .device = device,
-        .size = n_tiles * tile_size_bytes,                // Total size in bytes
+        .size = n_tiles * tile_size_bytes,
         .page_size = tile_size_bytes,
-        .shard_parameters = shard_spec,
-    };
+        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = shard_spec});
 
-    auto buf = CreateBuffer(memory_config);
-
-    std::vector<TensorAccessorArgs> compile_time_args;
+    // Describe access pattern for kernel (compile-time args packing helper).
+    std::vector<uint32_t> compile_time_args;
     TensorAccessorArgs(*buf).append_to(compile_time_args);
 
 
@@ -313,4 +327,4 @@ Accessing of sharded memory is done exactly like accessing interleaved memory. `
 
 .. note::
 
-    Note the concepts (DRAM vs SRAM, interleaved vs sharded) are independent of each other. You can have interleaved DRAM buffers (most common), interleaved SRAM buffers (often used for temporary data), sharded SRAM buffers (for specific use cases where they benifit from the bandwidth) and sharded DRAM buffers (rarely used, but possible). The best approach depends on the specific kernel and its access patterns.
+    Note the concepts (DRAM vs SRAM, interleaved vs sharded) are mostly independent of each other. You can have interleaved DRAM buffers (most common), interleaved SRAM buffers (often used for temporary data), sharded SRAM buffers (for specific use cases where they benefit from the bandwidth) and sharded DRAM buffers (rarely used due to limited DRAM vs NoC bandwidth thus not described above). The best approach depends on the specific kernel and its access patterns.
