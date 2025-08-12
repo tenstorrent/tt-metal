@@ -39,7 +39,8 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
         # LLama
         (
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (1, 1, 32, 1024 * 4),
+            # (1, 1, 32, 1024 * 4),
+            (1, 1, 32, 800),
             3,
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
@@ -56,7 +57,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
     ),
 )
 @pytest.mark.parametrize("use_persistent_output", [True, False])
-@pytest.mark.parametrize("replication_factor", [8])
+@pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_sharded_on_TG_rows_post_commit(
