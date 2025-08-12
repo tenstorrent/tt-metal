@@ -52,7 +52,6 @@ def calculate_max_valid_cores_for_group_norm(num_groups: int, num_channels: int,
         f"tiles={num_tiles}, group_width={group_width}"
     )
 
-    # Test from maximum cores (8) down to 1
     max_cores_to_test = 8
     for num_cores in range(max_cores_to_test, 0, -1):
         # Check if tiles can be evenly distributed across cores
@@ -63,7 +62,6 @@ def calculate_max_valid_cores_for_group_norm(num_groups: int, num_channels: int,
         tiles_per_core = num_tiles // num_cores
         channels_per_core = tiles_per_core * tile_width
 
-        # Check if groups can be evenly distributed
         if channels_per_core % group_width != 0:
             logger.debug(
                 f"  cores={num_cores}: SKIP - channels_per_core ({channels_per_core}) "
@@ -123,6 +121,21 @@ def calculate_max_valid_cores_for_group_norm(num_groups: int, num_channels: int,
         (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
         (1, 256, 512, 512, 32, 16, 8, 8),  # SD 1.4 VAE
         (1, 128, 512, 512, 32, 22, 4, 4),  # SD 1.4 VAE
+        # SDXL Refiner
+        (1, 1152, 128, 128, 32, 3, 4, 4),
+        (1, 1152, 64, 64, 32, 1, 4, 4),
+        (1, 1536, 16, 16, 32, 1, 8, 8),
+        (1, 1536, 32, 32, 32, 1, 8, 8),
+        (1, 1536, 64, 64, 32, 1, 8, 8),
+        (1, 2304, 32, 32, 32, 1, 8, 8),
+        (1, 2304, 64, 64, 32, 1, 8, 8),
+        (1, 3072, 16, 16, 32, 1, 8, 8),
+        (1, 3072, 32, 32, 32, 1, 8, 8),
+        (1, 384, 128, 128, 32, 3, 4, 4),
+        (1, 384, 64, 64, 32, 1, 4, 4),
+        (1, 768, 128, 128, 32, 2, 8, 8),
+        (1, 768, 32, 32, 32, 1, 8, 8),
+        (1, 768, 64, 64, 32, 1, 8, 8),
     ],
 )
 def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
