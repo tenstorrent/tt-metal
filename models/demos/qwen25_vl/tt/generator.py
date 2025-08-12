@@ -149,7 +149,7 @@ class Generator:
                 )
                 tt_logits = self.model.ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats=chunk_rot_mats_prefill,
+                    rot_mats_global=chunk_rot_mats_prefill,
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -171,7 +171,7 @@ class Generator:
 
             tt_logits = self.model.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
+                rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,

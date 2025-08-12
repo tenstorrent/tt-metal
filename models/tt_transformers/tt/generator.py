@@ -158,7 +158,8 @@ class Generator:
 
                 (
                     chunk_prefill_input,
-                    chunk_rot_mats_prefill,
+                    chunk_rot_mats_global_prefill,
+                    chunk_rot_mats_local_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
                 ) = self.model[model_id].prepare_inputs_prefill(
@@ -169,7 +170,8 @@ class Generator:
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats=chunk_rot_mats_prefill,
+                    rot_mats_global=chunk_rot_mats_global_prefill,
+                    rot_mats_local=chunk_rot_mats_local_prefill,
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -183,14 +185,21 @@ class Generator:
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
+            (
+                prefill_input,
+                rot_mats_global_prefill,
+                rot_mats_local_prefill,
+                page_table_tt,
+                _,
+            ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
             )
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
-                rot_mats=rot_mats_prefill,
+                rot_mats_global=rot_mats_global_prefill,
+                rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
@@ -253,17 +262,24 @@ class Generator:
 
         tt_tokens = []
         tt_current_pos = []
-        tt_rot_mat_idxs = []
+        tt_rot_mat_idxs_global = []
+        tt_rot_mat_idxs_local = []
         tt_page_table = []
 
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
-            tt_tokens_i, tt_current_pos_i, tt_rot_mat_idxs_i, tt_page_table_i = self.model[i].prepare_inputs_decode(
-                tokens[i], current_pos[i], user_page_table
-            )
+            model_i = self.model[i]
+            (
+                tt_tokens_i,
+                tt_current_pos_i,
+                tt_rot_mat_idxs_global_i,
+                tt_rot_mat_idxs_local_i,
+                tt_page_table_i,
+            ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
+            tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
+            tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
             tt_page_table.append(tt_page_table_i)
 
         for i in range(self.data_parallel):
@@ -271,7 +287,8 @@ class Generator:
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
-                rot_mat_idxs=tt_rot_mat_idxs[i],
+                rot_mat_idxs_global=tt_rot_mat_idxs_global[i],
+                rot_mat_idxs_local=tt_rot_mat_idxs_local[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
