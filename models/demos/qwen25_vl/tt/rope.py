@@ -179,9 +179,7 @@ class RotarySetup(LightweightModule):
         batch_size = position_idxs.shape[0]
         cos, sin = None, None
         for i in range(batch_size):
-            # [INFO] This is a work-around to avoid the slicing issue in position_idxs[i:i+1]
-            # todo)) this workaround can be removed after pulling changes from `main` --> the bug is fixed there
-            pos_i = ttnn.squeeze(ttnn.reshape(position_idxs, (batch_size, 1))[i : i + 1], dim=-1)
+            pos_i = position_idxs[i : i + 1]
             cos_i = ttnn.embedding(pos_i, self.cos_matrix[i : i + 1, ...])  # [1, head_dim]
             sin_i = ttnn.embedding(pos_i, self.sin_matrix[i : i + 1, ...])  # [1, head_dim]
 
