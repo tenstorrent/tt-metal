@@ -253,18 +253,6 @@ def custom_preprocessor(device, state_dict, inp_h=640, inp_w=640, mesh_mapper=No
     return parameters
 
 
-def get_mesh_mappers(device):
-    if device.get_num_devices() > 1:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
-        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
-        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
-    else:
-        inputs_mesh_mapper = None
-        weights_mesh_mapper = None
-        output_mesh_composer = None
-    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
-
-
 def create_custom_mesh_preprocessor(device, mesh_mapper=None):
     def custom_mesh_preprocessor(model):
         return custom_preprocessor(device, model.state_dict(), inp_h=640, inp_w=640, mesh_mapper=mesh_mapper)
