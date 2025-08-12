@@ -322,7 +322,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
         uint32_t num_sticks_this_core = std::min(num_sticks_per_core, max_num_sticks_this_core + 1);
 
-        log_debug(
+        log_trace(
             tt::LogOp,
             "Start ID: {}, Start ID per dim : {} , Size till end : {} Num Sticks: {} for Core: {}",
             start_id,
@@ -625,7 +625,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         uint32_t num_tiles_this_core =
             std::min(num_tiles_nhw_per_core * num_tiles_per_channel, max_num_tiles_this_core);
 
-        log_debug(
+        log_trace(
             tt::LogOp,
             "Start ID: {}, Start ID per dim : {} , Size till end : {}, Channel Tiles : {}, Max Tiles: {}, Num Tiles: "
             "{} for Core: {}",

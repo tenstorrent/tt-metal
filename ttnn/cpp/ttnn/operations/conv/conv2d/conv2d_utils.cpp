@@ -485,7 +485,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
-    MeshDevice* device,
+    CoreCoord compute_grid_size,
     Layout input_tensor_layout,
     const std::optional<ParallelConfig>& input_tensor_parallel_config) {
     TT_FATAL(conv_config.shard_layout.has_value(), "Shard layout must be set in Conv2dConfig.");
@@ -506,7 +506,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
             output_tensor_shape[2],
             output_tensor_shape[3],
             input_channels_alignment,
-            device->compute_with_storage_grid_size(),
+            compute_grid_size,
             block_shard_orientation,
             !is_mm_conv,
             true,
@@ -657,7 +657,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
             input_tensor.logical_shape(),
             input_tensor.padded_shape(),
             is_mm_conv,
-            device,
+            device->compute_with_storage_grid_size(),
             input_tensor.layout(),
             parallel_config);
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
@@ -816,12 +816,14 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
     Layout input_layout,
-    tt_metal::DataType input_datatype,
-    tt_metal::DataType output_datatype,
+    tt::tt_metal::DataType input_datatype,
+    tt::tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
-    const uint32_t groups,
-    const bool enable_bias,
+    const std::array<uint32_t, 2>& dilation,
+    const std::array<uint32_t, 4>& padding,
+    uint32_t groups,
+    bool enable_bias,
     const DeviceComputeKernelConfig& compute_config) {
     // If the input tensor is already sharded, or the conv_config has a specified shard layout, we don't need to do
     // anything.
@@ -923,21 +925,33 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             enable_bias,
             conv_is_1d_deptwise);
 
-        // Since we don't have L1 usage for halo output (input to conv2d)
-        // use approx input tensor size per core as a proxy.
-        uint32_t input_nhw = tt::div_up(batch_size * input_height * input_width, tt::constants::TILE_HEIGHT);
-        uint32_t input_c = tt::div_up(in_channels_aligned, tt::constants::TILE_WIDTH);
-        uint32_t approx_input_size =
-            input_nhw * input_c * tt::tile_size(datatype_to_dataformat_converter(output_datatype));
-        uint32_t approx_input_size_per_core = approx_input_size / input_parallel_config.grid.num_cores();
+        auto halo_input_memory_config = std::get<1>(determine_input_memory_config(
+            conv_config,
+            batch_size,
+            ttnn::Shape({batch_size, input_height, input_width, in_channels}),
+            ttnn::Shape({batch_size, output_height, output_width, out_channels}),
+            is_mm_conv,
+            compute_grid_size,
+            Layout::TILE,
+            input_parallel_config));
+
+        uint32_t approx_input_size_per_core = estimate_halo_output_bytes(
+            halo_input_memory_config.shard_spec().value().shape,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            dilation,
+            padding);
 
         l1_usage.tensor_allocation_size += approx_input_size_per_core;
         log_debug(
             tt::LogOp,
-            "L1 usage for {}: {}, {}",
+            "L1 usage for {}: {}, {}, Halo Output : {}",
             conv_config.shard_layout,
             l1_usage.tensor_allocation_size,
-            l1_usage.CB_allocation_size);
+            l1_usage.CB_allocation_size,
+            approx_input_size_per_core);
         return core_count_and_size{
             .core_count = input_parallel_config.grid.num_cores(),
             .size = l1_usage.CB_allocation_size + l1_usage.tensor_allocation_size,
@@ -1014,6 +1028,184 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
+}
+
+uint32_t estimate_halo_output_bytes(
+    std::array<uint32_t, 2> halo_input_shard_shape,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> dilation,
+    std::array<uint32_t, 4> padding) {
+    uint32_t shard_height = halo_input_shard_shape[0] / input_width;
+    uint32_t shard_batches = shard_height / input_height;
+    // Halo adds the overlap region of the input tensor that is needed for the convolution.
+    //  As width is the faster changing dimension, we typically have the entire width in every shard.
+    //  For each shard, it's the additional height from adjacent shards that is needed to cover the kernel size and
+    //  dilation.
+
+    // At the boundary between two batches, the additional height is needed another time. If a single shard contains
+    // more than one batch, then the additional height is needed for each batch in the shard.
+    uint32_t batch_boundary_multiplier = (batch_size > 1) ? (shard_batches + 2) : 1;
+
+    // Multiplying by 2 as output is always BFloat16.
+    uint32_t approx_max_halo_size = (shard_height + (dilation[0] * kernel_size[0] - 1) * batch_boundary_multiplier) *
+                                    (input_width + padding[2] + padding[3]) * halo_input_shard_shape[1] * 2;
+    return approx_max_halo_size;
+};
+
+uint32_t calculate_conv_dram_slice_L1_usage(
+    const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
+    Conv2dConfig conv_config = params.conv_config;
+    TT_FATAL(
+        dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
+
+    const uint32_t input_sliced_dim =
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? params.input_height : params.input_width;
+    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT
+                                           ? params.output_height
+                                           : params.output_width;
+
+    uint32_t slice_rounding_value = 1;
+    if (conv_config.output_layout == tt_metal::Layout::TILE) {
+        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        slice_rounding_value = tt::constants::TILE_HEIGHT;
+    }
+
+    uint32_t max_slice_size = 0;
+
+    const uint32_t min_output_slice_size =
+        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
+    const uint32_t output_slice_rem =
+        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
+
+    const uint32_t max_output_slice_size =
+        slice_rounding_value * (min_output_slice_size + ((output_slice_rem > 0) ? 1 : 0));
+
+    uint32_t output_slice_height, output_slice_width;
+    uint32_t input_slice_height, input_slice_width;
+    if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+        output_slice_height = max_output_slice_size;
+        output_slice_width = params.output_width;
+        input_slice_height = (max_output_slice_size * params.stride[0]);
+        input_slice_width = params.input_width;
+    } else {
+        output_slice_height = params.output_height;
+        output_slice_width = max_output_slice_size;
+        input_slice_height = params.input_height;
+        input_slice_width = (max_output_slice_size * params.stride[1]);
+    }
+
+    if (!conv_config.shard_layout.has_value()) {
+        if (!conv_config.weights_dtype.has_value()) {
+            conv_config.weights_dtype = params.weights_datatype;
+        }
+        conv_config = determine_conv_config_for_auto_shard(
+            conv_config,
+            params.mm_conv,
+            params.batch_size,
+            params.in_channels,
+            params.out_channels,
+            output_slice_height,
+            output_slice_width,
+            params.out_channels,
+            input_slice_height,
+            input_slice_width,
+            params.compute_grid,
+            conv_config.output_layout,
+            DataType::BFLOAT16,  // Input datatype is always BFLOAT16 in Conv2D DRAM
+            params.output_datatype,
+            std::nullopt,
+            params.kernel_size,
+            params.dilation,
+            params.padding_n4,
+            params.groups,
+            params.enable_bias,
+            params.compute_kernel_config);
+    }
+    auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
+        conv_config,
+        params.batch_size,
+        ttnn::Shape({params.batch_size, input_slice_height, input_slice_width, params.in_channels}),
+        ttnn::Shape({params.batch_size, output_slice_height, output_slice_width, params.out_channels}),
+        params.mm_conv,
+        device->compute_with_storage_grid_size(),
+        // Setting layout to TILE forces input_channels_alignment to 32.
+        //  The padded_slice op needs aligned reads from L1.
+        Layout::TILE));
+
+    ParallelConfig parallel_config = {
+        .grid = sliced_input_tensor_memory_config.shard_spec().value().grid,
+        .shard_scheme = sliced_input_tensor_memory_config.memory_layout(),
+        .shard_orientation = sliced_input_tensor_memory_config.shard_spec().value().orientation};
+
+    ParallelConfig output_parallel_config =
+        determine_output_parallel_config(parallel_config, params.compute_grid, params.out_channels, params.mm_conv);
+
+    auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
+        conv_config,
+        params.compute_kernel_config,
+        parallel_config,
+        output_parallel_config,
+        tt::round_up(
+            params.in_channels, constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config)),
+        params.out_channels,
+        params.batch_size,
+        output_slice_height,
+        output_slice_width,
+        params.kernel_size,
+        params.compute_grid);
+
+    conv_op_l1_usage l1_usage = calculate_L1_usage(
+        params.compute_kernel_config,
+        opt_conv_op_block_config,
+        opt_conv_op_parallel_config,
+        params.weights_shape,
+        params.kernel_size,
+        conv_config,
+        DataType::BFLOAT16,  // Input datatype is always BFLOAT16 in Conv2D DRAM
+        params.output_datatype,
+        params.enable_bias,
+        false);
+
+    auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
+
+    // Output of padded slice is always BFloat16, so size is 2 bytes.
+    uint32_t input_size = shard_shape[0] * shard_shape[1] * 2;
+    uint32_t approx_max_halo_size = estimate_halo_output_bytes(
+        shard_shape,
+        params.batch_size,
+        input_slice_height,
+        input_slice_width,
+        params.kernel_size,
+        params.dilation,
+        params.padding_n4);
+
+    const float output_size_margin = 1.0f;
+
+    log_debug(
+        tt::LogOp,
+        "Conv DRAM Auto slicing: num_slices = {}, input_size = {}, approx_max_halo_size = {}, conv size = {}",
+        dram_slice_config.num_slices,
+        input_size,
+        approx_max_halo_size,
+        l1_usage);
+    if (conv_config.in_place) {
+        if (params.stride[0] > params.kernel_size[0] || params.stride[1] > params.kernel_size[1]) {
+            log_warning(
+                tt::LogOp,
+                "conv_config has in-place halo enabled, but it may be disabled as the halo output is smaller than the "
+                "input. This may lead to OOM errors with auto-slicing. If so, please disable in-place halo in the "
+                "Conv2dConfig.");
+        }
+        return output_size_margin *
+               (approx_max_halo_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size);
+    }
+    return output_size_margin *
+           std::max<uint32_t>(
+               approx_max_halo_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size,
+               input_size + approx_max_halo_size);
 }
 
 conv_op_l1_usage conv2d::calculate_L1_usage(
