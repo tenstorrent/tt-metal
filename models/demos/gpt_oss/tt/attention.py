@@ -1,13 +1,14 @@
 import torch
 
 import ttnn
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.experimental.stable_diffusion_35_large.tt.substate import substate
 
 from ..tt.sdpa import sdpa as tt_sdpa
 
 
 class Attention:
-    def __init__(self, mesh_device, hf_config, state_dict, layer_idx, ccl_manager):
+    def __init__(self, mesh_device, hf_config, state_dict, layer_idx, ccl_manager, tensor_cache_path=None):
         self.layer_idx = layer_idx
         self.use_sliding_window = self.layer_idx % 2 == 0
         self.scaling = hf_config.head_dim**-0.5
@@ -39,25 +40,61 @@ class Attention:
         col_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
         row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
 
-        self.q_proj = ttnn.from_torch(
-            q_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+        self.q_proj = ttnn.as_tensor(
+            q_proj,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "q_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.q_proj_bias = ttnn.from_torch(
-            q_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+        self.q_proj_bias = ttnn.as_tensor(
+            q_proj_bias,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "q_proj_bias"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.k_proj = ttnn.from_torch(
-            k_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+        self.k_proj = ttnn.as_tensor(
+            k_proj,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "k_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.k_proj_bias = ttnn.from_torch(
-            k_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+        self.k_proj_bias = ttnn.as_tensor(
+            k_proj_bias,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "k_proj_bias"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.v_proj = ttnn.from_torch(
-            v_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+        self.v_proj = ttnn.as_tensor(
+            v_proj,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "v_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.v_proj_bias = ttnn.from_torch(
-            v_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+        self.v_proj_bias = ttnn.as_tensor(
+            v_proj_bias,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "v_proj_bias"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         if mesh_device.shape[1] > 1:
@@ -65,19 +102,33 @@ class Attention:
                 [o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_device.shape[1] - 1), dim=-1
             )
 
-        self.o_proj = ttnn.from_torch(
-            o_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=row_mesh_mapper
+        self.o_proj = ttnn.as_tensor(
+            o_proj,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=row_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.o_proj_bias = ttnn.from_torch(
-            o_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+        self.o_proj_bias = ttnn.as_tensor(
+            o_proj_bias,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_bias"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.sinks = ttnn.from_torch(
+        self.sinks = ttnn.as_tensor(
             sinks,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-3),
+            cache_file_name=get_cache_file_name(tensor_cache_path, "sinks"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def __call__(self, x: ttnn.Tensor, mask, rope_stuff):

@@ -15,6 +15,7 @@ from ...tt.ccl import CCLManager
 from ...tt.model import Model
 from ...tt.rope import ApplyRotaryPosEmb
 
+tensor_cache_dir = os.environ.get("GPT_OSS_CACHE_DIR", "/proj_sw/user_dev/gpt-oss/tensor_cache")
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 tokenizer = load_tokenizer(local_weights_path)
 
@@ -359,8 +360,23 @@ def test_model(
     )
     sliding_window = 0
 
-    cur_seq_len = seq_len
-    position_ids = torch.arange(seq_len).unsqueeze(0)
+    messages = [
+        {"role": "user", "content": "Who are you?"},
+    ]
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+        padding="max_length",
+        max_length=seq_len,
+    )
+    print(f"Input ids: {inputs.input_ids}")
+    print(f"Detokenized input: {tokenizer.decode(inputs.input_ids[0])}")
+
+    cur_seq_len = inputs.input_ids.shape[1]
+    position_ids = torch.arange(cur_seq_len).unsqueeze(0)
 
     # Create input tensors
     hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
@@ -379,21 +395,6 @@ def test_model(
     tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     apply_rope = ApplyRotaryPosEmb(config)
     rope_stuff = (apply_rope, tt_cos, tt_sin)
-
-    messages = [
-        {"role": "user", "content": "Who are you?"},
-    ]
-    inputs = tokenizer.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
-        padding="max_length",
-        max_length=seq_len,
-    )
-    print(f"Input ids: {inputs.input_ids}")
-    print(f"Detokenized input: {tokenizer.decode(inputs.input_ids[0])}")
 
     # Create input tensors (token ids)
     # input_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
@@ -417,7 +418,9 @@ def test_model(
 
     # Initialize TT model
     ccl_manager = CCLManager(mesh_device)
-    tt_model = Model(mesh_device, config, model_state_dict, ccl_manager, dtype=dtype)
+    tt_model = Model(
+        mesh_device, config, model_state_dict, ccl_manager, dtype=dtype, tensor_cache_path=tensor_cache_dir
+    )
 
     # Run forward passes
     # reference_output = reference_model(input_ids, attention_masks={"full_attention": mask, "sliding_attention": sliding_mask}, position_embeddings=(cos, sin))
