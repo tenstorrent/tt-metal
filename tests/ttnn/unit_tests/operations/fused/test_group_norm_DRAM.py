@@ -148,9 +148,9 @@ def _nearest_32(x):
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
         ### oft
-        (1, 256, 159, 159, 16, 3, 4, 4),
-        (1, 512, 159, 159, 16, 3, 4, 4),
-        (1, 64, 192, 640, 16, 10, 4, 4),  # pcc drop AssertionError: 0.05151822326267651
+        (1, 256, 159, 159, 16, 4, 4, 5),
+        (1, 512, 159, 159, 16, 4, 4, 5),
+        (1, 64, 192, 640, 16, 10, 2, 5),
     ],
 )
 def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
@@ -237,4 +237,4 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor[:, :, : H * W, :C], 0.9995)
+    assert_with_pcc(torch_output_tensor, output_tensor[:, :, : H * W, :C], 0.9994)

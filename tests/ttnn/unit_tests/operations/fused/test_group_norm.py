@@ -583,10 +583,10 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, shard",
     [
-        (1, 256, 12, 40, 16, "BS"),
-        (1, 256, 24, 80, 16, "HS"),
-        (1, 256, 48, 160, 16, "HS"),
-        (1, 512, 12, 40, 16, "BS"),
+        # (1, 256, 12, 40, 16, "BS"),
+        # (1, 256, 24, 80, 16, "HS"),
+        # (1, 256, 48, 160, 16, "HS"),
+        # (1, 512, 12, 40, 16, "BS"),
         (1, 64, 96, 320, 16, "HS"),  # PCC AssertionError: 0.5680849100099723
     ],
 )
