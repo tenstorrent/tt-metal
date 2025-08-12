@@ -20,13 +20,9 @@ void kernel_main() {
     const auto cb_id_mask_h = cb_id++;
 
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_data_format = get_dataformat(cb_id_input);
 
-    const InterleavedAddrGenFast<true> dram_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
-
-    const InterleavedAddrGenFast<false> l1_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    constexpr auto input_args = TensorAccessorArgs<0>();
+    const auto s = TensorAccessor(input_args, input_addr, input_tile_bytes);
 
     Scalar one;
     one.f = 1.0f;
@@ -50,11 +46,7 @@ void kernel_main() {
         auto input_tile_idx = outer_idx * Ht * Wt + inner_idx;
         for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
             cb_reserve_back(cb_id_input, 1);
-            if (input_is_dram) {
-                noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr);
-            } else {
-                noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr);
-            }
+            noc_async_read_tile(input_tile_idx, s, input_l1_write_ptr);
             noc_async_read_barrier();
             cb_push_back(cb_id_input, 1);
             input_tile_idx += Wt;

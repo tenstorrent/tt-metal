@@ -39,6 +39,10 @@ jobs:
             cmd: |
               ./tests/scripts/run_cpp_unit_tests.sh
               ./build/test/tt_metal/unit_tests_api
+          - name: user kernel path
+            cmd: |
+              rm -rf /tmp/kernels
+              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
           - name: data_movement
             cmd: ./build/test/tt_metal/unit_tests_data_movement
           - name: debug_tools and device and dispatch
