@@ -3,7 +3,7 @@
 Tiles
 =====
 
-Most compute and data movement on the Tensix processor use a tile as the fundamental unit. This page describes the tile structure, the memory layout of a tile and conversion between tiles and row major data used by most applications.
+Most compute and data movement on the Tensix processor use a tile as the fundamental unit. This page describes the tile structure, the memory layout of a tile and conversion between tiles and row major data (as used by most applications).
 
 A tile is a 32x32 grid of values. Other tile sizes exist but currently have limited support. All elements in a tile share the same data type (integer, floating point, or block floating point).
 

@@ -8,3 +8,4 @@ Hardware implications and the effects
 .. toctree::
 
     tiles
+    memory_for_kernel_developers
