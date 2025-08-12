@@ -26,6 +26,8 @@ struct ChipIdentifier {
 
     bool operator<(const ChipIdentifier &other) const;
     bool operator==(const ChipIdentifier &other) const;
+
+    std::vector<std::string> telemetry_path() const;
 };
 
 std::ostream &operator<<(std::ostream &os, const ChipIdentifier &chip);
