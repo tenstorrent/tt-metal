@@ -4,10 +4,10 @@ import ttnn
 device = ttnn.CreateDevice(0, l1_small_size=8192)
 
 in_n = 1
-in_h = 8
-in_w = 4
+in_h = 2
+in_w = 2
 in_c = 32
-kernel_size = [8, 4]
+kernel_size = [2, 2]
 stride = [1, 1]
 padding = [0, 0]
 dilation = [1, 1]

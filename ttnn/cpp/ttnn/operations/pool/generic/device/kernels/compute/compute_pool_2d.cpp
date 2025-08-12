@@ -48,6 +48,11 @@ void MAIN {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
     constexpr bool return_indices = (bool)get_compile_time_arg_val(18);
 
+    constexpr uint32_t topk_output_tiles = 1;
+    constexpr uint32_t topk_cb_tile_idx = 0;
+    constexpr uint32_t data_dst_idx = 0;
+    constexpr uint32_t index_dst_idx = 2;
+
     constexpr uint32_t face_r_dim = window_size_hw < 16 && !return_indices ? window_size_hw : 16;
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -84,8 +89,6 @@ void MAIN {
         pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
     } else {
         unary_op_init_common(in_cb_id_0, tile_tmp_cb_id);
-        tilize_init(in_cb_id_0, 1, tile_tmp_cb_id);
-        // pack_untilize_dest_init<1>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
     }
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -135,30 +138,39 @@ void MAIN {
                     }
                 } else {
                     // pack_reconfig_data_format(tile_tmp_cb_id);
-                    tilize_block(curr_in_cb_id, 1, tile_tmp_cb_id, 0, 0);
-                    // tilize_uninit(curr_in_cb_id, tile_tmp_cb_id);
+                    tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
+                    tilize_block(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
+                    tilize_uninit(curr_in_cb_id, tile_tmp_cb_id);
+                    // tilize_init(curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
+                    // tilize_block(curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx,
+                    // topk_cb_tile_idx); tilize_uninit(curr_in_idx_cb_id, tile_idx_tmp_cb_id);
 
-                    cb_push_back(tile_tmp_cb_id, 1);
+                    // PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
+                    // PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id, 0));
 
-                    // transpose_wh_init_short(tile_tmp_cb_id);
-                    // transpose_wh_tile(tile_tmp_cb_id, 0, 0);
+                    // transpose_wh_init(tile_tmp_cb_id, out_cb_id);
+                    transpose_wh_init_short(tile_tmp_cb_id);
+                    transpose_wh_tile(tile_tmp_cb_id, topk_cb_tile_idx, data_dst_idx);
+                    // transpose_wh_init_short(tile_idx_tmp_cb_id);
+                    // transpose_wh_tile(tile_idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
 
-                    // // llk_topk_sort -> inplace
-                    // // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
-                    // topk_tile_init();
-                    // ckernel::topk_local_sort(0, 0, 4, 0);
-
-                    // DPRINT << "TOP K" << ENDL();
-                    // dprint_tensix_dest_reg(0);
+                    dprint_tensix_dest_reg(0);
                     // dprint_tensix_dest_reg(2);
 
-                    // // // re-transpose the tiles to get max values and indices from column 0 to row 0
-                    // transpose_wh_dest_init_short();
-                    // transpose_wh_dest(0);
-                    // // transpose_wh_dest(2);
+                    // llk_topk_sort -> inplace
+                    // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
+                    topk_tile_init();
+                    ckernel::topk_local_sort(data_dst_idx, 0, 4, 0);
 
-                    // DPRINT << "TRANS WH DEST" << ENDL();
-                    // dprint_tensix_dest_reg(0);
+                    dprint_tensix_dest_reg(0);
+                    // dprint_tensix_dest_reg(2);
+
+                    // re-transpose the tiles to get max values and indices from column 0 to row 0
+                    transpose_wh_dest_init_short();
+                    transpose_wh_dest(data_dst_idx);
+                    // transpose_wh_dest(index_dst_idx);
+
+                    dprint_tensix_dest_reg(0);
                     // dprint_tensix_dest_reg(2);
                 }
                 cb_pop_front(curr_in_cb_id, 1);
@@ -178,19 +190,18 @@ void MAIN {
                     cb_push_back(out_cb_id, max_tiles_per_iter);
                 }
             } else {
-                // constexpr uint32_t topk_output_tiles = 1;
+                pack_untilize_dest_init<1>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
 
-                // constexpr uint32_t data_dst_idx = 0;
-                // pack_reconfig_data_format(out_cb_id);
-                // pack_untilize_dest<topk_output_tiles>(
-                //     out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, data_dst_idx);
-                // cb_push_back(out_cb_id, topk_output_tiles);
-
-                // constexpr uint32_t index_dst_idx = 2;
+                pack_reconfig_data_format(out_cb_id);
+                pack_untilize_dest<topk_output_tiles>(
+                    out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, data_dst_idx);
+                cb_push_back(out_cb_id, topk_output_tiles);
                 // pack_reconfig_data_format(out_idx_cb_id);
                 // pack_untilize_dest<topk_output_tiles>(
                 //     out_idx_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, index_dst_idx);
                 // cb_push_back(out_idx_cb_id, topk_output_tiles);
+
+                pack_untilize_uninit(out_cb_id);
             }
             tile_regs_release();
         }
