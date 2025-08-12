@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 import torch
-import os
 from loguru import logger
 
 import ttnn
@@ -15,6 +14,7 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     fold_batch_norm2d_into_conv2d,
 )
+from models.experimental.vadv2.common import load_torch_model
 
 
 def create_vadv2_model_parameters(model: ResNet, input_tensor, device=None):
@@ -80,22 +80,16 @@ def custom_preprocessor(model, name):
 def test_vadv2_backbone(
     device,
     reset_seeds,
+    model_location_generator,
 ):
-    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = backbone.ResNet(
         layers=[3, 4, 6, 3],
         out_indices=(3,),
         block=backbone.Bottleneck,
     )
-    torch_dict = torch.load(weights_path)
-
-    state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("img_backbone"))}
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), state_dict.values()))
-
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model=torch_model, layer="img_backbone", model_location_generator=model_location_generator
+    )
 
     torch_input = torch.randn((6, 3, 384, 640), dtype=torch.bfloat16)
     torch_input = torch_input.float()

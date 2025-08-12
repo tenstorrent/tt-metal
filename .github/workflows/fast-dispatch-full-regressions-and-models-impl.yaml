@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen25_vl-3B, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet, yolov5x, efficientnetb0, vovnet, ufld_v2, yolov12x, vadv2]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen25_vl-3B, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet, yolov5x, efficientnetb0, vovnet, ufld_v2, yolov12x]
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
         # ttt-mistral-7B-v0.3 issue #25861: https://github.com/tenstorrent/tt-metal/issues/25861
         include:
@@ -160,7 +160,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [yolov8s]
+        model: [yolov8s, vadv2]
     name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.model }}
     runs-on: ${{ format('tt-beta-ubuntu-2204-{0}-large-stable', matrix.card) }}
     container:
