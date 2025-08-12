@@ -109,7 +109,7 @@ ttnn::Tensor ReshardOperation::invoke(
         }
         bool rt_gt_341 = false;
         for (const auto& [core, rt_args] : rt_config_map_0) {
-            if (rt_args.size() > 341 || rt_config_map_1[core].size() > 341) {
+            if (rt_args.size() > MAX_RUNTIME_ARGS || rt_config_map_1[core].size() > MAX_RUNTIME_ARGS) {
                 rt_gt_341 = true;
                 break;
             }
@@ -126,7 +126,12 @@ ttnn::Tensor ReshardOperation::invoke(
             inputs.push_back(device_runtime_args_1);
         }
     }
-    // deallocate the intermediate tensor used to generate rt args
+    bool has_output_tensor = optional_output_tensor.has_value();
+    if (has_output_tensor) {
+        return operation::run(
+                   ReshardDeviceOperation{.output_mem_config = memory_config}, inputs, {}, {optional_output_tensor})
+            .at(0);
+    }
     return operation::run(ReshardDeviceOperation{.output_mem_config = memory_config}, inputs, {}, {output_tensor})
         .at(0);
 }

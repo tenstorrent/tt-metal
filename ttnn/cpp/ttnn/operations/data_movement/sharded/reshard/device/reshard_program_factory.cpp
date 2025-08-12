@@ -266,7 +266,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const std::vector<Ten
         rt_config_map_1[core] = runtime_args_1;
     }
     for (const auto& [core, rt_args] : rt_config_map_0) {
-        if (rt_args.size() > 341 || rt_config_map_1[core].size() > 341) {
+        if (rt_args.size() > MAX_RUNTIME_ARGS || rt_config_map_1[core].size() > MAX_RUNTIME_ARGS) {
             rt_gt_341 = true;
             break;
         }

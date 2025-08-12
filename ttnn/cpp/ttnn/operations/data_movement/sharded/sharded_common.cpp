@@ -128,25 +128,13 @@ bool is_valid_for_2d_reshard(const Tensor& input_tensor, const MemoryConfig& out
         // Resharding requires output buffer to be in L1
         return out_mem_config.buffer_type() == BufferType::L1;
     }
-
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        if (inp_mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            // row major must have shard_spec[0] be the same on both input and output
-            return input_tensor.memory_config().shard_spec().value().shape[0] ==
-                   out_mem_config.shard_spec().value().shape[0];
-        } else {
-            // row major must have shard_spec[1] be the same on both input and output
-            return input_tensor.memory_config().shard_spec().value().shape[1] ==
-                   out_mem_config.shard_spec().value().shape[1];
-        }
-    }
 }
 
 std::vector<uint32_t> get_runtime_args_for_given_ranges(
     const std::vector<uint32_t>& physical_core_coords,
     const std::vector<detail::PageStride>& page_stride_vector,
     const uint32_t output_page_offset,
-    const uint32_t& input_addr,
+    const uint32_t input_addr,
     const uint32_t starting_range,
     const uint32_t ending_range,
     const detail::ReshardStridesInRange reshard_strides_in_range) {
@@ -437,9 +425,9 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> get_core_page_ran
     auto total_width = input.logical_shape()[-1];
 
     uint32_t total_page_number =
-        std::ceil((float)(input.logical_shape()[-1] * input.element_size()) / (float)base_page_size);
-    uint32_t num_input_pages_per_row = input_pages_per_original * std::ceil((float)total_width / (float)input_width);
-    uint32_t num_output_pages_per_row = output_pages_per_original * std::ceil((float)total_width / (float)output_width);
+        (input.logical_shape()[-1] * input.element_size() + base_page_size - 1) / base_page_size;
+    uint32_t num_input_pages_per_row = input_pages_per_original * ((total_width + input_width - 1) / input_width);
+    uint32_t num_output_pages_per_row = output_pages_per_original * ((total_width + output_width - 1) / output_width);
 
     std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_input_core_mapping(total_page_number * num_rows);
 

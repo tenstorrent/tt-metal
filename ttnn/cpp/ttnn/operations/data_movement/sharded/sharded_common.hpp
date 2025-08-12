@@ -70,12 +70,13 @@ compute_width_sharding_reshard_segments(
 
 namespace ttnn::operations::data_movement {
 
+constexpr uint32_t MAX_RUNTIME_ARGS = 341;
 bool is_valid_for_2d_reshard(const Tensor& input_tensor, const MemoryConfig& out_mem_config);
 std::vector<uint32_t> get_runtime_args_for_given_ranges(
     const std::vector<uint32_t>& physical_core_coords,
     const std::vector<detail::PageStride>& page_stride_vector,
     const uint32_t output_page_offset,
-    const uint32_t& input_addr,
+    const uint32_t input_addr,
     const uint32_t starting_range,
     const uint32_t ending_range,
     const detail::ReshardStridesInRange reshard_strides_in_range = detail::ReshardStridesInRange::ALL_STRIDES);
