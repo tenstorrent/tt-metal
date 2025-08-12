@@ -120,11 +120,7 @@ def my_encode_prompt(
     tokenizers = (
         [pipeline.tokenizer, pipeline.tokenizer_2] if pipeline.tokenizer is not None else [pipeline.tokenizer_2]
     )
-    text_encoders = (
-        [pipeline.text_encoder, pipeline.text_encoder_2]
-        if pipeline.text_encoder is not None
-        else [pipeline.text_encoder_2]
-    )
+    text_encoders = [tt_text_encoder, tt_text_encoder_2] if tt_text_encoder is not None else [tt_text_encoder_2]
 
     total_tokenize_and_encode_time = 0
     if prompt_embeds is None:
@@ -173,12 +169,7 @@ def my_encode_prompt(
                 mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),  # fix this
             )
 
-            prompt_embeds = text_encoder(text_input_ids.to(device), output_hidden_states=True)
-            print("Running TT text encoder 1 inference")
-            if ind == 0:
-                tt_sequence_output, tt_pooled_output = tt_text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
-            else:
-                tt_sequence_output, tt_pooled_output = tt_text_encoder_2(tt_tokens, ttnn_device, parallel_manager=None)
+            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
             ttnn.synchronize_device(ttnn_device)
 
             tt_sequence_output_torch = ttnn.to_torch(
@@ -193,8 +184,7 @@ def my_encode_prompt(
             # print(f"text_encoder_{i} time = ", text_encoder_end_time - text_encoder_start_time)
             total_tokenize_and_encode_time += text_encoder_end_time - text_encoder_start_time
             # We are only ALWAYS interested in the pooled output of the final text encoder
-            pooled_prompt_embeds = prompt_embeds[0]
-            print("pooled prompt embeds data format is ", pooled_prompt_embeds.dtype)
+            # print("pooled prompt embeds data format is ", pooled_prompt_embeds.dtype)
             # print("Full prompt embeds is: ", prompt_embeds)
             if ind == 0:
                 # the reference code says that pooled prompt embeds is actually the pooled prompt embeds, but is in fact last hidden state
@@ -212,7 +202,6 @@ def my_encode_prompt(
 
             if clip_skip is None:
                 print("Clip skip none path")
-                prompt_embeds = prompt_embeds.hidden_states[-2]
                 prompt_embeds = tt_sequence_output_torch
                 print("Prompt embeds shape = ", prompt_embeds.shape)
                 print("TT prompt embeds shape = ", tt_sequence_output_torch.shape)
@@ -289,14 +278,7 @@ def my_encode_prompt(
                 device=ttnn_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),  # fix this
             )
-            if ind == 0:
-                tt_sequence_output_neg, tt_pooled_output_neg = tt_text_encoder(
-                    tt_tokens, ttnn_device, parallel_manager=None
-                )
-            else:
-                tt_sequence_output_neg, tt_pooled_output_neg = tt_text_encoder_2(
-                    tt_tokens, ttnn_device, parallel_manager=None
-                )
+            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
             tt_sequence_output_neg_torch = ttnn.to_torch(
                 ttnn.get_device_tensors(tt_sequence_output_neg.hidden_states[-2])[0]
             ).to(torch.float32)
@@ -304,22 +286,16 @@ def my_encode_prompt(
                 torch.float32
             )
             ttnn.synchronize_device(ttnn_device)
-
-            negative_prompt_embeds = text_encoder(
-                uncond_input.input_ids.to(device),
-                output_hidden_states=True,
-            )
             text_encoder_end_time = time.time()
             # print(f"negative text_encoder_{i} time = ", text_encoder_end_time - text_encoder_start_time)
             total_tokenize_and_encode_time += text_encoder_end_time - text_encoder_start_time
             # We are only ALWAYS interested in the pooled output of the final text encoder
-            negative_pooled_prompt_embeds = negative_prompt_embeds[0]
-            negative_prompt_embeds = negative_prompt_embeds.hidden_states[-2]
             if ind == 0:
                 tt_pooled_prompt_embeds = (
                     ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output_neg.hidden_states[-1])[0])
                 ).to(torch.float32)
                 negative_pooled_prompt_embeds = tt_pooled_prompt_embeds
+                # this is actually not used anywhere
                 print(
                     "Using negative pooled prompt embeds that are not actually pooled for tt negative prompt - encoder 1"
                 )
@@ -327,8 +303,8 @@ def my_encode_prompt(
                 negative_pooled_prompt_embeds = tt_pooled_output_neg_torch
                 print("Using negative pooled prompt embeds for tt negative prompt - encoder 2")
 
-                negative_prompt_embeds = tt_sequence_output_neg_torch
-                print("Using tt path for encoder 1 in negative prompt")
+            negative_prompt_embeds = tt_sequence_output_neg_torch
+            print("Using tt path for encoder in negative prompt")
 
             negative_prompt_embeds_list.append(negative_prompt_embeds)
 
