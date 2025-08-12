@@ -68,11 +68,11 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
 
-    std::vector<uint32_t> reader_ct_args = {};
+    std::vector<uint32_t> reader_ct_args = {static_cast<uint32_t>(input.dtype() == DataType::FLOAT32)};
     TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels//reader_moreh_softmax_h_large.cpp",
+        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_h_large.cpp",
         all_cores,
         reader_ct_args,
         reader_defines);

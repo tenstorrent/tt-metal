@@ -83,6 +83,7 @@ FORCE_INLINE void noc_async_write_tile_helper(tt::CBIndex cb, uint32_t num_tiles
     cb_pop_front(cb, num_tiles);
 }
 
+template <typename T = uint16_t>
 FORCE_INLINE void generate_bcast_scaler(uint32_t cb_scaler, uint32_t scaler) {
     union {
         float f;
@@ -90,17 +91,22 @@ FORCE_INLINE void generate_bcast_scaler(uint32_t cb_scaler, uint32_t scaler) {
     } u;
     u.u = scaler;
     cb_reserve_back(cb_scaler, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_scaler));
+    auto ptr = reinterpret_cast<T*>(get_write_ptr(cb_scaler));
 
     for (int j = 0; j < 1024; j++) {
-        ptr[j] = uint16_t(0);
+        ptr[j] = T(0);
     }
 
     for (int k = 0; k < 4; k++) {
         for (int j = 0; j < 16; j++) {
-            ptr[k * 256 + j] = uint16_t(u.u >> 16);
+            if constexpr (std::is_same_v<T, uint16_t>) {
+                ptr[k * 256 + j] = T(u.u >> 16);
+            } else {
+                ptr[k * 256 + j] = T(u.u);
+            }
         }
     }
+
     cb_push_back(cb_scaler, 1);
 }
 
@@ -167,139 +173,108 @@ FORCE_INLINE uint32_t get_tilized_gamma_beta_idx_in_tile(
     return tilized_idx_in_tile;
 }
 
+template <typename T>
+FORCE_INLINE T get_mask_value(const Scalar& scalar, bool is_one) {
+    if constexpr (std::is_same_v<T, uint16_t>) {
+        return T(scalar.u >> 16);
+    } else {
+        return T(scalar.u);
+    }
+}
+
+template <typename T>
+FORCE_INLINE void fill_subtile_mask_h(
+    T* ptr, uint32_t w, uint32_t subtile_offset, uint32_t active_height, const Scalar& one, const Scalar& zero) {
+    uint32_t h = 0;
+    // Fill active elements with one
+    for (; h < active_height; h++) {
+        ptr[h * 16 + w + subtile_offset] = get_mask_value<T>(one, true);
+    }
+    // Fill remaining elements with zero
+    for (; h < 16; h++) {
+        ptr[h * 16 + w + subtile_offset] = get_mask_value<T>(zero, false);
+    }
+}
+
+template <typename T>
+FORCE_INLINE void fill_subtile_mask_w(
+    T* ptr, uint32_t h, uint32_t subtile_offset, uint32_t active_width, const Scalar& one, const Scalar& zero) {
+    uint32_t w = 0;
+    // Fill active elements with one
+    for (; w < active_width; w++) {
+        ptr[h * 16 + w + subtile_offset] = get_mask_value<T>(one, true);
+    }
+    // Fill remaining elements with zero
+    for (; w < 16; w++) {
+        ptr[h * 16 + w + subtile_offset] = get_mask_value<T>(zero, false);
+    }
+}
+
+template <typename T = uint16_t>
 FORCE_INLINE void generate_mask_h(uint32_t cb_mask, uint32_t mask_h) {
-    Scalar one;
-    Scalar zero;
+    Scalar one = {};
+    Scalar zero = {};
 
     one.f = 1.0f;
     zero.f = 0.0f;
 
     cb_reserve_back(cb_mask, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask));
+    auto ptr = reinterpret_cast<T*>(get_write_ptr(cb_mask));
+
+    // Calculate mask heights for top and bottom subtiles
+    const uint32_t mask_h_top = (mask_h >= 16) ? 16 : mask_h;        // subtiles 0, 1
+    const uint32_t mask_h_bottom = (mask_h < 16) ? 0 : mask_h - 16;  // subtiles 2, 3
+
+    // Define subtile offsets: [0, 256, 512, 768] for subtiles [0, 1, 2, 3]
+    constexpr uint32_t subtile_offsets[4] = {0, 256, 512, 768};
 
     for (uint32_t w = 0; w < 16; w++) {
-        // sub tile 0
-        {
-            uint32_t mask_h_0 = mask_h;
-            if (mask_h_0 >= 16) {
-                mask_h_0 = 16;
-            }
-            uint32_t h = 0;
-            for (; h < mask_h_0; h++) {
-                ptr[h * 16 + w] = uint16_t(one.u >> 16);
-            }
-            for (; h < 16; h++) {
-                ptr[h * 16 + w] = uint16_t(zero.u >> 16);
-            }
-        }
+        // sub tile 0 (top-left)
+        fill_subtile_mask_h<T>(ptr, w, subtile_offsets[0], mask_h_top, one, zero);
 
-        // sub tile 1
-        {
-            uint32_t mask_h_0 = mask_h;
-            if (mask_h_0 >= 16) {
-                mask_h_0 = 16;
-            }
-            uint32_t h = 0;
-            for (; h < mask_h_0; h++) {
-                ptr[h * 16 + w + 256] = uint16_t(one.u >> 16);
-            }
-            for (; h < 16; h++) {
-                ptr[h * 16 + w + 256] = uint16_t(zero.u >> 16);
-            }
-        }
+        // sub tile 1 (top-right)
+        fill_subtile_mask_h<T>(ptr, w, subtile_offsets[1], mask_h_top, one, zero);
 
-        // sub tile 2
-        {
-            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
-            uint32_t h = 0;
-            for (; h < mask_h_1; h++) {
-                ptr[h * 16 + w + 512] = uint16_t(one.u >> 16);
-            }
-            for (; h < 16; h++) {
-                ptr[h * 16 + w + 512] = uint16_t(zero.u >> 16);
-            }
-        }
+        // sub tile 2 (bottom-left)
+        fill_subtile_mask_h<T>(ptr, w, subtile_offsets[2], mask_h_bottom, one, zero);
 
-        // sub tile 3
-        {
-            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
-            uint32_t h = 0;
-            for (; h < mask_h_1; h++) {
-                ptr[h * 16 + w + 768] = uint16_t(one.u >> 16);
-            }
-            for (; h < 16; h++) {
-                ptr[h * 16 + w + 768] = uint16_t(zero.u >> 16);
-            }
-        }
+        // sub tile 3 (bottom-right)
+        fill_subtile_mask_h<T>(ptr, w, subtile_offsets[3], mask_h_bottom, one, zero);
     }
 
     cb_push_back(cb_mask, 1);
 }
 
+template <typename T = uint16_t>
 FORCE_INLINE void generate_mask_w(uint32_t cb_mask, uint32_t mask_w) {
-    Scalar one;
-    Scalar zero;
+    Scalar one = {};
+    Scalar zero = {};
 
     one.f = 1.0f;
     zero.f = 0.0f;
 
     cb_reserve_back(cb_mask, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask));
+    auto ptr = reinterpret_cast<T*>(get_write_ptr(cb_mask));
+
+    // Calculate mask widths for left and right subtiles
+    const uint32_t mask_w_left = (mask_w >= 16) ? 16 : mask_w;      // subtiles 0, 2
+    const uint32_t mask_w_right = (mask_w < 16) ? 0 : mask_w - 16;  // subtiles 1, 3
+
+    // Define subtile offsets: [0, 256, 512, 768] for subtiles [0, 1, 2, 3]
+    constexpr uint32_t subtile_offsets[4] = {0, 256, 512, 768};
 
     for (uint32_t h = 0; h < 16; h++) {
-        // sub tile 0
-        {
-            uint32_t mask_w_0 = mask_w;
-            if (mask_w_0 >= 16) {
-                mask_w_0 = 16;
-            }
-            uint32_t w = 0;
-            for (; w < mask_w_0; w++) {
-                ptr[h * 16 + w] = uint16_t(one.u >> 16);
-            }
-            for (; w < 16; w++) {
-                ptr[h * 16 + w] = uint16_t(zero.u >> 16);
-            }
-        }
+        // sub tile 0 (top-left)
+        fill_subtile_mask_w<T>(ptr, h, subtile_offsets[0], mask_w_left, one, zero);
 
-        // sub tile 1
-        {
-            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
-            uint32_t w = 0;
-            for (; w < mask_w_1; w++) {
-                ptr[h * 16 + w + 256] = uint16_t(one.u >> 16);
-            }
-            for (; w < 16; w++) {
-                ptr[h * 16 + w + 256] = uint16_t(zero.u >> 16);
-            }
-        }
+        // sub tile 1 (top-right)
+        fill_subtile_mask_w<T>(ptr, h, subtile_offsets[1], mask_w_right, one, zero);
 
-        // sub tile 2
-        {
-            uint32_t mask_w_0 = mask_w;
-            if (mask_w_0 >= 16) {
-                mask_w_0 = 16;
-            }
-            uint32_t w = 0;
-            for (; w < mask_w_0; w++) {
-                ptr[h * 16 + w + 512] = uint16_t(one.u >> 16);
-            }
-            for (; w < 16; w++) {
-                ptr[h * 16 + w + 512] = uint16_t(zero.u >> 16);
-            }
-        }
+        // sub tile 2 (bottom-left)
+        fill_subtile_mask_w<T>(ptr, h, subtile_offsets[2], mask_w_left, one, zero);
 
-        // sub tile 3
-        {
-            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
-            uint32_t w = 0;
-            for (; w < mask_w_1; w++) {
-                ptr[h * 16 + w + 768] = uint16_t(one.u >> 16);
-            }
-            for (; w < 16; w++) {
-                ptr[h * 16 + w + 768] = uint16_t(zero.u >> 16);
-            }
-        }
+        // sub tile 3 (bottom-right)
+        fill_subtile_mask_w<T>(ptr, h, subtile_offsets[3], mask_w_right, one, zero);
     }
 
     cb_push_back(cb_mask, 1);
@@ -316,60 +291,25 @@ FORCE_INLINE void generate_int_mask_h(uint32_t cb_mask, uint32_t mask_h) {
     cb_reserve_back(cb_mask, 1);
     auto ptr = reinterpret_cast<int32_t*>(get_write_ptr(cb_mask));
 
+    // Calculate mask heights for top and bottom subtiles
+    const uint32_t mask_h_top = (mask_h >= 16) ? 16 : mask_h;        // subtiles 0, 1
+    const uint32_t mask_h_bottom = (mask_h < 16) ? 0 : mask_h - 16;  // subtiles 2, 3
+
+    // Define subtile offsets: [0, 256, 512, 768] for subtiles [0, 1, 2, 3]
+    constexpr uint32_t subtile_offsets[4] = {0, 256, 512, 768};
+
     for (uint32_t w = 0; w < 16; w++) {
-        // sub tile 0
-        {
-            uint32_t mask_h_0 = mask_h;
-            if (mask_h_0 >= 16) {
-                mask_h_0 = 16;
-            }
-            uint32_t h = 0;
-            for (; h < mask_h_0; h++) {
-                ptr[h * 16 + w] = one.u;
-            }
-            for (; h < 16; h++) {
-                ptr[h * 16 + w] = zero.u;
-            }
-        }
+        // sub tile 0 (top-left)
+        fill_subtile_mask_h<int32_t>(ptr, w, subtile_offsets[0], mask_h_top, one, zero);
 
-        // sub tile 1
-        {
-            uint32_t mask_h_0 = mask_h;
-            if (mask_h_0 >= 16) {
-                mask_h_0 = 16;
-            }
-            uint32_t h = 0;
-            for (; h < mask_h_0; h++) {
-                ptr[h * 16 + w + 256] = one.u;
-            }
-            for (; h < 16; h++) {
-                ptr[h * 16 + w + 256] = zero.u;
-            }
-        }
+        // sub tile 1 (top-right)
+        fill_subtile_mask_h<int32_t>(ptr, w, subtile_offsets[1], mask_h_top, one, zero);
 
-        // sub tile 2
-        {
-            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
-            uint32_t h = 0;
-            for (; h < mask_h_1; h++) {
-                ptr[h * 16 + w + 512] = one.u;
-            }
-            for (; h < 16; h++) {
-                ptr[h * 16 + w + 512] = zero.u;
-            }
-        }
+        // sub tile 2 (bottom-left)
+        fill_subtile_mask_h<int32_t>(ptr, w, subtile_offsets[2], mask_h_bottom, one, zero);
 
-        // sub tile 3
-        {
-            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
-            uint32_t h = 0;
-            for (; h < mask_h_1; h++) {
-                ptr[h * 16 + w + 768] = one.u;
-            }
-            for (; h < 16; h++) {
-                ptr[h * 16 + w + 768] = zero.u;
-            }
-        }
+        // sub tile 3 (bottom-right)
+        fill_subtile_mask_h<int32_t>(ptr, w, subtile_offsets[3], mask_h_bottom, one, zero);
     }
 
     cb_push_back(cb_mask, 1);
@@ -385,60 +325,25 @@ FORCE_INLINE void generate_int_mask_w(uint32_t cb_mask, uint32_t mask_w) {
     cb_reserve_back(cb_mask, 1);
     auto ptr = reinterpret_cast<int32_t*>(get_write_ptr(cb_mask));
 
+    // Calculate mask widths for left and right subtiles
+    const uint32_t mask_w_left = (mask_w >= 16) ? 16 : mask_w;      // subtiles 0, 2
+    const uint32_t mask_w_right = (mask_w < 16) ? 0 : mask_w - 16;  // subtiles 1, 3
+
+    // Define subtile offsets: [0, 256, 512, 768] for subtiles [0, 1, 2, 3]
+    constexpr uint32_t subtile_offsets[4] = {0, 256, 512, 768};
+
     for (uint32_t h = 0; h < 16; h++) {
-        // sub tile 0
-        {
-            uint32_t mask_w_0 = mask_w;
-            if (mask_w_0 >= 16) {
-                mask_w_0 = 16;
-            }
-            uint32_t w = 0;
-            for (; w < mask_w_0; w++) {
-                ptr[h * 16 + w] = one.u;
-            }
-            for (; w < 16; w++) {
-                ptr[h * 16 + w] = zero.u;
-            }
-        }
+        // sub tile 0 (top-left)
+        fill_subtile_mask_w<int32_t>(ptr, h, subtile_offsets[0], mask_w_left, one, zero);
 
-        // sub tile 1
-        {
-            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
-            uint32_t w = 0;
-            for (; w < mask_w_1; w++) {
-                ptr[h * 16 + w + 256] = one.u;
-            }
-            for (; w < 16; w++) {
-                ptr[h * 16 + w + 256] = zero.u;
-            }
-        }
+        // sub tile 1 (top-right)
+        fill_subtile_mask_w<int32_t>(ptr, h, subtile_offsets[1], mask_w_right, one, zero);
 
-        // sub tile 2
-        {
-            uint32_t mask_w_0 = mask_w;
-            if (mask_w_0 >= 16) {
-                mask_w_0 = 16;
-            }
-            uint32_t w = 0;
-            for (; w < mask_w_0; w++) {
-                ptr[h * 16 + w + 512] = one.u;
-            }
-            for (; w < 16; w++) {
-                ptr[h * 16 + w + 512] = zero.u;
-            }
-        }
+        // sub tile 2 (bottom-left)
+        fill_subtile_mask_w<int32_t>(ptr, h, subtile_offsets[2], mask_w_left, one, zero);
 
-        // sub tile 3
-        {
-            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
-            uint32_t w = 0;
-            for (; w < mask_w_1; w++) {
-                ptr[h * 16 + w + 768] = one.u;
-            }
-            for (; w < 16; w++) {
-                ptr[h * 16 + w + 768] = zero.u;
-            }
-        }
+        // sub tile 3 (bottom-right)
+        fill_subtile_mask_w<int32_t>(ptr, h, subtile_offsets[3], mask_w_right, one, zero);
     }
 
     cb_push_back(cb_mask, 1);
