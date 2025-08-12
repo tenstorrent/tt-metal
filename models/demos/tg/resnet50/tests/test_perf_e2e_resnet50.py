@@ -113,6 +113,7 @@ def test_perf_trace_2cqs(
     hf_cat_image_sample_input,
     model_location_generator,
 ):
+    mesh_device.disable_and_clear_program_cache()
     run_perf_resnet(
         device_batch_size,
         expected_inference_time,
