@@ -39,4 +39,4 @@ def test_centernet_head(device, reset_seeds):
 
     assert_with_pcc(ttnn.to_torch(tt_output[0]), torch_output[0], 0.99)
     assert_with_pcc(ttnn.to_torch(tt_output[1]), torch_output[1], 0.99)
-    assert_with_pcc(ttnn.to_torch(tt_output[2]), torch_output[2], 0.989)
+    assert_with_pcc(ttnn.to_torch(tt_output[2]), torch_output[2], 0.99)

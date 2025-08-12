@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 # This is different from the TTA of official CenterNet.
 
 tta_model = dict(type="DetTTAModel", tta_cfg=dict(nms=dict(type="nms", iou_threshold=0.5), max_per_img=100))

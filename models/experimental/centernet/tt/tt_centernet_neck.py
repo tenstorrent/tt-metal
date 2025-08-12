@@ -24,6 +24,7 @@ def _output_size(input, weight):
     return output_size
 
 
+# TODO : https://github.com/tenstorrent/tt-metal/issues/25526
 def modulated_deform_conv(input, offset, mask, weight, bias):
     input = input.type_as(offset)
     weight = weight.type_as(input)

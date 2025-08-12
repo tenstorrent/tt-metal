@@ -44,7 +44,7 @@ class TtConv:
         self.out_channels = self.weights.shape[0]
         self.reader_patterns_cache = {}
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
+            # dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat16,
             activation=activation,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

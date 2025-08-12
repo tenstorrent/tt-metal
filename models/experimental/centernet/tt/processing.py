@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 from typing import Callable, Dict, Iterable, Optional, Sequence, Tuple, Union
 
 import numpy as np

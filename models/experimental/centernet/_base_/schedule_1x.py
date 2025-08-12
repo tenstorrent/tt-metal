@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 # training schedule for 1x
 train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=12, val_interval=1)
 val_cfg = dict(type="ValLoop")
