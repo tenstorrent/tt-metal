@@ -378,6 +378,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     uint32_t in_idx_cb_id_0 = 32;
     uint32_t in_idx_cb_id_1 = 32;
+    uint32_t tile_tmp_cb_id = 32;
+    uint32_t tile_idx_tmp_cb_id = 32;
     if (return_indices) {
         const uint32_t in_idx_cb_pagesize = params.index_nbytes * in_cb_page_padded;
         const uint32_t in_idx_cb_npages = params.multi_buffering_factor;
@@ -392,6 +394,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 in_idx_cb_id_1, program, all_cores, in_idx_cb_pagesize, in_idx_cb_npages, params.index_format);
             log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_idx_cb_id_1, in_idx_cb_pagesize, in_idx_cb_npages);
         }
+
+        uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        tile_tmp_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(tile_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.data_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_tmp_cb_id, params.nbytes * tile_elems, 1);
+        tile_idx_tmp_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(
+            tile_idx_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1);
     }
 
     // output of reduce == writer to write
@@ -505,6 +516,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
+        tile_tmp_cb_id,
+        tile_idx_tmp_cb_id,
         clear_value_cb_id,
         (uint32_t)pool_type,
         one_scalar_per_core,
@@ -550,6 +563,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_idx_cb_id_1,
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
+        tile_tmp_cb_id,
+        tile_idx_tmp_cb_id,
         out_cb_id,
         out_idx_cb_id,
         one_scalar_per_core,
