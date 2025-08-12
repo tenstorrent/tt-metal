@@ -264,10 +264,12 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
     const auto& eth_connections = cluster.get_ethernet_connections();
 
+    auto my_rank = *(distributed_context.rank());
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
-    std::string hostname_str = std::string(hostname);
+    std::string hostname_str = std::string(hostname) + "_" + std::to_string(my_rank);
     std::cout << "Hostname: " << hostname_str << std::endl;
+
     tt::tt_fabric::EthConnectivityDescriptor eth_connectivity_desc;
     std::vector<tt::tt_fabric::ASICDescriptor> asic_descriptors;
 
@@ -321,13 +323,11 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
 
     auto serialized_sys_desc = serialize_system_descriptor_to_bytes(system_desc);
 
-    auto my_rank = *(distributed_context.rank());
     constexpr uint32_t controller_rank = 0;
     std::vector<uint8_t> serialized_peer_desc;
 
     if (my_rank != controller_rank) {
         std::size_t local_desc_size_bytes = serialized_sys_desc.size();
-        std::cout << "Sending " << local_desc_size_bytes << " bytes from: " << my_rank << std::endl;
         distributed_context.send(
             tt::stl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&local_desc_size_bytes), sizeof(local_desc_size_bytes)),
@@ -363,7 +363,42 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
         }
     }
     distributed_context.barrier();
+    if (my_rank == controller_rank) {
+        for (auto& conn_desc : system_desc.eth_connectivity_descs) {
+            for (auto& [local_chan, remote_pair] : conn_desc.remote_eth_connections) {
+                for (auto& candidate_desc : system_desc.eth_connectivity_descs) {
+                    for (auto& [candidate_chan, candidate_remote_pair] : candidate_desc.remote_eth_connections) {
+                        auto& curr_host_name = conn_desc.host_name;
+                        auto& candidate_remote_host_name = candidate_desc.host_name;
+                        if (remote_pair.second.board_id == candidate_chan.board_id &&
+                            remote_pair.second.chan_id == candidate_chan.chan_id) {
+                            TT_FATAL(
+                                candidate_remote_pair.second.board_id == local_chan.board_id &&
+                                    candidate_remote_pair.second.chan_id == local_chan.chan_id,
+                                "Remote channel {}:{} does not match local channel {}:{} for host {}",
+                                candidate_remote_pair.second.board_id,
+                                candidate_remote_pair.second.chan_id,
+                                local_chan.board_id,
+                                local_chan.chan_id,
+                                curr_host_name);
+                            remote_pair.first = candidate_remote_host_name;
+                            candidate_remote_pair.first = curr_host_name;
+                        }
+                    }
+                }
+            }
+        }
 
+        for (const auto& conn_desc : system_desc.eth_connectivity_descs) {
+            std::cout << "Remote connections for: " << conn_desc.host_name << std::endl;
+            for (const auto& [local_chan, remote_pair] : conn_desc.remote_eth_connections) {
+                std::cout << "  Local Info: " << local_chan.board_id << ":" << local_chan.chan_id
+                          << " -> Remote Board: " << remote_pair.first
+                          << ", Remote Channel: " << remote_pair.second.board_id << ":" << remote_pair.second.chan_id
+                          << std::endl;
+            }
+        }
+    }
     // build_local_connectivity_desc_yaml(local_eth_connectivity, "local_ethernet_connectivity.yaml");
 }
 
