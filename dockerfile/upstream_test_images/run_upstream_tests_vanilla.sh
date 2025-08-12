@@ -80,7 +80,15 @@ test_suite_bh_single_pcie_llama_demo_tests() {
 test_suite_bh_multi_pcie_metal_unit_tests() {
     echo "[upstream-tests] Running BH LLMBox metal unit tests"
 
-    ./build/test/tt_metal/tt_fabric/test_system_health
+    # Sim HW deskbox has 8 connections so we need to pass in the min-connections arg
+    # This changes the connection count assert == 4 to assert >= 4
+    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
+        local min_connections_arg="--min-connections 4"
+    else
+        local min_connections_arg=""
+    fi
+
+    ./build/test/tt_metal/tt_fabric/test_system_health $min_connections_arg
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/unit_tests_eth
