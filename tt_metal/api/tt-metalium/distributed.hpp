@@ -64,14 +64,6 @@ void ReadShard(
     const std::shared_ptr<MeshBuffer>& mesh_buffer,
     const MeshCoordinate& coord,
     bool blocking = true) {
-
-    // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
-    // Tracking removal of free function APIs in this file in this issue.
-    auto mesh_device = mesh_cq.device();
-    if (!mesh_device->is_local(coord)) {
-        return;
-    }
-
     auto shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
     std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
@@ -143,9 +135,6 @@ void Synchronize(
     MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-// Returns true if the distributed environment is initialized and world_size > 1.
-bool UsingDistributedEnvironment();
 
 }  // namespace distributed
 }  // namespace tt::tt_metal
