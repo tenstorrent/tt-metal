@@ -177,6 +177,7 @@ Note: In case containers size is compile-time, then shapes, strides, coords are 
 You can use the shard pages iterator to iterate over page addresses and page IDs in a shard with a step >=1.
 - Since it has a state, address calculation is more efficient than calling `accessor.get_noc_addr` at each step.
 - It handles cases when the input shape is not divisible by the shard shape along some dimension(s) (i.e., it skips padding pages)
+- Note: works only for sharded tensors
 
 Example of a sharded tensor copy
 ```c++
@@ -192,6 +193,22 @@ for (uint32_t i = 0; i < num_shards; ++i) {
         noc_async_writes_flushed();
     }
 }
+```
+
+Or this sharded tensor copy, which should be more efficient, since it uses iterator to calculate address for both src and dst:
+```c++
+for (uint32_t i = 0; i < num_shards; ++i) {
+    uint32_t shard_id = first_shard_id + i * num_cores;
+    auto shard_pages_src = tensor_accessor_src.shard_pages(shard_id);
+    auto shard_pages_dst = tensor_accessor_dst.shard_pages(shard_id);
+    auto page_dst = shard_pages_dst.begin();
+    for (const auto& page_src : shard_pages_src) {
+        noc_async_read(page_src.get_noc_addr(), page_dst->get_noc_addr(), page_size);
+        noc_async_writes_flushed();
+        ++page_dst;
+    }
+}
+
 ```
 
 ## Performance Considerations

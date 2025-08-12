@@ -215,10 +215,10 @@ public:
     }
 
     // Returns a proxy for shard pages iterator
-    ShardPages<TensorAccessor> shard_pages(
+    tensor_accessor::ShardPages<TensorAccessor> shard_pages(
         uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
         static_assert(DSpec::has_static_rank, "ShardPages is only supported for static rank");
-        return ShardPages<TensorAccessor>(*this, shard_id, start_page_offset, noc);
+        return tensor_accessor::ShardPages<TensorAccessor>(*this, shard_id, start_page_offset, noc);
     }
 
 private:
@@ -265,7 +265,7 @@ public:
     const size_t bank_base_address = 0;
     const uint32_t page_size = 0;
 
-    friend class ShardPagesAddressIterator<TensorAccessor>;
+    friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)

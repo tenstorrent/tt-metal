@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <iterator>
 
+namespace tensor_accessor {
 class Page {
 public:
     Page(uint64_t noc_addr, uint32_t global_page_id, uint32_t shard_id) :
@@ -260,3 +261,4 @@ private:
     uint32_t start_page_offset_;
     uint8_t noc_;
 };
+}  // namespace tensor_accessor
