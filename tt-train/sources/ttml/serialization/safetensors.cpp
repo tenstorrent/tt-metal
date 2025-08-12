@@ -4,17 +4,13 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <system_error>
 #include <vector>
-
-// JSON: use any you like; nlohmann/json for brevity here
-#include <nlohmann/json.hpp>
 
 #include "fmt/format.h"
 
@@ -93,7 +89,6 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
         }
     };
 
-    // Create a unique_ptr with the custom deleter
     std::unique_ptr<void, decltype(mmap_deleter)> map(
         mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd.get(), 0), mmap_deleter);
 
