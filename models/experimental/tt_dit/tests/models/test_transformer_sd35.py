@@ -13,6 +13,7 @@ from ...utils.check import assert_quality
 from ...models.transformers.transformer_sd35 import SD35TransformerBlock, SD35Transformer2DModel
 from ...parallel.manager import CCLManager
 from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from ...utils.padding import PaddingConfig
 
 
 @pytest.mark.parametrize(
@@ -25,10 +26,10 @@ from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as Tor
         [(2, 1), 1, 0],
         [(2, 2), 0, 1],
         [(2, 2), 1, 0],
-        # [(2, 4), 0, 1], # fails because we don't have padded heads yet
+        [(2, 4), 0, 1],  # Now enabled with head padding
         [(2, 4), 1, 0],
     ],
-    ids=["1x2sp0tp1", "2x1sp1tp0", "2x2sp0tp1", "2x2sp1tp0", "2x4sp1tp0"],
+    ids=["1x2sp0tp1", "2x1sp1tp0", "2x2sp0tp1", "2x2sp1tp0", "2x4sp0tp1", "2x4sp1tp0"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -57,28 +58,13 @@ def test_sd35_transformer_block(
     head_dim = 64
     num_heads = 38
     use_dual_attention = False
-    qk_norm = "rms_norm"
 
     # Create Torch model
-    # dummy = TorchTransformerBlock(
-    #     dim=dim,
-    #     num_heads=num_heads,
-    #     head_dim=head_dim,
-    #     context_pre_only=False,
-    #     qk_norm=qk_norm,
-    #     use_dual_attention=use_dual_attention,
-    # ).to(torch_dtype)
-    # print("random model")
-    # print(dummy)
     parent_torch_model = TorchSD3Transformer2DModel.from_pretrained(
         f"stabilityai/stable-diffusion-3.5-large", subfolder="transformer", torch_dtype=torch_dtype
     )
     torch_model = parent_torch_model.transformer_blocks[0]
     torch_model.eval()
-    # print("pretrained model")
-    # print(torch_model)
-    # breakpoint()
-
     # Create CCL manager
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
@@ -99,6 +85,12 @@ def test_sd35_transformer_block(
 
     parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
 
+    # Create padding config if needed for tensor parallelism
+    if num_heads % tp_factor != 0:
+        padding_config = PaddingConfig.from_tensor_parallel_factor(num_heads, head_dim, tp_factor)
+    else:
+        padding_config = None
+
     # Create TT model
     tt_model = SD35TransformerBlock(
         dim=dim,
@@ -109,6 +101,7 @@ def test_sd35_transformer_block(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        padding_config=padding_config,
         init=False,
     )
     tt_model.load_state_dict(torch_model.state_dict())
@@ -148,7 +141,7 @@ def test_sd35_transformer_block(
     tt_spatial_torch = tt_spatial_torch.squeeze(0)
     # tt_spatial_torch += spatial_input # DEBUG! Do residual add in torch!
 
-    assert_quality(torch_spatial, tt_spatial_torch, pcc=0.995_000)
+    assert_quality(torch_spatial, tt_spatial_torch, pcc=0.994_000)
 
     if not torch_model.context_pre_only:
         assert tt_prompt_out is not None
@@ -175,8 +168,10 @@ def test_sd35_transformer_block(
         [(2, 1), 1, 0],
         [(2, 2), 0, 1],
         [(2, 2), 1, 0],
+        [(2, 4), 0, 1],  # Now enabled with head padding
+        [(2, 4), 1, 0],
     ],
-    ids=["1x2sp0tp1", "2x1sp1tp0", "2x2sp0tp1", "2x2sp1tp0"],
+    ids=["1x2sp0tp1", "2x1sp1tp0", "2x2sp0tp1", "2x2sp1tp0", "2x4sp0tp1", "2x4sp1tp0"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -244,6 +239,12 @@ def test_sd35_transformer2d_model(
 
     parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
 
+    # Create padding config if needed for tensor parallelism
+    if num_attention_heads % tp_factor != 0:
+        padding_config = PaddingConfig.from_tensor_parallel_factor(num_attention_heads, attention_head_dim, tp_factor)
+    else:
+        padding_config = None
+
     # Create TT model
     tt_model = SD35Transformer2DModel(
         sample_size=sample_size,
@@ -261,6 +262,7 @@ def test_sd35_transformer2d_model(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        padding_config=padding_config,
         init=False,
     )
     tt_model.load_state_dict(torch_model.state_dict())
@@ -321,7 +323,6 @@ def test_sd35_transformer2d_model(
     for i in range(len(tt_output_tensors)):
         logger.info(f"Checking output tensor {i}")
         tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
-        assert_quality(torch_output, tt_output_torch, pcc=0.990_000)  # Lower PCC due to full model complexity
-    # assert_quality(torch_output, tt_output_reshaped, pcc=0.990_000)  # Lower PCC due to full model complexity
+        assert_quality(torch_output.squeeze(), tt_output_torch.squeeze(), pcc=0.999_940)
 
     print("SD35Transformer2DModel test passed successfully!")

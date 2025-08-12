@@ -24,6 +24,7 @@ class SD35TransformerBlock:
         ccl_manager=None,
         parallel_config=None,
         init=False,
+        padding_config=None,
     ):
         assert not use_dual_attention, "Expecting not dual attention"
 
@@ -89,6 +90,7 @@ class SD35TransformerBlock:
             init=init,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            padding_config=padding_config,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -348,6 +350,7 @@ class SD35Transformer2DModel:
         ccl_manager=None,
         parallel_config=None,
         init=False,
+        padding_config=None,
     ):
         self.sample_size = sample_size
         self.patch_size = patch_size
@@ -410,6 +413,7 @@ class SD35Transformer2DModel:
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
+                padding_config=padding_config,
                 init=init,
             )
             self.transformer_blocks.append(block)
