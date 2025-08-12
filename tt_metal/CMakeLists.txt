@@ -85,6 +85,7 @@ target_sources(
             api/tt-metalium/fabric_edm_types.hpp
             api/tt-metalium/edm_fabric_counters.hpp
             core_descriptors/blackhole_140_arch.yaml
+            core_descriptors/blackhole_20_arch.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
             core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml
             fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.yaml
