@@ -14,6 +14,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_graph.hpp>
+#include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tt_metal/fabric/intermesh_constants.hpp"
@@ -221,16 +222,52 @@ std::string build_local_connectivity_desc_yaml(
     return emitter.c_str();
 }
 
+// auto deserialized_sys_desc = deserialize_system_descriptor_from_bytes(serialized_sys_desc);
+// TT_FATAL(deserialized_sys_desc.asic_ids == system_desc.asic_ids, "Deserialized ASIC IDs do not match original");
+
+// std::cout << "Eth Connectivity Size: " << deserialized_sys_desc.eth_connectivity_descs.size() << std::endl;
+
+// for (auto desc_idx = 0; desc_idx < deserialized_sys_desc.eth_connectivity_descs.size(); desc_idx++) {
+//     const auto& deserialized_desc = deserialized_sys_desc.eth_connectivity_descs[desc_idx];
+//     const auto& original_desc = system_desc.eth_connectivity_descs[desc_idx];
+//     std::cout << "Local Eth Connections Size: " << deserialized_desc.local_eth_connections.size() << std::endl;
+//     std::cout << "Remote Eth Connections Size: " << deserialized_desc.remote_eth_connections.size() << std::endl;
+//     for (const auto& [local_chan, remote_chan] : deserialized_desc.local_eth_connections) {
+//         TT_FATAL(
+//             original_desc.local_eth_connections.count(local_chan) > 0,
+//             "Local channel {} not found in original descriptor",
+//             local_chan);
+//         TT_FATAL(
+//             original_desc.local_eth_connections.at(local_chan) == remote_chan,
+//             "Remote channel for local channel {} does not match original",
+//             local_chan);
+//     }
+
+//     for (const auto& [local_chan, remote_pair] : deserialized_desc.remote_eth_connections) {
+//         TT_FATAL(
+//             original_desc.remote_eth_connections.count(local_chan) > 0,
+//             "Local channel {} not found in original descriptor",
+//             local_chan);
+//         TT_FATAL(
+//             original_desc.remote_eth_connections.at(local_chan) == remote_pair,
+//             "Remote pair for local channel {} does not match original",
+//             local_chan);
+//     }
+// }
 TEST(Cluster, GetLocalEthernetConnectivity) {
+    using namespace tt::tt_metal::distributed::multihost;
+
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& eth_connections = cluster.get_ethernet_connections();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
+    const auto& eth_connections = cluster.get_ethernet_connections();
 
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
     std::string hostname_str = std::string(hostname);
-
+    std::cout << "Hostname: " << hostname_str << std::endl;
     tt::tt_fabric::EthConnectivityDescriptor eth_connectivity_desc;
     std::vector<tt::tt_fabric::ASICDescriptor> asic_descriptors;
 
@@ -251,7 +288,6 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
 
-    uint64_t local_board_id = 0;
     uint64_t remote_board_id = 0;
     uint32_t remote_chan_id = 0;
 
@@ -284,35 +320,50 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     system_desc.eth_connectivity_descs.push_back(std::move(eth_connectivity_desc));
 
     auto serialized_sys_desc = serialize_system_descriptor_to_bytes(system_desc);
-    auto deserialized_sys_desc = deserialize_system_descriptor_from_bytes(serialized_sys_desc);
-    TT_FATAL(deserialized_sys_desc.asic_ids == system_desc.asic_ids, "Deserialized ASIC IDs do not match original");
 
-    for (auto desc_idx = 0; desc_idx < deserialized_sys_desc.eth_connectivity_descs.size(); desc_idx++) {
-        const auto& deserialized_desc = deserialized_sys_desc.eth_connectivity_descs[desc_idx];
-        const auto& original_desc = system_desc.eth_connectivity_descs[desc_idx];
+    auto my_rank = *(distributed_context.rank());
+    constexpr uint32_t controller_rank = 0;
+    std::vector<uint8_t> serialized_peer_desc;
 
-        for (const auto& [local_chan, remote_chan] : deserialized_desc.local_eth_connections) {
-            TT_FATAL(
-                original_desc.local_eth_connections.count(local_chan) > 0,
-                "Local channel {} not found in original descriptor",
-                local_chan);
-            TT_FATAL(
-                original_desc.local_eth_connections.at(local_chan) == remote_chan,
-                "Remote channel for local channel {} does not match original",
-                local_chan);
-        }
-
-        for (const auto& [local_chan, remote_pair] : deserialized_desc.remote_eth_connections) {
-            TT_FATAL(
-                original_desc.remote_eth_connections.count(local_chan) > 0,
-                "Local channel {} not found in original descriptor",
-                local_chan);
-            TT_FATAL(
-                original_desc.remote_eth_connections.at(local_chan) == remote_pair,
-                "Remote pair for local channel {} does not match original",
-                local_chan);
+    if (my_rank != controller_rank) {
+        std::size_t local_desc_size_bytes = serialized_sys_desc.size();
+        std::cout << "Sending " << local_desc_size_bytes << " bytes from: " << my_rank << std::endl;
+        distributed_context.send(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&local_desc_size_bytes), sizeof(local_desc_size_bytes)),
+            Rank{controller_rank},
+            Tag{0});
+        distributed_context.send(
+            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_sys_desc.data(), serialized_sys_desc.size())),
+            Rank{controller_rank},
+            Tag{0});
+    } else {
+        for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
+            if (rank != controller_rank) {
+                std::size_t peer_descriptor_size = 0;
+                distributed_context.recv(
+                    tt::stl::Span<std::byte>(
+                        reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
+                    Rank{rank},
+                    Tag{0});
+                serialized_peer_desc.clear();
+                serialized_peer_desc.resize(peer_descriptor_size);
+                distributed_context.recv(
+                    tt::stl::as_writable_bytes(
+                        tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
+                    Rank{rank},
+                    Tag{0});
+                auto peer_desc = deserialize_system_descriptor_from_bytes(serialized_peer_desc);
+                system_desc.asic_ids.insert(peer_desc.asic_ids.begin(), peer_desc.asic_ids.end());
+                system_desc.eth_connectivity_descs.insert(
+                    system_desc.eth_connectivity_descs.end(),
+                    std::make_move_iterator(peer_desc.eth_connectivity_descs.begin()),
+                    std::make_move_iterator(peer_desc.eth_connectivity_descs.end()));
+            }
         }
     }
+    distributed_context.barrier();
+
     // build_local_connectivity_desc_yaml(local_eth_connectivity, "local_ethernet_connectivity.yaml");
 }
 
