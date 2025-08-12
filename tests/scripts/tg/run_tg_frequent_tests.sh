@@ -39,7 +39,7 @@ run_tg_tests() {
 
   elif [[ "$1" == "sentencebert" ]]; then
     echo "LOG_METAL: running sentence-bert run_tg_frequent_tests"
-    pytest -n auto models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py ; fail+=$?
+    pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py
 
   elif [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
