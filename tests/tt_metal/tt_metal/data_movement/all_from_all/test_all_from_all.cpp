@@ -37,6 +37,7 @@ struct AllFromAllConfig {
     /* Write configurations */
     DataFormat l1_data_format = DataFormat::Invalid;
     NOC noc_id = NOC::NOC_1;
+    uint32_t num_virtual_channels = 1;
 
     // TODO: Add the following parameters
     //  1. Virtual Channel (only useful for unicast)
@@ -116,10 +117,12 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
         (uint32_t)mst_l1_base_address,
         (uint32_t)sub_l1_base_address,
         // 3 - 4: Transaction parameters
-        (uint32_t)test_config.num_of_transactions_per_subordinate,  // num_of_transactions
-        (uint32_t)bytes_per_transaction,                            // transaction_size_bytes
+        (uint32_t)test_config.num_of_transactions_per_subordinate,
+        (uint32_t)bytes_per_transaction,
         //     5: Subordinate count
-        (uint32_t)num_subordinates,  // num_subordinates
+        (uint32_t)num_subordinates,
+        //     6: Virtual channels
+        (uint32_t)test_config.num_virtual_channels,
     };
 
     // Create kernels
@@ -184,6 +187,50 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
     return pcc;
 }
 
+void directed_ideal_test(
+    tt::ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    CoreCoord mst_start_coord,
+    CoreCoord sub_start_coord,
+    CoreCoord mst_grid_size,
+    CoreCoord sub_grid_size) {
+    NOC noc_id = NOC::NOC_1;
+
+    // Physical Constraints
+    auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+        unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+    /* Running the Test */
+
+    uint32_t num_of_transactions_per_subordinate = 1;
+    uint32_t pages_reservable_per_transaction =
+        max_reservable_pages / num_of_transactions_per_subordinate / 2;  // Half for master and subordinate
+
+    // Test config
+    unit_tests::dm::all_from_all::AllFromAllConfig test_config = {
+
+        .test_id = test_case_id,
+
+        .mst_logical_start_coord = mst_start_coord,
+        .sub_logical_start_coord = sub_start_coord,
+        .mst_grid_size = mst_grid_size,
+        .sub_grid_size = sub_grid_size,
+
+        .num_of_transactions_per_subordinate = num_of_transactions_per_subordinate,
+        .pages_reservable_per_transaction = pages_reservable_per_transaction,
+        .bytes_per_page = bytes_per_page,
+
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = noc_id,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
 void packet_sizes_test(
     tt::ARCH arch_,
     vector<IDevice*>& devices_,
@@ -218,7 +265,7 @@ void packet_sizes_test(
             // Test config
             unit_tests::dm::all_from_all::AllFromAllConfig test_config = {
 
-                .test_id = unit_tests::dm::all_from_all::START_ID + test_case_id,
+                .test_id = test_case_id,
 
                 .mst_logical_start_coord = mst_start_coord,
                 .sub_logical_start_coord = sub_start_coord,
@@ -241,42 +288,94 @@ void packet_sizes_test(
     }
 }
 
-void directed_ideal_test(
-    tt::ARCH arch_,
+void virtual_channels_test(ARCH arch_, vector<IDevice*>& devices_, uint32_t num_devices_, uint32_t test_case_id) {
+    // Physical Constraints
+    auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
+        unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    // Parameters for literal all-to-all (use the full grid for both master and subordinate)
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
+    std::uint32_t max_num_pages_per_transaction = 1 << 12;
+    std::uint32_t num_of_transactions = 256;  // Constant value
+    std::uint32_t max_num_virtual_channels = 4;
+
+    // Loop through:
+    // 1. NOCs (NOC_0, NOC_1)
+    // 2. Size of transactions
+    // 3. Numbers of virtual channels
+    for (NOC noc_id : {NOC::NOC_0, NOC::NOC_1}) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_num_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            for (uint32_t num_virtual_channels = 1; num_virtual_channels <= max_num_virtual_channels;
+                 num_virtual_channels++) {
+                if (pages_per_transaction > max_pages_reservable) {
+                    continue;
+                }
+
+                // Test config
+                AllFromAllConfig test_config = {
+                    .test_id = test_case_id,
+                    .mst_logical_start_coord = mst_start_coord,
+                    .sub_logical_start_coord = sub_start_coord,
+                    .mst_grid_size = mst_grid_size,
+                    .sub_grid_size = sub_grid_size,
+                    .num_of_transactions_per_subordinate = num_of_transactions,
+                    .pages_reservable_per_transaction = pages_per_transaction,
+                    .bytes_per_page = bytes_per_page,
+                    .l1_data_format = DataFormat::Float16_b,
+                    .noc_id = noc_id,
+                    .num_virtual_channels = num_virtual_channels,
+                };
+
+                // Run
+                for (unsigned int id = 0; id < num_devices_; id++) {
+                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                }
+            }
+        }
+    }
+}
+
+void custom_test(
+    ARCH arch_,
     vector<IDevice*>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
     CoreCoord sub_start_coord,
     CoreCoord mst_grid_size,
-    CoreCoord sub_grid_size) {
-    NOC noc_id = NOC::NOC_1;
-
+    CoreCoord sub_grid_size,
+    uint32_t num_of_transactions_per_subordinate,
+    uint32_t pages_per_transaction,
+    uint32_t num_virtual_channels) {
     // Physical Constraints
-    auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+    auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-    /* Running the Test */
 
-    uint32_t num_of_transactions_per_subordinate = 1;
-    uint32_t pages_reservable_per_transaction =
-        max_reservable_pages / num_of_transactions_per_subordinate / 2;  // Half for master and subordinate
+    if (pages_per_transaction > max_pages_reservable) {
+        log_trace(LogTest, "Skipping test due to page size limitations");
+        return;
+    }
 
     // Test config
-    unit_tests::dm::all_from_all::AllFromAllConfig test_config = {
-
-        .test_id = unit_tests::dm::all_from_all::START_ID + test_case_id,
-
+    AllFromAllConfig test_config = {
+        .test_id = test_case_id,
         .mst_logical_start_coord = mst_start_coord,
         .sub_logical_start_coord = sub_start_coord,
         .mst_grid_size = mst_grid_size,
         .sub_grid_size = sub_grid_size,
-
         .num_of_transactions_per_subordinate = num_of_transactions_per_subordinate,
-        .pages_reservable_per_transaction = pages_reservable_per_transaction,
+        .pages_reservable_per_transaction = pages_per_transaction,
         .bytes_per_page = bytes_per_page,
-
         .l1_data_format = DataFormat::Float16_b,
-        .noc_id = noc_id,
+        .noc_id = NOC::NOC_0,
+        .num_virtual_channels = num_virtual_channels,
     };
 
     // Run
@@ -292,17 +391,41 @@ void directed_ideal_test(
 /  ============================================================= */
 
 /*
-IDEAS:
-    - Implement a for loop that shuffles through several coordinates to test grids of
-        different locations
-    - Implement a for loop that shuffles through several grid sizes to test grids of
-        different sizes
+TO-DO:
+    - Implement a test case that shuffles through several grid sizes to test grids of different sizes
 */
+
+/* ======== DIRECTED IDEAL ======== */
+
+/* ======== All from All ======== */
+TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
+    }
+    uint32_t test_case_id = 310;
+
+    /* Parameters */
+
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
+    unit_tests::dm::all_from_all::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+}
 
 /* ======== PACKET SIZES ======== */
 
 TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
-    uint32_t test_case_id = 0;
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
+    }
+
+    uint32_t test_case_id = 311;
 
     /* Parameters */
 
@@ -318,29 +441,9 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
         arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 
-/* ======== DIRECTED IDEAL ======== */
-
-/* ======== All from All ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
-    uint32_t test_case_id = 1;
-
-    /* Parameters */
-
-    CoreCoord mst_start_coord = {0, 0};
-    CoreCoord sub_start_coord = {0, 0};
-
-    CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
-    CoreCoord sub_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
-
-    unit_tests::dm::all_from_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
-}
-
 /* ======== 2x2 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
-    uint32_t test_case_id = 2;
+    uint32_t test_case_id = 312;
 
     /* Parameters */
 
@@ -356,7 +459,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
 
 /* ======== 4x4 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
-    uint32_t test_case_id = 3;
+    uint32_t test_case_id = 313;
 
     /* Parameters */
 
@@ -372,7 +475,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
 
 /* ======== 1x1 to 2x2 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
-    uint32_t test_case_id = 4;
+    uint32_t test_case_id = 314;
 
     /* Parameters */
 
@@ -388,7 +491,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
 
 /* ======== 1x1 to 4x4 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
-    uint32_t test_case_id = 5;
+    uint32_t test_case_id = 315;
 
     /* Parameters */
 
@@ -404,7 +507,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
 
 /* ======== 2x2 to 2x2 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
-    uint32_t test_case_id = 6;
+    uint32_t test_case_id = 316;
 
     /* Parameters */
 
@@ -416,6 +519,43 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
 
     unit_tests::dm::all_from_all::directed_ideal_test(
         arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+}
+
+/* ======== VIRTUAL CHANNELS ======== */
+
+TEST_F(DeviceFixture, TensixDataMovementAllFromAllVirtualChannels) {
+    uint32_t test_case_id = 317;
+
+    unit_tests::dm::all_from_all::virtual_channels_test(arch_, devices_, num_devices_, test_case_id);
+}
+
+TEST_F(DeviceFixture, TensixDataMovementAllFromAllCustom) {
+    uint32_t test_case_id = 318;
+
+    // Parameters
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
+    uint32_t num_of_transactions_per_subordinate = 256;
+    uint32_t pages_per_transaction = 1;
+    uint32_t num_virtual_channels = 4;
+
+    unit_tests::dm::all_from_all::custom_test(
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        mst_start_coord,
+        sub_start_coord,
+        mst_grid_size,
+        sub_grid_size,
+        num_of_transactions_per_subordinate,
+        pages_per_transaction,
+        num_virtual_channels);
 }
 
 }  // namespace tt::tt_metal

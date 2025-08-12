@@ -15,6 +15,24 @@ Tests:
     patterns:
       - type: all_to_all
 
+  - name: "LinearMulticastMicroLooped"
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+
+    defaults:
+      ftype: mcast
+      size: 64
+      num_packets: 1
+
+    patterns:
+      - type: all_to_all
+        iterations: 20
+
+
   - name: "UnidirLinearMulticast"
     fabric_setup:
       topology: Linear

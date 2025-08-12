@@ -112,23 +112,11 @@ target_sources(
 )
 setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
 
-# unit_tests_ttnn_fabric_edm
-
-add_executable(unit_tests_ttnn_fabric_edm)
-target_sources(unit_tests_ttnn_fabric_edm PRIVATE ccl/test_fabric_edm.cpp)
-setup_ttnn_test_target(unit_tests_ttnn_fabric_edm)
-
 # unit_tests_ttnn_ccl_multi_tensor
 
 add_executable(unit_tests_ttnn_ccl_multi_tensor)
 target_sources(unit_tests_ttnn_ccl_multi_tensor PRIVATE ccl/test_multi_tensor_ccl.cpp)
 setup_ttnn_test_target(unit_tests_ttnn_ccl_multi_tensor)
-
-# unit_tests_ttnn_1d_fabric_latency
-
-add_executable(unit_tests_ttnn_1d_fabric_latency)
-target_sources(unit_tests_ttnn_1d_fabric_latency PRIVATE ccl/test_1d_fabric_loopback_latency.cpp)
-setup_ttnn_test_target(unit_tests_ttnn_1d_fabric_latency)
 
 # unit_tests_ttnn_accessor
 
