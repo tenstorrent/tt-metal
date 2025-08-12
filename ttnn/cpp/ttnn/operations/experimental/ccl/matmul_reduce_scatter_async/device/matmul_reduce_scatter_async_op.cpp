@@ -149,6 +149,7 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
         this->reduce_scatter_minimal_async_struct.topology,
         this->reduce_scatter_minimal_async_struct.semaphore,
         this->reduce_scatter_minimal_async_struct.barrier_semaphore,
+        this->reduce_scatter_minimal_async_struct.using_persistent_buffers,
         this->reduce_scatter_minimal_async_struct.sub_device_id,
         this->reduce_scatter_core_grid_offset,
 
@@ -251,6 +252,9 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
             /*output_tile=*/std::nullopt,
             /*global_cb=*/std::nullopt});
 
+    // Not using persistent buffers not currently supported by the RSMM API
+    bool using_persistent_buffers = true;
+
     std::vector<std::optional<Tensor>> optional_output_tensors = {
         persistent_intermediate_buffer, persistent_output_buffer};
 
@@ -269,6 +273,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         topology,
         multi_device_global_semaphore,
         barrier_semaphore,
+        using_persistent_buffers,
         sub_device_id,
         std::nullopt,
         std::nullopt,
