@@ -440,7 +440,8 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                 }
 
                 if (i + 2 >= events.size() ||
-                    !std::holds_alternative<EMD::FabricRoutingFields>(EMD(events[i + 1].data).getContents()) ||
+                    !std::holds_alternative<EMD::FabricRoutingFields1D>(EMD(events[i + 1].data).getContents()) &&
+                        !std::holds_alternative<EMD::FabricRoutingFields2D>(EMD(events[i + 1].data).getContents()) ||
                     !std::holds_alternative<EMD::LocalNocEvent>(EMD(events[i + 2].data).getContents()) ||
                     std::get<EMD::LocalNocEvent>(EMD(events[i + 2].data).getContents()).noc_xfer_type !=
                         EMD::NocEventType::WRITE_) {
@@ -604,32 +605,8 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                     noc_xfer_type = first_fabric_scatter_write_event.noc_xfer_type;
                 }
 
-                auto fabric_routing_fields_event =
-                    std::get<EMD::FabricRoutingFields>(EMD(fabric_routing_fields_datapoint.data).getContents());
                 auto local_noc_write_event =
                     std::get<EMD::LocalNocEvent>(EMD(local_noc_write_datapoint.data).getContents());
-
-                // determine hop count and other routing metadata from routing fields value
-                int start_distance = 0;
-                int range = 0;
-                switch (routing_fields_type) {
-                    case EMD::FabricPacketType::REGULAR: {
-                        std::tie(start_distance, range) =
-                            get_routing_start_distance_and_range(fabric_routing_fields_event.routing_fields_value);
-                        break;
-                    }
-                    case EMD::FabricPacketType::LOW_LATENCY: {
-                        std::tie(start_distance, range) = get_low_latency_routing_start_distance_and_range(
-                            fabric_routing_fields_event.routing_fields_value);
-                        break;
-                    }
-                    case KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH: {
-                        log_error(
-                            tt::LogMetal,
-                            "[profiler noc tracing] noc tracing does not support LOW_LATENCY_MESH packets!");
-                        continue;
-                    }
-                }
 
                 nlohmann::ordered_json fabric_event_json = {
                     {"run_host_id", local_noc_write_datapoint.run_host_id},
@@ -646,7 +623,41 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                      first_fabric_write_datapoint.timestamp},  // replace the timestamp with fabric event timestamp
                 };
 
-                fabric_event_json["fabric_send"] = {{"start_distance", start_distance}, {"range", range}};
+                // extract routing metadata from routing fields event
+                switch (routing_fields_type) {
+                    case EMD::FabricPacketType::REGULAR: {
+                        auto fabric_routing_fields_event = std::get<EMD::FabricRoutingFields1D>(
+                            EMD(fabric_routing_fields_datapoint.data).getContents());
+                        auto [start_distance, range] =
+                            get_routing_start_distance_and_range(fabric_routing_fields_event.routing_fields_value);
+                        fabric_event_json["fabric_send"] = {{"start_distance", start_distance}, {"range", range}};
+                        break;
+                    }
+                    case EMD::FabricPacketType::LOW_LATENCY: {
+                        auto fabric_routing_fields_event = std::get<EMD::FabricRoutingFields1D>(
+                            EMD(fabric_routing_fields_datapoint.data).getContents());
+                        auto [start_distance, range] = get_low_latency_routing_start_distance_and_range(
+                            fabric_routing_fields_event.routing_fields_value);
+                        fabric_event_json["fabric_send"] = {{"start_distance", start_distance}, {"range", range}};
+                        break;
+                    }
+                    case KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH: {
+                        auto fabric_routing_fields_event = std::get<EMD::FabricRoutingFields2D>(
+                            EMD(fabric_routing_fields_datapoint.data).getContents());
+                        fabric_event_json["fabric_send"] = {
+                            {"routing mode", "2D"},
+                            {"ns_hops", fabric_routing_fields_event.ns_hops},
+                            {"e_hops", fabric_routing_fields_event.e_hops},
+                            {"w_hops", fabric_routing_fields_event.w_hops},
+                            {"is_mcast", fabric_routing_fields_event.is_mcast}};
+                        break;
+                    }
+                    case KernelProfilerNocEventMetadata::FabricPacketType::DYNAMIC_MESH: {
+                        log_error(
+                            tt::LogMetal, "[profiler noc tracing] noc tracing does not support DYNAMIC_MESH packets!");
+                        continue;
+                    }  // need record side support!!!
+                }
 
                 // if fabric mux is used, add fabric mux coords and noc into "fabric_send" metadata
                 // and use corresponding write on fabric mux to get eth channel used on src device for the transfer
@@ -676,13 +687,12 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                             "[profiler noc tracing] Fabric edm_location->channel lookup failed for event in op '{}' at "
                             "ts {}: "
                             "src_dev={}, "
-                            "eth_core=({}, {}), start_distance={}. Keeping original events.",
+                            "eth_core=({}, {}). Skipping.",
                             first_fabric_write_datapoint.op_name,
                             first_fabric_write_datapoint.timestamp,
                             device_id,
                             eth_router_phys_coord.x,
-                            eth_router_phys_coord.y,
-                            start_distance);
+                            eth_router_phys_coord.y);
                         continue;
                     }
                     tt::tt_fabric::chan_id_t eth_chan = *eth_chan_opt;
@@ -700,13 +710,12 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                             "[profiler noc tracing] Fabric edm_location->channel lookup failed for event in op '{}' at "
                             "ts {}: "
                             "src_dev={}, "
-                            "eth_core=({}, {}), start_distance={}. Keeping original events.",
+                            "eth_core=({}, {}). Skipping.",
                             first_fabric_write_datapoint.op_name,
                             first_fabric_write_datapoint.timestamp,
                             device_id,
                             eth_router_phys_coord.x,
-                            eth_router_phys_coord.y,
-                            start_distance);
+                            eth_router_phys_coord.y);
                         continue;
                     }
                     tt::tt_fabric::chan_id_t eth_chan = *eth_chan_opt;
