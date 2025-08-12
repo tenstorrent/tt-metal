@@ -37,9 +37,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
           BroadcastType::NONE,
           false /*is_int_en*/,
           true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
-#ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<false /*untilize*/, false /*skip_inputs*/, true /*tilize en*/>(ocb)));
-#endif
 }
 
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
