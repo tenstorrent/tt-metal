@@ -15,7 +15,9 @@
 namespace tt {
 
 namespace tt_metal {
-static constexpr uint32_t max_num_cb_pages = (1 << 16) - 1;
+// We use 16 bits to store tiles_received and tiles_acked.
+static constexpr uint32_t cb_page_count_bits = 16;
+static constexpr uint32_t max_num_cb_pages = (1 << cb_page_count_bits) - 1;
 
 // Dynamic CBs will be created with address_ initialized to globally allocated address
 // Static CBs will not have address set until their owning Program allocates them
