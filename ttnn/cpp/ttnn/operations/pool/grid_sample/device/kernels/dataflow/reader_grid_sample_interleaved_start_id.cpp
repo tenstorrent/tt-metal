@@ -38,23 +38,17 @@ void kernel_main() {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t grid_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(2);
-    constexpr bool src_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool grid_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(5);
-    constexpr bool input_size_is_power_of_two = get_compile_time_arg_val(6) == 1;
-    constexpr uint32_t input_log2_size = get_compile_time_arg_val(7);
-    constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(8);
-    constexpr bool grid_size_is_power_of_two = get_compile_time_arg_val(9) == 1;
-    constexpr uint32_t grid_log2_size = get_compile_time_arg_val(10);
-    constexpr uint32_t input_height = get_compile_time_arg_val(11);
-    constexpr uint32_t input_width = get_compile_time_arg_val(12);
-    constexpr uint32_t output_hw_size = get_compile_time_arg_val(13);
+    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(3);
+    constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(4);
+    constexpr uint32_t input_height = get_compile_time_arg_val(5);
+    constexpr uint32_t input_width = get_compile_time_arg_val(6);
+    constexpr uint32_t output_hw_size = get_compile_time_arg_val(7);
 
-    const auto s0 =
-        get_interleaved_addr_gen<grid_is_dram, grid_size_is_power_of_two>(grid_addr, grid_stick_nbytes, grid_log2_size);
+    constexpr auto src_args = TensorAccessorArgs<8>();
+    constexpr auto grid_args = TensorAccessorArgs<9>();
 
-    const auto s1 = get_interleaved_addr_gen<src_is_dram, input_size_is_power_of_two>(
-        input_addr, input_stick_nbytes, input_log2_size);
+    const auto s0 = TensorAccessor(grid_args, grid_addr, grid_stick_nbytes);
+    const auto s1 = TensorAccessor(src_args, input_addr, input_stick_nbytes);
 
     const uint32_t end_id = start_page_id + num_pages;
 
@@ -71,7 +65,7 @@ void kernel_main() {
 
     for (uint32_t i = start_page_id; i < end_id; ++i) {
         uint32_t l1_write_grid_addr = get_write_ptr(grid_cb_index);
-        uint64_t grid_noc_addr = get_noc_addr(i, s0);
+        uint64_t grid_noc_addr = s0.get_noc_addr(i);
 
         noc_async_read(grid_noc_addr, l1_write_grid_addr, grid_stick_nbytes);
         noc_async_read_barrier();
@@ -108,28 +102,28 @@ void kernel_main() {
 
         if (h0_valid && w0_valid) {
             uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
-            dram_read_addr = get_noc_addr(north_west_stick_index, s1);
+            dram_read_addr = s1.get_noc_addr(north_west_stick_index);
             noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
         }
         l1_write_input_addr += input_stick_nbytes;
 
         if (h0_valid && w1_valid) {
             uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
-            dram_read_addr = get_noc_addr(north_east_stick_index, s1);
+            dram_read_addr = s1.get_noc_addr(north_east_stick_index);
             noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
         }
         l1_write_input_addr += input_stick_nbytes;
 
         if (h1_valid && w0_valid) {
             uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
-            dram_read_addr = get_noc_addr(south_west_stick_index, s1);
+            dram_read_addr = s1.get_noc_addr(south_west_stick_index);
             noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
         }
         l1_write_input_addr += input_stick_nbytes;
 
         if (h1_valid && w1_valid) {
             uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
-            dram_read_addr = get_noc_addr(south_east_stick_index, s1);
+            dram_read_addr = s1.get_noc_addr(south_east_stick_index);
             noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
         }
 

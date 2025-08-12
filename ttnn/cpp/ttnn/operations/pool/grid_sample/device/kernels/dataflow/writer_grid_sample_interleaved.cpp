@@ -11,14 +11,12 @@ void kernel_main() {
     uint32_t start_stick_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t output_stick_size = get_compile_time_arg_val(2);
-    constexpr bool dst_stick_size_is_pow2 = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t dst_log_base_2_of_stick_size = get_compile_time_arg_val(4);
-    constexpr uint32_t ntiles_c = get_compile_time_arg_val(5);
+    constexpr uint32_t output_stick_size = get_compile_time_arg_val(1);
+    constexpr uint32_t ntiles_c = get_compile_time_arg_val(2);
 
-    const auto s0 = get_interleaved_addr_gen<dst0_is_dram, dst_stick_size_is_pow2>(
-        dst_addr, output_stick_size, dst_log_base_2_of_stick_size);
+    constexpr auto dst_args = TensorAccessorArgs<3>();
+
+    const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
 
     uint32_t end_stick_id = start_stick_id + num_sticks_to_write;
 
@@ -34,7 +32,7 @@ void kernel_main() {
 
             // For row major grid sample output, we write one complete stick
 
-            uint64_t dst_noc_addr = get_noc_addr(stick_id, s0);
+            uint64_t dst_noc_addr = s0.get_noc_addr(stick_id);
 
             // Write the complete stick (ntiles_c * TILE_WIDTH elements)
             // The data is already laid out correctly in the CB pages
