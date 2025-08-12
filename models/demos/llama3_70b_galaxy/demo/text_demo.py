@@ -459,7 +459,7 @@ def create_tt_model(
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
-        "evals-long-prompts",  # Single user, 12 repeated batches, very long prompts (4K ~ 128K)
+        "evals-long-prompts",  # Single user, 12 repeated batches, very long prompts (4K ~ 64K)
         "repeat2",  # latency with 2 repeat batches
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user

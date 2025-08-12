@@ -70,7 +70,7 @@ run_tg_llama3_evals_tests() {
   for llama_dir in "$llama70b"; do
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-1" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32" --timeout 1000; fail+=$?;
-    # LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-long-prompts" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-long-prompts" --timeout 1000; fail+=$?;
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
