@@ -1520,7 +1520,6 @@ void RunTest2DMCastEWConnAPI(
         time_seed,
         ew_dim,
         src_fabric_node_id.chip_id,
-        east_fabric_node_id.chip_id,
         *mesh_id.value(),
         trunk_hops,
         (branch_west_hops << 16) | branch_east_hops,
@@ -1532,7 +1531,6 @@ void RunTest2DMCastEWConnAPI(
     link_idx = get_forwarding_link_indices(src_fabric_node_id, east_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, east_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-    sender_runtime_args.push_back(west_fabric_node_id.chip_id);
     sender_runtime_args.push_back(trunk_hops);
     sender_runtime_args.push_back((branch_west_hops << 16) | branch_east_hops);
 
@@ -1866,7 +1864,6 @@ void RunTest2DMCastEWMirrorConnAPI(
         time_seed,
         ew_dim,
         src_fabric_node_id.chip_id,
-        east_fabric_node_id.chip_id,
         *mesh_id.value(),
         trunk_hops,
         (branch_west_hops << 16) | branch_east_hops,
@@ -1888,7 +1885,6 @@ void RunTest2DMCastEWMirrorConnAPI(
     link_idx = get_forwarding_link_indices(src_fabric_node_id, true_east_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, true_east_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-    sender_runtime_args.push_back(true_west_fabric_node_id.chip_id);
     sender_runtime_args.push_back(trunk_hops);
     sender_runtime_args.push_back((branch_west_hops << 16) | branch_east_hops);
 
@@ -2061,24 +2057,47 @@ void RunTestTrue2DMCastConnAPI(
     uint32_t ew_dim = mesh_shape[1];
     auto north_offset = -1;
     auto south_offset = 1;
-    auto north_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][north_branch_east_hops - 1];
-    north_east_fabric_node_id.chip_id += north_offset * ew_dim;
-    auto right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_east_fabric_node_id);
-    auto north_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][north_branch_west_hops - 1];
-    north_west_fabric_node_id.chip_id += north_offset * ew_dim;
-    auto left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_west_fabric_node_id);
+    auto north_east_fabric_node_id = src_fabric_node_id;
+    auto north_west_fabric_node_id = src_fabric_node_id;
+    auto right_recv_phys_chip_id = src_phys_chip_id;
+    auto left_recv_phys_chip_id = src_phys_chip_id;
+    auto south_east_fabric_node_id = src_fabric_node_id;
+    auto south_west_fabric_node_id = src_fabric_node_id;
     auto right_fabric_node_id = src_fabric_node_id;
     auto left_fabric_node_id = src_fabric_node_id;
+
+    if(south_hops > 0){
+        if(south_branch_east_hops > 0){
+            south_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][south_branch_east_hops - 1];
+            south_east_fabric_node_id.chip_id += south_offset * ew_dim;
+            right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(south_east_fabric_node_id);
+        }
+        if(south_branch_west_hops > 0){
+            south_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][south_branch_west_hops - 1];
+            south_west_fabric_node_id.chip_id += south_offset * ew_dim;
+            left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(south_west_fabric_node_id);
+        }
+    }
+    if(north_hops > 0){
+        if(north_branch_east_hops > 0){
+            north_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][north_branch_east_hops - 1];
+            north_east_fabric_node_id.chip_id += north_offset * ew_dim;
+            right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_east_fabric_node_id);
+        }
+        if(north_branch_west_hops > 0){
+            north_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][north_branch_west_hops - 1];
+            north_west_fabric_node_id.chip_id += north_offset * ew_dim;
+            left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_west_fabric_node_id);
+        }
+    }
+
     if(direct_right_hops > 0){
         right_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][direct_right_hops - 1];
     }
     if(direct_left_hops > 0){
         left_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][direct_left_hops - 1];
     }
-    auto south_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][south_branch_east_hops - 1];
-    auto south_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][south_branch_west_hops - 1];
-    south_east_fabric_node_id.chip_id += south_offset * ew_dim;
-    south_west_fabric_node_id.chip_id += south_offset * ew_dim;
+
     std::vector<uint32_t> rx_physical_device_ids;
     for(size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::E].size(); i++){
         if(i < direct_right_hops){
@@ -2200,15 +2219,30 @@ void RunTestTrue2DMCastConnAPI(
     auto arbitrary_fabric_node_id = src_fabric_node_id;
     if(north_hops > 0 && south_hops > 0){
         mcast_mode = 3;
-        arbitrary_fabric_node_id = north_east_fabric_node_id;
+        if(north_branch_east_hops > 0){
+            arbitrary_fabric_node_id = north_east_fabric_node_id;
+        }
+        else{
+            arbitrary_fabric_node_id = north_west_fabric_node_id;
+        }
     }
     else if(south_hops > 0){
         mcast_mode = 2;
-        arbitrary_fabric_node_id = south_west_fabric_node_id;
+        if(south_branch_west_hops > 0){
+            arbitrary_fabric_node_id = south_west_fabric_node_id;
+        }
+        else{
+            arbitrary_fabric_node_id = south_east_fabric_node_id;
+        }
     }
     else{
         mcast_mode = 1;
-        arbitrary_fabric_node_id = north_east_fabric_node_id;
+        if(north_branch_east_hops > 0){
+            arbitrary_fabric_node_id = north_east_fabric_node_id;
+        }
+        else{
+            arbitrary_fabric_node_id = north_west_fabric_node_id;
+        }
     }
     // common compile time args for sender and receiver
     std::vector<uint32_t> compile_time_args = {
@@ -2244,7 +2278,6 @@ void RunTestTrue2DMCastConnAPI(
         time_seed,
         ew_dim,
         src_fabric_node_id.chip_id,
-        north_east_fabric_node_id.chip_id,
         *mesh_id.value(),
         north_hops,
         (north_branch_west_hops << 16) | north_branch_east_hops,
@@ -2252,18 +2285,43 @@ void RunTestTrue2DMCastConnAPI(
 
     // append the EDM connection rt args for fwd connection
     uint32_t link_idx;
-
-    link_idx = get_forwarding_link_indices(src_fabric_node_id, north_east_fabric_node_id)[0];
+    if(north_hops > 0){
+        if(north_branch_east_hops > 0){
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_east_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, north_east_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-    sender_runtime_args.push_back(south_west_fabric_node_id.chip_id);
+        }
+        else{
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_west_fabric_node_id)[0];
+            append_fabric_connection_rt_args(
+                src_fabric_node_id, north_west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        }    
+    }
+    else{
+        link_idx = 0;
+        append_fabric_connection_rt_args(
+            src_fabric_node_id, arbitrary_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    }
     sender_runtime_args.push_back(south_hops);
     sender_runtime_args.push_back((south_branch_west_hops << 16) | south_branch_east_hops);
 
-    link_idx = get_forwarding_link_indices(src_fabric_node_id, south_west_fabric_node_id)[0];
-    append_fabric_connection_rt_args(
-        src_fabric_node_id, south_west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-
+    if(south_hops > 0){
+        if(south_branch_west_hops > 0){
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_west_fabric_node_id)[0];
+        append_fabric_connection_rt_args(
+            src_fabric_node_id, south_west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        }
+        else{
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_east_fabric_node_id)[0];
+            append_fabric_connection_rt_args(
+                src_fabric_node_id, south_east_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        }
+    }
+    else{
+        link_idx = 0;
+        append_fabric_connection_rt_args(
+            src_fabric_node_id, arbitrary_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    }
     sender_runtime_args.push_back(left_fabric_node_id.chip_id);
     sender_runtime_args.push_back(right_fabric_node_id.chip_id);
     sender_runtime_args.push_back((direct_left_hops << 16) | direct_right_hops);

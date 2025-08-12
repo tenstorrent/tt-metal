@@ -343,6 +343,32 @@ TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_R){
 TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_L){
     RunTestTrue2DMCastConnAPI(this, 1, 1, 1, 2, 2, 1, 0, 1);
 }
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_N){
+    RunTestTrue2DMCastConnAPI(this, 1, 1, 1, 0, 0, 0, 0, 0);
+}
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_S){
+    RunTestTrue2DMCastConnAPI(this, 0, 0, 0, 1, 1, 1, 0, 0);
+}
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_BigS){
+    RunTestTrue2DMCastConnAPI(this, 0, 0, 0, 3, 3, 4, 3, 4);
+}
+
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_NorthWestCorner){
+    RunTestTrue2DMCastConnAPI(this, 0, 0, 0, 1, 1, 0, 1, 0);
+}
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_NorthEastCorner){
+    RunTestTrue2DMCastConnAPI(this, 0, 0, 0, 1, 0, 1, 1, 0);
+}
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_SouthWestCorner){
+    RunTestTrue2DMCastConnAPI(this, 1, 1, 0, 0, 0, 0, 1, 0);
+}
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_SouthEastCorner){
+    RunTestTrue2DMCastConnAPI(this, 1, 0, 1, 0, 0, 0, 0, 1);
+}
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_OneToAllCorner){
+    RunTestTrue2DMCastConnAPI(this, 0, 0, 0, 3, 7, 0, 7, 0);
+}
+
 // 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
 

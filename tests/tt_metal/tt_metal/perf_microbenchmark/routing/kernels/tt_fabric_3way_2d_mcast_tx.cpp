@@ -98,7 +98,6 @@ void kernel_main() {
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t ew_dim = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t fwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t north_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t north_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
@@ -106,7 +105,6 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender north_trunk_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    uint32_t bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t south_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t south_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
 
