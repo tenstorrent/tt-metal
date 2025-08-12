@@ -91,12 +91,12 @@ pytest --disable-warnings models/demos/segformer/tests/perf/test_e2e_performant.
 #### Single Device (BS=1):
 - Use the following command to run the performant data evaluation with Trace+2CQs:
   ```
-  pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval
+  pytest --disable-warnings models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval
 
 #### Multi Device (DP=2, n300):
 - Use the following command to run the performant data evaluation with Trace+2CQs:
   ```
-  pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp
+  pytest --disable-warnings models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp
   ```
 
 ## Details

@@ -7,7 +7,7 @@
 | Model        | Resolution | Batch Size | Samples | TTNN Accuracy | Torch Accuracy |
 |--------------|------------|------------|---------|-------------------------------|-------------------------------|
 | ViT          | (224, 224) | 8          | 512     | 81.25%               | 82.23%                 |
-| ResNet50     | (224, 224) | 16         | 512     | 78.52%                 | 75.59%                |
+| ResNet50     | (224, 224) | 16         | 512     | 71.68%                 | 75.59%                |
 | MobileNetV2  | (224, 224) | 10          | 512     | 68.36%                 | 70.62%                 |
 
 ***Note:*** The accuracy is for the selected random samples from the validation dataset.

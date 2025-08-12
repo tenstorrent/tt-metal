@@ -68,7 +68,7 @@ Note: To test the demo with your own images, replace images with `models/demos/y
 ### Performant evaluation with Trace+2CQ
 - Use the following command to run the performant evaluation with Trace+2CQs:
   ```
-  pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-tt_model]
+  pytest models/demos/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-tt_model]
   ```
 Note: The model is evaluated with 500 samples.
 

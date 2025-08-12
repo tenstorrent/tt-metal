@@ -51,17 +51,17 @@ run_qwen25_vl_func() {
 
 run_segformer_func() {
   #Segformer Segmentation Demo
-  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation_dp; fail+=$?
+  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py; fail+=$?
 
   #Segformer Classification Demo
-  pytest models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo_dp; fail+=$?
+  pytest models/demos/segformer/demo/demo_for_image_classification.py; fail+=$?
 
 }
 
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  pytest models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference_dp; fail+=$?
+  pytest models/demos/sentence_bert/demo/demo.py; fail+=$?
 
 }
 
@@ -274,7 +274,7 @@ run_yolov8s_perf() {
 run_mobilenetv2_perf(){
 
 #  mobilenetv2 demo
- pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp; fail+=$?
+ pytest models/demos/mobilenetv2/demo/demo.py; fail+=$?
 
 
 }
@@ -290,7 +290,7 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- pytest models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image; fail+=$?
+ pytest models/demos/vanilla_unet/demo/demo.py; fail+=$?
 
 }
 
@@ -311,8 +311,8 @@ run_yolov8x_perf() {
 }
 run_yolov4_perf() {
   #yolov4 demo
-  pytest models/demos/yolov4/demo.py::test_yolov4; fail+=$?
-  pytest models/demos/yolov4/demo.py::test_yolov4_dp; fail+=$?
+  pytest models/demos/yolov4/demo.py; fail+=$?
+  pytest models/demos/yolov4/demo.py; fail+=$?
 
 }
 
@@ -338,7 +338,7 @@ run_yolov6l_demo() {
 
 run_vgg_unet_demo() {
  # vgg_unet demo
-  pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp; fail+=$?
+  pytest models/demos/vgg_unet/demo/demo.py; fail+=$?
 
 
 }

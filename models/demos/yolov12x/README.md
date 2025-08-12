@@ -91,3 +91,13 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
   ```
   pytest --disable-warnings models/demos/yolov12x/demo/demo.py::test_demo_dataset_dp
   ```
+
+
+### Performant evaluation with Trace+2CQ
+
+- Use the following command to run the performant evaluation with Trace+2CQs:
+
+  ```
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov12x[device_params0-tt_model]
+  ```
+Note: The model is evaluated with 500 samples.

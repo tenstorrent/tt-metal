@@ -78,13 +78,13 @@ To run the test of ttnn vs ground truth, please follow the following commands:
  **YoloV12x:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov12x[device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov12x[device_params0-tt_model]
  ```
 
 **YoloV6l:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov6l[res0-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov6l[res0-device_params0-tt_model]
  ```
 
 ### The below observations are for torch_model vs dataset(ground truth data):
@@ -160,11 +160,11 @@ pytest models/demos/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution1-1-ac
 **YoloV12x:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov12x[device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov12x[device_params0-torch_model]
  ```
 
 **YoloV6l:** <br>
 **_For 640x640,_**<br>
  ```sh
- pytest models/experimental/yolo_eval/evaluate.py::test_yolov6l[res0-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov6l[res0-device_params0-torch_model]
  ```

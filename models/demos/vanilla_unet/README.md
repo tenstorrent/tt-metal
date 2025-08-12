@@ -56,11 +56,11 @@ Output images will be saved in the `models/demos/vanilla_unet/demo/pred_image_se
 To run the test of ttnn vs ground truth & torch vs ground truth, please follow the following command,
 
 ```sh
-pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet
+pytest --disable-warnings models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet
 ```
 
 Note: If vanilla unet evaluation test fails with the error: `ValueError: Sample larger than population or is negative`
-Try deleting the "imageset" folder in "models/experimental/segmentation_evaluation" directory and try running again.
+Try deleting the "imageset" folder in "models/demos/segmentation_evaluation" directory and try running again.
 
 
 ### Details
