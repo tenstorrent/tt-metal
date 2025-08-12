@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * mock_telemetry_provider.hpp
+ * server/mock_telemetry_provider.hpp
  *
  * Generates fake telemetry. Useful for testing.
  *

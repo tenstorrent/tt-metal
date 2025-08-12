@@ -35,6 +35,7 @@ target_sources(
     tt_telemetry_server
     PRIVATE
         server/main.cpp
+        server/telemetry_provider.cpp
         server/web_server.cpp
         telemetry/chip_identifier.cpp
         telemetry/ethernet_endpoint.cpp

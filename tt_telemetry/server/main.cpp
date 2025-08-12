@@ -37,6 +37,7 @@
 #include <telemetry/ethernet_helpers.hpp>
 #include <telemetry/print_helpers.hpp>
 #include <server/mock_telemetry_provider.hpp>
+#include <server/telemetry_provider.hpp>
 #include <server/web_server.hpp>
 
 
@@ -105,7 +106,11 @@ int main() {
     std::tie(web_server2, web_server2_subscriber) = run_web_server(8086);
 
     // Fake telemetry
-    MockTelemetryProvider mock_telemetry{web_server_subscriber, web_server2_subscriber};
+    //TODO: make command line option for testing?
+    //MockTelemetryProvider mock_telemetry{web_server_subscriber, web_server2_subscriber};
+
+    // Telemetry
+    run_telemetry_provider({ web_server_subscriber, web_server2_subscriber });
     
     // Run until finished
     bool web_server_succeeded = web_server.get();

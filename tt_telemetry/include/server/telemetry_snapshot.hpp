@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * telemetry_snapshot.hpp
+ * server/telemetry_snapshot.hpp
  *
  * Snapshot of telemetry data. Supports both deltas and absolute snapshots. This is serialized
  * directly to JSON and sent to web clients.

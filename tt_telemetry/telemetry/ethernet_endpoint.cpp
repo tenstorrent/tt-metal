@@ -20,6 +20,12 @@ bool EthernetEndpoint::operator==(const EthernetEndpoint &other) const {
     return chip == other.chip && ethernet_core == other.ethernet_core && channel == other.channel;
 }
 
+std::vector<std::string> EthernetEndpoint::telemetry_path() const {
+    auto path = chip.telemetry_path();
+    path.push_back("channel" + std::to_string(channel));
+    return path;
+}
+
 // Static because CoreCoord is defined outside of tt-telemetry and this should be included there
 static std::ostream &operator<<(std::ostream &os, const CoreCoord &core) {
     os << core.str();

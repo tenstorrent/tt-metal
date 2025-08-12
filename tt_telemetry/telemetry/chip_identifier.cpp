@@ -26,6 +26,15 @@ bool ChipIdentifier::operator==(const ChipIdentifier &other) const {
     return id == other.id && galaxy_ubb == other.galaxy_ubb;
 }
 
+std::vector<std::string> ChipIdentifier::telemetry_path() const {
+    if (galaxy_ubb.has_value()) {
+        auto tray_id = galaxy_ubb.value().tray_id;
+        auto asic_id = galaxy_ubb.value().asic_id;
+        return { "tray" + std::to_string(tray_id), "n" + std::to_string(asic_id) };
+    }
+    return { "chip" + std::to_string(id) };
+}
+
 std::ostream &operator<<(std::ostream &os, const ChipIdentifier &chip) {
     if (chip.galaxy_ubb.has_value()) {
         os << "Tray " << chip.galaxy_ubb.value().tray_id << ", N" << chip.galaxy_ubb.value().asic_id << " (Chip " << chip.id << ')';

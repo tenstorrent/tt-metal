@@ -21,6 +21,8 @@
 
     bool operator<(const EthernetEndpoint &other) const;
     bool operator==(const EthernetEndpoint &other) const;
+
+    std::vector<std::string> telemetry_path() const;
 };
 
 std::ostream &operator<<(std::ostream &os, const EthernetEndpoint &ep);
