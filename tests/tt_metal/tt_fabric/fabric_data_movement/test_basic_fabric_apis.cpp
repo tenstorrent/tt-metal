@@ -324,6 +324,16 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastEWMirrorConnAPI_Mirror){
 TEST_F(NightlyFabric2DFixture, Test2DMCastEWMirrorConnAPI_OneToAll){
     RunTest2DMCastEWMirrorConnAPI(this, RoutingDirection::N, 1, 2, 1, 2, 1, true);
 }
+
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_Basic){
+    RunTestTrue2DMCastConnAPI(this, 1, 1, 1, 1, 1, 1, 1, 1);
+}
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_OneToMany){
+    RunTestTrue2DMCastConnAPI(this, 2, 1, 2, 1, 1, 2, 1, 2);
+}
+TEST_F(NightlyFabric2DFixture, TestTrue2DMCastConnAPI_OneToAll){
+    RunTestTrue2DMCastConnAPI(this, 2, 3, 4, 1, 3, 4, 3, 4);
+}
 // 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
 
