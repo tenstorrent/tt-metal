@@ -13,12 +13,12 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("mkn", [(32, 128, 512)])
-@pytest.mark.parametrize("num_experts", [8])
-@pytest.mark.parametrize("num_tokens", [(1, 4)])
-@pytest.mark.parametrize("tile_h", [16])
+@pytest.mark.parametrize("mkn", [(1, 2880, 1440)])
+@pytest.mark.parametrize("num_experts", [32])
+@pytest.mark.parametrize("num_tokens", [(1, 1)])
+@pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
 def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype):
     torch.manual_seed(0)
     m, k, n = mkn
@@ -31,7 +31,7 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
 
     # Mark some as 0 to test the sparsity
     sparsity[(sparsity == 0)] = 0.1  # First make sure there are no zeros
-    number_of_zeros = random.randint(0, sparsity.numel() - 1)
+    number_of_zeros = 28
     zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
     sparsity.view(-1)[zero_indices] = 0.0
 
@@ -67,6 +67,7 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
     )
 
     output_tile = ttnn.Tile([tile_h, tile_w])
+    breakpoint()
     output_t = ttnn.sparse_matmul(
         in0_t,
         in1_t,

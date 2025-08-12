@@ -1431,7 +1431,8 @@ std::vector<Tensor> matmul_batched_weights(
         queue_id);
 }
 
-ttnn::Shape compute_sparse_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+ttnn::Shape compute_sparse_matmul_output_shape(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool batched_input_a) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
     const auto& input_shape_b = input_tensor_b.logical_shape();
 
@@ -1441,7 +1442,7 @@ ttnn::Shape compute_sparse_matmul_output_shape(const Tensor& input_tensor_a, con
     // Decide the rank of the output shape based on batch dimensions in input tensors
     // Find batched dimensions in both. Add batched dimensions from both to output rank and then add 2
     // Batched dimensions are all dimensions except the last two
-    uint32_t a_batched_dims = (a_rank > 2) ? (a_rank - 2) : 0;
+    uint32_t a_batched_dims = (batched_input_a || (a_rank <= 2)) ? 0 : (a_rank - 2);
     uint32_t b_batched_dims = (b_rank > 2) ? (b_rank - 2) : 0;
     uint32_t output_rank = a_batched_dims + b_batched_dims + 2;
 
@@ -1491,6 +1492,7 @@ SparseMatmul create_sparse_matmul_struct(
         create_matmul_struct(input_tensor_a, input_tensor_b, matmul_parameters, {optional_output_tensors.at(0)});
     return SparseMatmul{
         parameters.nnz,
+        parameters.batched_input_a,
         matmul_struct.program_config,
         matmul_struct.output_mem_config,
         matmul_struct.output_dtype,
@@ -2679,7 +2681,7 @@ void SparseMatmul::validate(
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length = 1;
-    if (ashape.rank() > 2) {
+    if ((!this->batched_input_a) && ashape.rank() > 2) {
         for (int i = 0; i < ashape.rank() - 2; ++i) {
             batch_length *= ashape[i];
         }
@@ -2719,7 +2721,7 @@ std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    const auto output_shape = compute_sparse_matmul_output_shape(input_tensor_a, input_tensor_b);
+    const auto output_shape = compute_sparse_matmul_output_shape(input_tensor_a, input_tensor_b, this->batched_input_a);
 
     const auto output_dtype = this->output_dtype.has_value() ? this->output_dtype.value() : input_tensor_a.dtype();
 
@@ -2775,6 +2777,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
                     input_tensor_b,
                     sparsity,
                     this->nnz,
+                    this->batched_input_a,
                     output_tensor,
                     program_config.compute_with_storage_grid_size,
                     this->compute_kernel_config.value(),

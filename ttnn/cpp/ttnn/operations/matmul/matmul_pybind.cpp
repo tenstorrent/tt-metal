@@ -646,6 +646,7 @@ void py_module(py::module& module) {
         Keyword Args:
             sparsity (ttnn.Tensor): the sparsity tensor containing the scale factor for each token for each expert. Needs to be on the device.
             nnz (int): the number of non-zero values in the sparsity tensor.
+            batched_input_a (bool): whether input_tensor_a is batched. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
@@ -681,6 +682,7 @@ void py_module(py::module& module) {
                const ttnn::Tensor& input_tensor_b,
                const ttnn::Tensor& sparsity,
                uint32_t nnz,
+               const bool batched_input_a,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
@@ -695,6 +697,7 @@ void py_module(py::module& module) {
                     input_tensor_b,
                     sparsity,
                     nnz,
+                    batched_input_a,
                     memory_config,
                     dtype,
                     program_config,
@@ -710,6 +713,7 @@ void py_module(py::module& module) {
             py::kw_only(),
             py::arg("sparsity"),
             py::arg("nnz"),
+            py::arg("batched_input_a") = false,
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("program_config") = std::nullopt,

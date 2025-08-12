@@ -404,6 +404,7 @@ Tensor SparseMatmulOperation::invoke(
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
     uint32_t nnz,
+    bool batched_input_a,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
@@ -421,6 +422,7 @@ Tensor SparseMatmulOperation::invoke(
         sparsity,
         SparseMatmul{
             nnz,
+            batched_input_a,
             program_config,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
             dtype,
