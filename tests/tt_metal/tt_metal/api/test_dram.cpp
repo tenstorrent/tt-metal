@@ -284,7 +284,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
     }
 }
 
-TEST_F(MeshDispatchFixture, DISABLED_ActiveEthDRAMLoopbackSingleCore) {
+TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {
@@ -312,7 +312,7 @@ TEST_F(MeshDispatchFixture, DISABLED_ActiveEthDRAMLoopbackSingleCore) {
     }
 }
 
-TEST_F(MeshDispatchFixture, DISABLED_IdleEthDRAMLoopbackSingleCore) {
+TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {
