@@ -18,7 +18,6 @@ def get_mesh_device_core_grid(mesh_device):
 MeshDevice = ttnn._ttnn.multi_device.MeshDevice
 MeshDevice.core_grid = property(get_mesh_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
-SystemMeshDescriptor = ttnn._ttnn.multi_device.SystemMeshDescriptor
 
 
 def _get_rich_table(
@@ -161,7 +160,7 @@ def visualize_system_mesh():
     from loguru import logger
 
     try:
-        system_mesh_desc = SystemMeshDescriptor()
+        system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
         global_shape = system_mesh_desc.shape()
         local_shape = system_mesh_desc.local_shape()
     except Exception as e:
@@ -188,7 +187,7 @@ def create_system_mesh_table():
     CELL_SIZE = 30
 
     try:
-        system_mesh_desc = SystemMeshDescriptor()
+        system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
 
         # TODO: Remove shape indexing workaround after exposing subscripts in pybind11
         global_shape = tuple(system_mesh_desc.shape())
@@ -250,8 +249,7 @@ def create_system_mesh_table():
 
 
 def get_num_devices() -> List[int]:
-    system_mesh_desc = SystemMeshDescriptor()
-    return system_mesh_desc.shape().mesh_size()
+    return ttnn._ttnn.device.GetNumAvailableDevices()
 
 
 def get_num_pcie_devices() -> int:

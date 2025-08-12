@@ -111,7 +111,6 @@ from ttnn._ttnn.multi_device import (
     create_mesh_composer,
     aggregate_tensor,
     distribute_tensor,
-    using_distributed_env,
 )
 
 from ttnn._ttnn.events import (

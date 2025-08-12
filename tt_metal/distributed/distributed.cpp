@@ -96,9 +96,4 @@ void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_devi
     mesh_cq.finish(sub_device_ids);
 }
 
-bool UsingDistributedEnvironment() {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    return distributed_context.is_initialized() && *(distributed_context.size()) > 1;
-}
-
 }  // namespace tt::tt_metal::distributed

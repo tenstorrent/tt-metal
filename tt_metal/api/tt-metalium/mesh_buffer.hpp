@@ -130,7 +130,7 @@ private:
         DeviceAddr device_local_size,
         MeshDevice* mesh_device,
         std::shared_ptr<Buffer> backing_buffer) :
-        buffers_(MeshShape(mesh_device->shape())),
+        buffers_(MeshShape(mesh_device->shape()), nullptr),
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device->shared_from_this()),
@@ -145,7 +145,7 @@ private:
         DeviceAddr address,
         DeviceAddr device_local_size,
         MeshDevice* mesh_device) :
-        buffers_(MeshShape(mesh_device->shape())),
+        buffers_(MeshShape(mesh_device->shape()), /*fill_value=*/nullptr),
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device->shared_from_this()),
@@ -160,7 +160,7 @@ private:
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 
-    DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
+    MeshContainer<std::shared_ptr<Buffer>> buffers_;
 
     // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
     // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.
