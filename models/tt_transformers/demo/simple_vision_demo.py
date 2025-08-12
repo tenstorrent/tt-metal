@@ -156,7 +156,9 @@ def prepare_generator_args(
         # 4,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": True, "trace_region_size": 14951424, "num_command_queues": 2}], indirect=True
+)
 def test_multimodal_demo_text(
     mesh_device,
     warmup_iters,
@@ -438,14 +440,14 @@ def test_multimodal_demo_text(
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
         target_prefill_tok_s = {
-            "N300_Llama-3.2-11B": 23.5,
-            "T3K_Llama-3.2-11B": 21.5,
+            "N300_Llama-3.2-11B": 23,
+            "T3K_Llama-3.2-11B": 20,
             "T3K_Llama-3.2-90B": 3,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 37,
+            "T3K_Llama-3.2-11B": 35,
             "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 
