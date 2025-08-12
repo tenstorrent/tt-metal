@@ -2067,8 +2067,14 @@ void RunTestTrue2DMCastConnAPI(
     auto north_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][north_branch_west_hops - 1];
     north_west_fabric_node_id.chip_id += north_offset * ew_dim;
     auto left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_west_fabric_node_id);
-    auto right_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][direct_right_hops - 1];
-    auto left_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][direct_left_hops - 1];
+    auto right_fabric_node_id = src_fabric_node_id;
+    auto left_fabric_node_id = src_fabric_node_id;
+    if(direct_right_hops > 0){
+        right_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][direct_right_hops - 1];
+    }
+    if(direct_left_hops > 0){
+        left_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][direct_left_hops - 1];
+    }
     auto south_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][south_branch_east_hops - 1];
     auto south_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][south_branch_west_hops - 1];
     south_east_fabric_node_id.chip_id += south_offset * ew_dim;
@@ -2191,14 +2197,18 @@ void RunTestTrue2DMCastConnAPI(
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     uint32_t mcast_mode;
+    auto arbitrary_fabric_node_id = src_fabric_node_id;
     if(north_hops > 0 && south_hops > 0){
         mcast_mode = 3;
+        arbitrary_fabric_node_id = north_east_fabric_node_id;
     }
     else if(south_hops > 0){
         mcast_mode = 2;
+        arbitrary_fabric_node_id = south_west_fabric_node_id;
     }
     else{
         mcast_mode = 1;
+        arbitrary_fabric_node_id = north_east_fabric_node_id;
     }
     // common compile time args for sender and receiver
     std::vector<uint32_t> compile_time_args = {
@@ -2257,14 +2267,27 @@ void RunTestTrue2DMCastConnAPI(
     sender_runtime_args.push_back(left_fabric_node_id.chip_id);
     sender_runtime_args.push_back(right_fabric_node_id.chip_id);
     sender_runtime_args.push_back((direct_left_hops << 16) | direct_right_hops);
-
-    link_idx = get_forwarding_link_indices(src_fabric_node_id, left_fabric_node_id)[0];
-    append_fabric_connection_rt_args(
+    if(direct_left_hops > 0){
+        link_idx = get_forwarding_link_indices(src_fabric_node_id, left_fabric_node_id)[0];
+        append_fabric_connection_rt_args(
         src_fabric_node_id, left_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-
-    link_idx = get_forwarding_link_indices(src_fabric_node_id, right_fabric_node_id)[0];
-    append_fabric_connection_rt_args(
+    }
+    else{
+        link_idx = 0;
+        append_fabric_connection_rt_args(
+        src_fabric_node_id, arbitrary_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    }
+    if(direct_right_hops > 0){
+        link_idx = get_forwarding_link_indices(src_fabric_node_id, right_fabric_node_id)[0];
+        append_fabric_connection_rt_args(
         src_fabric_node_id, right_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    }
+    else{
+        link_idx = 0;
+        append_fabric_connection_rt_args(
+        src_fabric_node_id, arbitrary_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    }
+    
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
