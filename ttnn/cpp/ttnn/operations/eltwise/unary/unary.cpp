@@ -398,7 +398,12 @@ Tensor Tanhshrink::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::TANHSHRINK;
-    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    if (input_tensor.dtype() == DataType::BFLOAT8_B) {
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    } else {
+        return ttnn::tanhshrink_accurate(queue_id, input_tensor, memory_config, optional_output_tensor);
+    }
 }
 
 Tensor Hardshrink::invoke(

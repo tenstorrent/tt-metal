@@ -775,22 +775,33 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
         (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
     ),
 )
-def test_unary_tanhshrink_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    cq_id = 0
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype, atol",
+    [
+        (torch.float32, ttnn.float32, 0.016),
+        (torch.bfloat16, ttnn.bfloat16, 0.012),
+        (torch.bfloat16, ttnn.bfloat8_b, 0.24),
+    ],
+)
+def test_unary_tanhshrink_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
-    ttnn.tanhshrink(input_tensor1, queue_id=cq_id, output_tensor=output_tensor)
+    output_tensor = ttnn.tanhshrink(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
     golden_tensor = golden_function(in_data1)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
