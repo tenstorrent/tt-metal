@@ -17,6 +17,7 @@ class Attention(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         weight_cache_path,
         layer_num,
@@ -30,6 +31,7 @@ class Attention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.TG = self.num_devices == 32
         self.hidden_size = configuration.dim
@@ -262,6 +264,7 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"]
+                tt_ccl=self.tt_ccl,
             )
             self.q_norm = lambda x, mode: norm_reshard(x, fn_q_norm, mode)
         else:
@@ -281,6 +284,7 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"],
+                tt_ccl=self.tt_ccl,
             )
             self.k_norm = lambda x, mode: norm_reshard(x, fn_k_norm, mode)
         else:
@@ -413,6 +417,7 @@ class Attention(LightweightModule):
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,
+            self.tt_ccl,
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
@@ -539,17 +544,33 @@ class Attention(LightweightModule):
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )
-            _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
+
+            # TODO: #26349
+            # Fused AGMM currently has a PCC bug on small shapes
+            # Using the non-fused version is a temporary workaround
+
+            all_gather_output = ttnn.experimental.all_gather_async(
                 attn_output_cat,
-                self.wo,
+                persistent_output_buffer=None,
                 dim=3,
-                all_gather_core_grid_offset=(0, 4),
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
+                memory_config=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+
+            dense_out_sharded = ttnn.linear(
+                all_gather_output,
+                self.wo,
+                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
                 program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
+
+            ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
@@ -558,6 +579,7 @@ class Attention(LightweightModule):
             attn_output = tt_all_gather(
                 attn_output_cat,
                 self.mesh_device,
+                self.tt_ccl,
                 dim=2,
                 cluster_axis=1,
                 num_links=2,
@@ -594,6 +616,7 @@ class Attention(LightweightModule):
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
                 self.mesh_device,
+                self.tt_ccl,
                 cluster_axis=0,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
@@ -658,6 +681,7 @@ class Attention(LightweightModule):
         xqkv_fused = tt_all_reduce(
             xqkv_fused,
             self.mesh_device,
+            self.tt_ccl,
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
@@ -817,12 +841,18 @@ class Attention(LightweightModule):
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
-            attn_output_11SH = ttnn.all_gather(
+            attn_output_11SH = ttnn.experimental.all_gather_async(
                 attn_output_11SH,
+                persistent_output_buffer=None,
                 dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
 
         output_11SH = ttnn.linear(
@@ -843,6 +873,7 @@ class Attention(LightweightModule):
             output_11SH = tt_all_reduce(
                 output_11SH,
                 self.mesh_device,
+                self.tt_ccl,
                 cluster_axis=0,
                 dim=0 if self.TG else 3,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,

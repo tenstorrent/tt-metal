@@ -13,12 +13,22 @@ from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 class MLP(LightweightModule):
     def __init__(
-        self, mesh_device, args, state_dict, weight_cache_path, layer_num, dtype, model_config, state_dict_prefix=None
+        self,
+        mesh_device,
+        tt_ccl,
+        args,
+        state_dict,
+        weight_cache_path,
+        layer_num,
+        dtype,
+        model_config,
+        state_dict_prefix=None,
     ):
         super().__init__()
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.args = args
         self.dim = args.dim
         self.model_config = model_config
@@ -138,30 +148,44 @@ class MLP(LightweightModule):
             #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
             if self.dim == 8192 or mode == "prefill":
                 input_mem_cfg = w1_out.memory_config()
-                w1_out = ttnn.reduce_scatter(
+
+                cluster_axis = 1
+                w1_out = ttnn.experimental.reduce_scatter_minimal_async(
                     w1_out,
+                    persistent_output_buffers=None,
                     dim=3,
-                    math_op=ttnn.ReduceType.Sum,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                     num_links=self.args.num_reduce_scatter_links,
-                    cluster_axis=1,
-                    mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,
+                    cluster_axis=cluster_axis,
                     memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
+                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Linear,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
                 )
-                w3_out = ttnn.reduce_scatter(
+
+                w3_out = ttnn.experimental.reduce_scatter_minimal_async(
                     w3_out,
+                    persistent_output_buffers=None,
                     dim=3,
-                    math_op=ttnn.ReduceType.Sum,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                     num_links=1,
-                    cluster_axis=1,
-                    mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,
+                    cluster_axis=cluster_axis,
                     memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
+                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Linear,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
                 )
             else:
                 w1_out = tt_all_reduce(
                     w1_out,
                     self.mesh_device,
+                    self.tt_ccl,
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
@@ -171,6 +195,7 @@ class MLP(LightweightModule):
                 w3_out = tt_all_reduce(
                     w3_out,
                     self.mesh_device,
+                    self.tt_ccl,
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
@@ -194,15 +219,22 @@ class MLP(LightweightModule):
         ttnn.deallocate(w1_out)
 
         if TG and (self.dim == 8192 or mode == "prefill"):
-            w2_in = ttnn.all_gather(
+            cluster_axis = 1
+            w2_in = ttnn.experimental.all_gather_async(
                 w2_in,
-                3,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
                 num_links=2,
                 cluster_axis=1,
-                mesh_device=self.mesh_device,
                 topology=ttnn.Topology.Linear,
                 memory_config=input_mem_cfg,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
+
             if mode == "decode":
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
@@ -224,6 +256,7 @@ class MLP(LightweightModule):
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
+            self.tt_ccl,
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,

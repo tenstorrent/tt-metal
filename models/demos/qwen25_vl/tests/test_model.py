@@ -34,6 +34,7 @@ from models.utility_functions import comp_allclose, comp_pcc
     [None, 1, 2],  # None means all layers, specific numbers will run fewer layers
     ids=["all_layers", "single_layer", "two_layers"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_model_inference(
     mesh_device,
     reset_seeds,

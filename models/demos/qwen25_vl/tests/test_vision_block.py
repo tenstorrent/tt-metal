@@ -26,6 +26,7 @@ from models.utility_functions import comp_allclose, comp_pcc
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_block_inference(
     mesh_device,
     reset_seeds,
