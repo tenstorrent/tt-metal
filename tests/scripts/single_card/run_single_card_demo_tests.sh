@@ -63,10 +63,10 @@ run_gemma3_perf() {
 
 run_segformer_func() {
   #Segformer Segmentation Demo
-  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation_dp; fail+=$?
+  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py; fail+=$?
 
   #Segformer Classification Demo
-  pytest models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo_dp; fail+=$?
+  pytest models/demos/segformer/demo/demo_for_image_classification.py; fail+=$?
 
 }
 
@@ -286,7 +286,7 @@ run_yolov8s_perf() {
 run_mobilenetv2_perf(){
 
 #  mobilenetv2 demo
- pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp; fail+=$?
+ pytest models/demos/mobilenetv2/demo/demo.py; fail+=$?
 
 
 }
@@ -321,8 +321,8 @@ run_yolov8x_perf() {
 }
 run_yolov4_perf() {
   #yolov4 demo
-  pytest models/demos/yolov4/demo.py::test_yolov4; fail+=$?
-  pytest models/demos/yolov4/demo.py::test_yolov4_dp; fail+=$?
+  pytest models/demos/yolov4/demo.py; fail+=$?
+  pytest models/demos/yolov4/demo.py; fail+=$?
 
 }
 
@@ -350,7 +350,11 @@ run_vgg_unet_demo() {
  # vgg_unet demo
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
   pytest models/demos/vgg_unet/demo/demo.py
+=======
+  pytest models/demos/vgg_unet/demo/demo.py; fail+=$?
+>>>>>>> da17e21598 ( modify all README eval paths to demos and update classification_eval for mobv2)
 
 =======
   pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp

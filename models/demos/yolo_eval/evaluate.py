@@ -230,10 +230,7 @@ def evaluation(
             im = img.clone()
             img = torch.autograd.Variable(img)
             n, c, h, w = input_shape
-            input_tensor = torch.permute(img, (0, 2, 3, 1))
-            input_tensor = input_tensor.reshape(1, 1, h * w * n, c)
-            ttnn_im = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            ttnn_im = ttnn.pad(ttnn_im, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+            ttnn_im = ttnn.from_torch(img, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         elif model_name in ["YOLOv8s", "YOLOv8s_World", "YOLOv8x", "YOLOv11n", "YOLOv9c", "YOLOv7", "YOLOv6l"]:
             ttnn_im = im.clone()
         else:
@@ -274,7 +271,7 @@ def evaluation(
     for ttnn_im, im, im0s in preprocessed_images:
         if model_type == "torch_model":
             preds = model(im)
-            if model_name in ["YOLOv7", "YOLOv6l"]:
+            if model_name in ["YOLOv7", "YOLOv6l", "YOLOv8s"]:
                 preds = preds[0]
             if model_name == "YOLOv4":
                 from models.demos.yolov4.post_processing import get_region_boxes
@@ -285,7 +282,7 @@ def evaluation(
             if model_name in ["YOLOv11"]:
                 preds = model(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
-            elif model_name in ["YOLOv10", "YOLOv8s", "YOLOv11n", "YOLOv8x", "YOLOv7", "YOLOv6l"]:
+            elif model_name in ["YOLOv11n", "YOLOv8x", "YOLOv7", "YOLOv6l"]:
                 preds = model.run(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name in ["YOLOv10"]:
@@ -775,7 +772,7 @@ def test_yolov12x(model_location_generator, device, model_type, reset_seeds):
         )
         logger.info("Inferencing [TTNN] Model")
 
-    save_dir = "models/experimental/yolov12x/demo"
+    save_dir = "models/demos/yolov12x/demo"
 
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT
@@ -802,13 +799,13 @@ def test_yolov12x(model_location_generator, device, model_type, reset_seeds):
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov6l(device, model_type, res, reset_seeds):
-    from models.experimental.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
-    from models.experimental.yolov6l.tt.model_preprocessing import load_torch_model_yolov6l
+    from models.demos.yolov6l.common import load_torch_model
+    from models.demos.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
 
-    sys.path.append("models/experimental/yolov6l/reference/")
+    sys.path.append("models/demos/yolov6l/reference/")
 
     if model_type == "torch_model":
-        model = load_torch_model_yolov6l()
+        model = load_torch_model()
     else:
         model = YOLOv6lPerformantRunner(
             device,
@@ -818,10 +815,9 @@ def test_yolov6l(device, model_type, res, reset_seeds):
             resolution=(640, 640),
             model_location_generator=None,
         )
-        model._capture_yolov6l_trace_2cqs()
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/experimental/yolov6l/demo/runs"
+    save_dir = "models/demos/yolov6l/demo/runs"
 
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT

@@ -76,6 +76,18 @@ pytest --disable-warnings models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py
   pytest --disable-warnings models/demos/yolov6l/demo/demo.py::test_demo_dataset_dp
   ```
 
+
+### Performant evaluation with Trace+2CQ
+
+- Use the following command to run the performant evaluation with Trace+2CQs:
+
+  ```
+  pytest models/demos/yolo_eval/evaluate.py::test_yolov6l[res0-device_params0-tt_model]
+  ```
+
+Note: The model is evaluated with 500 samples.
+
+
 ### Details
 - The entry point to yolov6l model is TtYolov6l in `models/demos/yolov6l/tt/ttnn_yolov6l.py`.
 - Batch Size : `1` (Single Device), `2` (Multi Device).

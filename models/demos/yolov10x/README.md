@@ -66,6 +66,15 @@ Note: Output images will be saved in the `models/demos/yolov10x/demo/runs` folde
   pytest --disable-warnings models/demos/yolov10x/demo/demo.py::test_demo_dataset_dp
   ```
 
+### Performant evaluation with Trace+2CQ
+
+- Use the following command to run the performant evaluation with Trace+2CQs:
+
+  ```
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov10x[res0-device_params0-tt_model]
+  ```
+Note: The model is evaluated with 500 samples.
+
 ### Web Demo:
 Try the interactive web demo at [yolov10x/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov10x/web_demo/README.md)
 

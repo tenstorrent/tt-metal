@@ -300,6 +300,7 @@ def evaluation(
                 label_types=["segmentations"],
                 include_id=True,
             )
+        performant_runner = None
         if model_type == "tt_model":
             dataset = fiftyone.zoo.load_zoo_dataset(
                 dataset_name,
@@ -307,6 +308,15 @@ def evaluation(
                 max_samples=200,
                 label_types=["segmentations"],
                 include_id=True,
+            )
+            performant_runner = YOLOv9PerformantRunner(
+                device,
+                1,
+                ttnn.bfloat8_b,
+                ttnn.bfloat8_b,
+                model_task="segment",
+                resolution=(640, 640),
+                model_location_generator=model_location_generator,
             )
 
         def load_coco_gt_mask(sample):
@@ -395,28 +405,18 @@ def evaluation(
                     cv2.imwrite(out_path, overlay_bgr)
                     logger.info(f"Saved to {out_path}")
                 index += 1
-
-            if model_type == "tt_model":
-                performant_runner = YOLOv9PerformantRunner(
-                    device,
-                    1,
-                    ttnn.bfloat8_b,
-                    ttnn.bfloat8_b,
-                    model_task="segment",
-                    resolution=(640, 640),
-                    model_location_generator=model_location_generator,
-                    torch_input_tensor=im,
-                )
-
+            else:
                 preds = performant_runner.run(torch_input_tensor=im)
-                preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
-                detect1_out, detect2_out, detect3_out = [
-                    ttnn.to_torch(tensor, dtype=torch.float32) for tensor in preds[1][0]
+                preds = [
+                    ttnn.to_torch(preds[0], dtype=torch.float32),
+                    [
+                        [ttnn.to_torch(t, dtype=torch.float32) for t in preds[1][0]],
+                        ttnn.to_torch(preds[1][1], dtype=torch.float32),
+                        ttnn.to_torch(preds[1][2], dtype=torch.float32)
+                        .reshape((1, 160, 160, 32))
+                        .permute((0, 3, 1, 2)),
+                    ],
                 ]
-                mask = ttnn.to_torch(preds[1][1], dtype=torch.float32)
-                proto = ttnn.to_torch(preds[1][2], dtype=torch.float32)
-                proto = proto.reshape((1, 160, 160, 32)).permute((0, 3, 1, 2))
-                preds[1] = [[detect1_out, detect2_out, detect3_out], mask, proto]
                 skipped_sample = 0
                 try:
                     results = postprocess(preds, im, im0s, batch)
@@ -476,8 +476,9 @@ def evaluation(
                     logger.warning(f"Failed to postprocess sample {paths[i]}: {e}")
                     skipped_sample += 1
                     logger.info(f"skipped_sample: {skipped_sample}")
-                finally:
-                    performant_runner.release()
+
+        if performant_runner is not None:
+            performant_runner.release()
 
         logger.info(f"Sample Count: {sample_count}")
         logger.info(f"IoU: {np.mean(iou_list):.2f}%")

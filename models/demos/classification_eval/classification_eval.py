@@ -26,14 +26,19 @@ def evaluation(
     get_batch=None,
     batch_size=None,
     res=None,
+    entire_imagenet_dataset=False,
+    inputs_mesh_mapper=None,
+    output_mesh_composer=None,
 ):
     # Loading the dataset
     input_loc = load_imagenet_dataset(model_location_generator)
     iterations = 512
     # iteration dataset, preprocessing
-    data_loader = get_data_loader(input_loc, batch_size, iterations // batch_size)
+    data_loader = get_data_loader(input_loc, batch_size, iterations // batch_size, entire_imagenet_dataset)
     gt_id = []
     pred_id = []
+    input_tensors_all = []
+    input_labels_all = []
     for i in range(iterations // batch_size):
         if model_name in ["vit", "resnet50", "mobilenetv2", "vovnet"]:
             inputs, labels = get_batch(data_loader, image_processor)
@@ -59,6 +64,18 @@ def evaluation(
             ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
         elif model_name in ["swin_v2", "vovnet"]:
             torch_input_tensor = inputs
+            if model_type == "tt_model":
+                ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
+                ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
+                ttnn_input = ttnn.from_torch(
+                    ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=inputs_mesh_mapper
+                )
+                ttnn_input = ttnn.reshape(
+                    ttnn_input,
+                    (1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]),
+                )
+                input_tensors_all.append(ttnn_input)
+                input_labels_all.append(labels)
         elif model_name == "resnet50":
             torch_input_tensor = inputs
             if model_type == "tt_model":
@@ -88,9 +105,7 @@ def evaluation(
 
         # Inference
         if model_type == "tt_model":
-            if model_name == "mobilenetv2":
-                output = model.run(inputs)
-            elif model_name == "vit":
+            if model_name == "vit":
                 output = model.execute_vit_trace_2cqs_inference(tt_inputs_host)
             elif model_name == "resnet50":
                 output = model.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
@@ -103,11 +118,9 @@ def evaluation(
 
         # post_process
         if model_name == "mobilenetv2":
-            if model_type == "tt_model":
-                final_output = ttnn.to_torch(output, mesh_composer=model.test_infra.output_mesh_composer)
-            else:
+            if model_type == "torch_model":
                 final_output = output
-            prediction = final_output.argmax(dim=-1)
+                prediction = final_output.argmax(dim=-1)
 
         elif model_name == "vovnet":
             if model_type == "tt_model":
@@ -138,17 +151,7 @@ def evaluation(
             else:
                 final_output = output
                 predicted_id = final_output.argmax(dim=-1)
-
-        if model_name in ["mobilenetv2", "vovnet", "swin_v2"]:
-            for i in range(batch_size):
-                pred_id.append(prediction[i].item())
-                gt_id.append(labels[i])
-
-            del output, final_output
-        elif model_name in ["vit", "resnet50"]:
-            for i in range(batch_size):
-                pred_id.append(predicted_id[i].item())
-                gt_id.append(labels[i])
+        
         elif model_name == "efficientnet_b0":
             if model_type == "tt_model":
                 final_output = ttnn.to_torch(output)
@@ -157,13 +160,35 @@ def evaluation(
             else:
                 probabilities = torch.nn.functional.softmax(output[0], dim=0)
                 top_prob, predicted_id = torch.topk(probabilities, 1)
+
+        if model_name in ["mobilenetv2", "vovnet", "swin_v2"]:
+            for i in range(batch_size):
+                pred_id.append(prediction[i].item())
+                gt_id.append(labels[i])
+
+            del output, final_output
+        elif model_name in ["vit", "resnet50","efficientnet_b0"]:
             for i in range(batch_size):
                 pred_id.append(predicted_id[i].item())
                 gt_id.append(labels[i])
 
     if model_type == "tt_model":
         if model_name == "mobilenetv2":
-            model.release_mobilenetv2_trace_2cqs_inference()
+            outputs = model.enqueue(input_tensors_all).pop_all()
+            for iter in range(iterations // batch_size):
+                predictions = []
+                output = outputs[iter]
+                labels = input_labels_all[iter]
+                output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+                prediction = output.argmax(dim=-1)
+                for i in range(batch_size):
+                    pred_id.append(prediction[i].item())
+                    gt_id.append(labels[i])
+                del output, prediction
+
+    if model_type == "tt_model":
+        if model_name == "mobilenetv2":
+            model.cleanup()
         elif model_name in ["vovnet", "swin_v2", "efficientnet_b0"]:
             model.release()
         elif model_name == "resnet50":
@@ -285,36 +310,82 @@ def test_resnet50_image_classification_eval(
 
 
 def run_mobilenetv2_image_classification_eval(
-    device, model_type, device_batch_size, res, model_location_generator, reset_seeds
+    device, model_type, batch_size_per_device, res, model_location_generator, reset_seeds
 ):
     from models.demos.mobilenetv2.common import load_torch_model
     from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-    from models.demos.mobilenetv2.runner.performant_runner import MobileNetV2Trace2CQ
+    from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
+    from models.demos.mobilenetv2.tt.model_preprocessing import (
+        create_mobilenetv2_input_tensors,
+        create_mobilenetv2_model_parameters,
+        get_mesh_mappers,
+    )
     from models.demos.ttnn_resnet.tests.demo_utils import get_batch
+    from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
+
+    batch_size = batch_size_per_device * device.get_num_devices()
 
     model_version = "microsoft/resnet-50"
     image_processor = AutoImageProcessor.from_pretrained(model_version)
+    with torch.no_grad():
+        inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
+        reference_model = Mobilenetv2()
+        reference_model = load_torch_model(reference_model, model_location_generator)
+        model_parameters = create_mobilenetv2_model_parameters(reference_model, device=device)
+        ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size_per_device)
 
-    reference_model = Mobilenetv2()
-    reference_model = load_torch_model(reference_model, model_location_generator)
-    mobilenetv2_trace_2cq = MobileNetV2Trace2CQ()
-    mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(
-        device,
-        device_batch_size,
-        ttnn.bfloat8_b,
-        ttnn.bfloat8_b,
-    )
+        _, host_input_tensor = create_mobilenetv2_input_tensors(
+            batch=batch_size, input_height=224, input_width=224, pad_channels=16, mesh_mapper=inputs_mesh_mapper
+        )
+        dram_cores = 10
+        assert host_input_tensor.shape[-2] % dram_cores == 0, "Expecting even sharding on DRAM input tensor"
+        dram_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))}),
+            [host_input_tensor.shape[-2] // dram_cores, host_input_tensor.shape[-1]],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        input_dram_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+        )
+
+        input_l1_core_grid = ttnn.CoreGrid(x=8, y=8)
+        assert (
+            host_input_tensor.shape[-2] % input_l1_core_grid.num_cores == 0
+        ), "Expecting even sharding on L1 input tensor"
+        input_l1_mem_config = ttnn.create_sharded_memory_config(
+            shape=(host_input_tensor.shape[2] // input_l1_core_grid.num_cores, host_input_tensor.shape[-1]),
+            core_grid=input_l1_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        config = PipelineConfig(use_trace=True, num_command_queues=2, separate_io_queue=False)
+        pipe = create_pipeline_from_config(
+            config,
+            ttnn_model,
+            device,
+            dram_input_memory_config=input_dram_mem_config,
+            l1_input_memory_config=input_l1_mem_config,
+            dram_output_memory_config=None,
+            output_shape=None,
+            output_dtype=None,
+        )
+        pipe.compile(host_input_tensor)
+
     evaluation(
         device=device,
-        model=mobilenetv2_trace_2cq if model_type == "tt_model" else reference_model,
+        model=pipe if model_type == "tt_model" else reference_model,
         model_location_generator=model_location_generator,
         model_type=model_type,
         model_name="mobilenetv2",
         image_processor=image_processor,
         config=None,
         get_batch=get_batch,
-        batch_size=device_batch_size * device.get_num_devices(),
+        batch_size=batch_size_per_device * device.get_num_devices(),
         res=res,
+        inputs_mesh_mapper=inputs_mesh_mapper,
+        output_mesh_composer=output_mesh_composer,
     )
 
 
