@@ -350,7 +350,6 @@ void SoftmaxProgramFactory::override_runtime_arguments(
     auto& softmax_writer_kernel_id = shared_variables.writer_kernel_id;
     auto& softmax_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
     auto& softmax_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
-    auto& core_group_1 = shared_variables.core_group_1;
     auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
@@ -364,7 +363,7 @@ void SoftmaxProgramFactory::override_runtime_arguments(
     auto& writer_runtime_args = GetRuntimeArgs(program, softmax_writer_kernel_id);
     auto& group_1_runtime_args = GetRuntimeArgs(program, softmax_kernel_group_1_id);
     // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
-    auto& group_2_runtime_args =
+    [[maybe_unused]] auto& group_2_runtime_args =
         core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, softmax_kernel_group_2_id);
 
     for (uint32_t i = 0; i < num_cores; i++) {

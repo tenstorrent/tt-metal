@@ -76,7 +76,6 @@ TEST_F(UnaryOpsTest, Silu) {
     auto C = 1;
     auto H = 20;
     auto W = 5;
-    auto len = static_cast<float>(N * C * H * W);
     xt::random::seed(42);
     xt::xarray<float> a = xt::random::rand<float>({N, C, H, W}, -1.0F, 1.0F);
     xt::xarray<float> expected_silu = {
