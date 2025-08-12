@@ -42,7 +42,6 @@ private:
     void initialize_mesh_device();
     void setup_fabric_configuration();
     void share_seed();
-    void log_test_execution(const ParsedTestConfig& test, size_t socket_index, size_t total_sockets) const;
     std::unordered_map<Rank, tt::tt_fabric::MeshId> create_rank_to_mesh_mapping();
     void expand_test_configurations();
 

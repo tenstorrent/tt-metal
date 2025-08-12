@@ -71,9 +71,7 @@ bool test_socket_send_recv(
 
     std::vector<uint32_t> src_vec_per_core(data_size / sizeof(uint32_t));
 
-    if (gen.has_value()) {
-        log_info(tt::LogTest, "Using provided generator");
-    } else {
+    if (!gen.has_value()) {
         // Exchange seed between sender and receiver and create local generator
         uint32_t seed;
         if (distributed_context->rank() == sender_rank) {

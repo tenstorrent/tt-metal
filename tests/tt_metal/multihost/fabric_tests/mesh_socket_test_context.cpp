@@ -143,12 +143,10 @@ void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
     uint32_t num_iterations = test.num_iterations.value_or(DEFAULT_NUM_ITERATIONS);
 
     for (uint32_t iteration = 0; iteration < num_iterations; ++iteration) {
-        if (num_iterations > 1) {
-            log_info(tt::LogTest, "--- Iteration {}/{} ---", iteration + 1, num_iterations);
-        }
+        log_info(tt::LogTest, "--- Iteration {}/{} ---", iteration + 1, num_iterations);
 
         for (size_t socket_idx = 0; socket_idx < sockets.size(); ++socket_idx) {
-            log_test_execution(test, socket_idx, sockets.size());
+            log_info(tt::LogTest, "Executing socket {}/{}", socket_idx + 1, sockets.size());
             execute_socket_test(sockets[socket_idx], test);
         }
     }
@@ -252,16 +250,6 @@ bool MeshSocketTestContext::should_participate_in_test(const ParsedTestConfig& t
     return false;
 }
 
-void MeshSocketTestContext::log_test_execution(
-    const ParsedTestConfig& test, size_t socket_index, size_t total_sockets) const {
-    log_info(tt::LogTest, "Executing socket {}/{} for test '{}'", socket_index + 1, total_sockets, test.name);
-    log_info(
-        tt::LogTest,
-        "  Data size: {} bytes, Page size: {} bytes, FIFO size: {} bytes",
-        test.memory_config.data_size,
-        test.memory_config.page_size,
-        test.memory_config.fifo_size);
-}
 /*
     We assume rank to mesh is 1-to-1, each rank sends its mesh_id and we receive all mesh_ids
     Sockets APIs will need to change to use mesh_id instead of rank to supprot Big Mesh x Multi Mesh case

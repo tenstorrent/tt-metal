@@ -47,7 +47,7 @@ struct MemoryConfig {
     std::vector<uint32_t> fifo_size;
     std::vector<uint32_t> page_size;
     std::vector<uint32_t> data_size;
-    std::vector<uint32_t> num_transactions;
+    uint32_t num_transactions;
 };
 
 struct ParsedMemoryConfig {

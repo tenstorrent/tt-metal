@@ -226,13 +226,11 @@ std::vector<ParsedMemoryConfig> MeshSocketYamlParser::expand_memory_config(const
     for (uint32_t fifo_size : memory_config.fifo_size) {
         for (uint32_t page_size : memory_config.page_size) {
             for (uint32_t data_size : memory_config.data_size) {
-                for (uint32_t num_transactions : memory_config.num_transactions) {
-                    expanded_configs.push_back(ParsedMemoryConfig{
-                        .fifo_size = fifo_size,
-                        .page_size = page_size,
-                        .data_size = data_size,
-                        .num_transactions = num_transactions});
-                }
+                expanded_configs.push_back(ParsedMemoryConfig{
+                    .fifo_size = fifo_size,
+                    .page_size = page_size,
+                    .data_size = data_size,
+                    .num_transactions = memory_config.num_transactions});
             }
         }
     }
@@ -387,11 +385,7 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
     }
 
     if (node["num_transactions"].IsDefined()) {
-        if (node["num_transactions"].IsSequence()) {
-            memory.num_transactions = node["num_transactions"].as<std::vector<uint32_t>>();
-        } else {
-            memory.num_transactions = {node["num_transactions"].as<uint32_t>()};
-        }
+        memory.num_transactions = node["num_transactions"].as<uint32_t>();
     }
 
     return memory;
@@ -465,7 +459,7 @@ void MeshSocketYamlParser::validate_memory_config(const MemoryConfig& memory) {
     TT_FATAL(!memory.fifo_size.empty(), "fifo_size must have at least one value");
     TT_FATAL(!memory.page_size.empty(), "page_size must have at least one value");
     TT_FATAL(!memory.data_size.empty(), "data_size must have at least one value");
-    TT_FATAL(!memory.num_transactions.empty(), "num_transactions must have at least one value");
+    TT_FATAL(memory.num_transactions > 0, "num_transactions must be greater than 0");
 
     for (uint32_t fifo_size : memory.fifo_size) {
         TT_FATAL(fifo_size > 0, "All fifo_size values must be greater than 0");
@@ -475,9 +469,6 @@ void MeshSocketYamlParser::validate_memory_config(const MemoryConfig& memory) {
     }
     for (uint32_t data_size : memory.data_size) {
         TT_FATAL(data_size > 0, "All data_size values must be greater than 0");
-    }
-    for (uint32_t num_transactions : memory.num_transactions) {
-        TT_FATAL(num_transactions > 0, "All num_transactions values must be greater than 0");
     }
 }
 
@@ -622,7 +613,7 @@ void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfigur
         log_info(tt::LogTest, "    fifo_size: {} values", test.memory_config.fifo_size.size());
         log_info(tt::LogTest, "    page_size: {} values", test.memory_config.page_size.size());
         log_info(tt::LogTest, "    data_size: {} values", test.memory_config.data_size.size());
-        log_info(tt::LogTest, "    num_transactions: {} values", test.memory_config.num_transactions.size());
+        log_info(tt::LogTest, "    num_transactions: {}", test.memory_config.num_transactions);
 
         // Print sockets if present
         if (test.sockets.has_value()) {
