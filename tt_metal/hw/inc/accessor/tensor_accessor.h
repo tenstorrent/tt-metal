@@ -290,6 +290,48 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
         InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+
+    // Locality APIs
+    FORCE_INLINE
+    bool is_local_bank(uint32_t virtual_x, uint32_t virtual_y, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::is_local_bank is not supported by the interleaved tensor accessor");
+        return false;
+    }
+
+    FORCE_INLINE
+    bool is_local_addr(const uint64_t noc_addr, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::is_local_addr is not supported by the interleaved tensor accessor");
+        return false;
+    }
+
+    FORCE_INLINE
+    bool is_local_page(const uint32_t page_id, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::is_local_page is not supported by the interleaved tensor accessor");
+        return false;
+    }
+
+    FORCE_INLINE
+    bool is_local_shard(const uint32_t shard_id, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::is_local_shard is not supported by the interleaved tensor accessor");
+        return false;
+    }
+
+    // Returns a proxy for shard pages iterator
+    tensor_accessor::ShardPages<TensorAccessor> shard_pages(
+        uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::shard_pages is not supported by the interleaved tensor accessor");
+        return {};
+    }
 };
 #endif
 
