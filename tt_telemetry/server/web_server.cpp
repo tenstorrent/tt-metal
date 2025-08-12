@@ -11,6 +11,7 @@
 #include <iostream>
 #include <vector>
 #include <queue>
+#include <initializer_list>
 
 #include <httplib.h>
 
@@ -36,9 +37,8 @@ private:
 
     // Snapshot and distribution to consumers
     std::mutex mtx_;
-    std::queue<std::shared_ptr<TelemetrySnapshot>> available_buffers_;
-    HandoffHandle<TelemetrySnapshot> current_buffer_;
-    TelemetrySubscriber *subscriber_;
+    std::queue<TelemetrySnapshot *> available_buffers_;
+    std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers_;
     std::atomic<bool> stopped_{false};
 
     // Random number generators for generating random updates
@@ -50,7 +50,7 @@ private:
 
     std::thread thread_;
 
-    void return_buffer_to_pool(std::shared_ptr<TelemetrySnapshot> buffer) {
+    void return_buffer_to_pool(TelemetrySnapshot *buffer) {
         if (stopped_.load()) {
             return;
         }
@@ -61,20 +61,23 @@ private:
         available_buffers_.push(buffer);
     }
 
-    HandoffHandle<TelemetrySnapshot> create_new_handoff_buffer(std::shared_ptr<TelemetrySnapshot> buffer) {
-        return HandoffHandle<TelemetrySnapshot>(
+    std::shared_ptr<TelemetrySnapshot> create_new_handoff_buffer(TelemetrySnapshot *buffer) {
+        return std::shared_ptr<TelemetrySnapshot>(
             buffer,
-            [this](std::shared_ptr<TelemetrySnapshot> buffer) {
+            [this](TelemetrySnapshot *buffer) {
+                // Custom deleter: do not delete, just return to pool. We use shared_ptr for its
+                // thread-safe reference counting, allowing a buffer to be passed to multiple
+                // consumers.
                 std::cout << "[MockTelemetryProvider] Released buffer" << std::endl;
                 return_buffer_to_pool(buffer);
             }
         );
     }
 
-    HandoffHandle<TelemetrySnapshot> get_writeable_buffer() {
+    std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
         std::lock_guard<std::mutex> lock(mtx_);
 
-        std::shared_ptr<TelemetrySnapshot> buffer;
+        TelemetrySnapshot *buffer;
         if (!available_buffers_.empty()) {
             // Get a free buffer
             buffer = available_buffers_.front();
@@ -82,7 +85,7 @@ private:
             std::cout << "[MockTelemetryProvider] Got buffer from pool" << std::endl;
         } else {
             // Pool exhausted, create new buffer
-            buffer = std::make_shared<TelemetrySnapshot>();
+            buffer = new TelemetrySnapshot();
             std::cout << "[MockTelemetryProvider] Allocated new buffer" << std::endl;
         }
 
@@ -90,7 +93,7 @@ private:
         return create_new_handoff_buffer(buffer);
     }
 
-    void create_random_updates(HandoffHandle<TelemetrySnapshot> &delta) {
+    void create_random_updates(std::shared_ptr<TelemetrySnapshot> delta) {
         int num_updates = num_updates_dist_(gen_);
         
         // Select random endpoints to update
@@ -111,7 +114,7 @@ private:
 
     void update_telemetry_randomly() {
         // Send initial snapshot to subscriber
-        HandoffHandle<TelemetrySnapshot> snapshot = get_writeable_buffer();
+        std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
         snapshot->clear();
         snapshot->is_absolute = true;
         for (size_t i = 0; i < metric_names_.size(); i++) {
@@ -120,23 +123,23 @@ private:
             snapshot->metric_values.push_back(metric_values_[i]);
         }
 
-        if (subscriber_ != nullptr) {
-            subscriber_->on_telemetry_ready(std::move(snapshot));
+        for (auto &subscriber: subscribers_) {
+            subscriber->on_telemetry_ready(snapshot);
         }
 
         // Send periodic updates
         while (!stopped_.load()) {
-            if (subscriber_ != nullptr) {
-                // We will now produce a delta snapshot
-                HandoffHandle<TelemetrySnapshot> delta = get_writeable_buffer();
-                delta->clear();
-                delta->is_absolute = false;
+            // We will now produce a delta snapshot
+            std::shared_ptr<TelemetrySnapshot> delta = get_writeable_buffer();
+            delta->clear();
+            delta->is_absolute = false;
 
-                // Fill it with updates
-                create_random_updates(delta);
+            // Fill it with updates
+            create_random_updates(delta);
 
-                // Push to subscriber
-                subscriber_->on_telemetry_ready(std::move(delta));
+            // Push to subscribers
+            for (auto &subscriber: subscribers_) {
+                subscriber->on_telemetry_ready(delta);
             }
 
             std::this_thread::sleep_for(UPDATE_INTERVAL_SECONDS);
@@ -144,9 +147,8 @@ private:
     }
 
 public:
-    explicit MockTelemetryProvider(TelemetrySubscriber *subscriber)
-        : current_buffer_(create_new_handoff_buffer(std::make_shared<TelemetrySnapshot>()))
-        , subscriber_(subscriber)
+    explicit MockTelemetryProvider(std::initializer_list<std::shared_ptr<TelemetrySubscriber>> subscribers)
+        : subscribers_(subscribers)
         , gen_(rd_())
         , bool_dist_(0, 1)
         , metric_dist_(0, metric_names_.size() - 1)
@@ -181,12 +183,12 @@ private:
     std::unordered_map<size_t, std::string> metric_name_by_index_;
     std::unordered_map<size_t, bool> metric_value_by_index_;
     std::mutex snapshot_mutex_;
-    std::queue<HandoffHandle<TelemetrySnapshot>> pending_snapshots_;
+    std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
     void broadcast_telemetry() {
         while (running_) {
             // Get snapshot from telemetry producer thread, if one is ready
-            HandoffHandle<TelemetrySnapshot> current_snapshot(nullptr, {});
+            std::shared_ptr<TelemetrySnapshot> current_snapshot;
             {
                 std::lock_guard<std::mutex> lock(snapshot_mutex_);
                 if (!pending_snapshots_.empty()) {
@@ -196,7 +198,7 @@ private:
             }
 
             // If no snapshot, sleep and try again
-            if (!current_snapshot.is_valid()) {
+            if (!current_snapshot) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 continue;
             }
@@ -380,21 +382,21 @@ public:
         });
     }
 
-    void start() {
+    void start(uint16_t port) {
         setup_routes();
 
         // Start telemetry broadcasting thread
         running_ = true;
         telemetry_thread_ = std::thread(&TelemetryServer::broadcast_telemetry, this);
 
-        std::cout << "Starting telemetry server on port 8080..." << std::endl;
+        std::cout << "Starting telemetry server on port " << port << "..." << std::endl;
         std::cout << "API endpoints:" << std::endl;
         std::cout << "  GET  /                - Web UI" << std::endl;
         std::cout << "  GET  /api/status      - Server status" << std::endl;
         std::cout << "  GET  /api/telemetry   - Current telemetry" << std::endl;
         std::cout << "  GET  /api/stream      - Real-time stream (SSE)" << std::endl;
 
-        server_.listen("0.0.0.0", 5555);
+        server_.listen("0.0.0.0", port);
     }
 
     void stop() {
@@ -405,7 +407,7 @@ public:
         }
     }
 
-    void on_telemetry_ready(HandoffHandle<TelemetrySnapshot> &&telemetry) override {
+    void on_telemetry_ready(std::shared_ptr<TelemetrySnapshot> telemetry) override {
         std::lock_guard<std::mutex> lock(snapshot_mutex_);
         pending_snapshots_.push(std::move(telemetry));
     }
@@ -416,11 +418,13 @@ public:
 };
 
 bool run_web_server() {
-    TelemetryServer server;
-    MockTelemetryProvider mock_provider(&server);
+    auto server = std::make_shared<TelemetryServer>();
+    auto server2 = std::make_shared<TelemetryServer>();
+    MockTelemetryProvider mock_provider{server, server2};
     
     try {
-        server.start();
+        server->start(8080);
+        //server2->start(8080);
     } catch (const std::exception& e) {
         std::cerr << "Server error: " << e.what() << std::endl;
         return false;
