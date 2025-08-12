@@ -66,6 +66,7 @@ template <
     uint32_t in_cb_id,
     uint32_t in_idx_cb_id,
     uint32_t tile_tmp_cb_id,
+    uint32_t tile_idx_tmp_cb_id,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
@@ -175,17 +176,20 @@ ALWI void read_window_with_top_left_index(
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
-            DPRINT << "IN_CB " << ENDL();
-            tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 32);
+            // DPRINT << "IN_CB " << ENDL();
+            // tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 32);
             cb_push_back(in_cb_id, 1);
             if constexpr (return_indices) {
-                DPRINT << "IN_IDX_CB " << ENDL();
-                tt::data_movement::common::print_u16_pages(get_read_ptr(in_idx_cb_id), 32, 32);
+                // DPRINT << "IN_IDX_CB " << ENDL();
+                // tt::data_movement::common::print_u16_pages(get_read_ptr(in_idx_cb_id), 32, 32);
                 cb_push_back(in_idx_cb_id, 1);
 
-                cb_wait_front(tile_tmp_cb_id, 1);
-                DPRINT << "TILE_TMP_CB " << ENDL();
-                tt::data_movement::common::print_bf16_pages(get_read_ptr(tile_tmp_cb_id), 32, 32);
+                // cb_wait_front(tile_tmp_cb_id, 1);
+                // cb_wait_front(tile_idx_tmp_cb_id, 1);
+                // tt::data_movement::common::print_bf16_pages(
+                //     get_read_ptr(tile_tmp_cb_id), 32, 32);
+                // tt::data_movement::common::print_u16_pages(
+                //     get_read_ptr(tile_idx_tmp_cb_id), 32, 32);
             }
         }
     }
@@ -377,6 +381,7 @@ void kernel_main() {
                 in_cb_id,
                 in_idx_cb_id,
                 tile_tmp_cb_id,
+                tile_idx_tmp_cb_id,
                 window_h,
                 window_w,
                 in_w_padded,
@@ -406,6 +411,7 @@ void kernel_main() {
             in_cb_id,
             in_idx_cb_id,
             tile_tmp_cb_id,
+            tile_idx_tmp_cb_id,
             window_h,
             window_w,
             in_w_padded,
