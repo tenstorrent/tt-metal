@@ -14,17 +14,17 @@ void kernel_main() {
     uint32_t end_padding_tile_idx = get_arg_val<uint32_t>(4);
 
     // Compile-time constants
-    constexpr uint32_t element_size = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t C = get_compile_time_arg_val(2);
-    constexpr uint32_t H = get_compile_time_arg_val(3);
-    constexpr uint32_t W = get_compile_time_arg_val(4);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(5);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(6);
-    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(7);
-    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(8);
-    constexpr bool needs_padding = get_compile_time_arg_val(9) == 1;
-    constexpr auto dst_args = TensorAccessorArgs<10>();
+    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t element_size = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(2);
+    constexpr uint32_t C = get_compile_time_arg_val(3);
+    constexpr uint32_t H = get_compile_time_arg_val(4);
+    constexpr uint32_t W = get_compile_time_arg_val(5);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(6);
+    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(7);
+    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(8);
+    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(9);
+    constexpr bool needs_padding = get_compile_time_arg_val(10) == 1;
 
     // Derived compile-time constants
     constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
@@ -43,7 +43,10 @@ void kernel_main() {
 
     // Initialize address generator
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto input_data_format = get_dataformat(cb_id_out0);
+
+    const InterleavedAddrGenFast<dst_is_dram, TILE_HW> s = {
+        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = input_data_format};
 
     // Calculate actual data height in the last tile
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;
