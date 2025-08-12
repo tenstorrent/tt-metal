@@ -343,7 +343,7 @@ void packet_sizes_test(
 
 void virtual_channels_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     bool is_multicast,
@@ -409,7 +409,7 @@ void virtual_channels_test(
 
 void custom_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     bool is_multicast,
@@ -786,7 +786,7 @@ TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal
 
 /* ========== VIRTUAL CHANNELS ========== */
 
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Expose loopback here?
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Expose loopback here?
     GTEST_SKIP() << "Skipping test";
 
     // Parameters
@@ -818,7 +818,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Ex
         loopback);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
     GTEST_SKIP() << "Skipping test";
 
     // Parameters

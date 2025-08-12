@@ -362,7 +362,7 @@ void virtual_channels_test(ARCH arch_, vector<std::shared_ptr<distributed::MeshD
 
 void custom_test(
     ARCH arch_,
-    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& mesh_devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     uint32_t num_of_transactions,
@@ -370,15 +370,17 @@ void custom_test(
     uint32_t num_virtual_channels) {
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
-        unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        unit_tests::dm::compute_physical_constraints(arch_, mesh_devices_.at(0));
 
     // Parameters for literal all-to-all (use the full grid for both master and subordinate)
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord sub_start_coord = {0, 0};
     CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+        mesh_devices_.at(0)->compute_with_storage_grid_size().x,
+        mesh_devices_.at(0)->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+        mesh_devices_.at(0)->compute_with_storage_grid_size().x,
+        mesh_devices_.at(0)->compute_with_storage_grid_size().y};
 
     // Test config
     unit_tests::dm::all_to_all::AllToAllConfig test_config = {

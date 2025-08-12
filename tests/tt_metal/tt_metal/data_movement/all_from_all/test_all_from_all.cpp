@@ -352,7 +352,7 @@ void virtual_channels_test(ARCH arch_, vector<std::shared_ptr<distributed::MeshD
 
 void custom_test(
     ARCH arch_,
-    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& mesh_devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
@@ -364,7 +364,7 @@ void custom_test(
     uint32_t num_virtual_channels) {
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
-        unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        unit_tests::dm::compute_physical_constraints(arch_, mesh_devices_.at(0));
 
     if (pages_per_transaction > max_pages_reservable) {
         log_trace(LogTest, "Skipping test due to page size limitations");
@@ -531,14 +531,14 @@ TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
 
 /* ======== VIRTUAL CHANNELS ======== */
 
-TEST_F(DeviceFixture, TensixDataMovementAllFromAllVirtualChannels) {
+TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAllVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 317;
 
     unit_tests::dm::all_from_all::virtual_channels_test(arch_, devices_, num_devices_, test_case_id);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementAllFromAllCustom) {
+TEST_F(MeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 318;
 
