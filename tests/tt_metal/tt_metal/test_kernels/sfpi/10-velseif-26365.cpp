@@ -13,9 +13,6 @@ namespace NAMESPACE {
 volatile uint32_t global __attribute__((used)) = 0x12345678;
 volatile uint32_t zero __attribute__((used));
 
-// Do not let compiler propagate knowledge of the initialized value;
-static uint32_t __attribute__((noinline)) get(volatile uint32_t* ptr) { return *ptr; }
-
 static void __attribute__((noinline)) compc_26365() {
     vFloat val = l_reg[LRegs::LReg3];
     vUInt result = 0;
@@ -31,23 +28,27 @@ void MAIN {
 #if COMPILE_FOR_TRISC == 1  // compute
 #include "pre.inc"
     {
-        l_reg[LRegs::LReg3] = vFloat(0f);
-        compc_26365() vUInt res = l_reg[LRegs::LReg3];
+        l_reg[LRegs::LReg3] = vFloat(0.0f);
+        compc_26365();
+        vUInt res = l_reg[LRegs::LReg3];
         FAIL_IF(res != 1);
     }
     {
-        l_reg[LRegs::LReg3] = vFloat(1f);
-        compc_26365() vUInt res = l_reg[LRegs::LReg3];
+        l_reg[LRegs::LReg3] = vFloat(1.0f);
+        compc_26365();
+        vUInt res = l_reg[LRegs::LReg3];
         FAIL_IF(res != 2);
     }
     {
-        l_reg[LRegs::LReg3] = vFloat(2f);
-        compc_26365() vUInt res = l_reg[LRegs::LReg3];
+        l_reg[LRegs::LReg3] = vFloat(2.0f);
+        compc_26365();
+        vUInt res = l_reg[LRegs::LReg3];
         FAIL_IF(res != 2);
     }
     {
-        l_reg[LRegs::LReg3] = vFloat(3f);
-        compc_26365() vUInt res = l_reg[LRegs::LReg3];
+        l_reg[LRegs::LReg3] = vFloat(3.0f);
+        compc_26365();
+        vUInt res = l_reg[LRegs::LReg3];
         FAIL_IF(res != 0);
     }
 #include "post.inc"
