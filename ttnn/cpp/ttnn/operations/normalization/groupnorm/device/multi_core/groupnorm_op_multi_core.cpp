@@ -1201,10 +1201,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
     TT_FATAL(num_groups % num_cores_c == 0, "num_groups: {} must divide cores_y: {}", num_groups, num_cores_c);
     TT_FATAL(
-        (num_groups / num_cores_c) * group_size % TILE_WIDTH == 0,
+        ((num_groups / num_cores_c) * group_size) % TILE_WIDTH == 0,
         "(num_groups: {}/cores_y: {})*(num_channels: {}/num_groups: {}) must be divisible by {}",
         num_groups,
-        num_cores_r,
+        num_cores_c,
         W,
         num_groups,
         TILE_WIDTH);
