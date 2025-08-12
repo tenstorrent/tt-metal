@@ -112,11 +112,18 @@ jobs:
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e TOPOLOGY=${{ matrix.test-group.topology }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e TOPOLOGY=${{ inputs.topology }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
             ${{ matrix.test-group.cmd }}
+      - name: Skip DiT Galaxy test if on a TG
+        if: ${{ matrix.test-group.model-type == 'SD3.5' && inputs.topology != 'topology-6u' }}
+        run: |
+          echo "Skipping DiT Galaxy test as we are not on a TG machine."
+          exit 0
       - name: Save environment data
         if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
         uses: ./.github/actions/docker-run
