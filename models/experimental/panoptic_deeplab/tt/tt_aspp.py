@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from math import floor
 import torch.nn as nn
 import torch
 
@@ -52,25 +53,40 @@ class TtASPP(nn.Module):
         activation,
         dropout: float = 0.0,
         pool_kernel_size,
+        shared_weight_tensor_kernel1: torch.Tensor,
+        shared_weight_tensor_kernel3: torch.Tensor,
+        shared_weight_tensor_kernel1_output5: torch.Tensor,
     ):
         super(TtASPP, self).__init__()
         assert len(dilations) == 3, "ASPP expects 3 dilations, got {}".format(len(dilations))
         self.dropout = dropout
-        use_bias = norm == ""
+        use_bias = False
         self.conv_branches = []
 
         self.activation = get_ttnn_activation(activation)
         self.device = device
         self.pool_kernel_size = pool_kernel_size
 
+        self.shared_weight_tensor_kernel1 = shared_weight_tensor_kernel1
+        self.shared_weight_tensor_kernel3 = shared_weight_tensor_kernel3
+        self.shared_weight_tensor_kernel1_output5 = shared_weight_tensor_kernel1_output5
+
         # Shared Method to create TtConv2d objects
-        def create_ttconv2d(in_channels, out_channels, kernel_size, stride, padding, dilation=1, bias=True):
+        def create_ttconv2d(
+            in_channels, out_channels, kernel_size, stride, padding, dilation=1, bias=False, isProjectConv=False
+        ):
+            if kernel_size == 1 and isProjectConv:
+                weight = self.shared_weight_tensor_kernel1_output5
+            elif kernel_size == 3:
+                weight = self.shared_weight_tensor_kernel3
+            else:
+                weight = self.shared_weight_tensor_kernel1
             param_dict = {
-                "weight": torch.randn(out_channels, in_channels, kernel_size, kernel_size, dtype=torch.bfloat16),
+                "weight": weight,
                 "dilation": (dilation, dilation),
             }
             if bias:
-                param_dict["bias"] = torch.empty(out_channels)
+                param_dict["bias"] = torch.empty(1, 1, 1, out_channels, dtype=torch.bfloat16)
             parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
 
             return TtConv2d(parameters, stride=stride, padding=padding)
@@ -88,8 +104,6 @@ class TtASPP(nn.Module):
         norm_func = get_ttnn_norm(norm, out_channels, device=self.device)
         self.conv_branches.append((conv, norm_func))
 
-        # weight_init.c2_xavier_fill(self.convs[-1]) check if this is needed
-
         for dilation in dilations:
             conv = create_ttconv2d(
                 in_channels=in_channels,
@@ -102,7 +116,6 @@ class TtASPP(nn.Module):
             )
             norm_func = get_ttnn_norm(norm, out_channels, device=self.device)
             self.conv_branches.append((conv, norm_func))
-            # weight_init.c2_xavier_fill(self.convs[-1]) # check if this is needed
 
         self.pool_conv = create_ttconv2d(
             in_channels=in_channels,
@@ -111,10 +124,8 @@ class TtASPP(nn.Module):
             stride=(1, 1),
             padding=(0, 0),
             dilation=1,
-            bias=True,
+            bias=False,
         )
-
-        # weight_init.c2_xavier_fill(image_pooling[1]) check if this is needed
 
         self.project_conv = create_ttconv2d(
             in_channels=5 * out_channels,  # Concatenation results in 5 branches
@@ -124,10 +135,10 @@ class TtASPP(nn.Module):
             padding=(0, 0),
             dilation=1,
             bias=use_bias,
+            isProjectConv=True,
         )
 
         self.project_norm = get_ttnn_norm(norm, out_channels, device=self.device)
-        # weight_init.c2_xavier_fill(self.project) check if this is needed
 
     def forward(self, x):
         input_shape = x.shape
@@ -142,31 +153,33 @@ class TtASPP(nn.Module):
                 "`pool_kernel_size` must be divisible by the shape of inputs. "
                 "Input size: {} `pool_kernel_size`: {}".format(input_shape, self.pool_kernel_size)
             )
-
         res = []
         for conv, norm in self.conv_branches:
+            # print("Branch out before conv")
+            # print(x)
             branch_out = conv(x)
-            print("Branch out tensor")
+            print("Branch out after conv")
             print(branch_out)
-            print()
+            # print()
             branch_out = norm(branch_out)
             branch_out = self.activation(branch_out)
             print(f"branch_out shape {branch_out.shape}")
+            # print(branch_out)
             res.append(branch_out)
 
         input_shape = (1, 1, N * H * W, C)  # Reshape to (1, 1, N*H*W, C) for TTNN
-        ttnn_perm = ttnn.permute(x, (0, 2, 3, 1))  # Convert to NHWC format for TTNN
-        ttnn_reshape = ttnn_perm.reshape(input_shape)
-
-        kernel_h, kernel_w = self.pool_kernel_size
-        if kernel_h % 2 == 1 and kernel_w % 2 == 1:
-            # Odd kernel - symmetric padding
-            paddingSame = [(kernel_h - 1) // 2, (kernel_w - 1) // 2]
-        else:
-            # Even kernel - asymmetric padding
-            pad_h = kernel_h - 1
-            pad_w = kernel_w - 1
-            paddingSame = [pad_h // 2, pad_h - pad_h // 2, pad_w // 2, pad_w - pad_w // 2]
+        # ttnn_perm = ttnn.permute(x, (0, 2, 3, 1))  # Convert to NHWC format for TTNN
+        ttnn_reshape = x.reshape(input_shape)
+        print("TTNN Reshape shape: ", ttnn_reshape.shape)
+        # kernel_h, kernel_w = self.pool_kernel_size
+        # if kernel_h % 2 == 1 and kernel_w % 2 == 1:
+        #     # Odd kernel - symmetric padding
+        #     paddingSame = [(kernel_h - 1) // 2, (kernel_w - 1) // 2]
+        # else:
+        #     # Even kernel - asymmetric padding
+        #     pad_h = kernel_h - 1
+        #     pad_w = kernel_w - 1
+        #     paddingSame = [pad_h // 2, pad_h - pad_h // 2, pad_w // 2, pad_w - pad_w // 2]
 
         pooled = ttnn.avg_pool2d(
             input_tensor=ttnn_reshape,
@@ -176,11 +189,16 @@ class TtASPP(nn.Module):
             channels=C,
             kernel_size=self.pool_kernel_size,  # Use full spatial dimensions for global pooling effect
             stride=[1, 1],
-            padding=paddingSame,  # Adjust padding to ensure output size matches input size
+            padding=[0, 0],
             ceil_mode=False,
         )
-        pooled = ttnn.reshape(pooled, (N, H, W, C))  # Reshape to (N, pooled_h, pooled_w, C)
 
+        output_h = floor(H + 0 - self.pool_kernel_size[0]) + 1
+        output_w = floor(W + 0 - self.pool_kernel_size[1]) + 1
+        print("Output height:", output_h, "Output width:", output_w)
+        print("pooled tensor shape", pooled.shape)
+
+        pooled = ttnn.reshape(pooled, (N, output_h, output_w, C))  # Reshape to (N, pooled_h, pooled_w, C)
         # height_sharded_config = ttnn.create_sharded_memory_config(
         #     pooled.shape,  # Use the tensor's current shape
         #     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # Same grid as current
@@ -191,12 +209,62 @@ class TtASPP(nn.Module):
 
         for i in range(len(res)):
             res[i] = ttnn.to_memory_config(res[i], ttnn.DRAM_MEMORY_CONFIG)
-            print(f"Memory config of res[{i}]: {res[i].memory_config()}")
+            # print(f"Memory config of res[{i}]: {res[i].memory_config()}")
+        pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
-        pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)  # Convert to height-sharded memory config
+        print("Pooled layout")
+        print(pooled.get_layout())
+
+        # pooled = ttnn.tilize_with_zero_padding(pooled)
+        # pooled = ttnn.tilize_with_val_padding(
+        #     pooled,
+        #     output_tensor_shape = (N, H, W, C),
+        #     pad_value=0.0,
+        #     use_multicore=True,  # Use multicore tiling
+        # )
+
+        # pooled = ttnn.pad(
+        #     pooled,
+        #     padding=((0,0), (1,2), (1,2), (0,0)),  # No padding needed for global pooling
+        #     value=0.0,
+        # )
+
+        print("Pooled tensor after padding")
+        print(f"{pooled.shape=} {pooled.padded_shape=}")
 
         pooled = self.pool_conv(pooled)
+
+        # unpad here
+        # pooled = ttnn.unpad(pooled, (0, 0, 0, 0))  # Unpad the tensor to remove padding
+
         pooled = self.activation(pooled)
+
+        # unpadded_shape_end = [N-1, output_h-1, output_w-1, C-1]  # Unpadded shape end indices
+        # pooled = ttnn.untilize_with_unpadding(
+        #     pooled,
+        #     output_tensor_end=unpadded_shape_end,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # )
+
+        current_h, current_w = pooled.shape[1], pooled.shape[2]
+        print(f"Current height: {current_h}, Current width: {current_w}")
+        print("Pooled shape before upsample:", pooled.shape)
+        print(pooled.memory_config())
+        scale_factor = [H // current_h, W // current_w]
+        print(f"Scale factor: {scale_factor}")
+
+        # numTiles = C // 32
+
+        # pooled = pooled.reshape(N, current_h, 32, numTiles)  # Reshape to (N, H, W, C) for upsampling
+
+        pooled = ttnn.upsample(pooled, scale_factor=scale_factor, mode="bilinear")
+
+        # pooled = ttnn.upsample(pooled, scale_factor=scale_factor, mode="bilinear")
+        # print(pooled.shape)
+
+        print("Pooled tensor")
+        print(pooled)
+        return pooled
 
         # pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -223,9 +291,7 @@ class TtASPP(nn.Module):
         res = ttnn.concat(
             res, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # Concatenate along the channel dimension (NHWC layout)
-
         print(res)
-
         res = self.project_conv(res)
 
         print("After project conv")
