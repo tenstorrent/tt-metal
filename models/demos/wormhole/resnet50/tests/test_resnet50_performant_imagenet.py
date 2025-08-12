@@ -150,7 +150,6 @@ def test_run_resnet50_trace_2cqs_inference(
     "batch_size_per_device, iterations, act_dtype, weight_dtype",
     ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("entire_imagenet_dataset", [True])
 @pytest.mark.parametrize("expected_accuracy", [0.7555288461538462])
 def test_run_resnet50_trace_2cqs_accuracy(
@@ -160,7 +159,6 @@ def test_run_resnet50_trace_2cqs_accuracy(
     imagenet_label_dict,
     act_dtype,
     weight_dtype,
-    enable_async_mode,
     model_location_generator,
     entire_imagenet_dataset,
     expected_accuracy,
