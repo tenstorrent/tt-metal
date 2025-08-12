@@ -135,6 +135,15 @@ operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
+    auto input_buffer_type = input_tensor.memory_config().buffer_type();
+    auto output_buffer_type = output_tensor.memory_config().buffer_type();
+    auto input_page_size = input_tensor.buffer()->page_size();
+    auto output_page_size = output_tensor.buffer()->page_size();
+
+    if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
+        input_page_size != output_page_size) {
+        return detail::nd_reshard_multi_core(input_tensor, output_tensor);
+    }
     if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor.memory_config())) {
         return detail::reshard_multi_core(input_tensor, output_tensor);
     } else {
