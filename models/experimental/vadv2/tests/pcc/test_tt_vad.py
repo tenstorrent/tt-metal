@@ -5,7 +5,6 @@
 import pytest
 import torch
 import ttnn
-import os
 import numpy as np
 from loguru import logger
 from models.experimental.vadv2.reference import vad
@@ -15,16 +14,15 @@ from models.experimental.vadv2.tt.model_preprocessing import (
     create_vadv2_model_parameters_vad,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.vadv2.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 def test_vadv2(
     device,
     reset_seeds,
+    model_location_generator,
 ):
-    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = vad.VAD(
         use_grid_mask=True,
         pts_voxel_layer=None,
@@ -46,14 +44,7 @@ def test_vadv2(
         fut_mode=6,
     )
 
-    state_dict = torch.load(weights_path)
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        k_new = k.replace("lateral_convs.0.", "lateral_convs.")
-        k_new = k_new.replace("fpn_convs.0.", "fpn_convs.")
-        new_state_dict[k_new] = v
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(torch_model=torch_model, model_location_generator=model_location_generator)
 
     input_dict = {
         "img_metas": [
