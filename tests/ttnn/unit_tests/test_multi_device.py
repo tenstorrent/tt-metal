@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -756,22 +757,3 @@ def test_heterogenous_operation_dispatch():
 def test_fabric_with_submeshes(t3k_mesh_device):
     logger.info("Spawning 2 1x4 submeshes on a 2x4 mesh device with fabric enabled")
     submeshes = t3k_mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
-
-
-@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
-def test_multihost_sanity(mesh_device):
-    torch.manual_seed(0)
-
-    shard_size = 32
-    torch_tensor = torch.rand((1, 1, 32, shard_size * mesh_device.get_num_devices()), dtype=torch.bfloat16)
-    torch_gelu = torch.nn.functional.gelu(torch_tensor)
-
-    ttnn_tensor = ttnn.from_torch(
-        torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(mesh_device, dim=3)
-    )
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn_tensor = ttnn.gelu(ttnn_tensor)
-    ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
-    torch_loop_back_tensor = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-
-    assert_with_pcc(torch_gelu, torch_loop_back_tensor, pcc=0.9999)

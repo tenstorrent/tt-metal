@@ -15,7 +15,6 @@
 #include <pybind11/pytypes.h>
 
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -716,7 +715,6 @@ void py_module(py::module& module) {
             Returns:
                 Tensor: The combined tensor.
             )doc");
-    module.def("using_distributed_env", &tt::tt_metal::distributed::UsingDistributedEnvironment);
 }
 
 }  // namespace ttnn::distributed
