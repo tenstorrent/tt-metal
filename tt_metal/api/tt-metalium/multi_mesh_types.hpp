@@ -38,4 +38,25 @@ struct IntermeshLinkTable {
     std::map<EthChanDescriptor, EthChanDescriptor> intermesh_links;
 };
 
+struct EthConnectivityDescriptor {
+    std::string host_name = "";
+    std::map<tt::tt_fabric::EthChanDescriptor, tt::tt_fabric::EthChanDescriptor> local_eth_connections = {};
+    std::map<tt::tt_fabric::EthChanDescriptor, std::pair<std::string, tt::tt_fabric::EthChanDescriptor>>
+        remote_eth_connections = {};
+};
+
+struct ASICDescriptor {
+    uint64_t unique_id;
+    uint32_t tray_id;
+
+    bool operator==(const ASICDescriptor& other) const {
+        return unique_id == other.unique_id && tray_id == other.tray_id;
+    }
+};
+
+struct SystemDescriptor {
+    std::unordered_map<std::string, std::vector<ASICDescriptor>> asic_ids;
+    std::vector<EthConnectivityDescriptor> eth_connectivity_descs;
+};
+
 }  // namespace tt::tt_fabric
