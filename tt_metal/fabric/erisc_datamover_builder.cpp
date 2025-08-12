@@ -1354,7 +1354,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
                 config.sender_channels_local_flow_control_semaphore_address[i];
             sender_channels_connection_semaphore_id[i] = config.sender_channels_connection_semaphore_address[i];
         }
-        log_info(tt::LogTest, "sender_channels_connection_semaphore_id: {}", sender_channels_connection_semaphore_id);
     }
     return FabricEriscDatamoverBuilder(
         ethernet_core,
