@@ -59,10 +59,12 @@ int main() {
         std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
         std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
         std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+
         // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
         uint32_t src0_bank_id = 0;
         uint32_t src1_bank_id = 0;
         uint32_t dst_bank_id = 0;
+
         /*
          * Use circular buffers to set input and output buffers that the
          * compute engine will use.
@@ -88,22 +90,6 @@ int main() {
         tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         /*
-         * Specify data movement kernels for reading/writing data to/from
-         * DRAM.
-         */
-        KernelHandle binary_reader_kernel_id = CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/reader_dummy.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
-        KernelHandle unary_writer_kernel_id = CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_dummy.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-        /*
          * Set the parameters that the compute kernel will use.
          */
         std::vector<uint32_t> compute_kernel_args = {};
@@ -117,7 +103,7 @@ int main() {
          */
         KernelHandle eltwise_binary_kernel_id = CreateKernel(
             program,
-            "tt_metal/kernels/compute/single_thread_eltwise_binary_with_read_write.cpp",
+            "tt_metal/programming_examples/kernels/compute/single_thread_eltwise_binary_with_read_write.cpp",
             core,
             ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
@@ -144,12 +130,6 @@ int main() {
 
         SetRuntimeArgs(
             program,
-            binary_reader_kernel_id,
-            core,
-            {src0_dram_buffer->address(), src0_bank_id, src1_dram_buffer->address(), src1_bank_id, num_tiles});
-
-        SetRuntimeArgs(
-            program,
             eltwise_binary_kernel_id,
             core,
             {src0_dram_buffer->address(),
@@ -160,8 +140,6 @@ int main() {
              block_size,
              dst_dram_buffer->address(),
              dst_bank_id});
-
-        SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id, num_tiles});
 
         EnqueueProgram(cq, program, false);
         Finish(cq);

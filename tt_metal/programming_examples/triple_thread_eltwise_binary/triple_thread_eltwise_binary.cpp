@@ -93,13 +93,13 @@ int main() {
          */
         KernelHandle binary_reader_kernel_id = CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_binary.cpp",
+            "tt_metal/programming_examples/kernels/dataflow/reader_binary.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         KernelHandle unary_writer_kernel_id = CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tt_metal/programming_examples/kernels/dataflow/writer_unary.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -117,7 +117,7 @@ int main() {
          */
         KernelHandle eltwise_binary_kernel_id = CreateKernel(
             program,
-            "tt_metal/kernels/compute/single_thread_eltwise_binary.cpp",
+            "tt_metal/programming_examples/kernels/compute/single_thread_eltwise_binary.cpp",
             core,
             ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,

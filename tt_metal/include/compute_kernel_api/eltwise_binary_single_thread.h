@@ -26,7 +26,6 @@ namespace ckernel {
 // clang-format on
 ALWI void binary_op_init_common_(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1)));
-    // UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
 
     UNPACK((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     UNPACK((llk_math_hw_configure_disaggregated(icb0, icb1)));
