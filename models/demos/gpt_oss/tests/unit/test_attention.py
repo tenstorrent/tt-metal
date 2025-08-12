@@ -12,6 +12,7 @@ from ...reference.configuration_gpt_oss import GptOssConfig
 from ...reference.hf_utils import get_state_dict
 from ...reference.modeling_gpt_oss import GptOssAttention, GptOssRotaryEmbedding
 from ...tt.attention import Attention
+from ...tt.ccl import CCLManager
 
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
@@ -30,7 +31,12 @@ local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/g
 #     indirect=True,
 # )
 @pytest.mark.parametrize("layer_idx", [0])
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 def test_attention(
     mesh_device,
     batch_size,
@@ -87,18 +93,23 @@ def test_attention(
     apply_rope = ApplyRotaryPosEmb(config)
     rope_stuff = (apply_rope, tt_cos, tt_sin)
 
+    ccl_manager = CCLManager(mesh_device)
     tt_model = Attention(
         mesh_device=mesh_device,
         hf_config=config,
         state_dict=state_dict,
         layer_idx=0,
+        ccl_manager=ccl_manager,
     )
 
     tt_out = tt_model(tt_hidden_states, tt_mask, rope_stuff)
-    tt_out_torch = ttnn.to_torch(tt_out)
 
-    # Compare outputs
-    pcc = 0.99
-    passed, pcc_message = comp_pcc(reference_out, tt_out_torch, pcc)
-    logger.info(f"Test passed: {passed}, PCC: {pcc_message}")
-    all_passing = all_passing and passed
+    tt_out_tensors = ttnn.get_device_tensors(tt_out)
+    for i in range(len(tt_out_tensors)):
+        tt_out_torch = ttnn.to_torch(tt_out_tensors[i])
+
+        # Compare outputs
+        pcc = 0.99
+        passed, pcc_message = comp_pcc(reference_out, tt_out_torch, pcc)
+        logger.info(f"Test passed: {passed}, PCC: {pcc_message}")
+        all_passing = all_passing and passed
