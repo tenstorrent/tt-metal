@@ -4,7 +4,7 @@ import ttnn
 
 
 class Experts:
-    def __init__(self, mesh_device, hf_config, state_dict, ccl_manager):
+    def __init__(self, mesh_device, hf_config, state_dict, ccl_manager, dtype=ttnn.bfloat16):
         self.intermediate_size = hf_config.intermediate_size
         self.num_experts = hf_config.num_local_experts
         self.hidden_size = hf_config.hidden_size
@@ -20,26 +20,26 @@ class Experts:
         row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
 
         self.gate_proj = ttnn.from_torch(
-            gate_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+            gate_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=col_mesh_mapper
         )
         self.up_proj = ttnn.from_torch(
-            up_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+            up_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=col_mesh_mapper
         )
         self.gate_proj_bias = ttnn.from_torch(
             gate_proj_bias,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             mesh_mapper=col_mesh_mapper,
         )
         self.up_proj_bias = ttnn.from_torch(
-            up_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=col_mesh_mapper
+            up_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=col_mesh_mapper
         )
 
         down_proj = state_dict["down_proj"].reshape(self.num_experts, 1, self.expert_dim, self.hidden_size)
         down_proj_bias = state_dict["down_proj_bias"].reshape(self.num_experts, 1, 1, self.hidden_size)
         self.down_proj = ttnn.from_torch(
-            down_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=row_mesh_mapper
+            down_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=row_mesh_mapper
         )
         # Row-parallel bias must not be replicated. Extend it with zeros for TP devices.
         if mesh_device.shape[1] > 1:
@@ -50,7 +50,7 @@ class Experts:
             down_proj_bias,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             mesh_mapper=col_mesh_mapper,
         )
 

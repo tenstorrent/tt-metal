@@ -96,8 +96,11 @@ class ReferenceExperts(nn.Module):
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b], ids=["bf16", "bf8", "bf4", "bf2"]
 )
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_mlp(
@@ -109,6 +112,7 @@ def test_mlp(
     seq_len,
     batch_size,
     use_real_weights,
+    dtype,
     reset_seeds,
 ):
     # Create configuration
@@ -135,7 +139,7 @@ def test_mlp(
     state_dict = reference_model.state_dict()
 
     ccl_manager = CCLManager(mesh_device)
-    tt_model = MLP(mesh_device, config, state_dict, ccl_manager)
+    tt_model = MLP(mesh_device, config, state_dict, ccl_manager, dtype=dtype)
 
     # Run tt forward pass first to get the routing scores to use in reference execution
     tt_output, tt_router_scores = tt_model(tt_hidden_states)
