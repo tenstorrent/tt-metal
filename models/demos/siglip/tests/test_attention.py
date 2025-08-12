@@ -4,11 +4,11 @@
 
 
 ### SDPA comparison
-import json
+import os
 
 import pytest
 import torch
-from transformers.models.siglip.configuration_siglip import SiglipVisionConfig
+from transformers import AutoConfig
 from transformers.models.siglip.modeling_siglip import SiglipSdpaAttention
 
 from models.demos.siglip.compare import comp_pcc
@@ -17,12 +17,10 @@ from models.demos.siglip.reference.functional_ttnn import siglip_attention_ttnn
 
 
 @pytest.mark.parametrize("attention_func", [siglip_attention, siglip_attention_ttnn])
-def test_attention_rand(attention_func):
-    with open(
-        "/proj_sw/user_dev/hf_data/hub/models--google--gemma-3-4b-it/snapshots/093f9f388b31de276ce2de164bdc2081324b9767/config.json",
-        "r",
-    ) as fp:
-        config = SiglipVisionConfig(**json.load(fp)["vision_config"])
+def test_attention(attention_func):
+    config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
+    if hasattr(config, "vision_config"):
+        config = config.vision_config
 
     reference_attention = SiglipSdpaAttention(config=config)
 
