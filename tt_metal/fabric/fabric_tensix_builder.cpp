@@ -60,18 +60,32 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     // Get maximum number of active ethernet channels from control plane across all devices
     size_t max_eth_channels = 0;
 
-    // Check all devices to find the maximum number of active ethernet channels
+    // Create per-device channel mappings using real ethernet channel IDs
     for (chip_id_t dev_id = 0; dev_id < num_devices; ++dev_id) {
-        try {
+        if (!(is_TG && tt::DevicePool::instance().get_active_device(dev_id)->is_mmio_capable())) {
             auto dev_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
 
             // Get all active ethernet channels for this device
             auto active_channels = control_plane.get_active_fabric_eth_channels(dev_fabric_node_id);
             max_eth_channels = std::max(max_eth_channels, active_channels.size());
 
-        } catch (const std::exception& e) {
-            // Skip devices that don't have fabric nodes
-            continue;
+            // Initialize per-device mappings
+            eth_chan_to_core_index_[dev_id] = std::unordered_map<size_t, size_t>();
+            eth_chan_to_risc_id_[dev_id] = std::unordered_map<size_t, size_t>();
+
+            // Create round-robin mapping using the actual ethernet channel IDs from active_channels
+            size_t channel_index = 0;
+            for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
+                size_t core_index = channel_index % logical_fabric_mux_cores_.size();
+                eth_chan_to_core_index_[dev_id][eth_chan_id] = core_index;
+
+                // Determine RISC ID: round-robin assignment (0 = BRISC, 1 = NCRISC, etc.)
+                size_t channels_on_core = (channel_index / logical_fabric_mux_cores_.size());
+                size_t risc_id = channels_on_core % num_used_riscs_per_tensix_;
+                eth_chan_to_risc_id_[dev_id][eth_chan_id] = risc_id;
+
+                channel_index++;
+            }
         }
     }
 
@@ -81,17 +95,6 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     num_configs_per_core_ =
         (max_eth_channels + logical_fabric_mux_cores_.size() - 1) / logical_fabric_mux_cores_.size();
     num_used_riscs_per_tensix_ = num_configs_per_core_;
-
-    // Create round-robin mapping of ethernet channels to cores and RISC types
-    for (uint32_t eth_chan = 0; eth_chan < max_eth_channels; ++eth_chan) {
-        size_t core_index = eth_chan % logical_fabric_mux_cores_.size();
-        eth_chan_to_core_index_[eth_chan] = core_index;
-
-        // Determine RISC ID: round-robin assignment (0 = BRISC, 1 = NCRISC, etc.)
-        size_t channels_on_core = (eth_chan / logical_fabric_mux_cores_.size());
-        size_t risc_id = channels_on_core % num_used_riscs_per_tensix_;
-        eth_chan_to_risc_id_[eth_chan] = risc_id;
-    }
 }
 
 void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
@@ -168,7 +171,7 @@ size_t FabricTensixDatamoverConfig::get_base_l1_address(size_t risc_id) const {
 
 std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_noc_xy(
     tt::tt_metal::IDevice* device, uint32_t eth_chan_id) const {
-    CoreCoord core = get_core_for_channel(eth_chan_id);
+    CoreCoord core = get_core_for_channel(device->id(), eth_chan_id);
     CoreCoord physical_core = device->worker_core_from_logical_core(core);
     return {physical_core.x, physical_core.y};
 }
@@ -179,16 +182,30 @@ size_t FabricTensixDatamoverConfig::get_channels_base_address(size_t risc_id, ui
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, tensix_channel_id);
 }
 
-size_t FabricTensixDatamoverConfig::get_risc_id_for_channel(uint32_t eth_chan_id) const {
-    auto it = eth_chan_to_risc_id_.find(eth_chan_id);
-    TT_FATAL(it != eth_chan_to_risc_id_.end(), "RISC ID not found for ethernet channel {}", eth_chan_id);
+size_t FabricTensixDatamoverConfig::get_risc_id_for_channel(chip_id_t device_id, uint32_t eth_chan_id) const {
+    auto device_it = eth_chan_to_risc_id_.find(device_id);
+    TT_FATAL(device_it != eth_chan_to_risc_id_.end(), "Device {} not found in risc mapping", device_id);
+
+    auto it = device_it->second.find(eth_chan_id);
+    TT_FATAL(
+        it != device_it->second.end(),
+        "RISC ID not found for ethernet channel {} on device {}",
+        eth_chan_id,
+        device_id);
     return it->second;
 }
 
-CoreCoord FabricTensixDatamoverConfig::get_core_for_channel(uint32_t eth_chan_id) const {
-    // For this method, we can use the cached logical_fabric_mux_cores_ since they're the same across devices
-    auto it = eth_chan_to_core_index_.find(eth_chan_id);
-    TT_FATAL(it != eth_chan_to_core_index_.end(), "Core index not found for ethernet channel {}", eth_chan_id);
+CoreCoord FabricTensixDatamoverConfig::get_core_for_channel(chip_id_t device_id, uint32_t eth_chan_id) const {
+    auto device_it = eth_chan_to_core_index_.find(device_id);
+    TT_FATAL(device_it != eth_chan_to_core_index_.end(), "Device {} not found in core mapping", device_id);
+
+    auto it = device_it->second.find(eth_chan_id);
+    TT_FATAL(
+        it != device_it->second.end(),
+        "Core index not found for ethernet channel {} on device {}",
+        eth_chan_id,
+        device_id);
+
     size_t core_index = it->second;
     TT_FATAL(core_index < logical_fabric_mux_cores_.size(), "Invalid core index {}", core_index);
     return logical_fabric_mux_cores_[core_index];
@@ -205,30 +222,32 @@ bool FabricTensixDatamoverConfig::is_risc_id_active(size_t risc_id) const {
 }
 
 size_t FabricTensixDatamoverConfig::get_local_flow_control_semaphore_address(
-    uint32_t eth_chan_id, uint32_t channel_id) const {
-    auto risc_id = get_risc_id_for_channel(eth_chan_id);
+    chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
+    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
     auto mux_config = get_mux_config(risc_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     return mux_config->get_flow_control_address(channel_type, channel_id);
 }
 
-size_t FabricTensixDatamoverConfig::get_connection_semaphore_address(uint32_t eth_chan_id, uint32_t channel_id) const {
-    auto risc_id = get_risc_id_for_channel(eth_chan_id);
+size_t FabricTensixDatamoverConfig::get_connection_semaphore_address(
+    chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
+    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
     auto mux_config = get_mux_config(risc_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     return mux_config->get_connection_handshake_address(channel_type, channel_id);
 }
 
-size_t FabricTensixDatamoverConfig::get_worker_conn_info_base_address(uint32_t eth_chan_id, uint32_t channel_id) const {
-    auto risc_id = get_risc_id_for_channel(eth_chan_id);
+size_t FabricTensixDatamoverConfig::get_worker_conn_info_base_address(
+    chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
+    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
     auto mux_config = get_mux_config(risc_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     return mux_config->get_connection_info_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_buffer_index_semaphore_address(
-    uint32_t eth_chan_id, uint32_t channel_id) const {
-    auto risc_id = get_risc_id_for_channel(eth_chan_id);
+    chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
+    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
     auto mux_config = get_mux_config(risc_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     return mux_config->get_buffer_index_address(channel_type, channel_id);
@@ -271,10 +290,10 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     const auto& tensix_config = fabric_context.get_fabric_tensix_config();
 
     // Get RISC ID for this ethernet channel
-    size_t risc_id = tensix_config.get_risc_id_for_channel(ethernet_channel_id);
+    size_t risc_id = tensix_config.get_risc_id_for_channel(device->id(), ethernet_channel_id);
 
     // Get core for this ethernet channel
-    CoreCoord my_core_logical = tensix_config.get_core_for_channel(ethernet_channel_id);
+    CoreCoord my_core_logical = tensix_config.get_core_for_channel(device->id(), ethernet_channel_id);
 
     // Get NOC coordinates
     auto [noc_x, noc_y] = tensix_config.get_noc_xy(device, ethernet_channel_id);

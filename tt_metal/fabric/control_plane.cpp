@@ -2118,14 +2118,14 @@ void ControlPlane::populate_fabric_connection_info(
         const auto& tensix_config = fabric_context.get_fabric_tensix_config();
 
         // Get the mux core that handles this ethernet channel
-        CoreCoord mux_core_logical = tensix_config.get_core_for_channel(eth_channel_id);
+        CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);
 
         // Convert logical core to virtual coordinates for NOC access (similar to write_to_all_tensix_cores)
         CoreCoord mux_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
             physical_chip_id, mux_core_logical, CoreType::WORKER);
 
         // Get the RISC ID that handles this ethernet channel
-        auto risc_id = tensix_config.get_risc_id_for_channel(eth_channel_id);
+        auto risc_id = tensix_config.get_risc_id_for_channel(physical_chip_id, eth_channel_id);
 
         // Use tensix config methods for mux configuration
         connection_info.edm_noc_x = static_cast<uint8_t>(mux_core_virtual.x);
@@ -2136,13 +2136,13 @@ void ControlPlane::populate_fabric_connection_info(
 
         // Use tensix config wrapper APIs for semaphore addresses
         connection_info.edm_l1_sem_addr =
-            tensix_config.get_local_flow_control_semaphore_address(eth_channel_id, sender_channel);
+            tensix_config.get_local_flow_control_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
         connection_info.edm_connection_handshake_addr =
-            tensix_config.get_connection_semaphore_address(eth_channel_id, sender_channel);
+            tensix_config.get_connection_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
         connection_info.edm_worker_location_info_addr =
-            tensix_config.get_worker_conn_info_base_address(eth_channel_id, sender_channel);
+            tensix_config.get_worker_conn_info_base_address(physical_chip_id, eth_channel_id, sender_channel);
         connection_info.buffer_index_semaphore_id =
-            tensix_config.get_buffer_index_semaphore_address(eth_channel_id, sender_channel);
+            tensix_config.get_buffer_index_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
     } else {
         // Use original fabric router configuration
         const auto& edm_config = fabric_context.get_fabric_router_config();

@@ -41,11 +41,11 @@ public:
     // Get channel base address for mux channel ID
     size_t get_channels_base_address(size_t risc_id, uint8_t tensix_channel_id) const;
 
-    // Get the RISC ID for a given ethernet channel
-    size_t get_risc_id_for_channel(uint32_t eth_chan_id) const;
+    // Get the RISC ID for a given ethernet channel on a specific device
+    size_t get_risc_id_for_channel(chip_id_t device_id, uint32_t eth_chan_id) const;
 
-    // Get the core for a given ethernet channel (requires device_id)
-    CoreCoord get_core_for_channel(uint32_t eth_chan_id) const;
+    // Get the core for a given ethernet channel on a specific device
+    CoreCoord get_core_for_channel(chip_id_t device_id, uint32_t eth_chan_id) const;
 
     // Get the mux config for a specific RISC ID
     std::shared_ptr<tt::tt_fabric::FabricMuxConfig> get_mux_config(size_t risc_id) const;
@@ -53,11 +53,12 @@ public:
     // Check if a RISC ID is active (has channels)
     bool is_risc_id_active(size_t risc_id) const;
 
-    // Wrapper APIs for mux config access - these take eth_chan_id and channel_id (channels inside a mux)
-    size_t get_local_flow_control_semaphore_address(uint32_t eth_chan_id, uint32_t channel_id) const;
-    size_t get_connection_semaphore_address(uint32_t eth_chan_id, uint32_t channel_id) const;
-    size_t get_worker_conn_info_base_address(uint32_t eth_chan_id, uint32_t channel_id) const;
-    size_t get_buffer_index_semaphore_address(uint32_t eth_chan_id, uint32_t channel_id) const;
+    // Wrapper APIs for mux config access - these take device_id, eth_chan_id and channel_id (channels inside a mux)
+    size_t get_local_flow_control_semaphore_address(
+        chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
+    size_t get_connection_semaphore_address(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
+    size_t get_worker_conn_info_base_address(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
+    size_t get_buffer_index_semaphore_address(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
 
 private:
     // Logical fabric tensix cores (will get from device-specific core descriptor when needed)
@@ -72,16 +73,16 @@ private:
     size_t num_buffers_per_channel_;
     size_t buffer_size_bytes_full_size_channel_;
 
-    // Base L1 addresses for each RISC ID
+    // Base L1 addresses for each RISC ID, [risc id] -> [base addr] mapping
     std::unordered_map<size_t, size_t> base_l1_addresses_;
 
-    // [eth chan] -> [core index] mapping for round-robin assignment
-    std::unordered_map<uint32_t, size_t> eth_chan_to_core_index_;
+    // [device_id][eth chan] -> [core index] mapping for round-robin assignment
+    std::unordered_map<chip_id_t, std::unordered_map<size_t, size_t>> eth_chan_to_core_index_;
 
-    // [eth chan] -> [risc id] mapping
-    std::unordered_map<uint32_t, size_t> eth_chan_to_risc_id_;
+    // [device_id][eth chan] -> [risc id] mapping
+    std::unordered_map<chip_id_t, std::unordered_map<size_t, size_t>> eth_chan_to_risc_id_;
 
-    // Mux configs per RISC ID
+    // Mux configs per RISC ID, [risc id] -> [mux config] mapping
     std::unordered_map<size_t, std::shared_ptr<tt::tt_fabric::FabricMuxConfig>> mux_configs_;
 
     // Helper methods for initialization
