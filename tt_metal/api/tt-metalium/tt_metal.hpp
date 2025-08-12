@@ -369,6 +369,8 @@ bool ReadFromDeviceL1(
     CoreType core_type = CoreType::WORKER);
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
+bool ReadRegFromDevice(
+    std::shared_ptr<distributed::MeshDevice> device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
 }  // namespace detail
 }  // namespace tt::tt_metal
