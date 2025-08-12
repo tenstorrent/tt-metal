@@ -78,7 +78,7 @@ void kernel_main() {
             const uint32_t input_addr = input_base_addr + input_page_offset;
             const uint32_t szbytes = map_ptr[seg_idx].num_elements * element_sz_bytes;
 
-            if (is_bfp8) {
+            if constexpr (is_bfp8) {
                 volatile tt_l1_ptr uint8_t* input_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(input_base_addr);
                 volatile tt_l1_ptr uint8_t* exp_buffer = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(exp_ptr_addr);
                 uint32_t subtile_id = input_page_offset / faceline_size;
@@ -101,7 +101,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
 
-        if (is_bfp8) {
+        if constexpr (is_bfp8) {
             // copy exponents for bfloat8_b
             memmove((void*)working_write_addr, (const void*)exp_ptr_addr, exponents_size);
         }
