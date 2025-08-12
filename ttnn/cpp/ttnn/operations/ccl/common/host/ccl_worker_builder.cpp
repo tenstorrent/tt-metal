@@ -1294,6 +1294,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
     if (forward_device.has_value() and forward_device.value()) {
         const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
         const auto forward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        log_info(tt::LogAlways, "Appending fabric connection RT args from device: {} with pid {} to forward device: {} with pid {}", device_fabric_node_id, device->id(), forward_device_fabric_node_id, forward_device.value()->id());
         tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, forward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
@@ -1301,6 +1302,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
     if (backward_device.has_value() and backward_device.value()) {
         const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
         const auto backward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        log_info(tt::LogAlways, "Appending fabric connection RT args from device: {} with pid {} to backward device: {} with pid {}", device_fabric_node_id, device->id(), backward_device_fabric_node_id, backward_device.value()->id());
         tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, backward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
