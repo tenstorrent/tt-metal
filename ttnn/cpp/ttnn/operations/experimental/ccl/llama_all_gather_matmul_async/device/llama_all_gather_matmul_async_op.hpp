@@ -97,23 +97,6 @@ struct LlamaAllGatherMatmulAsync {
     auto attribute_values() const { return std::forward_as_tuple(this->matmul_struct, this->devices); }
 };
 
-// All Gather Replicate Variants
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded(
-    const Tensor& input_tensor,
-    const Tensor& intermediate_tensor,
-    const Tensor& aggregated_tensor,
-    Tensor& output_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
-
 // llama All Gather MM Variants
 tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_sharded(
     const Tensor& input_tensor,

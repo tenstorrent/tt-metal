@@ -90,4 +90,5 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }

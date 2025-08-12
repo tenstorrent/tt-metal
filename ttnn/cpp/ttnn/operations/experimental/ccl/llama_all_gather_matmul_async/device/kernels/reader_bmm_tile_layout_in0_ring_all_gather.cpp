@@ -66,46 +66,4 @@ void kernel_main() {
         noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
         cb_push_back(cb_id_in0, multicast_chunk_size_in_tiles);
     }
-
-    /*
-    // Reserving/pushing the local shard is done in compute
-    cb_reserve_back(cb_id_in2, (ring_size - 1) * shard_size_in_tiles);
-
-    uint32_t local_shard_read_addr = get_read_ptr(cb_id_in0);
-    uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in2);
-
-    uint32_t hop_core_offset = static_cast<uint32_t>(is_hop_core);
-
-    for (uint32_t shard_cnt = hop_core_offset; shard_cnt < ring_size; shard_cnt++) {
-        uint32_t curr_ring_idx = (ring_idx + shard_cnt) % ring_size;
-        bool skip_send = unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0 && !is_hop_core;
-
-        uint32_t curr_shard_write_addr = l1_write_addr_in0 + shard_size_bytes * (shard_cnt - hop_core_offset);
-        uint64_t remote_curr_shard_write_addr =
-            get_noc_addr(next_core_noc_x, next_core_noc_y, curr_shard_write_addr, noc);
-        uint32_t curr_shard_read_addr =
-            shard_cnt == 0 ? local_shard_read_addr : l1_write_addr_in0 + shard_size_bytes * (shard_cnt - 1);
-
-        // Wait for signal from previous core that data has been added to this core's in0
-        noc_semaphore_wait_min(l1_signal_sem_addr, shard_cnt);
-
-        // Send data to next core
-        if (shard_cnt < ring_size - 1 || is_hop_core) {  // Skip sending the last shard
-            if (!skip_send) {
-                noc_async_write(curr_shard_read_addr, remote_curr_shard_write_addr, shard_size_bytes, noc);
-            }
-
-            // Signal the next core that data is ready
-            noc_semaphore_inc(remote_signal_semaphore_addr, 1, noc);
-        }
-
-        // Do stuff for matmul fusion here
-        if (shard_cnt > 0) {
-            cb_push_back(cb_id_in2, shard_size_in_tiles);
-        }
-    }
-
-
-    noc_async_atomic_barrier();
-    */
 }
