@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * telemetry_subscriber.hpp
+ * server/telemetry_subscriber.hpp
  *
  * Interface for a telemetry consumer that accepts snapshots of telemetry data.
  */
