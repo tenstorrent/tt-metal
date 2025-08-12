@@ -95,6 +95,9 @@ class Attention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.transformation_mats = transformation_mats
+        self.is_sliding = (
+            configuration.layer_types[layer_num] == "sliding_window" if configuration.layer_types else False
+        )
 
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()

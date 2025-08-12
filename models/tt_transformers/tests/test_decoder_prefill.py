@@ -172,7 +172,9 @@ def test_decoder_inference(
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
-        tt_out = tt_model(decode_input, None, rot_mats, user_id=0, mode="prefill", page_table=page_table_tt)
+        tt_out = tt_model(
+            decode_input, None, rot_mats_global=rot_mats, user_id=0, mode="prefill", page_table=page_table_tt
+        )
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
