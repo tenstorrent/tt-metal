@@ -25,9 +25,10 @@ PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
 
 class RankBinding(BaseModel):
-    """Binding between MPI rank to target as defined in the mesh graph descriptor."""
+    """Binding between MPI rank to target MeshId as defined in the mesh graph descriptor."""
 
     rank: int = Field(..., ge=0, description="MPI rank (must be >= 0)")
+    mesh_id: int = Field(..., ge=0, description="`MeshId` defines the mesh to which the rank belongs")
     env_overrides: Dict[str, str] = Field(default_factory=dict, description="Environment variable overrides")
 
 
@@ -90,6 +91,7 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
             "TT_METAL_CACHE",
             DEFAULT_CACHE_DIR_PATTERN.format(home=str(Path.home()), hostname=os.uname().nodename, rank=binding.rank),
         ),  # Need to explicitly configure this because kernel cache is not multi-process safe (#21089)
+        "TT_MESH_ID": str(binding.mesh_id),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
     }
 
@@ -236,6 +238,7 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
     \b
     Environment Variables:
         The following variables are automatically set for each rank:
+        - TT_MESH_ID: Mesh identifier
         - TT_METAL_CACHE: Per-rank cache directory
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path

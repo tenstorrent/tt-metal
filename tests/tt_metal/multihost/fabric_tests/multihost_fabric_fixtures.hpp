@@ -17,9 +17,8 @@ namespace fabric_router_tests {
 
 template <typename Fixture>
 void validate_and_setup_control_plane_config(Fixture* fixture) {
-    const auto local_mesh_ids = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
     auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
-        fixture->get_eth_coord_mapping(), *local_mesh_ids[0]);
+        fixture->get_eth_coord_mapping(), std::stoi(std::getenv("TT_MESH_ID")));
     tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
         fixture->get_path_to_mesh_graph_desc(), chip_to_eth_coord_mapping);
     TT_FATAL(
