@@ -116,15 +116,68 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice"):
     Console().print(mesh_table)
 
 
+def get_placement_info(tensor_topology):
+    """Extract placement patterns from topology"""
+    placements = tensor_topology.placements()
+    placement_info = []
+    for i, placement in enumerate(placements):
+        placement_type = type(placement).__name__
+        if "Replicate" in placement_type:
+            placement_info.append(f"Tensor shards REPLICATED across mesh dim {i}")
+        elif "Shard" in placement_type:
+            placement_info.append(f"Tensor dim {placement.dim} SHARDED across mesh dim {i}")
+
+    return placement_info
+
+
+def calculate_shard_number(device_id, topology):
+    """Calculate the actual shard number based on sharding pattern, not device ID"""
+    mesh_shape = topology.mesh_shape()
+    placements = topology.placements()
+
+    # Convert device_id to mesh coordinates
+    if hasattr(mesh_shape, "__len__") and len(mesh_shape) >= 2:
+        mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
+        row = device_id // mesh_cols
+        col = device_id % mesh_cols
+        coord = [row, col]
+    else:
+        # Handle 1D or other cases
+        coord = [device_id]
+
+    # Calculate shard number by only considering sharded dimensions
+    shard_num = 0
+    shard_multiplier = 1
+
+    for i, placement in enumerate(placements):
+        placement_type = type(placement).__name__
+        if "Shard" in placement_type and i < len(coord):
+            # This dimension is sharded, so coordinate matters for shard number
+            shard_num += coord[i] * shard_multiplier
+            if hasattr(mesh_shape, "__len__") and i < len(mesh_shape):
+                shard_multiplier *= mesh_shape[i]
+        # If replicated, this dimension doesn't affect shard number
+
+    return shard_num
+
+
 def visualize_tensor(tensor: "ttnn.Tensor"):
     """
     Visualize tensor distribution across the mesh.
     """
     from rich.console import Console
+    from rich.panel import Panel
+    from rich.columns import Columns
     from loguru import logger
+
+    console = Console()
 
     try:
         shards = ttnn.get_device_tensors(tensor)
+        topology = tensor.tensor_topology()
+        placement_info = get_placement_info(topology)
+
+        placement_panel = Panel("\n".join(placement_info), title="Placement Configuration", border_style="blue")
 
         def annotate_with_shard_info(device_id):
             """Add shard information to device cells"""
@@ -134,9 +187,10 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
                 dtype_str = str(shard.dtype).split(".")[-1]
                 layout_str = str(shard.layout).split(".")[-1]
 
-                # TODO: #11406 - Shard number is same as device id for now, this will break when shards are replicated
-                #       Need to update this when we can group devices by shard
-                return f"Shard {device_id}\nShape: {shape_str}\nDtype: {dtype_str}\nLayout: {layout_str}"
+                # Calculate actual shard number based on topology
+                shard_num = calculate_shard_number(device_id, topology)
+
+                return f"Shard {shard_num}\nShape: {shape_str}\nDtype: {dtype_str}\nLayout: {layout_str}"
             return ""
 
         # Generate the mesh table with shard annotations
@@ -147,7 +201,8 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
             storage_type=tensor.storage_type(),
         )
 
-        Console().print(mesh_table)
+        console.print(placement_panel)
+        console.print(mesh_table)
 
     except Exception as e:
         logger.error(f"Error visualizing tensor: {e}")
