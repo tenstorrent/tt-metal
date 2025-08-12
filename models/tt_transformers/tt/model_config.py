@@ -1480,8 +1480,12 @@ class ModelArgs:
                     )
                     self.hidden_dim = padded_hidden_dim
 
+        self.layer_types = text_config.get("layer_types", None)
+
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
+        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+
         rope_scaling_params = text_config.get("rope_scaling", None)
         self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
