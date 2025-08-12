@@ -73,7 +73,7 @@ Result conv2d_DRAM(
     const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
-    const Conv2dSliceConfig& dram_slice_config_ = Conv2dSliceConfig{
+    Conv2dSliceConfig dram_slice_config_ = Conv2dSliceConfig{
         .slice_type = Conv2dSliceConfig::SliceType::WIDTH, .num_slices = 0});
 
 ResultWithOptions conv2d(
