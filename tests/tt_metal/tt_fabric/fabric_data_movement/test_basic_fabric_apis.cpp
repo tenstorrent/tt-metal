@@ -174,6 +174,12 @@ TEST_F(Fabric2DFixture, TestUnicastConnAPIRandom) {
     }
 }
 
+TEST_F(Fabric2DFixture, TestUnicastRaw_3N) { RunTestUnicastRaw(this, 3, RoutingDirection::N); }
+
+TEST_F(Fabric2DFixture, TestUnicastRaw_3E) { RunTestUnicastRaw(this, 3, RoutingDirection::E); }
+
+TEST_F(Fabric2DFixture, TestUnicastRaw_3N3E) { RunTestUnicast2D(this, 3, RoutingDirection::N, 3, RoutingDirection::E); }
+
 TEST_F(Fabric2DFixture, TestMCastConnAPI_1W1E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 1, RoutingDirection::E, 1);
 }
@@ -241,6 +247,8 @@ TEST_F(Fabric2DFixture, Test2DMCastConnAPI_2N1E1W) { RunTest2DMCastConnAPI(this,
 TEST_F(Fabric2DFixture, Test2DMCastConnAPI_2N2E1W) { RunTest2DMCastConnAPI(this, RoutingDirection::N, 2, 2, 1); }
 
 TEST_F(Fabric2DFixture, Test2DMCastConnAPI_2N1E2W) { RunTest2DMCastConnAPI(this, RoutingDirection::N, 2, 1, 2); }
+
+TEST_F(Fabric2DFixture, Test2DMCastConnAPI_7N1E2W) { RunTest2DMCastConnAPI(this, RoutingDirection::N, 7, 1, 2); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N1E6W) { RunTest2DMCastConnAPI(this, RoutingDirection::N, 2, 1, 6); }
 

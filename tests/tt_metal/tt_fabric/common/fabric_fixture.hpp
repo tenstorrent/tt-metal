@@ -194,6 +194,9 @@ void RunTestUnicastConnAPI(
 
 void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture);
 
+void RunTestUnicast2D(
+    BaseFabricFixture* fixture, uint32_t ns_hops, RoutingDirection ns_dir, uint32_t ew_hops, RoutingDirection ew_dir);
+
 void RunTestMCastConnAPI(
     BaseFabricFixture* fixture,
     RoutingDirection fwd_dir = RoutingDirection::W,

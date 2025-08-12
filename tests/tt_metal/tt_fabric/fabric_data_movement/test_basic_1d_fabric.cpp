@@ -778,6 +778,77 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
         fixture, src_physical_device_id, dst_physical_device_id, 0 /* num_hops, not needed for 2d */);
 }
 
+void RunTestUnicast2D(
+    BaseFabricFixture* fixture, uint32_t ns_hops, RoutingDirection ns_dir, uint32_t ew_hops, RoutingDirection ew_dir) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // use control plane to find a mesh with 3 devices
+    auto user_meshes = control_plane.get_user_physical_mesh_ids();
+    std::optional<MeshId> mesh_id;
+    for (const auto& mesh : user_meshes) {
+        auto mesh_shape = control_plane.get_physical_mesh_shape(mesh);
+        if (mesh_shape.mesh_size() >= (ns_hops + 1) * (ew_hops + 1)) {
+            mesh_id = mesh;
+            break;
+        }
+    }
+    if (!mesh_id.has_value()) {
+        GTEST_SKIP() << "No appropriate mesh found for 2d unicast test";
+    }
+
+    // Find a device num_hops away in specified direction.
+    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
+    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
+    std::unordered_map<RoutingDirection, uint32_t> branch_hops;
+
+    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
+    chip_id_t src_phys_chip_id;
+    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
+
+    fabric_hops[ns_dir] = ns_hops;
+    fabric_hops[ew_dir] = ew_hops;
+
+    tt::tt_metal::distributed::MeshShape mesh_shape;
+    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
+    uint32_t is_2d_fabric = topology == Topology::Mesh;
+
+    if (!is_2d_fabric) {
+        GTEST_SKIP() << "Need 2D Fabric for this test.";
+    }
+
+    // Get the mcast sender device and mcast receiver devices that satisfy the input number of trunk hops
+    if (!find_device_with_neighbor_in_multi_direction(
+            fixture,
+            src_fabric_node_id,
+            end_fabric_node_ids_by_dir,
+            src_phys_chip_id,
+            physical_end_device_ids_by_dir,
+            fabric_hops)) {
+        log_info(
+            tt::LogTest,
+            "No destinations found for {} hops in direction {} and {} hops in direction {}.",
+            ns_hops,
+            ns_dir,
+            ew_hops,
+            ew_dir);
+        GTEST_SKIP() << "Skipping Test";
+    }
+
+    mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+    uint32_t ew_dim = mesh_shape[1];
+    auto device_offset = ns_dir == RoutingDirection::N ? -1 : 1;
+    auto dst_fabric_node_id = end_fabric_node_ids_by_dir[ew_dir][ew_hops - 1];
+    dst_fabric_node_id.chip_id += device_offset * ew_dim * ns_hops;
+    auto dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
+    auto src_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+
+    log_info(tt::LogTest, "Src Phys ChipId {}", src_physical_device_id);
+    log_info(tt::LogTest, "Dst Phys ChipId {}", dst_physical_device_id);
+
+    run_unicast_test_bw_chips(
+        fixture, src_physical_device_id, dst_physical_device_id, 0 /* num_hops, not needed for 2d */);
+}
+
 void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
     // TODO: remove this restriction once tunneling is disabled
     if (!fixture->slow_dispatch_) {
