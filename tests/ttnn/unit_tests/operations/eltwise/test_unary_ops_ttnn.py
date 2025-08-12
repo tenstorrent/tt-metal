@@ -1068,6 +1068,7 @@ def test_unary_log1p_ttnn(input_shapes, device):
         (torch.float32, ttnn.float32),
         (torch.bfloat16, ttnn.bfloat16),
         (torch.int32, ttnn.int32),
+        (torch.uint32, ttnn.uint32),
     ],
 )
 def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
@@ -1075,11 +1076,15 @@ def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
 
     if torch_dtype.is_floating_point:
         torch_input_tensor_a = torch.empty((h, w), dtype=torch_dtype).uniform_(-100, 100)
+    elif torch_dtype == torch.uint32:
+        torch_input_tensor_a = torch.randint(low=0, high=100, size=(h, w), dtype=torch_dtype)
     else:
         torch_input_tensor_a = torch.randint(low=-100, high=100, size=(h, w), dtype=torch_dtype)
 
     golden_function = ttnn.get_golden_function(ttnn.fill)
-    torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
+    if torch_dtype in [torch.uint32, torch.int32]:
+        golden_scalar = int(scalar)
+    torch_output_tensor = golden_function(torch_input_tensor_a, golden_scalar, device=device)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
