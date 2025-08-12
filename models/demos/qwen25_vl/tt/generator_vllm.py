@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Union
 
 import torch
+from loguru import logger
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration as Ref_Qwen2_5_VLForConditionalGeneration,
 )
@@ -14,16 +15,32 @@ from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs,
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 
 import ttnn
-from models.demos.qwen25_vl.tt.common import (
-    PagedAttentionConfig,
-    merge_vision_tokens,
-    multimodal_rope_from_hf,
-    preprocess_inputs_prefill,
-)
+from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+
+
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer, model_args: ModelArgs, tt_cache_path):
+    for layer_idx in range(num_layers):
+        cache_k = torch.zeros(kv_cache_shape, dtype=dtype)
+        cache_v = torch.zeros(kv_cache_shape, dtype=dtype)
+
+        model.layers[layer_idx].attention.layer_past = [
+            ttnn.as_tensor(
+                k_or_v,
+                device=model.mesh_device,
+                dtype=ttnn.bfloat8_b,
+                layout=model_args.model_config["ATTN_W_LAYOUT_TILE"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
+                cache_file_name=f"{tt_cache_path}/kvcache_{k_or_v.shape}",
+            )
+            for k_or_v in [cache_k, cache_v]
+        ]
+
+    return [l.attention.layer_past for l in model.layers]
 
 
 def get_platform_specific_optimizations(model_name):
@@ -40,7 +57,6 @@ def initialize_vllm_text_transformer(
     mesh_device,
     max_batch_size,
     max_seq_len,
-    n_layers=None,
     dtype=ttnn.bfloat8_b,
     optimizations=None,
 ):
@@ -54,26 +70,7 @@ def initialize_vllm_text_transformer(
     assert tt_model_args.model_name.replace("-", "").endswith(
         hf_config.name_or_path.split("/")[-1].replace("-", "")
     ), f"The model specified in vLLM ({hf_config.name_or_path}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
-    if n_layers is not None:
-        tt_model_args.n_layers = n_layers
     state_dict = tt_model_args.load_state_dict()
-
-    page_table = None
-    paged_attention_config = None
-    tt_kv_cache = None
-
-    block_size = 32  # [INFO] block size is fixed to 32 for now
-    paged_attention_config = PagedAttentionConfig(
-        block_size=block_size,
-        max_num_blocks=max_seq_len * max_batch_size // block_size,
-    )
-    # Implied shuffling of blocks
-    permutation = torch.randperm(paged_attention_config.max_num_blocks)
-    # Page table which maps virtual blocks to physical
-    reverse_permutation = torch.argsort(permutation)
-    page_table = reverse_permutation.reshape(
-        tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
-    )
 
     model = Transformer(
         args=tt_model_args,
@@ -81,12 +78,10 @@ def initialize_vllm_text_transformer(
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        paged_attention_config=paged_attention_config,
+        use_paged_kv_cache=True,  # [INFO] use paged kv cache provided by this generator
     )
 
-    tt_kv_cache = [l.attention.layer_past for l in model.layers]
-
-    return tt_model_args, model, page_table, tt_kv_cache
+    return tt_model_args, model
 
 
 def input_processor_for_qwen25_vl(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
@@ -123,11 +118,6 @@ class CustomNamespace(SimpleNamespace):
 @INPUT_REGISTRY.register_input_processor(input_processor_for_qwen25_vl)
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
-        self.page_table = kwargs.pop("page_table", None)
-        self.kv_cache = kwargs.pop("kv_cache", None)
-        assert (
-            self.page_table is not None and self.kv_cache is not None
-        ), "Page table and kv cache must be provided for vLLM"
         self.reference_model = kwargs.pop("reference_model", None)
         self.visual_model = kwargs.pop("visual_model", None)
         assert (
@@ -137,9 +127,14 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, tt_data_parallel=1):
-        optimizations, max_seq_len = get_platform_specific_optimizations(hf_config.name_or_path)
-        model_args, model, page_table, kv_cache = initialize_vllm_text_transformer(
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
+        optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_config.name_or_path)
+        if max_seq_len > max_seq_len_native:
+            logger.warning(
+                f"max_seq_len {max_seq_len} is not supported for {hf_config.name_or_path}, using {max_seq_len_native} instead"
+            )
+            max_seq_len = max_seq_len_native
+        model_args, model = initialize_vllm_text_transformer(
             hf_config,
             mesh_device,
             max_batch_size,
@@ -162,41 +157,32 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             optimizations=optimizations,
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(
-            reference_model.visual, vision_model_args, debug=False
-        )  # debug=True to show PCC
+        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
 
         return cls(
             model,
             model_args,
             mesh_device,
             tokenizer=model_args.tokenizer,
-            page_table=page_table,
-            kv_cache=kv_cache,
             reference_model=reference_model,
             visual_model=visual_model,
         )
 
     @property
     def cache_path(self):
-        return self.model_args[0].model_cache_path
+        return self.model_args.model_cache_path
 
     def allocate_kv_cache(self, *args, **kwargs):
-        self.zero_out_kv_cache()
-        return self.kv_cache
-
-    def zero_out_kv_cache(self):
-        for layer in self.kv_cache:
-            k_cache, v_cache = layer
-            k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-            v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+        return allocate_vllm_kv_cache(
+            *args, **kwargs, model=self.model, model_args=self.model_args, tt_cache_path=self.cache_path
+        )
 
     def prefill_forward(
         self,
         tokens,
         images,
-        page_table,  # [INFO] page_table is incorrectly generated for the tokens before the image tokens were processed
-        kv_cache,  # [INFO] id(kv_cache) == id(self.kv_cache) due to allocate_kv_cache returning self.kv_cache
+        page_table,
+        kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
     ):
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
@@ -222,7 +208,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
 
         # Prepare text + vision inputs for decoder model
-        # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
         input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, self.reference_model.config)
         (
@@ -242,35 +227,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         self.model.rope_setup.set_cos_sin(cos, sin)
 
         logits = self.prefill_forward_text(
-            input_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
-            page_table=self.page_table,
-            kv_cache=kv_cache,
-            prompt_lens=decoding_pos,
-        )
-
-        logits = self.prefill_forward_text(
             input_prefill_pt,
-            page_table=self.page_table,
+            page_table=page_table,
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
 
         return logits
 
-    def decode_forward(
-        self,
-        start_pos,
-        tokens,
-        page_table=None,
-        kv_cache=None,
-        enable_trace=True,
-        read_from_device=True,
-    ):
-        return super().decode_forward_text(
-            tokens=tokens,
-            start_pos=start_pos,
-            page_table=self.page_table,
-            kv_cache=kv_cache,
-            enable_trace=True,
-            read_from_device=read_from_device,
-        )
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)
