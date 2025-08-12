@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 
 import ttnn
@@ -10,7 +11,7 @@ import models.experimental.bloom.tt.bloom_gelu_forward as bloom_gelu_forward
 from models.utility_functions import pad_by_zero
 
 
-class TtBloomMLP(torch.nn.Module):
+class TtBloomMLP(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
         self.mem_config = ttnn.L1_MEMORY_CONFIG

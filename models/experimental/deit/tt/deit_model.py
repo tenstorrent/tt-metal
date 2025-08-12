@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Tuple
-from torch import nn
 
 import ttnn
 
@@ -15,7 +15,7 @@ from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
 
 
-class TtDeiTModel(nn.Module):
+class TtDeiTModel(LightweightModule):
     def __init__(
         self,
         config: DeiTConfig(),
