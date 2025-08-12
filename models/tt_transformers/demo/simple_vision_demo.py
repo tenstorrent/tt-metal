@@ -120,9 +120,17 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -437,7 +445,7 @@ def test_multimodal_demo_text(
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 33,
+            "T3K_Llama-3.2-11B": 37,
             "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 

@@ -13,12 +13,14 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
+    AllGatherAsyncConfig,
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
     MulConfig,
     OpConfigBase,
     ReduceScatterAsyncConfig,
+    ReshardConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -186,6 +188,13 @@ class MLP1D(AbstractModule):
 
         # Construct the config
         return {
+            "all_gather": AllGatherAsyncConfig(
+                mesh_device=MeshDeviceStub(mesh_device.shape),
+                cluster_axis=1,
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+            ),
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
             "linear_pc_gen": MLP1D.MLPProgramConfigData(
                 dim=dim, hidden_dim=hidden_dim, num_devices=mesh_width, core_grid_size=matmul_core_grid_size
@@ -195,7 +204,7 @@ class MLP1D(AbstractModule):
             "w3": linear_op_config,
             "mul": MulConfig(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                input_tensor_a_activations=[],  # [ttnn.UnaryOpType.SILU], # TODO: uncomment once ttnn.silu PCC is fixed
             ),
             "reduce_scatter_async": ReduceScatterAsyncConfig(
                 dim=-1,  # We are scattering across the feature dimension (last one)
@@ -205,7 +214,6 @@ class MLP1D(AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
-            "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,  # RMSNorm must provide this shard spec as its output
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
         }
 
@@ -257,13 +265,22 @@ class MLP1D(AbstractModule):
         ), "output_num_cores must divide the output tensor width evenly"
 
         # Calculate input and output memory configurations
-        input_memory_config = cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
         output_memory_config = cls._get_decode_activation_memory_config(
             even_int_div(dim, mesh_width), output_num_cores, mesh_device
         )
 
         # Construct the config
         return {
+            "all_gather": AllGatherAsyncConfig(
+                mesh_device=MeshDeviceStub(mesh_device.shape),
+                cluster_axis=1,
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+            ),
+            "all_gather_reshard": ReshardConfig(
+                memory_config=cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
+            ),
             "w1": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -294,7 +311,7 @@ class MLP1D(AbstractModule):
             ),
             "mul": MulConfig(
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                input_tensor_a_activations=[],  # [ttnn.UnaryOpType.SILU], # TODO: uncomment once ttnn.silu PCC is fixed
             ),
             "reduce_scatter_async": ReduceScatterAsyncConfig(
                 mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -304,7 +321,6 @@ class MLP1D(AbstractModule):
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=output_memory_config,
             ),
-            "input_memory_config": input_memory_config,  # For asserting the input to the MLP
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
         }
 
@@ -331,7 +347,7 @@ class MLP1D(AbstractModule):
         return ttnn.create_sharded_memory_config_(
             shape=(
                 ttnn.core.roundup(MAX_BATCH_SIZE, ttnn.TILE_SIZE),
-                even_int_div(ttnn.core.roundup(per_device_width, ttnn.TILE_SIZE), activation_sharding_num_cores),
+                ttnn.core.roundup(even_int_div(per_device_width, activation_sharding_num_cores), ttnn.TILE_SIZE),
             ),
             core_grid=ttnn.num_cores_to_corerangeset(
                 activation_sharding_num_cores,
@@ -358,6 +374,10 @@ class MLP1D(AbstractModule):
         """
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+            "all_gather": {
+                "multi_device_global_semaphore": ccl.get_semaphore(1),
+                "num_links": ccl.get_max_links(1),
+            },
             "reduce_scatter_async": {
                 "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
                 "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
@@ -395,11 +415,41 @@ class MLP1D(AbstractModule):
         )
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        assert x.memory_config() == cfg["input_memory_config"]
+    def _silu_workaround(cls, x: ttnn.Tensor) -> ttnn.Tensor:  # TODO: remove once ttnn.silu PCC is fixed
+        """Workaround for the silu PCC issue in ttnn."""
+        # -x
+        x1 = ttnn.neg(x)
 
+        # 1
+        x2 = ttnn.ones_like(x)
+
+        # exp(-x)
+        x3 = ttnn.exp(x1)
+        ttnn.deallocate(x1)
+
+        # 1 + exp(-x)
+        x4 = ttnn.add(x3, 1)
+        ttnn.deallocate(x3)
+
+        # 1 / (1 + exp(-x))
+        x5 = ttnn.div(x2, x4)
+        ttnn.deallocate(x2)
+        ttnn.deallocate(x4)
+
+        # x * (1 / (1 + exp(-x)))
+        x6 = ttnn.mul(x, x5)
+        ttnn.deallocate(x5)
+
+        return x6
+
+    @classmethod
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         num_layers, _, seq_len, _ = x.shape
 
+        # All gather for efficient matmuls
+        x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
+
+        # Chunk the input if needed
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
             x = ttnn.reshape(x, [num_layers, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
             seq_len = cfg["max_rows"]
@@ -413,9 +463,13 @@ class MLP1D(AbstractModule):
         )
         ttnn.deallocate(x)
 
-        # Apply activation and multiply
-        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        # Apply silu
+        w1_out_activated = cls._silu_workaround(w1_out)
         ttnn.deallocate(w1_out)
+
+        # Apply activation and multiply
+        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out_activated)
         ttnn.deallocate(w3_out)
 
         # Down projection with dynamic program configs, no need to reshard as we are using dram activations
@@ -439,15 +493,23 @@ class MLP1D(AbstractModule):
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        assert x.memory_config() == cfg["input_memory_config"]
+        # All gather
+        x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
+
+        # TODO: File issue on AG not being able to do this internally
+        x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
         w3_out = ttnn.linear(x, **cfg["w3"])
 
-        # Apply activation and multiply
-        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        # Apply silu
+        w1_out_activated = cls._silu_workaround(w1_out)
         ttnn.deallocate(w1_out)
+
+        # Apply activation and multiply
+        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out_activated)
         ttnn.deallocate(w3_out)
 
         # Down projection

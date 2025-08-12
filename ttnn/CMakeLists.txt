@@ -60,6 +60,8 @@ target_sources(
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
         core/distributed/distributed_tensor_config.cpp
+        core/distributed/distributed_configs.cpp
+        core/distributed/host_ccl.cpp
         core/distributed/tensor_topology.cpp
         core/events.cpp
         core/global_circular_buffer.cpp
@@ -141,6 +143,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_rm/fill_rm_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fold/fold_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/indexed_fill/indexed_fill_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/move/move_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/non_zero_indices/non_zero_indices_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/pad/pad_${PY_BINDING}.cpp

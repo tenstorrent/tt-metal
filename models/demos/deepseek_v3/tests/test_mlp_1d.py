@@ -31,8 +31,8 @@ DEVICE_SHAPE = ttnn.MeshShape(2, min(ttnn.get_num_devices() // 2, 8))
     "device_params", [{"mesh_shape": DEVICE_SHAPE, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
 def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
-    reference_model = DeepseekV3MLP(hf_config)
-    reference_state_dict = reference_model.state_dict()
+    reference_model = DeepseekV3MLP(hf_config).eval()
+    reference_state_dict = reference_model.to(torch.bfloat16).state_dict()
     run_weight_conversion_test(
         MLPClass=MLP1D,
         hf_config=hf_config,
@@ -146,10 +146,11 @@ def test_forward_pass(
 
     # Get the reference IO
     if not issubclass(MLPClass, MLP1DDequant):
-        torch.set_default_dtype(torch.bfloat16)
         reference_model = DeepseekV3MLP(hf_config).eval()
-        state_dict = reference_model.state_dict()
+        state_dict = reference_model.to(torch.bfloat16).state_dict()
         torch_input = torch.randn(num_module_layers, 1, seq_len, hf_config.hidden_size)
+
+        reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
     else:
         state_dict = load_state_dict(model_path, module_path)
@@ -167,9 +168,9 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, None)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, -1)),
         dtype=ttnn.bfloat16,
-        memory_config=run_config["input_memory_config"],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 

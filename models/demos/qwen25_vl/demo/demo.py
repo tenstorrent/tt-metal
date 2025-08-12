@@ -29,6 +29,19 @@ from models.tt_transformers.tt.generator import SamplingParams
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
 
+def create_tt_page_table(paged_attention_config, tt_model_args):
+    if paged_attention_config is None:
+        return None
+
+    # Implied shuffling of blocks
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    # Page table which maps virtual blocks to physical
+    reverse_permutation = torch.argsort(permutation)
+    return reverse_permutation.reshape(
+        tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
+    )
+
+
 def create_tt_model(
     mesh_device,
     instruct,
@@ -48,26 +61,14 @@ def create_tt_model(
     )
     state_dict = tt_model_args.load_state_dict()
 
-    page_table = None
-    paged_attention_config = None
-    tt_kv_cache = None
-
-    if use_paged_kv_cache:
-        paged_attention_config = PagedAttentionConfig(
+    paged_attention_config = (
+        PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
-        )
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
+        if use_paged_kv_cache
+        else None
+    )
 
     model = Transformer(
         args=tt_model_args,
@@ -78,10 +79,9 @@ def create_tt_model(
         paged_attention_config=paged_attention_config,
     )
 
-    if use_paged_kv_cache:
-        tt_kv_cache = [l.attention.layer_past for l in model.layers]
+    tt_kv_cache = [l.attention.layer_past for l in model.layers] if use_paged_kv_cache else None
 
-    return tt_model_args, model, page_table, tt_kv_cache
+    return tt_model_args, model, paged_attention_config, tt_kv_cache
 
 
 # List of supported Parameters for demo.py
@@ -180,6 +180,19 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
+        (  # Batch-32 run with single decoder layer (CI only) - 32 users
+            "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",  # real multi-user prompts
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users with the same prompt
+            4096,  # max_seq_len, allow for image tokens
+            32,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -188,6 +201,7 @@ def create_tt_model(
         "ci-only-two-users",  # ci_only batch-2 for faster testing coverage in CI pipelines
         "ci-only-repeated-batch",  # ci_only repeated batch for faster testing coverage in CI pipelines
         "ci-only-32-users",  # ci_only batch-32 for faster testing coverage in CI pipelines
+        "ci-only-bleu-score",  # ci_only batch-bleu-score for faster testing coverage in CI pipelines
     ],
 )
 @pytest.mark.parametrize(
@@ -231,6 +245,7 @@ def test_demo(
     is_ci_env,
     ci_only,
     reset_seeds,
+    ensure_nltk,
     request,
 ):
     """
@@ -241,6 +256,8 @@ def test_demo(
         pytest.skip("CI only runs the CI-only tests")
     if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
+    if is_ci_env and "bleu-score" in test_id and mesh_device.get_num_devices() <= 2:
+        pytest.skip("BLEU score is only supported for T3K for now")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
@@ -289,7 +306,7 @@ def test_demo(
     if print_to_file:
         # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/tt_transformers/demo/output"
+        output_directory = "models/demos/qwen25_vl/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
@@ -317,7 +334,7 @@ def test_demo(
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    model_args, model, page_table, tt_kv_cache = create_tt_model(
+    model_args, model, paged_attention_config, tt_kv_cache = create_tt_model(
         mesh_device,
         instruct=instruct,
         max_batch_size=batch_size,
@@ -360,9 +377,14 @@ def test_demo(
     num_image_tokens = []
 
     text_outputs = []
+    text_outputs_all_users = []
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
+
+        # Create new page table for each batch
+        page_table = create_tt_page_table(paged_attention_config, model_args)
+
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(input_prompts)
@@ -440,8 +462,7 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        argmax_on_device = sampling_params["temperature"] == 0
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
@@ -563,6 +584,9 @@ def test_demo(
                         logger.info(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
+                    if batch_idx == 0:
+                        text_outputs_all_users.append(text_after_prompt)
+
                 profiler.end(f"log_saving_file", iteration=batch_idx)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
@@ -591,6 +615,18 @@ def test_demo(
                     logger.info(f"text_outputs[{i}] != text_outputs[{j}]")
                     all_match = False
         assert all_match, "text_outputs should be the same for all batches"
+
+    if is_ci_env and "bleu-score" in test_id:
+        assert mesh_device.get_num_devices() > 2, "BLEU score is only supported for T3K for now"
+        expected_output = load_expected_text(model_args.base_model_name)
+        from nltk.tokenize import word_tokenize
+        from nltk.translate.bleu_score import sentence_bleu
+
+        for i, output_text in enumerate(text_outputs_all_users):
+            reference = [word_tokenize(expected_output.lower())]
+            candidate = word_tokenize(output_text.lower())
+            bleu_score = sentence_bleu(reference, candidate)
+            assert bleu_score > 0.5, f"BLEU score for batch {i} is {bleu_score:.3f}"
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill")
@@ -755,3 +791,17 @@ def load_inputs(input_file, batch_size):
         )
         user_input = user_input * batch_size
     return user_input
+
+
+def load_expected_text(model_name):
+    if "Qwen2.5-VL-72B" in model_name:
+        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_72B.txt"
+    elif "Qwen2.5-VL-32B" in model_name:
+        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_32B.txt"
+    else:
+        raise ValueError(f"Model {model_name} not supported")
+
+    with open(input_file, "r") as f:
+        expected_text = f.read()
+
+    return expected_text

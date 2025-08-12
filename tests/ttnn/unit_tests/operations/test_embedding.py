@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, run_for_wormhole_b0
+from models.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
 
 
 def test_base_case(device):
@@ -33,6 +33,43 @@ def test_base_case(device):
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_embedding(
+    device,
+    batch_size,
+    sentence_size,
+    hidden_embedding_dim,
+    vocabulary_size,
+    dtype,
+    input_mem_config,
+    output_mem_config,
+    layout,
+):
+    torch.manual_seed(1234)
+
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=input_mem_config)
+    weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=dtype), device, memory_config=input_mem_config)
+
+    output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=layout)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@skip_for_blackhole("TODO: Fix on BH #26230")
+@pytest.mark.parametrize("batch_size", [55, 100, 200])
+@pytest.mark.parametrize("sentence_size", [1, 10, 100])
+@pytest.mark.parametrize("hidden_embedding_dim", [1, 128])  # Bert_Num_Cols_768, Llama_Num_Cols
+@pytest.mark.parametrize(
+    "vocabulary_size", [768]
+)  # Bert_Position_Embeddings_512, Bert_Word_Embeddings_30528, Llama_Position_Embeddings,
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_embedding_unaligned_RM_pages(
     device,
     batch_size,
     sentence_size,

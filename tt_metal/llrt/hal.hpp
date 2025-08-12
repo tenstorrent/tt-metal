@@ -15,12 +15,13 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <type_traits>
 #include <unordered_set>
 #include <variant>
 #include <vector>
 
 #include "tt_memory.h"
+
+#include <tt_stl/overloaded.hpp>
 
 enum class CoreType;
 enum class AddressableCoreType : uint8_t;
@@ -125,6 +126,39 @@ inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
     return this->processor_classes_[processor_class_idx][processor_type_idx];
 }
 
+// HalJitBuildQueryInterface is an interface for querying arch-specific build options.
+// These are generated on demand instead of stored in HalJitBuildConfig,
+// as the options may vary based on fw build or kernel build.
+class HalJitBuildQueryInterface {
+public:
+    // The results from this query interface may vary based on these parameters.
+    struct Params {
+        bool is_fw;
+        HalProgrammableCoreType core_type;
+        HalProcessorClassType processor_class;
+        uint32_t processor_id;
+    };
+    virtual ~HalJitBuildQueryInterface() = default;
+    // Returns a list of objects to be linked; these were compiled offline.
+    // Paths are relative to the tt-metal root.
+    virtual std::vector<std::string> link_objs(const Params& params) const = 0;
+    // Returns a list of includes paths to be added to compiler command line.
+    virtual std::vector<std::string> includes(const Params& params) const = 0;
+    // Returns a list of defines to be added to compiler command line.
+    virtual std::vector<std::string> defines(const Params& params) const = 0;
+    // Returns a list of source files to be added to compiler command line.
+    virtual std::vector<std::string> srcs(const Params& params) const = 0;
+    // Returns a string of common flags to be added to compiler and linker command lines.
+    virtual std::string common_flags(const Params& params) const = 0;
+    // Returns the path to the linker script, relative to the tt-metal root.
+    virtual std::string linker_script(const Params& params) const = 0;
+    // Returns the target name for the build.
+    // Note: this is added only to keep the target names consistent with the previous
+    // implementation of build, to avoid breaking users / tools.
+    // We can migrate build to use arch-independent target names, and then this can be removed.
+    virtual std::string target_name(const Params& params) const = 0;
+};
+
 class Hal {
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
@@ -162,7 +196,7 @@ private:
     bool coordinate_virtualization_enabled_;
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
-    bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
+    bool eth_fw_is_cooperative_ = false;        // set when eth riscs have to context switch
     bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_;
@@ -188,6 +222,7 @@ private:
     NOCAddrFunc noc_ucast_addr_y_func_;
     NOCAddrFunc noc_local_addr_func_;
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
+    std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -297,42 +332,42 @@ public:
 
     const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
     const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
+
+    const HalJitBuildQueryInterface& get_jit_build_query() const {
+        TT_ASSERT(jit_build_query_ != nullptr);
+        return *jit_build_query_;
+    }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
 
 inline uint32_t Hal::get_processor_classes_count(
     std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const {
-    return std::visit(
-        [&](auto&& core_type_specifier) -> uint32_t {
-            using T = std::decay_t<decltype(core_type_specifier)>;
-            uint32_t index = this->core_info_.size();
-            if constexpr (std::is_same_v<T, HalProgrammableCoreType>) {
-                index = utils::underlying_type<HalProgrammableCoreType>(core_type_specifier);
-            } else if constexpr (std::is_same_v<T, uint32_t>) {
-                index = core_type_specifier;
-            }
-            TT_ASSERT(index < this->core_info_.size());
-            return this->core_info_[index].get_processor_classes_count();
+    // TODO extract as reusable function like `to_index(programmable_core_type)`
+    uint32_t index = std::visit(
+        ttsl::overloaded{
+            [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
+                return utils::underlying_type(core_type_specifier);
+            },
+            [](uint32_t core_type_specifier) { return core_type_specifier; },
         },
         programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].get_processor_classes_count();
 }
 
 inline uint32_t Hal::get_processor_types_count(
     std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const {
-    return std::visit(
-        [&](auto&& core_type_specifier) -> uint32_t {
-            using T = std::decay_t<decltype(core_type_specifier)>;
-            uint32_t index = this->core_info_.size();
-            if constexpr (std::is_same_v<T, HalProgrammableCoreType>) {
-                index = utils::underlying_type<HalProgrammableCoreType>(core_type_specifier);
-            } else if constexpr (std::is_same_v<T, uint32_t>) {
-                index = core_type_specifier;
-            }
-            TT_ASSERT(index < this->core_info_.size());
-            return this->core_info_[index].get_processor_types_count(processor_class_idx);
+    uint32_t index = std::visit(
+        ttsl::overloaded{
+            [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
+                return utils::underlying_type(core_type_specifier);
+            },
+            [](uint32_t core_type_specifier) { return core_type_specifier; },
         },
         programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].get_processor_types_count(processor_class_idx);
 }
 
 inline HalProgrammableCoreType Hal::get_programmable_core_type(uint32_t core_type_index) const {
@@ -458,16 +493,16 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
 }  // namespace tt_metal
 }  // namespace tt
 
-#define HAL_MEM_L1_BASE                                               \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr(      \
+#define HAL_MEM_L1_BASE                                          \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
         ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE                                               \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size(      \
+#define HAL_MEM_L1_SIZE                                          \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
         ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
 
-#define HAL_MEM_ETH_BASE                                              \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr(      \
+#define HAL_MEM_ETH_BASE                                         \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
         ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_ETH_SIZE                                              \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size(      \
+#define HAL_MEM_ETH_SIZE                                         \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
         ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)

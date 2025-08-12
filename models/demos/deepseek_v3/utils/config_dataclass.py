@@ -105,13 +105,17 @@ class AllReduceConfig(OpConfigBase):
 class AllGatherAsyncConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.all_gather_async op"""
 
-    mesh_device: ConfigDevice | None = None
-    cluster_axis: int | None = None
     dim: int | None = None
-    multi_device_global_semaphore: object | None = None
+    cluster_axis: int | None = None
+    mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    multi_device_global_semaphore: ttnn._ttnn.operations.experimental.ccl_experimental.GlobalSemaphoreArg | None = None
+    persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
     num_links: int | None = None
-    memory_config: ttnn.MemoryConfig | None = None
-    topology: ttnn.Topology | None = None
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    use_optimal_ccl_for_llama: bool | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
 
 
 @dataclass
@@ -263,3 +267,21 @@ class RepeatConfig(OpConfigBase):
     """Common parameters for a ttnn.repeat op"""
 
     repeat_dims: ttnn.Shape
+
+
+@dataclass
+class TopKFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.topk_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig
+    use_bitonic_sort: bool = False
+
+
+@dataclass
+class LinearFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.linear_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType
