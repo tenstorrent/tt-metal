@@ -26,6 +26,74 @@ def get_welford_params():
 welford_flavors = get_welford_params()
 
 
+def calculate_max_valid_cores_for_group_norm(num_groups: int, num_channels: int, tile_width: int = 32) -> int:
+    """
+    Calculate the maximum number of cores per dimension that can be used for group norm operations.
+
+    Args:
+        num_groups: Number of groups for group normalization
+        num_channels: Number of channels in the tensor
+        tile_width: Width of a tile (default 32)
+
+    Returns:
+        Maximum valid number of cores per dimension, or 0 if no valid configuration exists
+
+    Raises:
+        ValueError: If input parameters are invalid
+    """
+    if num_channels <= 0 or num_groups <= 0 or tile_width <= 0:
+        raise ValueError("All parameters must be positive integers")
+
+    if num_channels % tile_width != 0:
+        logger.error(
+            f"Invalid configuration: num_channels ({num_channels}) must be divisible by tile_width ({tile_width})"
+        )
+        return 0
+
+    if num_channels % num_groups != 0:
+        logger.error(
+            f"Invalid configuration: num_channels ({num_channels}) must be divisible by num_groups ({num_groups})"
+        )
+        return 0
+
+    num_tiles = num_channels // tile_width
+    group_width = num_channels // num_groups
+
+    logger.info(
+        f"Group norm core calculation: channels={num_channels}, groups={num_groups}, "
+        f"tiles={num_tiles}, group_width={group_width}"
+    )
+
+    # Test from maximum cores (8) down to 1
+    max_cores_to_test = 8
+    for num_cores in range(max_cores_to_test, 0, -1):
+        # Check if tiles can be evenly distributed across cores
+        if num_tiles % num_cores != 0:
+            logger.debug(f"  cores={num_cores}: SKIP - tiles ({num_tiles}) not evenly divisible")
+            continue
+
+        tiles_per_core = num_tiles // num_cores
+        channels_per_core = tiles_per_core * tile_width
+
+        # Check if groups can be evenly distributed
+        if channels_per_core % group_width != 0:
+            logger.debug(
+                f"  cores={num_cores}: SKIP - channels_per_core ({channels_per_core}) "
+                f"not divisible by group_width ({group_width})"
+            )
+            continue
+
+        groups_per_core = channels_per_core // group_width
+        logger.info(
+            f"  cores={num_cores}: VALID - tiles_per_core={tiles_per_core}, "
+            f"channels_per_core={channels_per_core}, groups_per_core={groups_per_core}"
+        )
+        return num_cores
+
+    logger.error("No valid core configuration found")
+    return 0
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
@@ -83,6 +151,13 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
+
+    # Calculate and log the maximum valid cores for this configuration
+    max_valid_cores = calculate_max_valid_cores_for_group_norm(num_groups, C)
+    logger.info(
+        f"Test case: N={N}, C={C}, H={H}, W={W}, groups={num_groups}, "
+        f"requested_grid={cores_y}x{cores_x}, max_valid_cores_per_dim={max_valid_cores}"
+    )
 
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
 
