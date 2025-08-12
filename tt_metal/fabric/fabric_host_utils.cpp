@@ -182,16 +182,6 @@ void set_routing_mode(uint16_t routing_mode) {
             routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_MESH | ROUTING_MODE_TORUS)) == 1,
         "Only one topology mode (RING, LINE, MESH, TORUS) can be active at once");
 
-    // Validate push/pull flags are orthogonal
-    TT_FATAL(
-        __builtin_popcount(routing_mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) <= 1,
-        "PUSH and PULL routing modes cannot be used together");
-
-    // Validate push/pull flags are only for 2D
-    TT_FATAL(
-        !(routing_mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) || (routing_mode & ROUTING_MODE_2D),
-        "PUSH and PULL routing modes can only be used with 2D topology");
-
     // Validate 1D can't be used with MESH or TORUS
     TT_FATAL(
         !(routing_mode & ROUTING_MODE_1D) || !(routing_mode & (ROUTING_MODE_MESH | ROUTING_MODE_TORUS)),
