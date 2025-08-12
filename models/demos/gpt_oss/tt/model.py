@@ -6,7 +6,7 @@ from .rms_norm import RMSNorm
 
 
 class Model:
-    def __init__(self, mesh_device, hf_config, state_dict, ccl_manager):
+    def __init__(self, mesh_device, hf_config, state_dict, ccl_manager, dtype=ttnn.bfloat16):
         self.mesh_device = mesh_device
         embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
         embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
@@ -18,7 +18,12 @@ class Model:
         )
         self.layers = [
             DecoderLayer(
-                mesh_device, hf_config, substate(state_dict, f"model.layers.{layer_idx}"), layer_idx, ccl_manager
+                mesh_device,
+                hf_config,
+                substate(state_dict, f"model.layers.{layer_idx}"),
+                layer_idx,
+                ccl_manager,
+                dtype=dtype,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -33,25 +38,18 @@ class Model:
     def __call__(
         self,
         input_ids,
-        # attention_mask,
-        position_ids,
-        past_key_values,
-        use_cache,
-        cache_position,
+        attention_masks,
         position_embeddings,
     ):
         input_embeds = ttnn.embedding(input_ids, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
 
         hidden_states = input_embeds
         for decoder_layer in self.layers:
+            mask = attention_masks[decoder_layer.attention_type]
             hidden_states = decoder_layer(
                 hidden_states,
-                # attention_mask=attention_mask,
-                # position_ids=position_ids,
-                # past_key_values=past_key_values,
-                # use_cache=use_cache,
-                # cache_position=cache_position,
-                # position_embeddings=position_embeddings,
+                attention_mask=mask,
+                position_embeddings=position_embeddings,
             )
 
         hidden_states = self.norm(hidden_states)

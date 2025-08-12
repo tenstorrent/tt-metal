@@ -1,16 +1,20 @@
 import os
+from typing import Callable, Optional
 
 import pytest
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 import ttnn
 from models.utility_functions import comp_pcc
 
 from ...reference.configuration_gpt_oss import GptOssConfig
 from ...reference.hf_utils import get_state_dict
+from ...reference.modeling_gpt_oss import GptOssRotaryEmbedding
 from ...tt.ccl import CCLManager
 from ...tt.layer import DecoderLayer
+from ...tt.rope import ApplyRotaryPosEmb
 
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
@@ -96,18 +100,174 @@ class ReferenceExperts(nn.Module):
         return next_states
 
 
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """
+    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    """
+    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+
+def _apply_rotary_emb(
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> torch.Tensor:
+    first_half, second_half = torch.chunk(x, 2, dim=-1)
+    first_ = first_half * cos - second_half * sin
+    second_ = second_half * cos + first_half * sin
+    return torch.cat((first_, second_), dim=-1)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_embed = _apply_rotary_emb(q, cos, sin)
+    k_embed = _apply_rotary_emb(k, cos, sin)
+    return q_embed, k_embed
+
+
+def eager_attention_forward(
+    module: nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    scaling: float,
+    dropout: float = 0.0,
+    **kwargs,
+):
+    key_states = repeat_kv(key, module.num_key_value_groups)
+    value_states = repeat_kv(value, module.num_key_value_groups)
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+    if attention_mask is not None:
+        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        attn_weights = attn_weights + causal_mask
+
+    sinks = module.sinks.reshape(1, -1, 1, 1).expand(query.shape[0], -1, query.shape[-2], -1)
+    combined_logits = torch.cat([attn_weights, sinks], dim=-1)
+
+    # This was not in the original implementation and slightly affect results; it prevents overflow in BF16/FP16
+    # when training with bsz>1 we clamp max values.
+
+    combined_logits = combined_logits - combined_logits.max(dim=-1, keepdim=True).values
+    probs = F.softmax(combined_logits, dim=-1, dtype=combined_logits.dtype)
+    scores = probs[..., :-1]  # we drop the sink here
+    attn_weights = nn.functional.dropout(scores, p=dropout, training=module.training)
+    attn_output = torch.matmul(attn_weights, value_states)
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    return attn_output, attn_weights
+
+
+class ReferenceAttention(nn.Module):
+    """Multi-headed attention from 'Attention Is All You Need' paper"""
+
+    def __init__(self, config, layer_idx: int):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        self.num_heads = config.num_attention_heads
+        self.num_key_value_heads = config.num_key_value_heads
+        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
+        self.scaling = self.head_dim**-0.5
+        self.attention_dropout = getattr(config, "attention_dropout", 0.0)
+        self.is_causal = True
+
+        self.q_proj = nn.Linear(
+            config.hidden_size,
+            config.num_attention_heads * self.head_dim,
+            bias=getattr(config, "attention_bias", False),
+        )
+        self.k_proj = nn.Linear(
+            config.hidden_size,
+            config.num_key_value_heads * self.head_dim,
+            bias=getattr(config, "attention_bias", False),
+        )
+        self.v_proj = nn.Linear(
+            config.hidden_size,
+            config.num_key_value_heads * self.head_dim,
+            bias=getattr(config, "attention_bias", False),
+        )
+        self.o_proj = nn.Linear(
+            config.num_attention_heads * self.head_dim,
+            config.hidden_size,
+            bias=getattr(config, "attention_bias", False),
+        )
+
+        # Initialize sinks parameter
+        self.sinks = nn.Parameter(torch.zeros(config.num_attention_heads))
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
+
+        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        cos, sin = position_embeddings
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        attention_interface: Callable = eager_attention_forward
+        attn_output, attn_weights = attention_interface(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            **kwargs,
+        )
+
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        attn_output = self.o_proj(attn_output)
+        return attn_output, attn_weights
+
+
 class ReferenceDecoderLayer(nn.Module):
     """Reference decoder layer implementation that matches the TT implementation"""
 
-    def __init__(self, config):
+    def __init__(self, config, layer_idx=0):
         super().__init__()
+        self.hidden_size = config.hidden_size
+        self.self_attn = ReferenceAttention(config, layer_idx)
+        self.mlp = ReferenceMLP(config)
         self.input_layernorm = ReferenceRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = ReferenceRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = ReferenceMLP(config)
+        self.layer_idx = layer_idx
 
-    def forward(self, hidden_states):
-        # Skip attention (not implemented yet)
-        # Fully Connected (MLP) part only
+    def forward(
+        self,
+        hidden_states,
+        attention_mask,
+        position_embeddings,
+        **kwargs,
+    ):
+        # Self Attention
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+
+        hidden_states, attn_weights = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )
+        hidden_states = residual + hidden_states
+
+        # Fully Connected (MLP) part
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states, router_scores = self.mlp(hidden_states)
@@ -125,6 +285,7 @@ class ReferenceDecoderLayer(nn.Module):
 )
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
+@pytest.mark.parametrize("layer_idx", [0])
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -136,23 +297,47 @@ def test_decoder_layer(
     hidden_size,
     seq_len,
     batch_size,
+    layer_idx,
     use_real_weights,
     reset_seeds,
 ):
+    mesh_device.disable_and_clear_program_cache()
     # Create configuration
     config = GptOssConfig(
         num_local_experts=num_experts,
         intermediate_size=intermediate_size,
         hidden_size=hidden_size,
         num_experts_per_tok=experts_per_token,
-        rms_norm_eps=1e-6,
     )
+
+    sliding_window = 0
+    if layer_idx % 2 == 0:
+        sliding_window = config.sliding_window
+
+    cur_seq_len = seq_len
+    position_ids = torch.arange(seq_len).unsqueeze(0)
+
+    # Create input tensors
+    hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
+    mask = torch.triu(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=1)
+    if sliding_window > 0:
+        mask += torch.tril(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=-sliding_window)
+
+    RopeEmbeddings = GptOssRotaryEmbedding(config)
+    cos, sin = RopeEmbeddings(hidden_states, position_ids)
+    position_embeddings = (cos, sin)
 
     # Create input tensors
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_mask = ttnn.from_torch(mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    apply_rope = ApplyRotaryPosEmb(config)
+    rope_stuff = (apply_rope, tt_cos, tt_sin)
 
     # Create models
     reference_model = ReferenceDecoderLayer(config)
@@ -172,17 +357,13 @@ def test_decoder_layer(
     tt_model = DecoderLayer(mesh_device, config, reference_state_dict, 0, ccl_manager)
 
     # Run forward passes
-    reference_output = reference_model(hidden_states)
+    reference_output = reference_model(hidden_states, mask, position_embeddings)
 
     # For TT model, we need to pass the required arguments even though they're not used
     tt_output = tt_model(
         hidden_states=tt_hidden_states,
-        attention_mask=None,
-        position_ids=None,
-        past_key_values=None,
-        use_cache=False,
-        cache_position=None,
-        position_embeddings=None,
+        attention_mask=tt_mask,
+        position_embeddings=rope_stuff,
     )
 
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
