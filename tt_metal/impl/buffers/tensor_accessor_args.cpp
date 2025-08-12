@@ -126,6 +126,10 @@ void TensorAccessorArgs::append_to(std::vector<uint32_t>& compile_time_args) con
     }
 }
 
+void TensorAccessorArgs::append_placeholder_to(std::vector<uint32_t>& compile_time_args) {
+    compile_time_args.push_back(0);
+}
+
 std::vector<uint32_t> TensorAccessorArgs::get_compile_time_args() const {
     std::vector<uint32_t> compile_time_args;
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {

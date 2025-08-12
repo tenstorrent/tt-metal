@@ -20,6 +20,8 @@ public:
     void append_to(std::vector<uint32_t>& compile_time_args) const;
     void append_to(std::vector<uint32_t>& compile_time_args, std::vector<uint32_t>& common_runtime_args) const;
 
+    static void append_placeholder_to(std::vector<uint32_t>& compile_time_args);
+
     std::vector<uint32_t> get_compile_time_args() const;
     std::vector<uint32_t> get_common_runtime_args() const;
 
