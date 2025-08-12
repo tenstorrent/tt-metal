@@ -10,7 +10,7 @@ import ttnn
 
 class Executor(ABC):
     @abstractmethod
-    def compile(self, sample_input):
+    def compile(self, host_input):
         pass
 
     @abstractmethod
@@ -23,6 +23,46 @@ class Executor(ABC):
 
     @abstractmethod
     def get_read_cq(self) -> int:
+        pass
+
+
+class ModelExecutor(Executor):
+    def __init__(self, model: Callable, device, l1_input_memory_config, cq_id=0):
+        """
+        Executor that runs a model on a single command-queue.
+        """
+        self.model = model
+        self.device = device
+        self.cq_id = cq_id
+        self.l1_input_memory_config = l1_input_memory_config
+
+    def get_read_cq(self):
+        return self.cq_id
+
+    def compile(self, host_input):
+        """
+        Compiles the model by running it once.
+        """
+        self._validate_input(host_input)
+        self._execute_single(host_input)
+        ttnn.synchronize_device(self.device)
+
+    def _validate_input(self, host_input):
+        if host_input.storage_type() != ttnn.StorageType.HOST:
+            raise ValueError("Input tensor must be on host")
+
+    def _execute_single(self, input_tensor):
+        l1_input_tensor = ttnn.to_device(input_tensor, device=self.device, memory_config=self.l1_input_memory_config)
+        output_tensor = self.model(l1_input_tensor)
+        if l1_input_tensor.is_allocated():
+            ttnn.deallocate(l1_input_tensor, force=True)
+        return output_tensor
+
+    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+        for host_input in host_inputs:
+            yield self._execute_single(host_input)
+
+    def cleanup(self):
         pass
 
 
@@ -46,7 +86,9 @@ class TracedModelExecutor(Executor):
         self.l1_input_memory_config = l1_input_memory_config
 
         self.dram_input_tensor = None
+        self.l1_input_tensor = None
         self.output_tensor = None
+        self._compilation_output_tensor = None
 
         self.trace_id = None
         self.input_trace_addr = None
@@ -60,11 +102,8 @@ class TracedModelExecutor(Executor):
         """
         self._validate_input(host_input)
         self._allocate_persistent_tensors(host_input)
-
         self._run_model_for_compilation(host_input)
-
         self._capture_execution_trace(host_input)
-
         ttnn.synchronize_device(self.device)
 
     def _validate_input(self, host_input):
@@ -78,9 +117,8 @@ class TracedModelExecutor(Executor):
 
     def _run_model_for_compilation(self, host_input):
         l1_input_for_compile = self._prepare_l1_input(host_input)
-        output_for_compile = self.model(l1_input_for_compile)
+        self._compilation_output_tensor = self.model(l1_input_for_compile)
         ttnn.deallocate(l1_input_for_compile)
-        ttnn.deallocate(output_for_compile)
 
     def _capture_execution_trace(self, host_input):
         l1_input_for_trace, spec = self._prepare_input_for_trace_capture(host_input)
@@ -91,7 +129,6 @@ class TracedModelExecutor(Executor):
         ttnn.deallocate(l1_input_for_trace)
 
         self._validate_trace_address_consistency(spec)
-
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=self.cq_id)
 
     def _prepare_input_for_trace_capture(self, host_input):
@@ -99,9 +136,7 @@ class TracedModelExecutor(Executor):
         self.input_trace_addr = l1_input_for_trace.buffer_address()
         spec = l1_input_for_trace.spec
 
-        # Clean up compilation output tensor if it exists to ensure correct memory allocation order for persistent tensors
-        if hasattr(self, "_compilation_output_tensor"):
-            self._compilation_output_tensor.deallocate(force=True)
+        self._compilation_output_tensor.deallocate(force=True)
 
         return l1_input_for_trace, spec
 
@@ -110,8 +145,8 @@ class TracedModelExecutor(Executor):
         Validates that allocating a persistent L1 tensor will use the expected address
         that was captured during trace recording.
         """
-        l1_input_tensor = ttnn.allocate_tensor_on_device(spec, self.device)
-        actual_addr = l1_input_tensor.buffer_address()
+        self.l1_input_tensor = ttnn.allocate_tensor_on_device(spec, self.device)
+        actual_addr = self.l1_input_tensor.buffer_address()
 
         if self.input_trace_addr != actual_addr:
             raise RuntimeError(
@@ -141,10 +176,12 @@ class TracedModelExecutor(Executor):
         """
         # Transfer input to device and reshard to L1
         ttnn.copy_host_to_device_tensor(input_tensor, self.dram_input_tensor, cq_id=self.cq_id)
-        l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+
+        # Reuse persistent L1 tensor by resharding in-place
+        self.l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config, self.l1_input_tensor)
 
         # Validate address consistency with captured trace
-        actual_addr = l1_input_tensor.buffer_address()
+        actual_addr = self.l1_input_tensor.buffer_address()
         if actual_addr != self.input_trace_addr:
             raise RuntimeError(
                 f"L1 input tensor address mismatch during execution: "
@@ -166,14 +203,17 @@ class TracedModelExecutor(Executor):
             ttnn.release_trace(self.device, self.trace_id)
 
 
-class MultiCQTracedModelExecutor(Executor):
+class MultiCQTracedModelOverlappedInputExecutor(Executor):
     """
-    Multi-command queue traced model executor that uses separate queues for input writes
-    and operations/output reads to enable parallel execution and improved throughput.
+    Multi-command queue traced model executor that overlaps input transfers with model execution
+    for improved throughput.
 
     Uses two command queues:
     - CQ_OPS_AND_OUTPUT_READ (0): Model operations and output reading
     - CQ_INPUT_WRITE (1): Input tensor writing to device
+
+    This executor can transfer the next input while the model is processing the current input,
+    reducing the impact of input transfer latency on overall throughput.
     """
 
     CQ_OPS_AND_OUTPUT_READ = 0
@@ -336,7 +376,7 @@ class MultiCQTracedModelExecutor(Executor):
             ttnn.release_trace(self.device, self.trace_id)
 
 
-class MultiCQTracedModelWithSeparateIOExecutor(Executor):
+class MultiCQTracedModelPipelinedIOExecutor(Executor):
     """
     Multi-command queue traced model executor that uses separate queues for I/O and operations.
 
@@ -359,8 +399,6 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
         dram_input_memory_config,
         l1_input_memory_config,
         dram_output_memory_config,
-        output_shape,
-        output_dtype,
     ):
         self.model = model
         self.device = device
@@ -368,9 +406,6 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
         self.dram_input_memory_config = dram_input_memory_config
         self.l1_input_memory_config = l1_input_memory_config
         self.dram_output_memory_config = dram_output_memory_config
-
-        self.output_shape = output_shape
-        self.output_dtype = output_dtype
 
         self.dram_input_tensor = None
         self.dram_output_tensor = None
@@ -389,18 +424,25 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
 
     def compile(self, host_input):
         """
-        Compiles the model with separate I/O pipeline by running it once to generate kernels,
+        Compiles the model with pipelined I/O by running it once to generate kernels,
         then capturing a trace for efficient repeated execution using multi-command queue
-        synchronization with separate I/O operations.
+        synchronization with pipelined I/O operations.
         """
         self._validate_input(host_input)
-        self._allocate_persistent_tensors(host_input)
+        self._allocate_persistent_input_tensor(host_input)
 
         first_op_event, read_event = self._initialize_synchronization_events()
 
-        first_op_event, write_event, last_op_event = self._run_model_for_compilation_with_io(
-            host_input, first_op_event, read_event
-        )
+        (
+            first_op_event,
+            write_event,
+            last_op_event,
+            output_shape,
+            output_dtype,
+        ) = self._run_model_for_compilation_with_io(host_input, first_op_event, read_event)
+
+        # Allocate output tensor based on inferred shape and dtype from compilation run
+        self._allocate_persistent_output_tensor(output_shape, output_dtype)
 
         self._capture_execution_trace_with_io(host_input, first_op_event, write_event)
 
@@ -412,13 +454,16 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
         if host_input.storage_type() != ttnn.StorageType.HOST:
             raise ValueError("Input tensor must be on host")
 
-    def _allocate_persistent_tensors(self, host_input):
-        """Allocates persistent DRAM input and output tensors for reuse across executions."""
+    def _allocate_persistent_input_tensor(self, host_input):
+        """Allocates persistent DRAM input tensor for reuse across executions."""
         self.dram_input_tensor = ttnn.allocate_tensor_on_device(
             host_input.shape, host_input.dtype, host_input.layout, self.device, self.dram_input_memory_config
         )
+
+    def _allocate_persistent_output_tensor(self, output_shape, output_dtype):
+        """Allocates persistent DRAM output tensor based on inferred shape and dtype."""
         self.dram_output_tensor = ttnn.allocate_tensor_on_device(
-            self.output_shape, self.output_dtype, ttnn.ROW_MAJOR_LAYOUT, self.device, self.dram_output_memory_config
+            output_shape, output_dtype, ttnn.ROW_MAJOR_LAYOUT, self.device, self.dram_output_memory_config
         )
 
     def _initialize_synchronization_events(self):
@@ -429,15 +474,17 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
     def _run_model_for_compilation_with_io(self, host_input, first_op_event, read_event):
         """
         Runs the model once for compilation using the I/O pipeline pattern.
-        Returns updated events for subsequent trace capture.
+        Returns updated events and output tensor shape/dtype for subsequent trace capture.
         """
         # Transfer input using I/O queue
         write_event = self._transfer_input_for_compilation(host_input, first_op_event)
 
         # Execute model and transfer output using ops queue
-        first_op_event, last_op_event = self._execute_model_and_transfer_output(write_event, read_event)
+        first_op_event, last_op_event, output_shape, output_dtype = self._execute_model_and_transfer_output(
+            write_event, read_event
+        )
 
-        return first_op_event, write_event, last_op_event
+        return first_op_event, write_event, last_op_event, output_shape, output_dtype
 
     def _transfer_input_for_compilation(self, host_input, first_op_event):
         """Transfers input from host to device DRAM using I/O queue."""
@@ -448,7 +495,7 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
     def _execute_model_and_transfer_output(self, write_event, read_event):
         """
         Executes model operations and transfers output to DRAM using ops queue.
-        Returns updated synchronization events.
+        Returns updated synchronization events and output tensor shape/dtype.
         """
         # Execute model operations
         ttnn.wait_for_event(self.CQ_OPS, write_event)
@@ -463,11 +510,15 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
         )
         last_op_event = ttnn.record_event(self.device, self.CQ_OPS)
 
+        # Extract output info before cleanup
+        output_shape = self._compilation_output_tensor.shape
+        output_dtype = self._compilation_output_tensor.dtype
+
         # Cleanup compilation tensors
         ttnn.deallocate(l1_input_tensor)
         ttnn.deallocate(self._compilation_output_tensor)
 
-        return first_op_event, last_op_event
+        return first_op_event, last_op_event, output_shape, output_dtype
 
     def _capture_execution_trace_with_io(self, host_input, first_op_event, write_event):
         """
@@ -593,16 +644,11 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
         """
         num_inputs = len(host_inputs)
         if num_inputs < 2:
-            raise ValueError(f"Separate I/O executor requires at least 2 inputs for pipelining (got {num_inputs})")
+            raise ValueError(f"Pipelined I/O executor requires at least 2 inputs for pipelining (got {num_inputs})")
 
-        # Transfer the first input to start the pipeline
         self._transfer_first_input(host_inputs[0])
-
-        # Process inputs 1 to N-1 with pipelining
         for i in range(1, num_inputs):
             yield self._issue_input_and_get_prev_output(host_inputs[i])
-
-        # Process the final input
         yield self._get_last_output()
 
     def _transfer_first_input(self, first_input):
