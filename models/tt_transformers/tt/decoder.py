@@ -115,7 +115,8 @@ class TransformerBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mats=None,
+        rot_mats_global=None,
+        rot_mats_local=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -129,6 +130,12 @@ class TransformerBlock(LightweightModule):
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+
+        # Choose the correct rotation matrices based on the mode
+        rot_mats = (
+            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
+        )
+
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
         # Attention takes replicated inputs and produces fractured outputs

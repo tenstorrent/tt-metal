@@ -308,7 +308,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             h = layer(
                 h,
                 current_pos,
-                rot_mats=rot_mats,
+                rot_mats_global=rot_mats,
                 user_id=user_id,
                 mode=mode,
                 page_table=page_table,
