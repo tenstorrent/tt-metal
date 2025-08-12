@@ -33,6 +33,7 @@ from ....stable_diffusion_35_large.tt.fun_vae_decoder.fun_vae_decoder import sd_
 from ...models.transformers.transformer_sd35 import SD35Transformer2DModel
 from ...parallel.manager import CCLManager
 from ...parallel.config import DiTParallelConfig, create_vae_parallel_manager, EncoderParallelManager
+from ...utils.padding import PaddingConfig
 
 TILE_SIZE = 32
 
@@ -193,21 +194,14 @@ class StableDiffusion3Pipeline:
 
         assert checkpoint_name == "stabilityai/stable-diffusion-3.5-large"
 
-        # TODO: Figure out heads padding throughout the model
-        # ## heads padding
-        # assert not embedding_dim % torch_transformer.config.num_attention_heads, "Embedding_dim % num_heads != 0"
-        # pad_embedding_dim = (bool)(
-        #     torch_transformer.config.num_attention_heads
-        # ) % parallel_config.tensor_parallel.factor
-        # if pad_embedding_dim:
-        #     head_size = embedding_dim // torch_transformer.config.num_attention_heads
-        #     num_heads = (
-        #         math.ceil(torch_transformer.config.num_attention_heads / parallel_config.tensor_parallel.factor)
-        #         * parallel_config.tensor_parallel.factor
-        #     )
-        #     hidden_dim_padding = (num_heads * head_size) - embedding_dim
-        # else:
-        #     num_heads = torch_transformer.config.num_attention_heads
+        if torch_transformer.config.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
+            padding_config = PaddingConfig.from_tensor_parallel_factor(
+                torch_transformer.config.num_attention_heads,
+                torch_transformer.config.attention_head_dim,
+                parallel_config.tensor_parallel.factor,
+            )
+        else:
+            padding_config = None
 
         self.transformers = []
         for i, submesh_device in enumerate(self.submesh_devices):
@@ -228,6 +222,7 @@ class StableDiffusion3Pipeline:
                 ccl_manager=self.ccl_managers[i],
                 parallel_config=self.dit_parallel_config,
                 init=False,
+                padding_config=padding_config,
             )
             tt_transformer.load_state_dict(torch_transformer.state_dict())
 
