@@ -404,13 +404,6 @@ def test_reduce_scatter_async(
     ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
-    "use_barrier, use_persistent_buffers",
-    [
-        (True, False),
-    ],
-    ids=["barrier_without_persistent_buffers"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -439,8 +432,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
     enable_trace,
     num_iters,
     ones_tensor,
-    use_barrier,
-    use_persistent_buffers,
     rs_topology,
 ):
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
@@ -485,8 +476,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        use_barrier=use_barrier,
-        use_persistent_buffers=use_persistent_buffers,
         mem_config_intermediate=mem_config_intermediate,
     )
 
@@ -541,13 +530,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
     ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
-    "use_barrier, use_persistent_buffers",
-    [
-        (True, False),
-    ],
-    ids=["barrier_without_persistent_buffers"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -573,8 +555,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     enable_trace,
     num_iters,
     ones_tensor,
-    use_barrier,
-    use_persistent_buffers,
     rs_topology,
 ):
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
@@ -612,8 +592,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        use_barrier=use_barrier,
-        use_persistent_buffers=use_persistent_buffers,
         mem_config_intermediate=mem_config_intermediate,
     )
 
@@ -662,13 +640,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
-    "use_barrier, use_persistent_buffers",
-    [
-        (True, False),
-    ],
-    ids=["barrier_without_persistent_buffers"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -691,8 +662,6 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     enable_trace,
     num_iters,
     ones_tensor,
-    use_barrier,
-    use_persistent_buffers,
     rs_topology,
 ):
     input_shard_spec = ttnn.ShardSpec(
@@ -721,7 +690,5 @@ def test_reduce_scatter_async_sharded_to_interleaved(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        use_barrier=use_barrier,
-        use_persistent_buffers=use_persistent_buffers,
         mem_config_intermediate=mem_config_intermediate,
     )
