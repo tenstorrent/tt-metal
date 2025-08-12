@@ -1180,8 +1180,8 @@ FORCE_INLINE void noc_async_write_tile(
 /**
  * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
  *
- * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the InterleavedAddrGen object.
- * This function is a convenience wrapper around noc_async_write_page for InterleavedAddrGen objects.
+ * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the TensorAccessor object.
+ * This function is a convenience wrapper around noc_async_write_page for TensorAccessor objects.
  * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
  */
 // clang-format on
