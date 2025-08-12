@@ -142,7 +142,6 @@ inline bool move_tiles_to_dram(
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
     int start_index = 0;
-    int tile_id = 0;
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     std::vector<uint32_t> tile;
     std::vector<uint32_t> tiles;

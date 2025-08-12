@@ -119,15 +119,15 @@ std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHa
                     .set_page_size(ouput_cb_index, single_tile_size)
                     .set_page_size(interm0_cb_index, single_tile_size);
             if (cfg.multi_dram) {
-                auto cb_src0 = tt_metal::CreateCircularBuffer(program_, all_cores, cb_src0_config);
-                auto cb_src1 = tt_metal::CreateCircularBuffer(program_, all_cores, cb_src1_config);
-                auto cb_output = tt_metal::CreateCircularBuffer(program_, CoreRangeSet({all_cores}), cb_output_config);
+                tt_metal::CreateCircularBuffer(program_, all_cores, cb_src0_config);
+                tt_metal::CreateCircularBuffer(program_, all_cores, cb_src1_config);
+                tt_metal::CreateCircularBuffer(program_, CoreRangeSet({all_cores}), cb_output_config);
             } else {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
-                auto cb_src0 = tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
-                auto cb_src1 = tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
-                auto cb_output = tt_metal::CreateCircularBuffer(program_, cores, cb_output_config);
+                tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
+                tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
+                tt_metal::CreateCircularBuffer(program_, cores, cb_output_config);
             }
         }
     }
@@ -174,7 +174,7 @@ std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHa
         uint(out_subblock_w),
         uint(out_subblock_num_tiles)};
 
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
         all_cores,
@@ -517,10 +517,8 @@ bool matmul_multi_core_multi_dram(
             out_subblock_h,
             out_subblock_w);
 
-    auto device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto& program_ = workload.get_programs().at(device_range);
     // CommandQueue& cq = device->command_queue();
 
     ////////////////////////////////////////////////////////////////////////////

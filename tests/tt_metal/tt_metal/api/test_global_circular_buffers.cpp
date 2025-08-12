@@ -82,7 +82,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
 
-        tt::tt_metal::KernelHandle blank_kernel = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/blank.cpp",
             all_cores,
@@ -111,7 +111,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
 
-        tt::tt_metal::KernelHandle blank_kernel = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/blank.cpp",
             all_cores,
@@ -122,8 +122,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         tt::tt_metal::CircularBufferConfig global_cb_config = tt::tt_metal::CircularBufferConfig(cb_page_size);
         global_cb_config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
         global_cb_config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
-        auto remote_cb =
-            tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
+        tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         auto& program_ = workload.get_programs().at(device_range);
         EXPECT_THROW(program_.finalize_offsets(device), std::exception);

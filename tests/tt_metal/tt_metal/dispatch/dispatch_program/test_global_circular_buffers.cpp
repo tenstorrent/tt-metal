@@ -50,7 +50,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
     tt::tt_metal::CircularBufferConfig global_cb_config = tt::tt_metal::CircularBufferConfig(cb_page_size);
     global_cb_config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
     global_cb_config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
-    auto remote_cb = tt::tt_metal::experimental::CreateCircularBuffer(program_, all_cores, global_cb_config, global_cb);
+    tt::tt_metal::experimental::CreateCircularBuffer(program_, all_cores, global_cb_config, global_cb);
 
     std::vector<uint32_t> compile_args = {remote_cb_index};
     tt::tt_metal::KernelHandle dm0_sender_kernel = tt::tt_metal::CreateKernel(

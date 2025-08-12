@@ -91,8 +91,6 @@ bool flatten(
     uint32_t num_tiles_c = 5) {
     bool pass = true;
 
-    auto device = mesh_device->get_devices()[0];
-
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -127,7 +125,7 @@ bool flatten(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 1;
@@ -135,7 +133,7 @@ bool flatten(
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     auto flatten_kernel = tt_metal::CreateKernel(
         program_,
@@ -155,7 +153,7 @@ bool flatten(
         num_tiles * 32  // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,

@@ -97,7 +97,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     std::string sender_kernel_filename = "sender.cpp";
     std::string sender_kernel_path = kernels_dir + sender_kernel_filename;
 
-    auto sender_kernel = CreateKernel(
+    CreateKernel(
         program,
         sender_kernel_path,
         test_config.master_core_coord,

@@ -376,7 +376,6 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
 JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     this->lflags_ = env.lflags_;
     this->cflags_ = env.cflags_;
     this->default_compile_opt_level_ = "Os";

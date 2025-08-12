@@ -277,7 +277,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
                                              .set_page_size(intermediate_cb, single_tile_size)
                                              .set_page_size(out_cb, single_tile_size);
-        auto cb = CreateCircularBuffer(program_, core_coord, cb_config);
+        CreateCircularBuffer(program_, core_coord, cb_config);
 
         CreateKernel(
             program_,

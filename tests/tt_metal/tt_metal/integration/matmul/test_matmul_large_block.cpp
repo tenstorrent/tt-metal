@@ -365,7 +365,7 @@ bool matmul_large_block(
 
     std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block.cpp";
 
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program_,
         compute_kernel,
         core,
