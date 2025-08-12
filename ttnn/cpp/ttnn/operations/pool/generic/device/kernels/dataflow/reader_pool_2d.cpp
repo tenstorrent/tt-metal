@@ -65,6 +65,7 @@ template <
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
     uint32_t in_idx_cb_id,
+    uint32_t tile_tmp_cb_id,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
@@ -174,11 +175,17 @@ ALWI void read_window_with_top_left_index(
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
-            tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 32);
+            // DPRINT << "IN_CB " << ENDL();
+            // tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 32);
             cb_push_back(in_cb_id, 1);
             if constexpr (return_indices) {
-                tt::data_movement::common::print_u16_pages(get_read_ptr(in_idx_cb_id), 32, 32);
+                // DPRINT << "IN_IDX_CB " << ENDL();
+                // tt::data_movement::common::print_u16_pages(get_read_ptr(in_idx_cb_id), 32, 32);
                 cb_push_back(in_idx_cb_id, 1);
+
+                // cb_wait_front(tile_tmp_cb_id, 1);
+                // DPRINT << "TILE_TMP_CB " << ENDL();
+                // tt::data_movement::common::print_bf16_pages(get_read_ptr(tile_tmp_cb_id), 32, 32);
             }
         }
     }
@@ -252,161 +259,19 @@ void kernel_main() {
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(21);
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(22);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(23);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(25);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(28);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(29);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(30);
+    constexpr uint32_t tile_tmp_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(25);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(26);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(27);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(28);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(29);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(30);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(31);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(32);
 
-    constexpr uint32_t in_scalar_cb_id =
-        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+    fill_with_val(get_write_ptr(in_cb_id), TILE_HEIGHT * TILE_WIDTH, 0x3F80);
 
-    uint32_t scalar_index = 0;
-    uint32_t scalar_start = 0;
-    uint32_t scalar_end = 1;
-    uint32_t scalar_value = 0;
+    // tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 32);
 
-    constexpr uint32_t window_size_hw = window_h * window_w;
-    constexpr uint32_t face_r_dim = window_size_hw < 16 && !return_indices ? window_size_hw : 16;
-    constexpr bool is_partial_tile = in_c < 32;
-    constexpr uint32_t num_faces_in_input_tile =
-        is_partial_tile                                                                ? 1
-        : ((max_sticks_for_reduction < 32 || window_size_hw <= 16) && !return_indices) ? 2
-                                                                                       : 4;
-    constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
-    constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
-    constexpr uint32_t interm_reduction_chunks =
-        remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
-    // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
-    constexpr bool need_to_initialize_in_cb =
-        return_indices || (remaining_elems && face_r_dim == 16 && (num_faces_in_input_tile == 4 || is_partial_tile) &&
-                           interm_reduction_chunks <= multi_buffering_factor);
-    constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
-
-    // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            cb_push_back(clear_value_cb_id, 1);
-        }
-        if constexpr (reader_id == 1) {
-            cb_wait_front(clear_value_cb_id, 1);
-        }
-        // for average pool clear out tiles runs in loop, no need to initialize here
-        if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>();
-        }
-        // we don't need to clear the idx CB since the data CB is the one being sorted
-    }
-
-    // initialize the scalar CB
-    if constexpr (reader_id == 0 && one_scalar_per_core) {
-        fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
-        cb_push_back(in_scalar_cb_id_0, 1);
-    }
-
-    const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
-    const uint32_t in_idx_l1_read_base_addr = get_read_ptr(in_shard_idx_cb_id);
-    uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
-    volatile tt_l1_ptr uint32_t* reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
-    uint32_t config_l1_addr;
-    volatile tt_l1_ptr uint16_t* config_ptr;
-
-    constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
-
-    uint32_t segments_counter = 1;
-    uint32_t counter = reader_id;
-    constexpr uint32_t total_elems_to_reduce = window_h * window_w;
-    constexpr bool wide_reduction = in_nblocks_c > 1;
-
-    if constexpr (!one_scalar_per_core) {
-        config_l1_addr = get_read_ptr(config_cb_id);
-        config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
-        scalar_start = config_ptr[3 * scalar_index];
-        scalar_value = config_ptr[3 * scalar_index + 1];
-        scalar_end = config_ptr[3 * scalar_index + 2];
-        scalar_index++;
-    }
-
-    uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
-    bool first_row_value = reader_id == 0;
-
-    uint32_t reader_indices_on_core = 0;
-
-    if (split_reader) {
-        if (reader_id == 0) {
-            reader_indices_on_core = (reader_nindices + 1) / 2;
-        } else {
-            reader_indices_on_core = reader_nindices / 2;
-        }
-    } else {
-        reader_indices_on_core = reader_nindices;
-    }
-
-    while (num_segments--) {
-        uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
-        uint16_t start = start_end_segment & 0xffff;
-        uint16_t end = start_end_segment >> 16;
-
-        if (!first_row_value) {
-            start += stride_w;
-            first_row_value = true;
-        }
-
-        constexpr uint32_t stride_multiple = split_reader ? 2 : 1;
-        for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
-            if constexpr (!one_scalar_per_core) {
-                fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader>(
-                    scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
-            }
-            reader_indices_on_core--;
-            read_window_with_top_left_index<
-                in_nblocks_c,
-                in_cb_id,
-                in_idx_cb_id,
-                window_h,
-                window_w,
-                in_w_padded,
-                in_nbytes_c,
-                in_c,
-                max_sticks_for_reduction,
-                total_elems_to_reduce,
-                is_avg_pool,
-                wide_reduction,
-                clear_value_cb_id,
-                in_cb_ntiles,
-                is_large_kernel,
-                return_indices>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
-            if (split_reader && ind == end) {
-                first_row_value = false;
-            }
-        }
-    }
-
-    while (reader_indices_on_core--) {
-        if constexpr (!one_scalar_per_core) {
-            fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader>(
-                scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
-        }
-        read_window_with_top_left_index<
-            in_nblocks_c,
-            in_cb_id,
-            in_idx_cb_id,
-            window_h,
-            window_w,
-            in_w_padded,
-            in_nbytes_c,
-            in_c,
-            max_sticks_for_reduction,
-            total_elems_to_reduce,
-            is_avg_pool,
-            wide_reduction,
-            clear_value_cb_id,
-            in_cb_ntiles,
-            is_large_kernel,
-            return_indices>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
-    }
+    cb_push_back(in_cb_id, 1);
 }  // kernel_main()
