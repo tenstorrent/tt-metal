@@ -880,7 +880,7 @@ void bind_tanh(py::module& module, const unary_operation_t& operation) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            accuracy (Boolean, optional): provides better accuracy for input range -3 to 3, for dtype BFLOAT16. Defaults to `False`.
+            accuracy (Boolean, optional): provides better accuracy for input range -3 to 3, for dtype BFLOAT16, FLOAT32. Defaults to `False`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -1926,7 +1926,7 @@ void py_module(py::module& module) {
         ttnn::tanhshrink,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|tanhshrink|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         module,
         ttnn::deg2rad,
