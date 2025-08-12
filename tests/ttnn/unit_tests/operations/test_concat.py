@@ -218,7 +218,7 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
 
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("groups", [1, 2, 4])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
     "input_shapes, output_shape, core_grid, layout",
     (
@@ -262,7 +262,10 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
     )
 
     actual = ttnn.to_torch(z)
-    assert torch.equal(expected, actual)
+    if dtype == ttnn.bfloat8_b:
+        assert_with_pcc(expected, actual, 0.99)
+    else:
+        assert torch.equal(expected, actual)
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])

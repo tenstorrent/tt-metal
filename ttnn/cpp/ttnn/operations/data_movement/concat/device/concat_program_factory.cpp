@@ -154,20 +154,18 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
         cb_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     }
-    const auto bf16_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
-    const auto bf16_tile_size = tt::tt_metal::detail::TileSize(bf16_data_format);
 
     const auto in0_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[0]);
     const uint32_t cb_input0_transpose_id = cb_inputs.size() + 1;
-    create_circular_buffer(cb_input0_transpose_id, in0_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_input0_transpose_id, in0_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
 
     const auto in1_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[1]);
     const uint32_t cb_input1_transpose_id = cb_inputs.size() + 2;
-    create_circular_buffer(cb_input1_transpose_id, in1_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_input1_transpose_id, in1_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
 
     const auto out_total_tiles_width = in0_total_tiles_width + in1_total_tiles_width;
     const uint32_t cb_concat_id = cb_inputs.size() + 3;
-    create_circular_buffer(cb_concat_id, out_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_concat_id, out_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
 
     const uint32_t cb_output_transpose_id = cb_inputs.size() + 4;
     create_circular_buffer(cb_output_transpose_id, out_total_tiles_width, tile_size, data_format, nullptr);
@@ -188,7 +186,9 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         groups,
     };
     std::map<std::string, std::string> reader_defines;
-    reader_defines["BF8"] = bf8 ? "1" : "0";
+    if (bf8) {
+        reader_defines["BF8"] = "1";
+    }
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
