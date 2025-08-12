@@ -453,6 +453,7 @@ class ModelArgs:
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 
         self.rms_norm_add_unit_offset = False
+        self.embed_scale = None
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -1402,6 +1403,7 @@ class ModelArgs:
         is_gemma3 = "gemma-3" in self.base_model_name.lower()
         if is_gemma3:
             self.rms_norm_add_unit_offset = True
+            self.embed_scale = self.dim**0.5
 
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
@@ -2215,9 +2217,9 @@ class ModelArgs:
 
     def reference_embedding(self, reference_model=None):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.tt_transformers.tt.common import HostEmbedding
+            from models.tt_transformers.tt.common import HostEmbedding, HostScaledEmbedding
 
-            return HostEmbedding(self)
+            return HostEmbedding(self) if self.embed_scale is None else HostScaledEmbedding(self)
         else:
             if reference_model is None:
                 model = self.reference_transformer(wrap=False)
