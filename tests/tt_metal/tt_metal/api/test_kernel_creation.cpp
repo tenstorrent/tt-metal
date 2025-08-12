@@ -105,18 +105,19 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         }
         CoreRangeSet dispatch_core_range_set(dispatch_core_ranges);
         if (dispatch_core_type == CoreType::WORKER) {
-            tt_metal::CreateKernel(
-                program_,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
-                CoreRangeSet(dispatch_core_range_set),
-                DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
+            EXPECT_ANY_THROW(tt_metal::CreateKernel(
+                                 program_,
+                                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+                                 CoreRangeSet(dispatch_core_range_set),
+                                 DataMovementConfig{
+                                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                                     .noc = tt_metal::NOC::RISCV_0_default}););
         } else if (dispatch_core_type == CoreType::ETH) {
-            tt_metal::CreateKernel(
-                program_,
-                "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
-                CoreRangeSet(dispatch_core_range_set),
-                EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0}););
+            EXPECT_ANY_THROW(tt_metal::CreateKernel(
+                                 program_,
+                                 "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
+                                 CoreRangeSet(dispatch_core_range_set),
+                                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0}););
         }
     }
 }
