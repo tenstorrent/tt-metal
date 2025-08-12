@@ -74,12 +74,22 @@ FORCE_INLINE void validate_max_payload_size(uint32_t payload_size) {
 
 template <typename AddrGenType>
 FORCE_INLINE void to_noc_unicast_write(
-    volatile PACKET_HEADER_TYPE* pkt_hdr, const uint32_t id, const AddrGenType& d, uint32_t offset = 0) {
+    uint32_t page_size,
+    volatile PACKET_HEADER_TYPE* pkt_hdr,
+    const uint32_t id,
+    const AddrGenType& d,
+    uint32_t offset = 0) {
     auto noc_address = addrgen_detail::get_noc_address(d, id, offset);
-    auto page_size = addrgen_detail::get_page_size(d);
     pkt_hdr->to_noc_unicast_write(NocUnicastCommandHeader{noc_address}, page_size);
 
     validate_max_payload_size(page_size);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void to_noc_unicast_write(
+    volatile PACKET_HEADER_TYPE* pkt_hdr, const uint32_t id, const AddrGenType& d, uint32_t offset = 0) {
+    auto page_size = addrgen_detail::get_page_size(d);
+    to_noc_unicast_write(page_size, pkt_hdr, id, d, offset);
 }
 
 template <typename AddrGenType>
