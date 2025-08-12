@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import json
 from random import randint
 
 import pytest
@@ -10,7 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
+from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block import MoEDecoderBlock
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_decode as reference_forward
@@ -28,12 +29,14 @@ from models.utility_functions import comp_pcc
 def hf_config(hf_config):
     """Load DeepSeek config for testing."""
     hf_config.max_seq_len = 5 * 1024  # Set max sequence length for testing
+    hf_config.num_hidden_layers = 4
     return hf_config
 
 
 def load_reference_model(hf_config, layer_idx):
     """Load the reference model for testing."""
-
+    torch.manual_seed(5)
+    torch.use_deterministic_algorithms(True)
     model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval()
 
     return model
@@ -49,8 +52,8 @@ def load_reference_model(hf_config, layer_idx):
 @pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx",
     [
-        (DecoderBlock, None, 0),
-        # (MoEDecoderBlock, None, 3), # TODO: Uncomment once PCC is fixed for MoE
+        # (DecoderBlock, None, 2),
+        (MoEDecoderBlock, None, 3),  # TODO: Uncomment once PCC is fixed for MoE
         # (DecoderBlock, "model.layers.0", None),
         # (MoEDecoderBlock, "model.layers.3", None), # TODO: Uncomment once PCC is fixed for MoE
     ],
@@ -71,7 +74,7 @@ def test_forward_pass(
     seq_len,
     batch_size,
     hf_config,
-    tmp_path,
+    deepseek_cache_path,
     mesh_device,
     model_path,
     ccl,
@@ -131,9 +134,23 @@ def test_forward_pass(
 
     # For now, since we're only loading one layer, we can replicate
     state_dicts = [state_dict] * num_rows
-    weight_config = DecoderBlockClass.convert_weights(hf_config, state_dicts, tmp_path, mesh_device)
 
-    is_padding_layer = [False] * num_rows
+    # check if the weight_config file exists
+    weight_config_path = deepseek_cache_path / "moe_decoder_block_weight_config_full.json"
+    if weight_config_path.exists():
+        logger.info(f"Loading weight config from {weight_config_path}")
+        with open(weight_config_path, "r") as f:
+            weight_config = json.load(f)
+    else:
+        weight_config = DecoderBlockClass.convert_weights(
+            hf_config, state_dicts, deepseek_cache_path / "tensors_cache", mesh_device
+        )
+        # save weight_config dictionary to a file
+        with open(weight_config_path, "w") as f:
+            json.dump(weight_config, f)
+        logger.info(f"Saved weight config to {weight_config_path}")
+
+    is_padding_layer = [False, False, False, False]
     if mode == "prefill":
         model_config = DecoderBlockClass.prefill_model_config(hf_config, mesh_device, is_padding_layer)
     else:

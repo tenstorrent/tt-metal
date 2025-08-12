@@ -285,3 +285,14 @@ class LinearFallbackConfig(OpConfigBase):
 
     mesh_device: ttnn.Device
     dtype: ttnn.DataType
+
+
+@dataclass
+class ConvertToDPConfig(OpConfigBase):
+    """Common parameters for ConvertToDP operation"""
+
+    mesh_device: ConfigDevice
+    dim: int
+    memory_config: ttnn.MemoryConfig
+    cluster_axis: int = 0
+    global_semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
