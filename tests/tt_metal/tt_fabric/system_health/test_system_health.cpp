@@ -212,12 +212,25 @@ std::string build_local_connectivity_desc_yaml(
     }
     root["asic_ids"] = asic_ids;
     root["eth_connections"] = connections;
-    
+
     YAML::Emitter emitter;
     emitter << root;
     std::cout << emitter.c_str() << std::endl;
     return emitter.c_str();
 }
+
+struct EthConnectivityDescriptor {
+    std::string host_name;
+    std::unordered_map<tt::tt_fabric::EthChanDescriptor, tt::tt_fabric::EthChanDescriptor> local_eth_connections;
+    std::unordered_map<tt::tt_fabric::EthChanDescriptor, std::pair<std::string, tt::tt_fabric::EthChanDescriptor>>
+        remote_eth_connections;
+};
+
+struct ASICDescriptor struct SystemDescriptor {
+    std::unordered_map<std::string, std::vector<uint64_t>> asic_ids;
+
+    std::vector<EthConnectivityDesc> eth_connectivity_descs;
+};
 
 TEST(Cluster, GetLocalEthernetConnectivity) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -243,9 +256,10 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
 
     // Get Cross-Host Ethernet Connectivity
     remote_eth_connectivity[hostname_str] = {};
-    
+
     for (auto chip : cluster.user_exposed_chip_ids()) {
         auto src_unique_id = chip_unique_ids.at(src);
+        remote_eth_connectivity[hostname_str][src_unique_id] = {};
         for (auto link : cluster.get_intermesh_eth_links(chip)) {
 
         }
