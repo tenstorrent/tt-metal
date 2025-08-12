@@ -82,10 +82,6 @@ public:
 
     const CoreRangeSet &core_range_set() const { return core_range_set_; }
 
-    const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
-
-    const std::map<std::string, std::string>& defines() const { return defines_; }
-
     const std::set<CoreCoord> &logical_cores() const;
 
     std::vector<CoreRange> logical_coreranges() const;
@@ -93,6 +89,8 @@ public:
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
+
+    const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
 
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
     RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
@@ -103,6 +101,8 @@ public:
     RuntimeArgsData & common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
+
+    const std::map<std::string, std::string>& defines() const { return defines_; }
 
     virtual RISCV processor() const = 0;
     uint32_t dispatch_class() { return this->dispatch_class_; }
