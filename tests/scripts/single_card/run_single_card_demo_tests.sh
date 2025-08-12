@@ -296,11 +296,11 @@ run_vanilla_unet_demo() {
 
 # Commenting out the test from CI due to HF issue. TODO demo will be enabled with CIv2 dataset .
 # Created a PR to enable demo with CIv2 dataset soon - https://github.com/tenstorrent/tt-metal/pull/26236
-# run_swin_v2_demo() {
+run_swin_v2_demo() {
 
-#   pytest models/experimental/swin_v2/demo/demo.py; fail+=$?
+  pytest models/experimental/swin_v2/demo/demo.py
 
-# }
+}
 
 run_yolov8x_perf() {
 
