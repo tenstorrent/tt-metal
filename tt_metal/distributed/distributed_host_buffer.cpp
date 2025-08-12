@@ -114,39 +114,18 @@ DistributedHostBuffer DistributedHostBuffer::transform(
     std::vector<distributed::MaybeRemote<Shard>> transformed_shards(
         shards.size(), distributed::MaybeRemote<Shard>::remote());
 
-    struct BufferKey {
-        const void* data_ptr;
-        size_t size_bytes;
-        bool operator==(const BufferKey& other) const noexcept {
-            return data_ptr == other.data_ptr && size_bytes == other.size_bytes;
-        }
-    };
-    struct BufferKeyHasher {
-        size_t operator()(const BufferKey& key) const noexcept {
-            size_t h1 = std::hash<const void*>{}(key.data_ptr);
-            size_t h2 = std::hash<size_t>{}(key.size_bytes);
-            return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6) + (h1 >> 2));
-        }
-    };
-
     // Group replicated shard indices together
-    std::unordered_map<BufferKey, size_t, BufferKeyHasher> key_to_group;
-    key_to_group.reserve(indices_to_process.size());
-    std::vector<std::vector<size_t>> groups;
-    groups.reserve(indices_to_process.size());
+    std::unordered_map<void*, std::vector<size_t>> shard_group_indices;
     for (size_t shard_index : indices_to_process) {
         const auto bytes = shards[shard_index]->buffer.view_bytes();
-        BufferKey key{bytes.data(), bytes.size()};
-        auto [it, inserted] = key_to_group.emplace(key, groups.size());
-        if (inserted) {
-            groups.emplace_back();
-        }
-        groups[it->second].push_back(shard_index);
+        void* key = const_cast<void*>(static_cast<const void*>(bytes.data()));
+        shard_group_indices.try_emplace(key, std::vector<size_t>());
+        shard_group_indices[key].push_back(shard_index);
     }
 
     // Transform one HostBuffer per shard group
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
-        for (const auto& group : groups) {
+        for (const auto& [key, group] : shard_group_indices) {
             HostBuffer out = fn(shards[group.front()]->buffer);
             for (size_t i : group) {
                 transformed_shards[i] =
@@ -155,7 +134,8 @@ DistributedHostBuffer DistributedHostBuffer::transform(
         }
     } else {
         tf::Taskflow taskflow;
-        taskflow.for_each(groups.begin(), groups.end(), [&](const std::vector<size_t>& group) {
+        taskflow.for_each(shard_group_indices.begin(), shard_group_indices.end(), [&](const auto& pair) {
+            const auto& group = pair.second;
             HostBuffer out = fn(shards[group.front()]->buffer);
             for (size_t i : group) {
                 transformed_shards[i] =
