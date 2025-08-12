@@ -203,6 +203,113 @@ class TracedModelExecutor(Executor):
             ttnn.release_trace(self.device, self.trace_id)
 
 
+class MultiCQModelOverlappedInputExecutor(Executor):
+    """
+    Multi-command queue model executor that overlaps input transfers with model execution
+    for improved throughput without using tracing.
+
+    Uses two command queues:
+    - CQ_OPS_AND_OUTPUT_READ (0): Model operations and output reading
+    - CQ_INPUT_WRITE (1): Input tensor writing to device
+
+    This executor can transfer the next input while the model is processing the current input,
+    reducing the impact of input transfer latency on overall throughput.
+    """
+
+    CQ_OPS_AND_OUTPUT_READ = 0
+    CQ_INPUT_WRITE = 1
+
+    def __init__(
+        self,
+        model: Callable,
+        device,
+        dram_input_memory_config,
+        l1_input_memory_config,
+    ):
+        self.model = model
+        self.device = device
+        self.dram_input_memory_config = dram_input_memory_config
+        self.l1_input_memory_config = l1_input_memory_config
+
+        self.dram_input_tensor = None
+        self.op_event = None
+
+    def get_read_cq(self):
+        return self.CQ_OPS_AND_OUTPUT_READ
+
+    def compile(self, host_input):
+        """
+        Compiles the model by running it once to generate kernels using multi-command queue synchronization.
+        """
+        # Validate input
+        if host_input.storage_type() != ttnn.StorageType.HOST:
+            raise ValueError("Input tensor must be on host")
+
+        # Allocate persistent DRAM input tensor
+        self.dram_input_tensor = ttnn.allocate_tensor_on_device(
+            host_input.shape, host_input.dtype, host_input.layout, self.device, self.dram_input_memory_config
+        )
+
+        # Initialize synchronization event
+        self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
+
+        # Run model once to compile kernels
+        self._compile_model(host_input)
+
+        ttnn.synchronize_device(self.device)
+
+    def _compile_model(self, host_input):
+        """
+        Runs the model once to compile kernels.
+        """
+        # Transfer input to device DRAM
+        ttnn.wait_for_event(self.CQ_INPUT_WRITE, self.op_event)
+        ttnn.copy_host_to_device_tensor(host_input, self.dram_input_tensor, cq_id=self.CQ_INPUT_WRITE)
+        write_event = ttnn.record_event(self.device, self.CQ_INPUT_WRITE)
+
+        # Reshard to L1 and run model
+        ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
+        l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+        output_tensor = self.model(l1_input_tensor)
+        self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
+
+        # Cleanup tensors
+        if l1_input_tensor.is_allocated():
+            ttnn.deallocate(l1_input_tensor, force=True)
+        if output_tensor.is_allocated():
+            ttnn.deallocate(output_tensor, force=True)
+
+    def _execute_single(self, input_tensor):
+        """
+        Executes the model for a single input tensor using multi-CQ synchronization.
+        Returns the output tensor (result available after synchronization).
+        """
+        # Transfer input to device DRAM
+        ttnn.wait_for_event(self.CQ_INPUT_WRITE, self.op_event)
+        ttnn.copy_host_to_device_tensor(input_tensor, self.dram_input_tensor, cq_id=self.CQ_INPUT_WRITE)
+        write_event = ttnn.record_event(self.device, self.CQ_INPUT_WRITE)
+
+        # Execute model
+        ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
+        l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+        output_tensor = self.model(l1_input_tensor)
+        self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
+
+        # Cleanup L1 input tensor
+        if l1_input_tensor.is_allocated():
+            ttnn.deallocate(l1_input_tensor, force=True)
+
+        return output_tensor
+
+    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+        """Executes the model for a batch of input tensors."""
+        for host_input in host_inputs:
+            yield self._execute_single(host_input)
+
+    def cleanup(self):
+        """No trace to release for non-traced executor."""
+
+
 class MultiCQTracedModelOverlappedInputExecutor(Executor):
     """
     Multi-command queue traced model executor that overlaps input transfers with model execution
