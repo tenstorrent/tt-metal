@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //===----------------------------------------------------------------------===//
 //===- llvm/ADT/SmallVector.h - 'Normally small' vectors --------*- C++ -*-===//
 //
