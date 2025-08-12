@@ -107,7 +107,7 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 }
 
 void create_kernel(
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle,
     const std::string& kernel_src,
     const CoreCoord& logical_core,
@@ -127,7 +127,7 @@ void create_kernel(
 
     for (const auto& [start_address, num_bytes] : addresses_to_clear) {
         std::vector<uint32_t> zero_vec((num_bytes / sizeof(uint32_t)), 0);
-        tt::tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], logical_core, start_address, zero_vec);
+        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, start_address, zero_vec);
     }
 }
 
@@ -135,7 +135,7 @@ void create_mux_kernel(
     const TestParams& test_params,
     const MuxTestConfig& mux_test_config,
     const DrainerTestConfig& drainer_test_config,
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle) {
     auto mux_kernel_config = mux_test_config.mux_kernel_config;
     auto drainer_kernel_config = drainer_test_config.drainer_kernel_config;
@@ -199,7 +199,7 @@ void create_mux_kernel(
     std::vector<uint32_t> mux_fabric_connection_rt_args;
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
         sender_worker_adapter_spec,
-        mesh_device->get_devices()[0]->id(),
+        device->id(),
         {mux_logical_core},
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
@@ -212,12 +212,12 @@ void create_mux_kernel(
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
-        mesh_device, program_handle, mux_kernel_src, mux_logical_core, mux_ct_args, mux_rt_args, addresses_to_clear);
+        device, program_handle, mux_kernel_src, mux_logical_core, mux_ct_args, mux_rt_args, addresses_to_clear);
 }
 
 void create_drainer_kernel(
     const DrainerTestConfig& drainer_test_config,
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle) {
     auto drainer_kernel_config = drainer_test_config.drainer_kernel_config;
     auto drainer_logical_core = drainer_test_config.drainer_logical_core;
@@ -251,7 +251,7 @@ void create_drainer_kernel(
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
-        mesh_device,
+        device,
         program_handle,
         drainer_kernel_src,
         drainer_logical_core,
@@ -265,7 +265,7 @@ void create_worker_kernel(
     const WorkerTestConfig& worker_test_config,
     const MuxTestConfig& mux_test_config,
     const DrainerTestConfig& drainer_test_config,
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle) {
     auto mux_kernel_config = mux_test_config.mux_kernel_config;
     auto channel_type = worker_test_config.channel_type;
@@ -319,7 +319,7 @@ void create_worker_kernel(
         std::make_pair(worker_memory_map->local_buffer_index_address, noc_address_padding_bytes)};
 
     create_kernel(
-        mesh_device,
+        device,
         program_handle,
         worker_kernel_src,
         worker_test_config.worker_logical_core,
@@ -391,6 +391,8 @@ int main(int argc, char** argv) {
         tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device = mesh_device_map.at(0 /* chip_id */);
+    // need device handle to do L1 read/writes
+    auto device = mesh_device->get_devices()[0];
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
@@ -448,9 +450,9 @@ int main(int argc, char** argv) {
 
     auto worker_memory_map = create_worker_memory_map(l1_unreserved_base_address);
 
-    create_mux_kernel(test_params, mux_test_config, drainer_test_config, mesh_device.get(), program);
+    create_mux_kernel(test_params, mux_test_config, drainer_test_config, device, program);
 
-    create_drainer_kernel(drainer_test_config, mesh_device.get(), program);
+    create_drainer_kernel(drainer_test_config, device, program);
 
     // keep the receiver noc xy encoding same for all workers, wont matter since we are not committing any
     // packets into receiver's L1
@@ -472,8 +474,7 @@ int main(int argc, char** argv) {
             .mcast_encoding = i == 0 ? std::make_optional(mcast_encoding) : std::nullopt,
             .num_mcast_dests = i == 0 ? std::make_optional(num_mcast_dests) : std::nullopt,
         };
-        create_worker_kernel(
-            test_params, worker_test_config, mux_test_config, drainer_test_config, mesh_device.get(), program);
+        create_worker_kernel(test_params, worker_test_config, mux_test_config, drainer_test_config, device, program);
     }
 
     auto header_only_channel_worker_offset = worker_cores_offset + test_params.num_full_size_channels;
@@ -490,8 +491,7 @@ int main(int argc, char** argv) {
             .mcast_encoding = std::nullopt,
             .num_mcast_dests = std::nullopt,
         };
-        create_worker_kernel(
-            test_params, worker_test_config, mux_test_config, drainer_test_config, mesh_device.get(), program);
+        create_worker_kernel(test_params, worker_test_config, mux_test_config, drainer_test_config, device, program);
     }
 
     log_info(tt::LogTest, "Launching programs");
@@ -500,7 +500,6 @@ int main(int argc, char** argv) {
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
     log_info(tt::LogTest, "Waiting for workers to complete");
-    auto device = mesh_device->get_devices()[0];
     size_t num_active_workers = test_params.num_full_size_channels + test_params.num_header_only_channels;
     for (size_t i = worker_cores_offset; i < worker_cores_offset + num_active_workers; i++) {
         CoreCoord core = worker_logical_cores[i];
