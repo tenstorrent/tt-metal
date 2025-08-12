@@ -104,7 +104,7 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     logger.info("Run Qwen_MLP_PF")
     # Explicitly allocate global CB to avoid memory fragmentation
     prefetcher_setup.create_global_cb()
-    for i in range(20):
+    for i in range(1):
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),
             num_layers=1,

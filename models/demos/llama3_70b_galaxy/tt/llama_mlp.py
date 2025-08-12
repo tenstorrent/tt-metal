@@ -105,45 +105,6 @@ class TtLlamaMLP(LightweightModule):
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
 
-            if self.args.qk_norm:
-                self.w1_rs_global_semaphores = [
-                    ttnn.create_global_semaphore(self.mesh_device, self.tt_ccl.sub_device_crs, 0) for _ in range(3)
-                ]
-                # 512 = 4 devices * 4 pages per packet * 32 tile_width
-                self.persistent_interim_w1_w3_rs_buffers = ttnn.from_torch(
-                    torch.zeros((*(8, 4), 32, 3200)),
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=self.args.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
-                )
-                self.persistent_output_w1_w3_rs_buffers = ttnn.from_torch(
-                    torch.zeros((*(8, 4), 32, 3200 // 4)),
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=self.args.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
-                )
-
-                self.persistent_interim_w2_rs_buffers = ttnn.from_torch(
-                    torch.zeros((*(8, 4), 32, 1280)),
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=self.args.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"],
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
-                )
-                self.persistent_output_w2_rs_buffers = ttnn.from_torch(
-                    torch.zeros((*(8, 4), 32, 1280 // 4)),
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(8, 4)),
-                )
-
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
         if tt_ccl.mode == "decode":
@@ -203,12 +164,8 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
 
-        logger.info(f"ff1ff3: {ff1ff3}")
-
-        # print("eltwise mul", w2_in)
-
-        ttnn.deallocate(w3_out_reduced)
-        ttnn.deallocate(w1_out_reduced)
+        # ttnn.deallocate(w3_out_reduced)
+        # ttnn.deallocate(w1_out_reduced)
 
         breakpoint()
 
@@ -222,8 +179,7 @@ class TtLlamaMLP(LightweightModule):
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
 
-        logger.info(f"w2_in: {w2_in}")
-        ttnn.deallocate(ff1ff3)
+        # ttnn.deallocate(ff1ff3)
 
         w2_out = ttnn.linear(
             w2_in,
@@ -249,7 +205,7 @@ class TtLlamaMLP(LightweightModule):
         logger.info(f"w2_out_reduced: {w2_out_reduced}")
         ttnn.deallocate(w2_out)
 
-        return w2_out_reduced
+        return w2_out_reduced, w1_out_reduced, w3_out_reduced, w2_in, ff1ff3
 
     def forward_prefill(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
