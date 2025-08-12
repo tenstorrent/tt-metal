@@ -203,13 +203,20 @@ bool flatten(
     return pass;
 }
 
-bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten_stress(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     // Test Simulating Program Caching with Async Command Queues
     bool pass = true;
     // Create a program used across all loops
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
-    CoreCoord core = {0, 0};
+    CoreCoord core = mesh_device->worker_core_from_logical_core({0, 0});
 
     uint32_t single_tile_size = 2 * 1024;
 
@@ -228,7 +235,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb_src0_config);
+    CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t ouput_cb_index = 16;
     uint32_t num_output_tiles = 1;
@@ -236,17 +243,17 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb_output_config);
+    CreateCircularBuffer(program_, core, cb_output_config);
 
     auto flatten_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/flatten.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = CreateKernel(
-        program,
+        program_,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
@@ -255,7 +262,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
     vector<uint32_t> compute_kernel_args = {num_tiles * 32};
 
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
@@ -279,18 +286,18 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
             src_dram_buffer.get(), (uint32_t)0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
         *writer_runtime_args = {dst_dram_buffer.get(), (uint32_t)0, num_tiles * 32};
 
-        SetRuntimeArgs(device, tt_metal::detail::GetKernel(program, flatten_kernel), core, compute_runtime_args);
+        SetRuntimeArgs(device, tt_metal::detail::GetKernel(program_, flatten_kernel), core, compute_runtime_args);
 
-        SetRuntimeArgs(device, tt_metal::detail::GetKernel(program, unary_writer_kernel), core, writer_runtime_args);
+        SetRuntimeArgs(device, tt_metal::detail::GetKernel(program_, unary_writer_kernel), core, writer_runtime_args);
         // Async write input
         EnqueueWriteBuffer(device->command_queue(), src_dram_buffer, src_vec, false);
         // Share ownership of buffer with program
-        AssignGlobalBufferToProgram(src_dram_buffer, program);
+        AssignGlobalBufferToProgram(src_dram_buffer, program_);
         // Main thread gives up ownership of buffer and src data (this is what python does)
         src_dram_buffer.reset();
         src_vec.reset();
         // Queue up program
-        EnqueueProgram(device->command_queue(), program, false);
+        distributed::EnqueueMeshWorkload(cq, workload, false);
         // Blocking read
         std::vector<uint32_t> result_vec;
         EnqueueReadBuffer(device->command_queue(), dst_dram_buffer, result_vec, true);
