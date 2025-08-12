@@ -15,20 +15,19 @@
 namespace ttnn::operations::experimental::ccl {
 
 bool use_native_all_gather(const ttnn::Tensor& input_tensor, const uint32_t dim) {
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+
     // Row major
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         return false;
     }
 
     // Tiled and padded on the gather dim
-    if (dim == 2 || dim == 3) {
-        auto input_shape = input_tensor.logical_shape();
-        auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-        uint32_t tile_height = tile_shape[0];
-        uint32_t tile_width = tile_shape[1];
-        if (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0) {
-            return false;
-        }
+    auto input_shape = input_tensor.logical_shape();
+    if ((dim == 2 && input_shape[2] % tile_height != 0) || (dim == 3 && input_shape[3] % tile_width != 0)) {
+        return false;
     }
 
     return true;

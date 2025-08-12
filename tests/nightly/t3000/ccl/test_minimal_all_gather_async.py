@@ -46,9 +46,9 @@ def run_all_gather_impl(
     tile = (32, 32)
 
     ag_input_shape = ag_output_shape[:]
-    ag_input_shape[dim] *= num_devices
-    is_unpadded_on_gather_dim = (dim == 2 or dim == 3) and (
-        ag_input_shape[2] % tile[0] != 0 or ag_input_shape[3] % tile[1] != 0
+    ag_input_shape[dim] /= num_devices
+    is_unpadded_on_gather_dim = (dim == 2 and ag_input_shape[2] % tile[0] != 0) or (
+        dim == 3 and ag_input_shape[3] % tile[1] != 0
     )
     invoking_composite = layout == ttnn.ROW_MAJOR_LAYOUT or is_unpadded_on_gather_dim
 
@@ -241,10 +241,10 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        # (True, 10),
+        (True, 10),
         (False, 1),
     ],
-    # ids=["perf", "check"],
+    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
