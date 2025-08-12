@@ -1,13 +1,32 @@
 import ttnn
 
 
+def softmax(x: ttnn.Tensor, stable=False):
+    """
+    Performs Softmax on a ``ttnn.Tensor``.
+    """
+    if stable:
+        sumsW = ttnn.max(x, -1)
+        sumsW = ttnn.unsqueeze(sumsW, -1)
+        z = ttnn.subtract(x, sumsW)  # x-max(x)
+    else:
+        z = x
+    numerator = ttnn.exp(z)  # exp(z)
+    denom1 = ttnn.sum(numerator, 3)  # torch.sum(x, 3)
+    denom = ttnn.reciprocal(denom1)
+    denom = ttnn.unsqueeze(denom, -1)
+    output = ttnn.multiply(numerator, denom)
+
+    return output
+
+
 def sdpa(
     tt_q: ttnn.Tensor,
     tt_k: ttnn.Tensor,
     tt_v: ttnn.Tensor,
     tt_sink: ttnn.Tensor,
     sm_scale: float,
-    tt_mask: ttnn.Tensor,
+    tt_mask: ttnn.Tensor = None,
     tt_cache: ttnn.Tensor = None,
 ) -> ttnn.Tensor:
     """
@@ -31,16 +50,16 @@ def sdpa(
     _, nkv, _ = tt_k.shape
 
     # Prepare inputs
-    tt_q = ttnn.reshape(tt_q, [num_tokens, nkv, nh // nkv, dim])
-    tt_q = ttnn.permute(tt_q, [1, 2, 0, 3])  # (nkv, nh // nkv, num_tokens, dim)
+    tt_q = ttnn.permute(tt_q, [1, 2, 0, 3])  # (1, nh, num_tokens, dim)
+    tt_q = ttnn.reshape(tt_q, [nkv, nh // nkv, num_tokens, dim])
 
     # KV Cache handling
-    tt_k = ttnn.reshape(tt_k, [num_tokens, nkv, 1, dim])  # unsqueeze
-    tt_v = ttnn.reshape(tt_v, [num_tokens, nkv, 1, dim])  # unsqueeze
-    tt_k = ttnn.permute(tt_k, [1, 2, 0, 3])  # (nkv, 1, num_tokens, dim)
-    tt_v = ttnn.permute(tt_v, [1, 2, 0, 3])  # (nkv, 1, num_tokens, dim)
+    tt_k = ttnn.transpose(tt_k, 0, 1)  # [nkv, num_tokens, dim]
+    tt_k = ttnn.unsqueeze(tt_k, 1)  # [nkv, 1, num_tokens, dim]
 
-    slice_out = False
+    tt_v = ttnn.transpose(tt_v, 0, 1)  # [nkv, num_tokens, dim]
+    tt_v = ttnn.unsqueeze(tt_v, 1)  # [nkv, 1, num_tokens, dim]
+
     if tt_cache is None:
         tt_cache = [tt_k, tt_v]  # Cache for keys and values
     else:
@@ -50,7 +69,8 @@ def sdpa(
         tt_v = ttnn.concat([tt_v_back, tt_v], dim=2)  # (nkv, 1, cache_len + num_tokens, dim)
 
         tt_cache = [tt_k, tt_v]  # Update cache with new keys and values
-        slice_out = True
+        ttnn.deallocate(tt_k_back)
+        ttnn.deallocate(tt_v_back)
 
     kv_len = tt_k.shape[2]  # Length of keys/values in the cache
 
@@ -60,34 +80,28 @@ def sdpa(
     tt_v = ttnn.repeat(tt_v, [1, nh // nkv, 1, 1])  # (nkv, nh // nkv, kv_len, dim)
 
     # QK + scale
-    tt_qk = ttnn.matmul(tt_q, tt_k)  # (nkv, nh // nkv, kv_len, kv_len)
+    tt_qk = ttnn.matmul(tt_q, tt_k)  # (nkv, nh // nkv, num_tokens, kv_len)
     tt_qk *= sm_scale
 
     # Mask
-    tt_qk += tt_mask
+    if tt_mask is not None:
+        tt_qk += tt_mask
 
     # Sink
-    tt_sink = ttnn.reshape(tt_sink, [1, nkv, nh // nkv, 1])
-    tt_sink = ttnn.permute(tt_sink, [1, 2, 0, 3])  # (nkv, nh // nkv, 1, 1)
-    tt_sink = ttnn.repeat(tt_sink, [1, 1, kv_len, 1])  # (nkv, nh // nkv, kv_len, 1)
-    tt_qk = ttnn.concat([tt_qk, tt_sink], dim=-1)  # (nkv, nh // nkv, kv_len, kv_len + 1)
+    tt_sink = ttnn.reshape(tt_sink, [nkv, nh // nkv, 1, 1])  # (nkv, nh // nkv, 1, 1)
+    tt_sink = ttnn.repeat(tt_sink, [1, 1, num_tokens, 1])  # (nkv, nh // nkv, num_tokens, 1)
+    tt_qk = ttnn.concat([tt_qk, tt_sink], dim=-1)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
 
     # Softmax
-    tt_qk = ttnn.softmax(tt_qk, dim=-1, numeric_stable=True)  # (nkv, nh // nkv, kv_len, kv_len + 1)
-
-    tt_qk = ttnn.slice(
-        tt_qk, [0, 0, 0, 0], [nkv, nh // nkv, kv_len, kv_len]
-    )  # (nkv, nh // nkv, num_tokens, num_tokens)
+    # FIXME: Program cache issue!!
+    # tt_qk = ttnn.softmax(tt_qk, dim=-1, numeric_stable=True)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
+    tt_qk = softmax(tt_qk, stable=True)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
+    tt_qk = tt_qk[:, :, :, :kv_len]
 
     # Out stuff
-    out = ttnn.matmul(tt_qk, tt_v)  # (nkv, nh // nkv, kv_len, dim)
-    out = ttnn.reshape(out, [1, nh, kv_len, dim])
-    out = ttnn.permute(out, [0, 2, 1, 3])  # (1, kv_len, nh, dim)
+    out = ttnn.matmul(tt_qk, tt_v)  # (nkv, nh // nkv, num_tokens, dim)
+    out = ttnn.reshape(out, [1, nh, num_tokens, dim])
 
-    if slice_out:
-        out = ttnn.slice(out, [0, kv_len - num_tokens, 0, 0], [1, kv_len, nh, dim])  # (1, num_tokens, nh, dim)
-
-    # FIXME: This reshape hangs after a few iterations (GH Issue #26656)
-    out = ttnn.reshape(out, [num_tokens, dim * nh])
+    out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, num_tokens, dim * nh]
 
     return out, tt_cache

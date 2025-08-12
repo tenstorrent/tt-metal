@@ -346,7 +346,6 @@ def test_model(
     dtype,
     reset_seeds,
 ):
-    mesh_device.disable_and_clear_program_cache()
     # Create configuration
     config = GptOssConfig(
         num_local_experts=num_experts,
@@ -417,12 +416,15 @@ def test_model(
 
     # Initialize TT model
     ccl_manager = CCLManager(mesh_device)
+    print("Initializing TT model")
     tt_model = Model(mesh_device, config, model_state_dict, ccl_manager, dtype=dtype)
+    print("TT model initialized successfully")
 
     # Run forward passes
     # reference_output = reference_model(input_ids, attention_masks={"full_attention": mask, "sliding_attention": sliding_mask}, position_embeddings=(cos, sin))
 
     # For TT model, we need to pass the required arguments
+    print("Running TT model")
     tt_output = tt_model(
         input_ids=tt_input_ids,
         attention_masks={"full_attention": tt_mask, "sliding_attention": tt_sliding_mask},

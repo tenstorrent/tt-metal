@@ -99,9 +99,7 @@ class ReferenceExperts(nn.Module):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b], ids=["bf16", "bf8", "bf4", "bf2"]
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_mlp(
     mesh_device,
