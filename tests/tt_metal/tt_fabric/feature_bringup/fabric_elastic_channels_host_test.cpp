@@ -110,8 +110,6 @@ struct DeviceTestResources {
     uint32_t worker_ack_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_new_chunk_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_src_buffer_address = std::numeric_limits<uint32_t>::max();
-    uint32_t erisc_write_out_buffer_address = std::numeric_limits<uint32_t>::max();
-    std::vector<uint32_t> erisc_flow_control_semaphore_ids;
 };
 
 
@@ -237,9 +235,10 @@ void set_worker_runtime_args(
             device_resources.worker_src_buffer_address,
             eth_core_virtual.x,
             eth_core_virtual.y,
-            device_resources.erisc_flow_control_semaphore_ids.at(i),
             config.message_size,
-            device_resources.worker_new_chunk_semaphore_id    
+            device_resources.worker_new_chunk_semaphore_id,
+            device_resources.worker_ack_semaphore_id,
+            i
         };
 
         tt_metal::SetRuntimeArgs(device_resources.program, worker_kernels.at(i), worker_core, rt_args);
@@ -304,9 +303,7 @@ void run_test(
             recv_buffer_base,
             timing_stats_addr,
             device_resources.worker_ack_semaphore_id,
-            device_resources.worker_new_chunk_semaphore_id,
-            device_resources.erisc_flow_control_semaphore_ids.size()};
-        std::copy(device_resources.erisc_flow_control_semaphore_ids.begin(), device_resources.erisc_flow_control_semaphore_ids.end(), std::back_inserter(rt_args));
+            device_resources.worker_new_chunk_semaphore_id};
         return rt_args;
     };
 
@@ -419,10 +416,7 @@ TestResources create_test_resources(
         worker_cores_vec.reserve(config.n_workers);
         worker_cores = CoreRange(CoreCoord(0, 0), CoreCoord(0, config.n_workers - 1));
         worker_cores_vec = corerange_to_cores(worker_cores);
-        for (auto &worker_core : worker_cores_vec) {
-            // one per worker
-            device_resource.erisc_flow_control_semaphore_ids.push_back(tt_metal::CreateSemaphore(device_resource.program, device_resource.eth_core, 0, CoreType::ETH));
-        }
+        
 
         device_resource.worker_ack_semaphore_id = tt_metal::CreateSemaphore(device_resource.program, device_resource.worker_cores, 0, CoreType::WORKER);
         device_resource.worker_new_chunk_semaphore_id = tt_metal::CreateSemaphore(device_resource.program, device_resource.worker_cores, 0, CoreType::WORKER);

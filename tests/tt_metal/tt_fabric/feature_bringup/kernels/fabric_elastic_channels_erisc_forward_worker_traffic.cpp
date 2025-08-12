@@ -6,7 +6,7 @@
 #include <array>
 #include <tuple>
 #include "dataflow_api.h"
-#include "kernels/fabric_elastic_channels.hpp"
+#include "fabric_elastic_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
@@ -26,8 +26,10 @@ constexpr int32_t pkts_acked_stream_id = 1;     // read by sender, written by re
 
 static_assert(PACKET_SIZE_BYTES % sizeof(uint32_t) == 0, "PACKET_SIZE_BYTES must be a multiple of sizeof(uint32_t)");
 
+using tt::tt_fabric::BufferIndex;
+
 // Points to a chunk and steps through the addresses
-using chunk_forward_iterator_t  = tt::tt_fabric::OnePassIterator<size_t*, CHUNK_N_PKTS, PACKET_SIZE_BYTES / sizeof(uint32_t)>
+using chunk_forward_iterator_t = tt::tt_fabric::OnePassIterator<uint32_t, CHUNK_N_PKTS, PACKET_SIZE_BYTES / sizeof(uint32_t)>;
 
 // Timing tracking structure
 struct TimingStats {
@@ -84,24 +86,24 @@ void process_send_side(
     volatile TimingStats* timing_stats,
     // For now we can keep these flat?
 
-    volatile uint32_t *local_src_ch_semaphore_ptr, // check this for new messages
-    uint64_t remote_src_ch_semaphore_ack_addr,     // send acks back here
-    uint64_t remote_src_new_chunk_noc_addr,        // send new chunk info here
+    uint32_t local_src_ch_flow_control_stream_id,         // check this for new messages
+    uint64_t remote_src_ch_semaphore_ack_addr,   // send acks back here
+    uint64_t remote_src_new_chunk_noc_addr,      // send new chunk info here
 
     chunk_forward_iterator_t& current_chunk_ptr,
     BufferIndex& current_chunk_ack_index,  
     OpenChunksCbT& open_chunks_cb,
     SendPoolT& send_pool,
-    size_t& unacked_sends,
-    size_t& messages_sent,
-    size_t& messages_acked,
-    size_t messages_to_send,
+    uint32_t& unacked_sends,
+    uint32_t& messages_sent,
+    uint32_t& messages_acked,
+    uint32_t messages_to_send,
     std::array<size_t, RX_N_PKTS>& receiver_buffer_addresses,
-    ChannelBufferPointer<RX_N_PKTS>& sender_view_rx_buf_wr_ptr,
-    size_t message_size) {
+    tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS>& sender_view_rx_buf_wr_ptr,
+    uint32_t message_size) {
     // Process Ack
 
-    auto n_unsent_messages = *local_src_ch_semaphore_ptr;
+    auto n_unsent_messages = get_ptr_val(local_src_ch_flow_control_stream_id);
 
     auto num_unprocessed_acks = get_sender_num_unprocessed_acks();
     if (num_unprocessed_acks > 0) {
@@ -142,13 +144,15 @@ void process_send_side(
         auto dest_addr = receiver_buffer_addresses[sender_view_rx_buf_wr_ptr.get_buffer_index()];
 
         // Send packet using the buffer's channel ID
-        eth_send_bytes_over_channel_payload_only_unsafe_one_packet(src_addr, dest_addr, message_size);
+        eth_send_bytes_over_channel_payload_only_unsafe_one_packet((uint32_t)src_addr, dest_addr, message_size);
 
         while (eth_txq_is_busy()) {
         }
         notify_remote_receiver_of_new_packet();
 
         current_chunk_ptr.increment();
+        
+        increment_local_update_ptr_val(local_src_ch_flow_control_stream_id, -1);
         messages_sent++;
 
         sender_view_rx_buf_wr_ptr.increment();
@@ -162,12 +166,12 @@ void process_send_side(
         auto new_chunk = send_pool.get_free_chunk();
 
         // Currently we only support one-deep open chunks
-        size_t new_chunk_base_address = new_chunk->get_buffer_address(0);
-        size_t new_chunk_field_for_sender = new_chunk_base_address | SENDER_CHANNEL_ID_MASK;
+        size_t new_chunk_base_address = new_chunk->get_buffer_address(BufferIndex{0});
+        size_t new_chunk_field_for_sender = tt::tt_fabric::FabricChunkMessageAvailableMessage::pack(new_chunk_base_address);
         // notify the worker about new chunk availability
         noc_inline_dw_write(remote_src_new_chunk_noc_addr, new_chunk_field_for_sender);
 
-        current_chunk_ptr.reset_to(new_chunk_base_address);
+        current_chunk_ptr.reset_to(reinterpret_cast<uint32_t*>(new_chunk_base_address));
 
         open_chunks_cb.push(new_chunk);
         uint64_t end_cycles = eth_read_wall_clock();
@@ -191,26 +195,26 @@ void kernel_main() {
     const uint32_t recv_buffer_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t timing_stats_addr = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t *remote_src_noc_x_ords = get_arg_addr(arg_idx);
+    auto remote_src_noc_x_ords = get_arg_val<uint32_t*>(arg_idx);
     arg_idx += N_SRC_CHANS;
-    uint32_t *remote_src_noc_y_ords = get_arg_addr(arg_idx);
+    auto remote_src_noc_y_ords = get_arg_val<uint32_t*>(arg_idx);
     arg_idx += N_SRC_CHANS;
-    uint32_t *remote_src_semaphore_ack_addrs = get_arg_addr(arg_idx);
+    auto remote_src_semaphore_ack_addrs = get_arg_val<uint32_t*>(arg_idx);
     arg_idx += N_SRC_CHANS;
-    uint32_t *remote_src_new_chunk_addrs = get_arg_addr(arg_idx);
+    auto remote_src_new_chunk_addrs = get_arg_val<uint32_t*>(arg_idx);
     arg_idx += N_SRC_CHANS;
-    uint32_t *dest_noc_buffer_addrs = get_arg_addr(arg_idx);
+    auto dest_noc_buffer_addrs = get_arg_val<uint32_t*>(arg_idx);
     arg_idx += N_SRC_CHANS;
-    uint32_t *local_src_ch_semaphores = get_arg_addr(arg_idx);
-    arg_idx += N_SRC_CHANS;
+
+    // DELETE ARGS
+    // auto local_src_ch_semaphores = get_arg_val<uint32_t*>(arg_idx);
+    // arg_idx += N_SRC_CHANS;
 
     using noc_addr_t = uint64_t;
     std::array<noc_addr_t, N_SRC_CHANS> remote_src_ch_semaphore_ack_addrs;
-    std::array<noc_addr_t, N_SRC_CHANS> local_src_ch_semaphore_addrs;
     std::array<noc_addr_t, N_SRC_CHANS> src_ch_new_chunk_addrs;
     std::array<noc_addr_t, N_SRC_CHANS> dest_noc_write_addrs;
     for (size_t i = 0; i < N_SRC_CHANS; i++) {
-        local_src_ch_semaphore_addrs[i] = get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(local_src_ch_semaphores[i]));
         remote_src_ch_semaphore_ack_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_semaphore_ack_addrs[i]));
         src_ch_new_chunk_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_new_chunk_addrs[i]));
         dest_noc_write_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], dest_noc_buffer_addrs[i]);
@@ -237,7 +241,7 @@ void kernel_main() {
         recv_buffer_addresses[i] = recv_buffer_base + i * PACKET_SIZE_BYTES;
     }
 
-    ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS> send_pool;
+    tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS> send_pool;
     send_pool.init(send_buffers, PACKET_SIZE_BYTES, sizeof(eth_channel_sync_t));
 
     // Set up channels for bidirectional communication if enabled
@@ -247,10 +251,10 @@ void kernel_main() {
 
     eth_setup_handshake(handshake_addr, is_sender_offset_0);
 
-    size_t messages_acked = 0;
-    size_t messages_sent = 0;
-    size_t messages_received = 0;
-    size_t total_messages_target = messages_per_direction;
+    uint32_t messages_acked = 0;
+    uint32_t messages_sent = 0;
+    uint32_t messages_received = 0;
+    uint32_t total_messages_target = messages_per_direction;
 
     uint32_t idle_count = 0;
     const uint32_t idle_max = 100000;
@@ -261,22 +265,22 @@ void kernel_main() {
     // acq: 6.00
     // rel: 9.5
     std::array<
-        WormholeEfficientCircularBuffer<typename ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>,
+        tt::tt_fabric::WormholeEfficientCircularBuffer<typename tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>,
         N_SRC_CHANS>
         open_chunks_cbs;
 #else
     // acq: 17
     // rel: 4
     std::array<
-        CircularBuffer<typename ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>,
+        tt::tt_fabric::CircularBuffer<typename tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>,
         N_SRC_CHANS>
         open_chunks_cbs;
 #endif
 
 
-    ChannelBufferPointer<RX_N_PKTS> sender_view_rx_buf_wr_ptr;
-    size_t unacked_sends = 0;
-    bool n_sender_channels_done = 0;
+    tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> sender_view_rx_buf_wr_ptr;
+    uint32_t unacked_sends = 0;
+    uint32_t n_sender_channels_done = 0;
     std::array<bool, N_SRC_CHANS> completed_sender_channels;
     std::array<bool, N_SRC_CHANS> sender_channels_acks_received;
     {
@@ -291,13 +295,13 @@ void kernel_main() {
                     process_send_side(
                         timing_stats,
 
-                        local_src_ch_semaphore_addrs[i], // check this for new messages
+                        i, // check this stream autoinc registert for new messages
                         remote_src_ch_semaphore_ack_addrs[i], // send acks back here
                         src_ch_new_chunk_addrs[i], // send new chunk info here
                         
                         sender_channel_wrptrs[i],
                         current_chunk_ack_index,
-                        open_chunks_cbs,
+                        open_chunks_cbs[i],
                         send_pool,
                         unacked_sends,
                         messages_sent,

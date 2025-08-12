@@ -314,4 +314,82 @@ struct WormholeEfficientCircularBuffer {
     FORCE_INLINE bool is_full() const { return cnt == CAPACITY; }
 };
 
+
+// Shares chunks with remote sources (workers or fabric routers)
+struct FabricChunkMessageAvailableMessage {
+    static constexpr uint32_t NEXT_CHUNK_VALID_FLAG = 1 << 31;
+    static constexpr uint32_t NEXT_CHUNK_VALUE_MASK = NEXT_CHUNK_VALID_FLAG - 1;
+    FORCE_INLINE static uint32_t pack(uint32_t chunk_base_address) {
+        return chunk_base_address | NEXT_CHUNK_VALID_FLAG;
+    }
+
+    FORCE_INLINE static uint32_t unpack(uint32_t message) {
+        return message & ~NEXT_CHUNK_VALID_FLAG;
+    }
+};
+
+struct SenderChannelView {
+    volatile uint32_t *next_chunk_ptr;
+
+    SenderChannelView(volatile uint32_t *next_chunk_ptr) : next_chunk_ptr(next_chunk_ptr) {}
+
+    FORCE_INLINE void wait_for_new_chunk() {
+        while (!*next_chunk_ptr) {
+        }
+    }
+
+    FORCE_INLINE bool has_new_chunk() {
+        return *next_chunk_ptr & FabricChunkMessageAvailableMessage::NEXT_CHUNK_VALID_FLAG;
+    }
+
+    FORCE_INLINE void clear_new_chunk_flag() {
+        *next_chunk_ptr = 0;
+    }
+
+    FORCE_INLINE uint32_t get_next_chunk() {
+        uint32_t value = *next_chunk_ptr;
+        return FabricChunkMessageAvailableMessage::unpack(value);
+    }
+};
+
+
+// Used by the worker to know where to send packets to next
+template <size_t N_CHUNKS, size_t CHUNK_N_PKTS>
+struct FabricWriterAdapter {
+    SenderChannelView sender_channel_view;
+    tt::tt_fabric::OnePassIterator<size_t, CHUNK_N_PKTS> current_chunk;
+
+    FabricWriterAdapter(volatile uint32_t *next_chunk_ptr) : 
+        sender_channel_view(next_chunk_ptr), current_chunk() {}
+
+    FORCE_INLINE bool has_valid_destination() {
+        return !current_chunk.is_done();
+    }
+
+    FORCE_INLINE void advance_to_next_buffer_slot() {
+        current_chunk.increment();
+    }
+
+    FORCE_INLINE bool new_chunk_is_available() {
+        return sender_channel_view.has_new_chunk();
+    }
+
+    FORCE_INLINE size_t* get_next_write_address() const {
+        return current_chunk.get_current_ptr();
+    }
+    
+
+    // return true if the new chunk was updated
+    FORCE_INLINE void update_to_new_chunk() {
+        //...
+        ASSERT(sender_channel_view.has_new_chunk());
+        ASSERT(current_chunk.is_done());
+        auto chunk_base_address = sender_channel_view.get_next_chunk();
+        auto new_chunk_base_address = chunk_base_address;
+        sender_channel_view.clear_new_chunk_flag();
+        current_chunk.reset_to(reinterpret_cast<size_t*>(new_chunk_base_address));
+    }
+};
+
+
 }  // namespace tt::tt_fabric
