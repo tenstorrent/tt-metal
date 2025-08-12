@@ -840,8 +840,9 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool process_mask_for_chec
 }
 #endif
 
+#if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
-FORCE_INLINE void process_mask_for_forwarding(
+FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forwarding(
     uint32_t mask,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
@@ -852,104 +853,117 @@ FORCE_INLINE void process_mask_for_forwarding(
     using eth_chan_directions::SOUTH;
     using eth_chan_directions::WEST;
 
-    // Manual jump table: array of handlers indexed by mask value (assuming 0-15 range)
-    // To ensure correct mapping, we initialize the array at positions matching the enum values
-    using Handler = void (*)(
-        tt_l1_ptr PACKET_HEADER_TYPE*,
-        ROUTING_FIELDS_TYPE,
-        std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&,
-        uint8_t);
-    static constexpr std::array<Handler, 16> table = []() constexpr {
-        std::array<Handler, 16> t = {};  // Zero-init
-
-        // Explicit lambdas with concrete types (fixes conversion error)
-        t[LowLatencyMeshRoutingFields::NOOP] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) { /* NOOP */ };
-        t[LowLatencyMeshRoutingFields::FORWARD_EAST] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<EAST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::FORWARD_WEST] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<WEST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::FORWARD_NORTH] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<NORTH>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::FORWARD_SOUTH] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<SOUTH>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<EAST, WEST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<NORTH, SOUTH>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<NORTH, SOUTH, EAST, WEST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<NORTH, SOUTH, EAST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<NORTH, SOUTH, WEST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<SOUTH, EAST, WEST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<NORTH, EAST, WEST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<SOUTH, EAST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<SOUTH, WEST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<NORTH, EAST>{}, ps, crf, dei, tid);
-            };
-        t[LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW] =
-            [](tt_l1_ptr PACKET_HEADER_TYPE* ps, ROUTING_FIELDS_TYPE crf, auto& dei, uint8_t tid) {
-                forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
-                    DownstreamDirections<NORTH, WEST>{}, ps, crf, dei, tid);
-            };
-
-        return t;
-    }();
-
-    if (mask < table.size() && table[mask] != nullptr) {
-        table[mask](packet_start, cached_routing_fields, downstream_edm_interface, transaction_id);
-    } else {
-        __builtin_unreachable();
+    switch (mask) {
+        case LowLatencyMeshRoutingFields::NOOP: return;
+        case LowLatencyMeshRoutingFields::FORWARD_EAST:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<EAST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::FORWARD_WEST:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<WEST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<EAST, WEST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::FORWARD_NORTH:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<NORTH>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<SOUTH>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<NORTH, SOUTH>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<NORTH, SOUTH, EAST, WEST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<NORTH, SOUTH, EAST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<NORTH, SOUTH, WEST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<SOUTH, EAST, WEST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<NORTH, EAST, WEST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<SOUTH, EAST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<SOUTH, WEST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<NORTH, EAST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
+            return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
+                DownstreamDirections<NORTH, WEST>{},
+                packet_start,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);
+        default: __builtin_unreachable();
     }
 }
+#endif
 
 #if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
