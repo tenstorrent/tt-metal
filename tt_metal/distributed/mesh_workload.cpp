@@ -170,7 +170,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                     mesh_device,
                     kernel_bin_buf_->address());
 
-                mesh_device->mesh_command_queue().enqueue_write_shard_to_sub_grid(
+                mesh_cq.enqueue_write_shard_to_sub_grid(
                     *kernel_bin_buf_view,
                     program.impl().get_program_transfer_info().binary_data.data(),
                     device_range,
