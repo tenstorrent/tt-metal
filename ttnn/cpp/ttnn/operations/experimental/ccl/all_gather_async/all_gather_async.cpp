@@ -66,6 +66,7 @@ ttnn::Tensor all_broadcast_composite_all_gather(
         num_links,
         input_tensor.memory_config(),
         ttnn::ccl::Topology::Linear,
+        cluster_axis,
         subdevice_id,
         barrier_semaphore);
 
