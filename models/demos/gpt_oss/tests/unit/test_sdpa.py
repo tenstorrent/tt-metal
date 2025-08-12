@@ -5,7 +5,7 @@ from loguru import logger
 import ttnn
 from models.utility_functions import comp_pcc
 
-from ...tt.attention import sdpa as tt_sdpa
+from ...tt.sdpa import sdpa as tt_sdpa
 
 
 def reference_sdpa(Q, K, V, S, sm_scale, sliding_window=0):

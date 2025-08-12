@@ -1,93 +1,88 @@
 import ttnn
 
+from ..tt.sdpa import sdpa as tt_sdpa
 
-def sdpa(
-    tt_q: ttnn.Tensor,
-    tt_k: ttnn.Tensor,
-    tt_v: ttnn.Tensor,
-    tt_sink: ttnn.Tensor,
-    sm_scale: float,
-    tt_mask: ttnn.Tensor,
-    tt_cache: ttnn.Tensor = None,
-) -> ttnn.Tensor:
-    """
-    Perform a single attention operation using the provided tensors.
 
-    Args:
-        tt_q (ttnn.Tensor): Query tensor.
-        tt_k (ttnn.Tensor): Key tensor.
-        tt_v (ttnn.Tensor): Value tensor.
-        tt_sink (ttnn.Tensor): Output tensor.
-        sm_scale (float): Scaling factor for softmax.
-        sliding_window (int, optional): Size of the sliding window for attention. Defaults to 0.
+class Attention:
+    def __init__(self, mesh_device, hf_config, state_dict, layer_idx):
+        self.layer_idx = layer_idx
+        self.use_sliding_window = self.layer_idx % 2 == 0
+        self.scaling = hf_config.head_dim**-0.5
+        self.cache = None
+        self.head_dim = hf_config.head_dim
+        self.num_heads = hf_config.num_attention_heads
+        self.hidden_size = hf_config.hidden_size
 
-    Returns:
-        ttnn.Tensor: The result of the attention operation.
-    """
+        # (['sinks', 'q_proj.weight', 'q_proj.bias', 'k_proj.weight', 'k_proj.bias', 'v_proj.weight', 'v_proj.bias', 'o_proj.weight', 'o_proj.bias'])
 
-    assert tt_q.shape[-1] == tt_k.shape[-1] == tt_v.shape[-1], "Dim size mismatch"
+        # TODO: Add mesh mapper
+        q_proj = state_dict["q_proj.weight"].transpose(-1, -2)
+        q_proj_bias = state_dict["q_proj.bias"]  # TODO: unsqueeze?
 
-    num_tokens, _, nh, dim = tt_q.shape
-    _, nkv, _ = tt_k.shape
+        k_proj = state_dict["k_proj.weight"].transpose(-1, -2)
+        k_proj_bias = state_dict["k_proj.bias"]  # TODO: unsqueeze?
 
-    # Prepare inputs
-    tt_q = ttnn.reshape(tt_q, [num_tokens, nkv, nh // nkv, dim])
-    tt_q = ttnn.permute(tt_q, [1, 2, 0, 3])  # (nkv, nh // nkv, num_tokens, dim)
+        v_proj = state_dict["v_proj.weight"].transpose(-1, -2)
+        v_proj_bias = state_dict["v_proj.bias"]  # TODO: unsqueeze?
 
-    # KV Cache handling
-    tt_k = ttnn.reshape(tt_k, [num_tokens, nkv, 1, dim])  # unsqueeze
-    tt_v = ttnn.reshape(tt_v, [num_tokens, nkv, 1, dim])  # unsqueeze
-    tt_k = ttnn.permute(tt_k, [1, 2, 0, 3])  # (nkv, 1, num_tokens, dim)
-    tt_v = ttnn.permute(tt_v, [1, 2, 0, 3])  # (nkv, 1, num_tokens, dim)
+        o_proj = state_dict["o_proj.weight"].transpose(-1, -2)
+        o_proj_bias = state_dict["o_proj.bias"]  # TODO: unsqueeze?
 
-    slice_out = False
-    if tt_cache is None:
-        tt_cache = [tt_k, tt_v]  # Cache for keys and values
-    else:
-        tt_k_back, tt_v_back = tt_cache
+        sinks = state_dict["sinks"].reshape(1, hf_config.num_attention_heads, 1, 1)
 
-        tt_k = ttnn.concat([tt_k_back, tt_k], dim=2)  # (nkv, 1, cache_len + num_tokens, dim)
-        tt_v = ttnn.concat([tt_v_back, tt_v], dim=2)  # (nkv, 1, cache_len + num_tokens, dim)
+        self.q_proj = ttnn.from_torch(q_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        self.q_proj_bias = ttnn.from_torch(
+            q_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
 
-        tt_cache = [tt_k, tt_v]  # Update cache with new keys and values
-        slice_out = True
+        self.k_proj = ttnn.from_torch(k_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        self.k_proj_bias = ttnn.from_torch(
+            k_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
 
-    kv_len = tt_k.shape[2]  # Length of keys/values in the cache
+        self.v_proj = ttnn.from_torch(v_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        self.v_proj_bias = ttnn.from_torch(
+            v_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
 
-    tt_k = ttnn.repeat(tt_k, [1, nh // nkv, 1, 1])  # (nkv, nh // nkv, kv_len, dim)
-    tt_k = ttnn.transpose(tt_k, -1, -2)  # (nkv, nh // nkv, dim, kv_len)
+        self.o_proj = ttnn.from_torch(o_proj, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        self.o_proj_bias = ttnn.from_torch(
+            o_proj_bias, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
 
-    tt_v = ttnn.repeat(tt_v, [1, nh // nkv, 1, 1])  # (nkv, nh // nkv, kv_len, dim)
+        self.sinks = ttnn.from_torch(sinks, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-    # QK + scale
-    tt_qk = ttnn.matmul(tt_q, tt_k)  # (nkv, nh // nkv, kv_len, kv_len)
-    tt_qk *= sm_scale
+    def __call__(self, x: ttnn.Tensor, mask, rope_stuff):
+        batch_size, seq_len, hidden_size = x.shape
 
-    # Mask
-    tt_qk += tt_mask
+        tt_q = ttnn.matmul(x, self.q_proj) + self.q_proj_bias
+        tt_q = ttnn.reshape(tt_q, [1, seq_len * batch_size, -1, self.head_dim])
 
-    # Sink
-    tt_sink = ttnn.reshape(tt_sink, [1, nkv, nh // nkv, 1])
-    tt_sink = ttnn.permute(tt_sink, [1, 2, 0, 3])  # (nkv, nh // nkv, 1, 1)
-    tt_sink = ttnn.repeat(tt_sink, [1, 1, kv_len, 1])  # (nkv, nh // nkv, kv_len, 1)
-    tt_qk = ttnn.concat([tt_qk, tt_sink], dim=-1)  # (nkv, nh // nkv, kv_len, kv_len + 1)
+        tt_k = ttnn.matmul(x, self.k_proj) + self.k_proj_bias
+        tt_k = ttnn.reshape(tt_k, [1, seq_len * batch_size, -1, self.head_dim])
 
-    # Softmax
-    tt_qk = ttnn.softmax(tt_qk, dim=-1, numeric_stable=True)  # (nkv, nh // nkv, kv_len, kv_len + 1)
+        tt_v = ttnn.matmul(x, self.v_proj) + self.v_proj_bias
+        tt_v = ttnn.reshape(tt_v, [1, seq_len * batch_size, -1, self.head_dim])
 
-    tt_qk = ttnn.slice(
-        tt_qk, [0, 0, 0, 0], [nkv, nh // nkv, kv_len, kv_len]
-    )  # (nkv, nh // nkv, num_tokens, num_tokens)
+        apply_rope, tt_cos, tt_sin = rope_stuff
+        tt_q = apply_rope(tt_q, tt_cos, tt_sin)
+        tt_k = apply_rope(tt_k, tt_cos, tt_sin)
 
-    # Out stuff
-    out = ttnn.matmul(tt_qk, tt_v)  # (nkv, nh // nkv, kv_len, dim)
-    out = ttnn.reshape(out, [1, nh, kv_len, dim])
-    out = ttnn.permute(out, [0, 2, 1, 3])  # (1, kv_len, nh, dim)
+        tt_q = ttnn.reshape(tt_q, [batch_size * seq_len, -1, self.num_heads, self.head_dim])
+        tt_k = ttnn.reshape(tt_k, [batch_size * seq_len, -1, self.head_dim])
+        tt_v = ttnn.reshape(tt_v, [batch_size * seq_len, -1, self.head_dim])
 
-    if slice_out:
-        out = ttnn.slice(out, [0, kv_len - num_tokens, 0, 0], [1, kv_len, nh, dim])  # (1, num_tokens, nh, dim)
+        tt_sdpa_out, self.cache = tt_sdpa(
+            tt_q,
+            tt_k,
+            tt_v,
+            self.sinks,
+            sm_scale=self.scaling,
+            tt_mask=mask,
+            tt_cache=self.cache,
+        )
 
-    # FIXME: This reshape hangs after a few iterations (GH Issue #26656)
-    out = ttnn.reshape(out, [num_tokens, dim * nh])
+        tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj) + self.o_proj_bias
+        tt_out = ttnn.reshape(tt_out, [batch_size, seq_len, hidden_size])
 
-    return out, tt_cache
+        return tt_out
