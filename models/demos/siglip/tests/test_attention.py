@@ -14,6 +14,7 @@ from transformers.models.siglip.modeling_siglip import SiglipSdpaAttention
 import ttnn
 from models.demos.siglip.compare import comp_pcc
 from models.demos.siglip.reference.functional import siglip_attention
+from models.demos.siglip.tests.common import convert_state_dict
 from models.demos.siglip.tt.attention import siglip_attention_ttnn
 
 
@@ -44,10 +45,11 @@ def test_attention(attention_func):
     )
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device()
+    state_dict = convert_state_dict(reference_attention.state_dict())
     result = attention_func(
         mesh_device=mesh_device,
         hidden_states=random_inputs,
-        state_dict=reference_attention.state_dict(),
+        state_dict=state_dict,
         state_dict_prefix="",
         weight_cache_path=None,
         vision_dim=config.hidden_size,

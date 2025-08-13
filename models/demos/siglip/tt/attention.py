@@ -9,6 +9,7 @@ import torch
 from pydantic import BaseModel, Field
 
 import ttnn
+from models.demos.siglip.tests.common import flatten_state_dict
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_out_subblock_w
 from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
@@ -140,6 +141,7 @@ def siglip_attention_ttnn(
     dropout: float = 0.0,
     attention_mask: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    state_dict = flatten_state_dict(state_dict)
     grid = mesh_device.compute_with_storage_grid_size()
     attention_config = AttentionConfig(
         num_devices=mesh_device.get_num_devices() if mesh_device else 0,

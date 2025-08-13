@@ -11,8 +11,6 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-from models.demos.siglip.tests.common import convert_state_dict
-
 
 def siglip_attention(
     mesh_device,
@@ -23,12 +21,10 @@ def siglip_attention(
     dtype: torch.dtype = torch.bfloat16,
     vision_dim: int = 1152,
     num_heads: int = 16,
-    patch_size: int = 14,
     dropout: float = 0.0,
     attention_mask: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """SigLIP self-attention mechanism."""
-    state_dict = convert_state_dict(state_dict)
     batch_size, seq_length, embed_dim = hidden_states.shape
     head_dim = vision_dim // num_heads
 
