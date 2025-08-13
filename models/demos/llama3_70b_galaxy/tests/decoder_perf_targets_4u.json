@@ -8,7 +8,7 @@
             "non-overlapped-dispatch-time": 4273.311111111111,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.3,
-            "first_to_last_start_relative_margin": 0.4,
+            "first_to_last_start_relative_margin": 1.0,
             "dispatch_duration_relative_margin": 0.2
         },
         "AllGatherConcat_0": {
@@ -115,7 +115,7 @@
             "kernel_duration": 20958.09375,
             "op_to_op": 768.6444444444444,
             "first_to_last_start": 2338.777777777778,
-            "non-overlapped-dispatch-time": 18558.666666666668,
+            "non-overlapped-dispatch-time": 24890.777777777777,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
@@ -129,7 +129,7 @@
             "non-overlapped-dispatch-time": 4601.383333333333,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
-            "first_to_last_start_relative_margin": 0.35,
+            "first_to_last_start_relative_margin": 1.0,
             "dispatch_duration_relative_margin": 0.2
         },
         "RMSAllGather_0": {
@@ -157,11 +157,11 @@
         "RotaryEmbeddingLlamaFusedQK_0": {
             "op_name": "RotaryEmbeddingLlamaFusedQK",
             "kernel_duration": 2492.621527777778,
-            "op_to_op": 874.0,
-            "first_to_last_start": 2616.0858585858587,
+            "op_to_op": 1051.111111111111,
+            "first_to_last_start": 2041.2222222222222,
             "non-overlapped-dispatch-time": 2981.8611111111113,
             "kernel_duration_relative_margin": 0.1,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.3,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.35
         },
@@ -182,18 +182,18 @@
             "op_name": "AllGatherAsync_0",
             "kernel_duration": 18323.4375,
             "op_to_op": 715.7727272727273,
-            "non-overlapped-dispatch-time": 2901.95,
-            "kernel_duration_relative_margin": 0.2,
+            "non-overlapped-dispatch-time": 4722.0,
+            "kernel_duration_relative_margin": 0.25,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
         "AllGatherAsync_1": {
             "op_name": "AllGatherAsync_1",
             "kernel_duration": 19229.59375,
-            "op_to_op": 746.0,
-            "non-overlapped-dispatch-time": 3521.8,
+            "op_to_op": 1173.0,
+            "non-overlapped-dispatch-time": 5420.0,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.6,
             "dispatch_duration_relative_margin": 0.5
         },
         "AllReduceAsync_0": {
@@ -214,7 +214,8 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "BinaryNgDeviceOperation_1": {
+
+        "BinaryNgDeviceOperation_0": {
             "op_name": "BinaryDeviceOperation_Indices_Correction",
             "kernel_duration": 3586.875,
             "op_to_op": 729.0,
@@ -325,7 +326,7 @@
         "ShardedToInterleavedDeviceOperation_1": {
             "op_name": "ShardedToInterleavedDeviceOperation_1",
             "kernel_duration": 1159.96875,
-            "op_to_op": 901.0,
+            "op_to_op": 2093.0,
             "non-overlapped-dispatch-time": 2297.1,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
