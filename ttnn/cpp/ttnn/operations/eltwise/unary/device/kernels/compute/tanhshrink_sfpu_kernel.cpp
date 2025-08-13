@@ -5,10 +5,12 @@
 #include <cstdint>
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api.h"
+#include "compute_kernel_api/copy_dest_values.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -27,17 +29,18 @@ void MAIN {
 
             // Pop tile after tile, copy to DST and pack
             copy_tile_init(cb_input);
-            copy_tile(cb_input, 0, 0);
+            copy_tile(cb_input, 0, 1);
 
             tanh_tile_init();
-            tanh_tile(0);
+            tanh_tile(1);
 
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_input);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                cb_input, 0, 0);
+            // output = cb_input - tanh(x)
+            copy_tile_init(cb_input);
+            copy_tile(cb_input, 0, 0);
+            sub_binary_tile_init();
+            sub_binary_tile(0, 1);
 
             tile_regs_commit();
-
             tile_regs_wait();
 
             pack_tile(0, cb_output);
