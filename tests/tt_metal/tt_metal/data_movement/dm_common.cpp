@@ -59,7 +59,6 @@ DramAddressInfo get_dram_address_and_size(const IDevice* device) {
 
 DramAddressInfo get_dram_address_and_size(const std::shared_ptr<distributed::MeshDevice> mesh_device) {
     // Obtaining DRAM address and size //
-
     auto dram_base_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     uint32_t dram_size = tt::tt_metal::MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::UNRESERVED);
 

@@ -32,6 +32,7 @@ struct DramAddressInfo {
 
 // Function to get DRAM address and size
 DramAddressInfo get_dram_address_and_size(const IDevice* device);
+
 DramAddressInfo get_dram_address_and_size(const std::shared_ptr<distributed::MeshDevice> mesh_device);
 
 // Function to compute physical constraints
