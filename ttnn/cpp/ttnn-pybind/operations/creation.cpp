@@ -430,7 +430,7 @@ template <typename creation_operation_t>
 void bind_from_buffer_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
-        Creates a device tensor with values from a buffer of the specified shape, data type, layout, and memory configuration.
+        Creates a device tensor with values from a buffer of the specified, data type, layout, and memory configuration.
 
         Args:
             buffer (List[List[Any]]): The buffer to be used to create the tensor.
