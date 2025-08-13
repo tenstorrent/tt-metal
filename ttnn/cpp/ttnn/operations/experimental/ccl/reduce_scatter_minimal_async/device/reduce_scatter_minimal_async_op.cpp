@@ -225,10 +225,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+    auto mesh_view = mesh_device->get_view();
+
+    IDevice* target_device = (mesh_device) ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
-    if (this->cluster_axis.has_value()) {
+    bool is_unit_mesh = mesh_view.num_rows() == 1 && mesh_view.num_cols() == 1;
+    if (is_unit_mesh) {
+        devices_to_use = this->devices;
+    } else if (this->cluster_axis.has_value()) {
         // User specified the cluster-axis. Derive devices based on the current coordinate
         // and the cluster-axis.
         devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
@@ -237,6 +241,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
         devices_to_use = devices;
     }
     uint32_t target_ring_size = devices_to_use.size();
+    log_info(tt::LogAlways, "Target_ring_size: {}", target_ring_size);
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
@@ -255,6 +260,17 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
                 forward_device = devices_to_use.at(0);
             }
         }
+    }
+    log_info(tt::LogAlways, "Ring size: {}", target_ring_size);
+    log_info(tt::LogAlways, "Index: {}", device_index);
+    log_info(tt::LogAlways, "Target_device: {}", target_device->id());
+    log_info(tt::LogAlways, "Forward_device has value: {}", forward_device.has_value());
+    if (forward_device.has_value()) {
+        log_info(tt::LogAlways, "Forward_device: {}", forward_device.value()->id());
+    }
+    log_info(tt::LogAlways, "Backward_device has value: {}", backward_device.has_value());
+    if (backward_device.has_value()) {
+        log_info(tt::LogAlways, "Backward_device: {}", backward_device.value()->id());
     }
 
     return reduce_scatter_minimal_async(

@@ -731,12 +731,25 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
-    log_trace(
-        tt::LogOp,
+    log_info(
+        tt::LogAlways,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
         input_tensor.device()->id(),
         is_first_chip,
         is_last_chip);
+    log_info(tt::LogAlways, "Ring size: {}", ring_size);
+    log_info(tt::LogAlways, "Ring index: {}", ring_index);
+    log_info(tt::LogAlways, "Input tensor address: {}", input_tensor.buffer()->address());
+    log_info(tt::LogAlways, "Intermediate tensor address: {}", intermediate_tensor.buffer()->address());
+    log_info(tt::LogAlways, "Output tensor address: {}", output_tensor.buffer()->address());
+    log_info(tt::LogAlways, "Semaphore size: {}", semaphore.size());
+    for (uint32_t i = 0; i < semaphore.size(); i++) {
+        log_info(tt::LogAlways, "Semaphore{}: {}", i, semaphore.at(i).address());
+    }
+    log_info(
+        tt::LogAlways,
+        "Barrier_semaphore: {}",
+        barrier_semaphore.has_value() ? barrier_semaphore.value().address() : 0);
 
     bool fuse_op = fused_op_signaler.has_value();
 
@@ -749,6 +762,25 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
+    auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+    log_info(tt::LogAlways, "Src_fabric_node_id: {}", src_fabric_node_id);
+    if (forward_device.has_value()) {
+        auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        log_info(
+            tt::LogAlways,
+            "forward device fabric node id: {}, forward_device: {}",
+            dst_fabric_node_id,
+            forward_device.value()->id());
+    }
+    if (backward_device.has_value()) {
+        auto dst_fabric_node_id =
+            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        log_info(
+            tt::LogAlways,
+            "backward device fabric node id: {}, backward_device: {}",
+            dst_fabric_node_id,
+            backward_device.value()->id());
+    }
     // Get worker cores
     // 2 senders (reader + core + writer) per direction (forward, backward) per link
     uint32_t num_directions_per_link = 2;

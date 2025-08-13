@@ -105,7 +105,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherAsync) {
     }
 }
 
-TEST_F(MultiCQMeshDevice2x4Fixture, ReduceScatter) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, ReduceScatter) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
 
@@ -115,6 +115,7 @@ TEST_F(MultiCQMeshDevice2x4Fixture, ReduceScatter) {
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
+        log_info(tt::LogAlways, "Tensor ring index: {}, device id: {}", dev_idx, mesh_devices[dev_idx]->id());
     }
     auto sem0 = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     auto sem1 = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
