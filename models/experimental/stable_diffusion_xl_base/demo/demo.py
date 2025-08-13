@@ -21,6 +21,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
+from ttnn import ConcatMeshToTensor
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
@@ -111,9 +112,12 @@ def my_encode_prompt(
     device = device or pipeline._execution_device
     prompt = [prompt] if isinstance(prompt, str) else prompt
 
+    print("Sent prompt to encode prompt function is: ", prompt)
+
     # Todo fix negative prompt
     num_devices = ttnn_device.get_num_devices()
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
+    assert prompt_2 is None, "Prompt 2 is not supported currently"
 
     if prompt is not None:
         batch_size = len(prompt)
@@ -135,8 +139,11 @@ def my_encode_prompt(
         # textual inversion: process multi-vector tokens if necessary
         prompt_embeds_list = []
         prompts = [prompt, prompt_2]
+        print("Prompt2 is: ", prompt_2)
+        print("Promptes pre loop are: ", prompts)
         i = 0
         for ind, (prompt, tokenizer, text_encoder) in enumerate(zip(prompts, tokenizers, text_encoders)):
+            print("Prompt in loop is", prompt)
             tokenizer_start_time = time.time()
             text_inputs = tokenizer(
                 prompt,
@@ -172,14 +179,20 @@ def my_encode_prompt(
                 device=ttnn_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
             )
+            print("tt_tokens shape = ", tt_tokens.shape)
 
             tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
             ttnn.synchronize_device(ttnn_device)
 
             tt_sequence_output_torch = ttnn.to_torch(
-                ttnn.get_device_tensors(tt_sequence_output.hidden_states[-2])[0]
+                ttnn.get_device_tensors(tt_sequence_output.hidden_states[-2])[0],
+                mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
             ).to(torch.float32)
-            tt_pooled_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_output)[0]).to(torch.float32)
+            tt_pooled_output_torch = ttnn.to_torch(
+                ttnn.get_device_tensors(tt_pooled_output)[0], mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0)
+            ).to(torch.float32)
+
+            print("tt_sequence_output_torch shape = ", tt_sequence_output_torch.shape)
 
             print("TT text encoder 1 inference done")
 
@@ -193,7 +206,8 @@ def my_encode_prompt(
             if ind == 0:
                 # the reference code says that pooled prompt embeds is actually the pooled prompt embeds, but is in fact last hidden state
                 tt_pooled_prompt_embeds = ttnn.to_torch(
-                    ttnn.get_device_tensors(tt_sequence_output.hidden_states[-1])[0]
+                    ttnn.get_device_tensors(tt_sequence_output.hidden_states[-1])[0],
+                    mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
                 )
                 print("Encoder 1 path for positive prompt - pooled output that is not actually pooled")
                 pooled_prompt_embeds = tt_pooled_prompt_embeds.to(torch.float32)
@@ -284,11 +298,12 @@ def my_encode_prompt(
             )
             tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
             tt_sequence_output_neg_torch = ttnn.to_torch(
-                ttnn.get_device_tensors(tt_sequence_output_neg.hidden_states[-2])[0]
+                ttnn.get_device_tensors(tt_sequence_output_neg.hidden_states[-2])[0],
+                mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
             ).to(torch.float32)
-            tt_pooled_output_neg_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_output_neg)[0]).to(
-                torch.float32
-            )
+            tt_pooled_output_neg_torch = ttnn.to_torch(
+                ttnn.get_device_tensors(tt_pooled_output_neg)[0], mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0)
+            ).to(torch.float32)
             ttnn.synchronize_device(ttnn_device)
             text_encoder_end_time = time.time()
             # print(f"negative text_encoder_{i} time = ", text_encoder_end_time - text_encoder_start_time)
@@ -296,7 +311,10 @@ def my_encode_prompt(
             # We are only ALWAYS interested in the pooled output of the final text encoder
             if ind == 0:
                 tt_pooled_prompt_embeds = (
-                    ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output_neg.hidden_states[-1])[0])
+                    ttnn.to_torch(
+                        ttnn.get_device_tensors(tt_sequence_output_neg.hidden_states[-1])[0],
+                        mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
+                    )
                 ).to(torch.float32)
                 negative_pooled_prompt_embeds = tt_pooled_prompt_embeds
                 # this is actually not used anywhere
@@ -530,9 +548,10 @@ def run_demo_inference(
 
     # Process prompts in batches
     all_embeds = []
+    print("Pre prompt processing, prompts are: ", prompts, " batch size is: ", batch_size)
     for i in range(0, len(prompts), batch_size):
         batch_prompts = prompts[i : i + batch_size]
-
+        print("Batch prompts are: ", batch_prompts)
         batch_embeds = my_encode_prompt(
             pipeline,
             tt_text_encoder,
@@ -793,8 +812,8 @@ def run_demo_inference(
 )
 @pytest.mark.parametrize(
     "prompt",
-    # ((["An astronaut riding a green horse", "A plate of food served on a wooden table"]),),
-    (("A plate of food served on a wooden table"),),
+    ((["An astronaut riding a green horse", "A plate of food served on a wooden table"]),),
+    # (("A plate of food served on a wooden table"),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
@@ -816,7 +835,7 @@ def run_demo_inference(
     ],
     ids=("with_trace", "no_trace"),
 )
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+# @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_demo(
     mesh_device,
     is_ci_env,
