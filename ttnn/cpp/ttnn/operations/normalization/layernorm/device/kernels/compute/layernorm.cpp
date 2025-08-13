@@ -115,13 +115,9 @@ void MAIN {
         }
     }();
 
-    // ================================
-    // Hack until Welford's is hooked up
-    // After that, change these to 0, 1, 2
-    constexpr int dst0 = 2;  // Input tile to Welford's algorithm
-    constexpr int dst1 = 1;  // Partial E[x] result
-    constexpr int dst2 = 0;  // Partial Var[x] result
-    // ================================
+    constexpr int dst0 = 0;  // Input tile to Welford's algorithm
+    constexpr int dst1 = 1;  // Partial E[x] result for Welford's
+    constexpr int dst2 = 2;  // Partial Var[x] result for Welford's
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
@@ -172,21 +168,42 @@ void MAIN {
 
             cb_reserve_back(cb_ex, onetile);
             cb_reserve_back(cb_ex2, onetile);
-            // welford_init();
-            uint32_t start_N = 1;
-            // Welford's needs transposed input tile
-            // constexpr uint32_t transpose = 1;
-            constexpr uint32_t transpose = 0;
+            uint32_t start_N = 0;
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_wait_front(cb_x, wt + blk);
                 for (uint32_t j = 0; j < blk; j++) {
-                    copy_tile_to_dst_init_short(cb_x, transpose);
+                    // Welford's needs transposed input tile
+                    copy_tile_to_dst_init_short(cb_x, /*transpose*/ 1);
                     copy_tile(cb_x, j, dst0);
-                    // welford(dst0, dst1, dst2, start_N, W, wt + j + 1 == Wt);
-                    dummy_mean_and_variance(cb_x, j, wt, Wt, dst0, dst1, dst2);
+                    // DPRINT << "===== input =====" << ENDL();
+                    // dprint_tensix_dest_reg(dst0);
+                    welford_init();
+                    welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
+                    // DPRINT << "===== mean after welford =====" << ENDL();
+                    // dprint_tensix_dest_reg(dst1);
+                    // DPRINT << "===== variance after welford =====" << ENDL();
+                    // dprint_tensix_dest_reg(dst2);
+                    // dummy_mean_and_variance(cb_x, j, wt, Wt, dst0, dst1, dst2);
                     start_N += tile_width;
                 }
             }
+            // Transpose dst1 and dst2 back to columns
+            pack_reconfig_data_format(cb_ex);
+            pack_tile(dst1, cb_ex);
+            pack_reconfig_data_format(cb_ex2);
+            pack_tile(dst2, cb_ex2);
+            cb_push_back(cb_ex, onetile);
+            cb_push_back(cb_ex2, onetile);
+            transpose_wh_init_short(cb_ex);
+            reconfig_data_format_srca(cb_ex);
+            transpose_wh_tile(cb_ex, 0, dst1);
+            transpose_wh_init_short(cb_ex2);
+            reconfig_data_format_srca(cb_ex2);
+            transpose_wh_tile(cb_ex2, 0, dst2);
+            cb_pop_front(cb_ex, onetile);
+            cb_pop_front(cb_ex2, onetile);
+            cb_reserve_back(cb_ex, onetile);
+            cb_reserve_back(cb_ex2, onetile);
             pack_reconfig_data_format(cb_ex);
             pack_tile(dst1, cb_ex);
             pack_reconfig_data_format(cb_ex2);
