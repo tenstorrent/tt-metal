@@ -52,7 +52,7 @@ export class HierarchicalTelemetryStore {
         for (const nextPathComponent of currentMap.keys()) {
             const childPath = path + "_" + nextPathComponent;
             const childState = this._stateByPath.get(childPath) === true ? true : false;
-            state &= childState;
+            state = state && childState;
         }
         return state;
     }
