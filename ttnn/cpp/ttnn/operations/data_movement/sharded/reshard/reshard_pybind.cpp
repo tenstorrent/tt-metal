@@ -25,13 +25,15 @@ void bind_reshard(pybind11::module& module, const data_movement_sharded_operatio
                const ttnn::Tensor& input_tensor,
                const MemoryConfig& output_memory_config,
                const std::optional<Tensor>& output_tensor,
+               bool use_nd_reshard,
                QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, output_memory_config, output_tensor);
+                return self(queue_id, input_tensor, output_memory_config, output_tensor, use_nd_reshard);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("output_memory_config"),
             py::arg("output_tensor").noconvert() = std::nullopt,
             py::kw_only(),
+            py::arg("use_nd_reshard") = false,
             py::arg("queue_id") = DefaultQueueId,
 
         });

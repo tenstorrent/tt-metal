@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
     auto output_page_size = output_tensor.buffer()->page_size();
 
     if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
-        input_page_size != output_page_size) {
+        input_page_size != output_page_size && this->use_nd_reshard) {
         return detail::nd_reshard_multi_core(input_tensor, output_tensor);
     }
     if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor.memory_config())) {

@@ -15,7 +15,8 @@ struct ReshardOperation {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const MemoryConfig& memory_config,
-        const std::optional<Tensor>& optional_output_tensor);
+        const std::optional<Tensor>& optional_output_tensor,
+        bool use_nd_reshard = false);
 };
 
 }  // namespace operations::data_movement
