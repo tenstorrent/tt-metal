@@ -237,6 +237,11 @@ if(ENABLE_CODE_TIMERS)
 endif()
 include(tracy)
 
+if(ENABLE_TRACY AND TARGET TracyClient)
+    message(STATUS "Adding -Wno-unused-variable to TracyClient")
+    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+endif()
+
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)
 file(GENERATE OUTPUT metal_common_pch.cpp CONTENT "/*dummy pch file*/\n")
