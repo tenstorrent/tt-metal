@@ -85,6 +85,19 @@ inline void llk_unpack_AB(
     WAYPOINT("UABD");
 }
 
+inline void llk_unpack_AB_reduce_row_max(
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a) {
+    std::uint32_t operandA_id = get_operand_id(operandA);
+    std::uint32_t operandB_id = get_operand_id(operandB);
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * tile_index_a;
+    std::uint32_t address_a = base_address_a + offset_address_a;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+
+    // Always tile index 0 for operandB
+    _llk_unpack_AB_(address_a, base_address_b);
+}
+
 template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
 inline void llk_unpack_AB_reduce_init(
     const std::uint32_t operandA,
@@ -113,4 +126,15 @@ inline void llk_unpack_AB_reduce_init(
     config_unpacker_x_end<UNP_SEL>(face_r_dim);
 
     _llk_unpack_AB_mop_config_<BType>(transpose > 0, num_faces, narrow_tile);  // transpose of faces 0,2,1,3
+}
+
+// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+inline void llk_unpack_AB_reduce_row_max_init() {
+    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
+    // if we have the flag set with REDUCE_ROW, we don't need to do anything
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
+
+    TTI_SETADCXX(p_setadc::UNP_AB, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+
+    _llk_unpack_AB_reduce_row_max_mop_config_();  // Use specialized function
 }

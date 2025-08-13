@@ -48,3 +48,9 @@ inline void llk_math_reduce_init(
     _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>(
         within_face_16x16_transpose);
 }
+
+// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+inline void llk_math_reduce_max_row_init() { _llk_math_reduce_max_row_init_(); }
+
+// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+inline void llk_math_reduce_max_row(const uint dst_index) { _llk_math_reduce_max_row_(dst_index); }
