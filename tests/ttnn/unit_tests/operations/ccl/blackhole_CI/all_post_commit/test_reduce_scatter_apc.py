@@ -88,6 +88,8 @@ def test_rs_row_nightly(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    if (2 == num_devices) and (rs_topology == ttnn.Topology.Ring):
+        pytest.skip("Ring configuration requires more than 2 devices")
     if (p150_mesh_device.shape[0] != num_devices) and (rs_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires the entire row or column so it loops around")
     if ttnn.get_num_devices() < num_devices:
