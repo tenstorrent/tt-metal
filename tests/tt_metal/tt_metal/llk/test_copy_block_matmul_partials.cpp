@@ -20,6 +20,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -61,11 +62,18 @@ struct CopyBlockMatmulPartialsConfig {
 };
 
 void run_single_core_copy_block_matmul_partials(
-    tt_metal::IDevice* device, const CopyBlockMatmulPartialsConfig& test_config) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const CopyBlockMatmulPartialsConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = test_config.single_tile_size;
@@ -95,7 +103,7 @@ void run_single_core_copy_block_matmul_partials(
                              num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float32}})
                              .set_page_size(src0_cb_index, single_tile_size);
     }
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t ouput_cb_index = test_config.ouput_cb_index;
     uint32_t num_output_tiles = test_config.writer_ublock;
@@ -108,17 +116,17 @@ void run_single_core_copy_block_matmul_partials(
                                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float32}})
                                .set_page_size(ouput_cb_index, single_tile_size);
     }
-    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp",
         core,
         tt_metal::DataMovementConfig{
@@ -136,7 +144,7 @@ void run_single_core_copy_block_matmul_partials(
         defines["DST_ACCUM_MODE"] = "1";
     }
     tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
         core,
         tt_metal::ComputeConfig{
@@ -161,7 +169,7 @@ void run_single_core_copy_block_matmul_partials(
     tt_metal::detail::WriteToBuffer(src_dram_buffer_bf16, src_vec);
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         unary_reader_kernel,
         core,
         {dram_buffer_src_addr,
@@ -172,7 +180,7 @@ void run_single_core_copy_block_matmul_partials(
          false});
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         unary_writer_kernel,
         core,
         {dram_buffer_dst_addr,
@@ -182,7 +190,7 @@ void run_single_core_copy_block_matmul_partials(
          test_config.writer_ublock,
          false});
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> result_vec_bf16;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec_bf16);
@@ -203,7 +211,7 @@ void run_single_core_copy_block_matmul_partials(
 // - pack_tile_block
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(DeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
+TEST_F(MeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
         if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
@@ -218,7 +226,7 @@ TEST_F(DeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
         }
     }
 }
-TEST_F(DeviceFixture, TensixComputeCopyBlockMultiple) {
+TEST_F(MeshDeviceFixture, TensixComputeCopyBlockMultiple) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
         if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
@@ -239,7 +247,7 @@ TEST_F(DeviceFixture, TensixComputeCopyBlockMultiple) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
+TEST_F(MeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
         if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
