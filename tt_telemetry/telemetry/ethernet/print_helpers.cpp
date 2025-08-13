@@ -1,4 +1,4 @@
-#include <telemetry/print_helpers.hpp>
+#include <telemetry/ethernet/print_helpers.hpp>
 
 std::ostream &operator<<(std::ostream &os, const tt::tt_metal::ClusterType cluster_type) {
     switch (cluster_type) {

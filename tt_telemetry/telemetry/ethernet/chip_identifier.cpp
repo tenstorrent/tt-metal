@@ -2,7 +2,7 @@
 
 #include <tt-metalium/control_plane.hpp>
 
-#include <telemetry/chip_identifier.hpp>
+#include <telemetry/ethernet/chip_identifier.hpp>
 
 bool GalaxyUbbIdentifier::operator<(const GalaxyUbbIdentifier &other) const {
     if (tray_id != other.tray_id) {
