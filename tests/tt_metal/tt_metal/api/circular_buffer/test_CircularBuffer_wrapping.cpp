@@ -74,11 +74,9 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
 
     EnqueueProgram(device->command_queue(), program, true);
 
-    std::vector<uint32_t> host_buffer(cb_page_size / sizeof(uint32_t), 0);
-    // EnqueueReadBuffer<uint32_t>(device->command_queue(), result_buffer, host_buffer, true);
-    detail::ReadFromDeviceL1(device, worker_core, result_buffer->address(), cb_page_size, host_buffer);
+    std::vector<uint32_t> host_buffer;
+    detail::ReadFromDeviceL1(device, worker_core, result_buffer->address(), 3 * sizeof(uint32_t), host_buffer);
 
-    log_info(tt::LogTest, "Result Buffer: {:X} {:X}", host_buffer[0], host_buffer[1]);
-
-    EXPECT_EQ(host_buffer[0], 0xFF00);
+    const static std::vector<uint32_t> expected_result = {0xAAAA, 0xBBBB, 0xAAAA};
+    EXPECT_EQ(host_buffer, expected_result) << "Page coruption detected.";
 }

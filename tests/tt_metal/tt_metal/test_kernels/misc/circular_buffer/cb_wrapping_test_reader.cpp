@@ -35,52 +35,21 @@ void print_page(std::size_t page_offset = 0) {
     DPRINT << ENDL();
 }
 
-void report_result(uint32_t page0, uint32_t page1) {
-    auto result_ptr = get_arg_val<uint32_t>(0);
-    DPRINT << "Result Buffer: " << HEX() << result_ptr << ENDL();
-    auto result_buffer = (volatile uint32_t*)result_ptr;
-
-    DPRINT << "Reporting page0: " << HEX() << page0 << " page1: " << HEX() << page1 << ENDL();
-
-    result_buffer[0] = page0;
-    DPRINT << "Result Buffer [0]: " << result_buffer[0] << ENDL();
-
-    result_buffer[1] = page1;
-    DPRINT << "Result Buffer [1]: " << result_buffer[1] << ENDL();
-}
-
 void kernel_main() {
+    auto result_ptr = get_arg_val<std::uint32_t*>(0);
+
     for (std::uint32_t i = 0; i < CHURN_LOOP_COUNT; i++) {
         cb_wait_front(cb_id, cb_step_size);
         cb_pop_front(cb_id, cb_step_size);
     }
 
-    // This is to give enough time for the faulty cb_reserve_back to return.
     DPRINT << "Reader Wait" << ENDL();
     riscv_wait(1024 * 1024 * 1024);
     DPRINT << "Reader Wait Done" << ENDL();
 
-    cb_wait_front(cb_id, cb_step_size);
-    DPRINT << "Should be 0xFFFF" << ENDL();
-    print_page();
-    cb_pop_front(cb_id, cb_step_size);
-
-    // This is where the counter is wrapped around.
-    // If reserve_back returns prematurely, this would have been corupted.
-    cb_wait_front(cb_id, cb_step_size);
-    DPRINT << "Should be 0xFF00" << ENDL();
-    print_page();
-    if (auto result = read_page()[0]; result != 0xFF00) {
-        DPRINT << "Corrupted data detected, got: " << HEX() << result << ENDL();
+    for (auto i = 0ul; i < 3; i++) {
+        cb_wait_front(cb_id, cb_step_size);
+        result_ptr[i] = read_page()[0];
+        cb_pop_front(cb_id, cb_step_size);
     }
-    auto page0 = read_page()[0];
-    cb_pop_front(cb_id, cb_step_size);
-
-    cb_wait_front(cb_id, cb_step_size);
-    DPRINT << "Should be 0xC0FE" << ENDL();
-    print_page();
-    auto page1 = read_page()[0];
-    cb_pop_front(cb_id, cb_step_size);
-
-    report_result(page0, page1);
 }
