@@ -32,7 +32,7 @@ jobs:
       matrix:
         test-group:
           - name: all gather nightly test
-            cmd: pytest tests/nightly/bh/ccl/all_gather_nightly.py -k "test_all_gather_nightly"
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
