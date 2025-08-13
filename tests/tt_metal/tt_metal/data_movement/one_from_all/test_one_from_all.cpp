@@ -45,7 +45,14 @@ struct OneFromAllConfig {
 bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromAllConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Sharded L1 buffers
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
@@ -96,7 +103,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromAllCon
 
     // Kernels
     auto gatherer_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer.cpp",
         master_core_set,
         DataMovementConfig{
@@ -108,11 +115,11 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromAllCon
     vector<uint32_t> master_runtime_args;
 
     for (auto& core : sub_core_list) {
-        CoreCoord physical_core = device->worker_core_from_logical_core(core);
+        CoreCoord physical_core = mesh_device->worker_core_from_logical_core(core);
         master_runtime_args.push_back(physical_core.x);
         master_runtime_args.push_back(physical_core.y);
     }
-    SetRuntimeArgs(program, gatherer_kernel, master_core_set, master_runtime_args);
+    SetRuntimeArgs(program_, gatherer_kernel, master_core_set, master_runtime_args);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
