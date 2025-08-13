@@ -44,7 +44,7 @@ jobs:
             runner-label: config-t3000,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
             co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
           },
           {
