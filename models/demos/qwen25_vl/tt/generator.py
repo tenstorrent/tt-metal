@@ -77,6 +77,15 @@ class Generator:
 
         return output_logits
 
+    def update_cos_sin(self, cos_matrix_pt=None, sin_matrix_pt=None):
+        self.model.rope_setup.update_cos_sin(cos_matrix_pt=cos_matrix_pt, sin_matrix_pt=sin_matrix_pt)
+
+    def update_cos_sin_rows(self, rot_mats_seq_ids):
+        for i, (cos, sin) in enumerate(rot_mats_seq_ids):
+            self.model.rope_setup.cos_matrix_pt[i] = cos[0]
+            self.model.rope_setup.sin_matrix_pt[i] = sin[0]
+        self.update_cos_sin()
+
     def decode_forward_text(
         self,
         tokens,
