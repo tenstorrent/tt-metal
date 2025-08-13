@@ -118,7 +118,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const operations::matmul::MatmulProgramConfig& program_config,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb);
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_helper(
     tt::tt_metal::Program& program,
     const Tensor& input0,
     const std::vector<Tensor>& input_tensors_b,
@@ -164,7 +164,7 @@ LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
 
 namespace llama_matmul {
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_helper(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -184,7 +184,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
 
 }  // namespace ttnn
 
-namespace llama_reuse_mcast_1d_optimized_helpers {
+namespace llama_agmm_fusion_helpers {
 void override_program_parameters(
     const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
     const void* operation,
@@ -193,4 +193,4 @@ void override_program_parameters(
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors);
 
-}  // namespace llama_reuse_mcast_1d_optimized_helpers
+}  // namespace llama_agmm_fusion_helpers

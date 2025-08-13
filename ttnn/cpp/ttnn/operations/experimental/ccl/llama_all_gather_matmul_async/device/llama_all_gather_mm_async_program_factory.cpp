@@ -427,7 +427,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
 
     // Call MM program factory with matmul_fused_op_signaler
     std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks =
-        ttnn::operations::llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+        ttnn::operations::llama_matmul::matmul_multi_core_agmm_fusion_helper(
             program,
             aggregated_tensor,         // in0
             {input1},                  // in1

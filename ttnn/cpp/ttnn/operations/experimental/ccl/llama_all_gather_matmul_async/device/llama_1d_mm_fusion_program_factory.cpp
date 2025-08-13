@@ -24,12 +24,12 @@ using namespace tt::constants;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace llama_reuse_mcast_1d_optimized_helpers {
+namespace llama_agmm_fusion_helpers {
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t
-process_gather_in0_program_and_create_override_variables(
+process_agmm_fusion_program_and_create_override_variables(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     const std::vector<tt::tt_metal::Tensor>& b_tensors,
@@ -658,9 +658,9 @@ process_gather_in0_program_and_create_override_variables(
         all_cores_vec,
         0,
         ttnn::operations::matmul::Matmul1DType::GATHER_IN0};
-}  // end of process_gather_in0_program_and_create_override_variables
+}  // end of process_agmm_fusion_program_and_create_override_variables
 
-inline void override_gather_in0_program_parameters(
+inline void override_agmm_fusion_program_parameters(
     const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
     const void* operation,
     tt_metal::Program& program,
@@ -716,11 +716,11 @@ void override_program_parameters(
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
     // Only GATHER_IN0 is supported now
-    override_gather_in0_program_parameters(
+    override_agmm_fusion_program_parameters(
         override_variables, operation, program, input_tensors, optional_input_tensors, output_tensors);
 }
 
-}  // namespace llama_reuse_mcast_1d_optimized_helpers
+}  // namespace llama_agmm_fusion_helpers
 
 namespace ttnn {
 
@@ -728,7 +728,7 @@ namespace operations {
 
 namespace llama_matmul {
 
-ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_(
+ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
     tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -871,7 +871,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     for (const auto& output_tensor : output_tensors) {
         out_buffers.push_back(output_tensor.buffer());
     }
-    return llama_reuse_mcast_1d_optimized_helpers::process_gather_in0_program_and_create_override_variables(
+    return llama_agmm_fusion_helpers::process_agmm_fusion_program_and_create_override_variables(
         program,
         a,
         b_tensors,
@@ -913,7 +913,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         fused_op_signaler);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion(
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
@@ -944,36 +944,35 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
 
-    ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars =
-        matmul_multi_core_reuse_mcast_1d_optimized_(
-            program,
-            a,
-            b_tensors,
-            bias,
-            output_tensors,
-            broadcast_batch,
-            compute_with_storage_grid_size,
-            compute_kernel_config,
-            ttnn::get_throttle_level(compute_kernel_config),
-            in0_block_w,
-            out_subblock_h,
-            out_subblock_w,
-            out_block_h,
-            out_block_w,
-            per_core_M,
-            per_core_N,
-            fuse_batch,
-            std::move(fused_activation),
-            mcast_in0,
-            gather_in0,
-            std::move(hop_cores),
-            untilize_out,
-            empty_fused_op_signaler,
-            global_cb,
-            num_global_cb_receivers,
-            sub_device_id,
-            tt::CBIndex::c_0,
-            std::nullopt);
+    ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars = matmul_multi_core_agmm_fusion_(
+        program,
+        a,
+        b_tensors,
+        bias,
+        output_tensors,
+        broadcast_batch,
+        compute_with_storage_grid_size,
+        compute_kernel_config,
+        ttnn::get_throttle_level(compute_kernel_config),
+        in0_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        out_block_h,
+        out_block_w,
+        per_core_M,
+        per_core_N,
+        fuse_batch,
+        std::move(fused_activation),
+        mcast_in0,
+        gather_in0,
+        std::move(hop_cores),
+        untilize_out,
+        empty_fused_op_signaler,
+        global_cb,
+        num_global_cb_receivers,
+        sub_device_id,
+        tt::CBIndex::c_0,
+        std::nullopt);
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,
@@ -981,14 +980,14 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            llama_reuse_mcast_1d_optimized_helpers::override_program_parameters(
+            llama_agmm_fusion_helpers::override_program_parameters(
                 shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
+ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_helper(
     tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -1010,7 +1009,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     TT_FATAL(!config.mcast_in0, "Only GATHER_IN0 is supported. MCAST_IN0 has been removed.");
     TT_FATAL(config.gather_in0, "Only GATHER_IN0 is supported. This function requires gather_in0=true.");
 
-    return matmul_multi_core_reuse_mcast_1d_optimized_(
+    return matmul_multi_core_agmm_fusion_(
         program,
         a,
         b_tensors,
@@ -1041,7 +1040,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         restricted_cores);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_helper(
     tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -1055,7 +1054,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars =
-        llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+        llama_matmul::matmul_multi_core_agmm_fusion_helper(
             program,
             a,
             b_tensors,
@@ -1077,7 +1076,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            llama_reuse_mcast_1d_optimized_helpers::override_program_parameters(
+            llama_agmm_fusion_helpers::override_program_parameters(
                 shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
         };
 
