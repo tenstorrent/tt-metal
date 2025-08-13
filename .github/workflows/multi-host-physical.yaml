@@ -15,7 +15,12 @@ jobs:
       version: 22.04
       build-wheel: true
   deploy:
-    runs-on: multi-host
+    runs-on:
+      # A physical, multi-host WH T3K that's in service
+      - multi-host
+      - arch-wormhole_b0
+      - bare-metal
+      - in-service
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
