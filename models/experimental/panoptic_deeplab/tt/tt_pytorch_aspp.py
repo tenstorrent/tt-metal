@@ -134,7 +134,6 @@ class ASPP(nn.Module):
         activation,
         pool_kernel_size=None,
         dropout: float = 0.0,
-        use_depthwise_separable_conv=False,
         shared_weight_tensor_kernel1: torch.Tensor,
         shared_weight_tensor_kernel3: torch.Tensor,
         shared_weight_tensor_kernel1_output5: torch.Tensor,
@@ -187,7 +186,7 @@ class ASPP(nn.Module):
         conv.weight.data = self.shared_weight_tensor_kernel1
         self.convs.append(conv)
 
-        # atrous convs
+        # Dilations convs
         for dilation in dilations:
             conv = Conv2d(
                 in_channels,
@@ -201,9 +200,8 @@ class ASPP(nn.Module):
             )
             conv.weight.data = self.shared_weight_tensor_kernel3
             self.convs.append(conv)
-        # image pooling
-        # We do not add BatchNorm because the spatial resolution is 1x1,
-        # the original TF implementation has BatchNorm.
+
+        # Image pooling
         conv = Conv2d(in_channels, out_channels, kernel_size=1, bias=use_bias, activation=deepcopy(activation))
         conv.weight.data = self.shared_weight_tensor_kernel1
         image_pooling = nn.Sequential(
@@ -212,6 +210,7 @@ class ASPP(nn.Module):
         )
         self.convs.append(image_pooling)
 
+        # Project conv to concatenate all branches
         self.project = Conv2d(
             5 * out_channels,
             out_channels,
@@ -234,32 +233,9 @@ class ASPP(nn.Module):
         for conv in self.convs:
             res.append(conv(x))
         res[-1] = F.interpolate(res[-1], size=size, mode="bilinear", align_corners=False)
-        print("Pooled conv PYTORCH!!")
-        print(res[4])
-        print(res[4].shape)
-        return res[4]
-        for tensor in res:
-            print("Tensor shape in ASPP forward pass:", tensor.shape)
-
-        print("Each branch output tensor")
-        print()
-        for tensor in res:
-            print(tensor)
-            print()
-        print("End of each branch output tensor")
 
         res = torch.cat(res, dim=1)
         res = self.project(res)
         res = F.dropout(res, self.dropout, training=self.training) if self.dropout > 0 else res
-
-        print("Final output tensor after project and dropout in Pytorch ASPP")
-        print()
-        for tensor in res:
-            print(tensor)
-            print()
-
-        print("Final res")
-        print(res)
-        print(res.shape)
 
         return res
