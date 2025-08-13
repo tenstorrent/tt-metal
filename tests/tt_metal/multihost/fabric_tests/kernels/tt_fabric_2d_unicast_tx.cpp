@@ -100,13 +100,7 @@ void kernel_main() {
     fwd_packet_header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
-    fabric_set_unicast_route(
-        (MeshPacketHeader*)fwd_packet_header,
-        (eth_chan_directions)fwd_fabric_connection.direction,
-        my_dev_id,
-        fwd_dev_id,
-        fwd_mesh_id,
-        ew_dim);
+    fabric_set_unicast_route((MeshPacketHeader*)fwd_packet_header, my_dev_id, fwd_dev_id, fwd_mesh_id, ew_dim);
 
     setup_connection_and_headers(fwd_fabric_connection, fwd_packet_header, noc_dest_addr, packet_payload_size_bytes);
 
