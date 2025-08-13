@@ -382,7 +382,7 @@ def run_demo_inference(
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     prompts = prompts + [""] * needed_padding
 
-    print("prompts length = ", len(prompts))
+    # print("prompts length = ", len(prompts))
 
     guidance_scale = 5.0
 
@@ -646,7 +646,8 @@ def run_demo_inference(
     # Process prompts in batches
 
     encoding_end_time = time.time()
-    logger.info(f"Encoding time = {encoding_end_time - encoding_start_time}")
+    encoding_time = encoding_end_time - encoding_start_time
+    logger.info(f"Encoding time = {encoding_time:.2f} seconds")
 
     # print("All embeds length = ", len(all_embeds))
     # print("all_embeds = ", all_embeds)
@@ -840,6 +841,7 @@ def run_demo_inference(
             tid_vae=tid_vae,
         )
 
+        logger.info(f"Encoding time for {batch_size} prompts: {encoding_time:.2f} seconds")
         logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
         logger.info(
             f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
