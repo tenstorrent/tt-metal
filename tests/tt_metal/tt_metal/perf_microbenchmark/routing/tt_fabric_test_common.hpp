@@ -1369,11 +1369,7 @@ private:
     bool wrap_around_mesh_ = false;
 
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
-        const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
-        const auto host_rank_str = std::string(std::getenv("TT_HOST_RANK"));
-
-        const auto local_mesh_id = MeshId{std::stoi(mesh_id_str)};
-        local_host_rank_ = HostRankId{std::stoi(host_rank_str)};
+        const auto local_mesh_id = MeshId{std::stoi(std::getenv("TT_MESH_ID"))};
 
         const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -1395,6 +1391,8 @@ private:
 
         const auto user_mesh_id =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids()[0];
+        local_host_rank_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding();
+
         // ensure user specified matches what control plane sees
         TT_FATAL(
             *user_mesh_id == *local_mesh_id,
