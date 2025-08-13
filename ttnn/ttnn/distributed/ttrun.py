@@ -26,7 +26,7 @@ PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
 
 class RankBinding(BaseModel):
-    """Binding between MPI rank to target MeshId and HostRankId as defined in the mesh graph descriptor."""
+    """Binding between MPI rank to target MeshId and MeshHostRankId as defined in the mesh graph descriptor."""
 
     rank: int = Field(..., ge=0, description="MPI rank (must be >= 0)")
     mesh_id: int = Field(..., ge=0, description="`MeshId` defines the mesh to which the rank belongs")
@@ -202,7 +202,7 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
 
     tt-run is a lightweight wrapper around `mpirun` that simplifies launching
     TT-Metal and TT-NN distributed applications by automatically mapping
-    MPI ranks to target MeshId and HostRankId as defined in the mesh graph descriptor.
+    MPI ranks to target MeshId and MeshHostRankId as defined in the mesh graph descriptor.
 
     \b
     Quick Start:

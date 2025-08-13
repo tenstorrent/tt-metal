@@ -158,6 +158,16 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
     return adjacent_chips;
 }
 
+std::uint64_t encode_mesh_id_and_rank(MeshId mesh_id, MeshHostRankId host_rank) {
+    return (static_cast<uint64_t>(mesh_id.get()) << 32) | static_cast<uint64_t>(host_rank.get());
+}
+
+std::pair<MeshId, MeshHostRankId> decode_mesh_id_and_rank(std::uint64_t encoded_value) {
+    return {
+        MeshId{static_cast<std::uint32_t>(encoded_value >> 32)},
+        MeshHostRankId{static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF)}};
+}
+
 }  // namespace
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
@@ -352,12 +362,12 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
             local_mesh_ids.push_back(mesh_id);
         }
         TT_FATAL(local_mesh_ids.size() > 0, "No local meshes found.");
-        return LocalMeshBinding{.mesh_ids = std::move(local_mesh_ids), .host_rank = HostRankId{0}};
+        return LocalMeshBinding{.mesh_ids = std::move(local_mesh_ids), .host_rank = MeshHostRankId{0}};
     }
 
     // If both TT_MESH_ID and TT_MESH_HOST_RANK are set, we'll use the values from the environment variables.
     auto local_mesh_binding = LocalMeshBinding{
-        .mesh_ids = {MeshId{std::stoi(mesh_id_str)}}, .host_rank = HostRankId{std::stoi(host_rank_str)}};
+        .mesh_ids = {MeshId{std::stoi(mesh_id_str)}}, .host_rank = MeshHostRankId{std::stoi(host_rank_str)}};
 
     log_debug(
         tt::LogDistributed,
@@ -367,11 +377,10 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
 
     // Validate the local mesh binding exists in the mesh graph descriptor
     const auto mesh_ids = this->routing_table_generator_->mesh_graph->get_mesh_ids();
-    if (std::find(mesh_ids.begin(), mesh_ids.end(), local_mesh_binding.mesh_ids[0]) == mesh_ids.end()) {
-        TT_THROW(
-            "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
-            local_mesh_binding.mesh_ids[0]);
-    }
+    TT_FATAL(
+        std::find(mesh_ids.begin(), mesh_ids.end(), local_mesh_binding.mesh_ids[0]) != mesh_ids.end(),
+        "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
+        local_mesh_binding.mesh_ids[0]);
 
     // Validate host rank (only if mesh_id is valid)
     const auto& host_ranks =
@@ -384,6 +393,55 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     return local_mesh_binding;
 }
 
+void ControlPlane::initialize_distributed_contexts() {
+    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    if (*global_context->size() == 1) {
+        host_local_context_ = global_context;
+        std::transform(
+            local_mesh_binding_.mesh_ids.begin(),
+            local_mesh_binding_.mesh_ids.end(),
+            std::inserter(distributed_contexts_, distributed_contexts_.end()),
+            [&](const MeshId& mesh_id) { return std::make_pair(mesh_id, global_context); });
+        return;
+    }
+
+    std::array this_host = {*global_context->rank()};
+    host_local_context_ = global_context->create_sub_context(this_host);
+
+    // Find out which MPI ranks manage the same meshes as this host.
+    uint64_t this_host_encoded_ids =
+        encode_mesh_id_and_rank(local_mesh_binding_.mesh_ids[0], local_mesh_binding_.host_rank);
+    std::vector<std::uint64_t> encoded_mesh_ids(*global_context->size());
+    global_context->all_gather(
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&this_host_encoded_ids), sizeof(std::uint64_t)),
+        ttsl::as_writable_bytes(ttsl::make_span(encoded_mesh_ids)));
+
+    int mpi_rank = 0;
+    for (std::uint64_t encoded_value : encoded_mesh_ids) {
+        const auto [mesh_id, mesh_host_rank] = decode_mesh_id_and_rank(encoded_value);
+        mpi_ranks_[mesh_id][mesh_host_rank] = tt::tt_metal::distributed::multihost::Rank{mpi_rank++};
+    }
+
+    // Create a sub-context for each mesh-host-rank pair.
+    for (const auto local_mesh_id : local_mesh_binding_.mesh_ids) {
+        auto mesh_host_ranks = mpi_ranks_.find(local_mesh_id);
+        TT_FATAL(mesh_host_ranks != mpi_ranks_.end(), "Mesh {} not found in mpi_ranks.", local_mesh_id);
+        if (mesh_host_ranks->second.size() == 1) {
+            distributed_contexts_.emplace(local_mesh_id, host_local_context_);
+        } else {
+            std::vector<int> mpi_neighbors;
+            std::transform(
+                mesh_host_ranks->second.begin(),
+                mesh_host_ranks->second.end(),
+                std::back_inserter(mpi_neighbors),
+                [](const auto& p) { return p.second.get(); });
+            distributed_contexts_.emplace(local_mesh_id, global_context->create_sub_context(mpi_neighbors));
+        }
+    }
+
+    global_context->barrier();
+}
+
 void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
@@ -391,20 +449,7 @@ void ControlPlane::init_control_plane(
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
-    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    std::transform(
-        this->local_mesh_binding_.mesh_ids.begin(),
-        this->local_mesh_binding_.mesh_ids.end(),
-        std::inserter(this->distributed_contexts_, this->distributed_contexts_.end()),
-        [&](const MeshId& mesh_id) { return std::make_pair(mesh_id, global_context); });
-    if (*global_context->size() > 1) {
-        std::array this_host = {*global_context->rank()};
-        this->host_local_context_ =
-            tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->create_sub_context(
-                this_host);
-    } else {
-        this->host_local_context_ = global_context;
-    }
+    this->initialize_distributed_contexts();
 
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
@@ -1617,7 +1662,7 @@ std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
 }
 
 MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id, MeshScope scope) const {
-    std::optional<HostRankId> local_host_rank_id =
+    std::optional<MeshHostRankId> local_host_rank_id =
         MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
     return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id, local_host_rank_id);
 }
@@ -1831,7 +1876,7 @@ bool ControlPlane::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord et
 }
 
 const std::vector<std::pair<CoreCoord, chan_id_t>>& ControlPlane::get_intermesh_eth_links(chip_id_t chip_id) const {
-    return this->intermesh_eth_links_.at(chip_id);
+    return intermesh_eth_links_.at(chip_id);
 }
 
 const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>&
@@ -2171,7 +2216,7 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     return local_mesh_ids;
 }
 
-HostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
+MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
 
 MeshCoordinate ControlPlane::get_local_mesh_offset() const {
     auto coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);
@@ -2179,7 +2224,7 @@ MeshCoordinate ControlPlane::get_local_mesh_offset() const {
 }
 
 MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scope) const {
-    std::optional<HostRankId> local_host_rank_id =
+    std::optional<MeshHostRankId> local_host_rank_id =
         MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
     return this->routing_table_generator_->mesh_graph->get_coord_range(mesh_id, local_host_rank_id);
 }

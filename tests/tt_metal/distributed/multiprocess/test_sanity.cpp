@@ -20,7 +20,7 @@
 namespace tt::tt_metal::distributed {
 
 using ::testing::ElementsAre;
-using ::tt::tt_fabric::HostRankId;
+using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_fabric::MeshId;
 using ::tt::tt_fabric::MeshScope;
 
@@ -33,11 +33,11 @@ TEST(BigMeshDualRankTest2x4, LocalRankBinding) {
     auto& dctx = MetalContext::instance().global_distributed_context();
     auto& control_plane = MetalContext::instance().get_control_plane();
 
-    tt_fabric::HostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
+    tt_fabric::MeshHostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
     if (dctx.rank() == multihost::Rank(0)) {
-        EXPECT_EQ(local_rank_binding, HostRankId(0));
+        EXPECT_EQ(local_rank_binding, MeshHostRankId(0));
     } else {
-        EXPECT_EQ(local_rank_binding, HostRankId(1));
+        EXPECT_EQ(local_rank_binding, MeshHostRankId(1));
     }
 
     const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
@@ -54,8 +54,7 @@ TEST(BigMeshDualRankTest2x4, LocalRankBinding) {
     EXPECT_EQ(distributed_context->size(), multihost::Size(2));
     EXPECT_EQ(distributed_context->rank(), dctx.rank());
 
-    // TODO: #24728 - support multi-mesh environments, where these 2 contexts are different (sub-context vs global).
-    EXPECT_EQ(MetalContext::instance().global_distributed_context().id(), distributed_context->id());
+    EXPECT_NE(MetalContext::instance().global_distributed_context().id(), distributed_context->id());
 }
 
 TEST(BigMeshDualRankTest2x4, SystemMeshValidation) {
@@ -71,7 +70,7 @@ TEST(BigMeshDualRankTest2x4, SystemMeshValidation) {
     const MeshContainer<MaybeRemote<int>> physical_device_ids(MeshShape(2, 4), std::move(mapped_devices.device_ids));
     const MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids(
         MeshShape(2, 4), std::move(mapped_devices.fabric_node_ids));
-    if (rank == HostRankId{0}) {
+    if (rank == MeshHostRankId{0}) {
         EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 0)).is_local());
         EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 1)).is_local());
         EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 0)).is_local());

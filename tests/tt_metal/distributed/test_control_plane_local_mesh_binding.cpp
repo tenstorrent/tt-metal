@@ -50,7 +50,7 @@ private:
 };
 
 struct MeshScopeTestParams {
-    HostRankId host_rank;
+    MeshHostRankId host_rank;
     MeshShape expected_local_shape;
     MeshCoordinate expected_start;
     MeshCoordinate expected_end;
@@ -109,7 +109,7 @@ TEST_F(ControlPlaneLocalMeshBinding, NoEnvironmentVariables) {
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), HostRankId{0});
+    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, WithEnvironmentVariables) {
@@ -117,7 +117,7 @@ TEST_F(ControlPlaneLocalMeshBinding, WithEnvironmentVariables) {
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), HostRankId{0});
+    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
 }
 
 // Test case to verify exception when both env vars are set but invalid
@@ -164,7 +164,7 @@ TEST_F(ControlPlaneLocalMeshBinding, GetPhysicalMeshShapeWithScopeDualHost) {
     EXPECT_EQ(global_shape, MeshShape(2, 4));
 
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), HostRankId{0});
+    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
 
     auto local_shape = control_plane->get_physical_mesh_shape(MeshId{0}, MeshScope::LOCAL);
     EXPECT_EQ(local_shape, MeshShape(2, 2));
@@ -183,7 +183,7 @@ TEST_F(ControlPlaneLocalMeshBinding, GetCoordRangeWithScopeDualHost) {
     EXPECT_EQ(global_range.shape(), MeshShape(2, 4));
 
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), HostRankId{0});
+    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
 
     auto local_range = control_plane->get_coord_range(MeshId{0}, MeshScope::LOCAL);
     EXPECT_EQ(local_range.start_coord(), MeshCoordinate(0, 0));
@@ -198,7 +198,7 @@ TEST_F(ControlPlaneLocalMeshBinding, InvalidMeshId) {
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), HostRankId{0});
+    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
     EXPECT_THROW(control_plane->get_physical_mesh_shape(MeshId{99}, MeshScope::GLOBAL), std::runtime_error);
 }
 
@@ -206,7 +206,7 @@ TEST_F(ControlPlaneLocalMeshBinding, LocalMeshScopeQueryWithoutExplicitBinding) 
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), HostRankId{0});
+    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
     EXPECT_NO_THROW(control_plane->get_coord_range(MeshId{0}, MeshScope::LOCAL));
 }
 
@@ -269,13 +269,13 @@ INSTANTIATE_TEST_SUITE_P(
     MeshScopeParameterizedTest,
     ::testing::Values(
         MeshScopeTestParams{
-            HostRankId{0},
+            MeshHostRankId{0},
             MeshShape(2, 2),       // Host 0 owns 2x2 (left half)
             MeshCoordinate(0, 0),  // Start at (0,0)
             MeshCoordinate(1, 1),  // End at (1,1)
             "HostRank0"},
         MeshScopeTestParams{
-            HostRankId{1},
+            MeshHostRankId{1},
             MeshShape(2, 2),       // Host 1 owns 2x2 (right half)
             MeshCoordinate(0, 2),  // Start at (0,2)
             MeshCoordinate(1, 3),  // End at (1,3)
