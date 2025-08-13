@@ -173,7 +173,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
 
     # input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.x)
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
         dtype=ttnn.DataType.BFLOAT8_B,
@@ -183,8 +183,8 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     )
 
     # gamma/beta
-    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.x)
-    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.x)
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
 
     gamma_t = ttnn.from_torch(
         gamma,
