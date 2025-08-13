@@ -274,7 +274,7 @@ void write_socket_configs(
         uint32_t ack_size_bytes = align_up(sizeof(uint32_t)) * num_downstreams;
         uint32_t enc_size_bytes = align_up(sizeof(sender_downstream_encoding)) * num_downstreams;
         uint32_t sender_total_size_bytes = md_size_bytes + ack_size_bytes + enc_size_bytes;
-        std::vector<uint32_t> config_data(sender_total_size_bytes / sizeof(uint32_t), 0);
+        std::vector<uint32_t> config_data(config_buffer->size() / sizeof(uint32_t), 0);
         for (const auto& [device_coord, indexed_connections] : grouped_connections) {
             for (const auto& [conn_idx, connection] : indexed_connections) {
                 const auto& [sender_core, recv_core] = connection;
