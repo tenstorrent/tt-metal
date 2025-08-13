@@ -310,7 +310,12 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_OneToAllNorthWestCorner) {
     RunTest2DMCastConnAPI(this, 0, 0, 0, 3, 7, 0, 7, 0);
 }
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_NorthEast) { RunTest2DMCastConnAPI(this, 1, 1, 0, 0, 0, 0, 0, 0); }
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_T3kCorner) { RunTest2DMCastConnAPI(this, 1, 3, 0, 0, 0, 0, 3, 0); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_T3kOneToAll) { RunTest2DMCastConnAPI(this, 1, 3, 0, 0, 0, 0, 3, 0); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_6UOneToAll) { RunTest2DMCastConnAPI(this, 4, 1, 2, 3, 1, 2, 1, 2); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_6UCorner) { RunTest2DMCastConnAPI(this, 7, 3, 0, 0, 0, 0, 3, 0); }
 
 // 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
