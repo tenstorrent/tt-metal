@@ -9,7 +9,7 @@ import os
 import pytest
 import torch
 from transformers import AutoConfig
-from transformers.models.siglip.modeling_siglip import SiglipSdpaAttention
+from transformers.models.siglip.modeling_siglip import SiglipAttention
 
 import ttnn
 from models.demos.siglip.compare import comp_pcc
@@ -26,7 +26,7 @@ def test_attention(attention_func):
     ), f"Unexpected model config provided. Expected a vision_config field to be present in: {config}"
     config = config.vision_config
 
-    reference_attention = SiglipSdpaAttention(config=config)
+    reference_attention = SiglipAttention(config=config)
 
     batch = 1
     seq_len = 4096
