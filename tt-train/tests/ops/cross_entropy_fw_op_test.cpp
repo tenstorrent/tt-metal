@@ -13,6 +13,7 @@
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 
@@ -20,6 +21,7 @@ class CrossEntropyForwardTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -119,9 +121,14 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     const uint32_t N = 2U, C = 1U, H = 91U, W = 157U;
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
 
-    std::random_device rd;
     std::mt19937 gen(42);
-    xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
+    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto& rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
+    ttml::core::parallel_generate(
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
@@ -163,9 +170,14 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
     const uint32_t N = 64U, C = 1U, H = 1017U, W = 1018U;
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
 
-    std::random_device rd;
     std::mt19937 gen(42);
-    xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
+    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto& rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
+    ttml::core::parallel_generate(
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
@@ -206,9 +218,14 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
     const uint32_t N = 1U, C = 1U, H = 1U, W = 65536U;
     const auto shape = ttnn::SmallVector<size_t>{N, C, H, W};
 
-    std::random_device rd;
     std::mt19937 gen(42);
-    xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
+    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto& rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
+    ttml::core::parallel_generate(
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
@@ -249,9 +266,14 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Huge_Forward) {
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;
     const auto shape = ttnn::SmallVector<size_t>{N, C, H, W};
 
-    std::random_device rd;
     std::mt19937 gen(42);
-    xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
+    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto& rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
+    ttml::core::parallel_generate(
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
