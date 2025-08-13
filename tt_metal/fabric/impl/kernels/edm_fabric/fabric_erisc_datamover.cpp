@@ -2282,7 +2282,7 @@ void kernel_main() {
                     // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
                     // connections we must always use semaphore lookup
                     // For 2D, downstream_edm_vc0_semaphore_id is an address.
-                    true,
+                    is_persistent_fabric,
                     0,  // Unused in routers. Used by workers to get edm direction for 2D.
                     (downstream_edm_vc0_noc_x >> (edm_index * 8)) & 0xFF,
                     (downstream_edm_vc0_noc_y >> (edm_index * 8)) & 0xFF,
@@ -2343,7 +2343,7 @@ void kernel_main() {
                 tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS>(
                     // persistent_mode -> hardcode to false because for EDM -> EDM
                     //  connections we must always use semaphore lookup
-                    true,
+                    is_persistent_fabric,
                     0,  // Unused in routers. Used by workers to get edm direction for 2D.
                     downstream_edm_vc1_noc_x,
                     downstream_edm_vc1_noc_y,
