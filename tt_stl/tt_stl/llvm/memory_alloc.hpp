@@ -28,8 +28,7 @@
 // - Removed unused functions: allocate_buffer, deallocate_buffer
 // - Added ttsl::detail:: prefix to LLVM namespace
 
-#ifndef LLVM_SUPPORT_MEMALLOC_H
-#define LLVM_SUPPORT_MEMALLOC_H
+#pragma once
 
 #include <cstdlib>
 #include <stdexcept>
@@ -79,4 +78,3 @@ namespace ttsl::detail::llvm {
 }
 
 }  // namespace ttsl::detail::llvm
-#endif

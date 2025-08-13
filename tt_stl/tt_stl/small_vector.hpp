@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt_stl/llvm_small_vector.hpp>
+#include <tt_stl/llvm/llvm_small_vector.hpp>
 
 #include <tt_stl/reflection.hpp>
 
