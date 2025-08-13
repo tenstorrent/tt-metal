@@ -42,7 +42,14 @@ struct OneFromOneConfig {
 bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     const size_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
 
@@ -79,7 +86,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneCon
 
     // Kernels
     auto requestor_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/requestor.cpp",
         master_core_set,
         DataMovementConfig{
@@ -88,9 +95,10 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneCon
             .compile_args = requestor_compile_args});
 
     // Runtime Arguments
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    CoreCoord physical_subordinate_core =
+        mesh_device->worker_core_from_logical_core(test_config.subordinate_core_coord);
     SetRuntimeArgs(
-        program, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
+        program_, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
