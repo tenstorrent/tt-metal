@@ -322,4 +322,15 @@ private:
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
 };
 
+class PhysicalDiscoveryManager {
+public:
+    PhysicalDiscoveryManager();
+    void dump_to_yaml(const SystemDescriptor& system_desc) const;
+
+private:
+    void local_discovery();
+    void global_discovery();
+    SystemDescriptor global_system_desc_;
+};
+
 }  // namespace tt::tt_fabric
