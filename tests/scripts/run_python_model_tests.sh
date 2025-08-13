@@ -95,7 +95,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_development_model_tests_wormhole_b0() {
-    # Siglip
+    # Siglip (Gemma3 Vision)
     pip install -r models/demos/siglip/requirements.txt
     HF_HOME=/mnt/MLPerf/huggingface/ HF_HUB_OFFLINE=1 HF_MODEL="google/gemma-3-4b-it" pytest models/demos/siglip/tests ; fail+=$?
 }
