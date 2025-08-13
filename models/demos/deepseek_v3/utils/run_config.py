@@ -13,18 +13,22 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
-WeightConfig = dict[str, "WeightConfig | str | None"] | list["WeightConfig | str | None"]
+WeightConfig = (
+    dict[str, "WeightConfig | str | None"] | list["WeightConfig | str | None"] | tuple["WeightConfig | str | None"]
+)
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
 # In general, we require ModelConfig to be serializable (NOTE: mesh device and classes that hold references to the objects on it are NOT serializable).
 ModelPrefillConfig = (
     dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 ModelDecodeConfig = (
     dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 
@@ -33,11 +37,13 @@ ModelState = Any  # Type of the model state
 RunPrefillConfig = (
     dict[str, "RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 RunDecodeConfig = (
     dict[str, "RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 
@@ -117,7 +123,9 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
     if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, str):
-        return ttnn.load_tensor(weight_config_item, device=model_state_config_item.mesh_device)
+        return ttnn.load_tensor(
+            weight_config_item, device=model_state_config_item.mesh_device, enable_multihost_format=True
+        )
 
     if weight_config_item is None:
         assert not isinstance(

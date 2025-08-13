@@ -285,3 +285,12 @@ class LinearFallbackConfig(OpConfigBase):
 
     mesh_device: ttnn.Device
     dtype: ttnn.DataType
+
+
+@dataclass
+class TypecastConfig(OpConfigBase):
+    """Common parameters for a ttnn.typecast op"""
+
+    dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig | None = None
+    sub_core_grids: ttnn.CoreRangeSet | None = None
