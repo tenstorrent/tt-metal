@@ -46,7 +46,12 @@ struct ScatterDeviceOperation {
         const Tensor& index_tensor,
         const Tensor& source_tensor,
         const MemoryConfig& output_memory_config,
+<<<<<<< HEAD
         const std::optional<ScatterReductionType>& opt_reduction);
+=======
+        const ScatterReductionType& opt_reduction,
+        const QueueId& queue_id = DefaultQueueId);
+>>>>>>> ef5fdaa9fb (25387: add reduction methods to ttnn.scatter)
 };
 
 }  // namespace ttnn::operations::data_movement::scatter
