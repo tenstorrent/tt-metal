@@ -55,7 +55,6 @@ jobs:
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}:${{ steps.capture-home.outputs.home }}:ro
             --device /dev/tenstorrent
-            --privileged
             --pid=host
             --hostname=mpirun-host
           install_wheel: true
