@@ -110,7 +110,12 @@ private:
 }  // namespace tt::tt_metal::distributed
 
 namespace std {
-
+template <>
+struct hash<tt::tt_metal::distributed::MeshCoreCoord> {
+    size_t operator()(const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept {
+        return tt::stl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
+    }
+};
 template <>
 struct hash<tt::tt_metal::distributed::SocketConfig> {
     size_t operator()(const tt::tt_metal::distributed::SocketConfig& config) const noexcept;
