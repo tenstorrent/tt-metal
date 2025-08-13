@@ -514,6 +514,10 @@ struct PackTraits;
 // Specialization for empty directions
 template <>
 struct PackTraits<DownstreamDirections<>> {
+    static constexpr bool has_n = false;
+    static constexpr bool has_e = false;
+    static constexpr bool has_w = false;
+    static constexpr bool has_s = false;
     static constexpr bool has_ew = false;
     static constexpr bool has_ns = false;
     static constexpr bool has_both_axes = false;
@@ -521,10 +525,16 @@ struct PackTraits<DownstreamDirections<>> {
 
 template <eth_chan_directions first, eth_chan_directions... rest>
 struct PackTraits<DownstreamDirections<first, rest...>> {
-    static constexpr bool has_ew = (first == eth_chan_directions::EAST || first == eth_chan_directions::WEST) ||
-                                   PackTraits<DownstreamDirections<rest...>>::has_ew;
-    static constexpr bool has_ns = (first == eth_chan_directions::NORTH || first == eth_chan_directions::SOUTH) ||
-                                   PackTraits<DownstreamDirections<rest...>>::has_ns;
+    static constexpr bool has_n =
+        (first == eth_chan_directions::NORTH) || PackTraits<DownstreamDirections<rest...>>::has_n;
+    static constexpr bool has_e =
+        (first == eth_chan_directions::EAST) || PackTraits<DownstreamDirections<rest...>>::has_e;
+    static constexpr bool has_w =
+        (first == eth_chan_directions::WEST) || PackTraits<DownstreamDirections<rest...>>::has_w;
+    static constexpr bool has_s =
+        (first == eth_chan_directions::SOUTH) || PackTraits<DownstreamDirections<rest...>>::has_s;
+    static constexpr bool has_ew = has_e || has_w;
+    static constexpr bool has_ns = has_n || has_s;
     static constexpr bool has_both_axes = has_ew && has_ns;
 };
 
@@ -618,7 +628,7 @@ FORCE_INLINE uint32_t get_processing_mask(
 
 #if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, eth_chan_directions downstream_direction>
-FORCE_INLINE size_t get_downstream_edm_interface_index() {
+FORCE_INLINE constexpr size_t get_downstream_edm_interface_index() {
     size_t downstream_edm_interface_index = downstream_direction;
     if constexpr (enable_deadlock_avoidance) {
         if constexpr (rx_channel_id == 1) {
@@ -683,12 +693,27 @@ FORCE_INLINE void update_header_and_cached_routing_fields(
 }
 #endif
 
+template <eth_chan_directions downstream_direction>
+constexpr bool drop_packet() {
+    // Dimension-order routing contraint: ignore any packets that make a turn from the E/W axis to N/S axis
+    // Inter-mesh routers are excluded from this constraint as they can be along any dimension
+    if constexpr (!is_intermesh_router) {
+        if constexpr (
+            (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST) &&
+            (downstream_direction == eth_chan_directions::NORTH ||
+             downstream_direction == eth_chan_directions::SOUTH)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 #if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS, eth_chan_directions downstream_direction>
 FORCE_INLINE bool check_space_in_downstream_edm(
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_interface) {
-    if constexpr (my_direction == downstream_direction) {
+    if constexpr (my_direction == downstream_direction || drop_packet<downstream_direction>()) {
         return true;
     } else {
         size_t idx = get_downstream_edm_interface_index<rx_channel_id, downstream_direction>();
@@ -709,37 +734,8 @@ FORCE_INLINE bool check_space_in_downstream_edms(
 }
 #endif
 
-#if defined(FABRIC_2D)
-template <
-    uint8_t rx_channel_id,
-    uint8_t SENDER_NUM_BUFFERS,
-    bool has_both_axes,
-    eth_chan_directions downstream_direction>
-FORCE_INLINE void forward_to_downstream_edm(
-    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
-    uint16_t payload_size_bytes,
-    ROUTING_FIELDS_TYPE& cached_routing_fields,
-    std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
-    uint8_t transaction_id) {
-    if constexpr (my_direction == downstream_direction) {
-        // local packet is handled at the end
-        return;
-    }
-
-    // Dimension-order routing contraint: ignore any packets that make a turn from the E/W axis to N/S axis
-    // Inter-mesh routers are excluded from this constraint as they can be along any dimension
-    if constexpr (!is_intermesh_router) {
-        if constexpr (
-            (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST) &&
-            (downstream_direction == eth_chan_directions::NORTH ||
-             downstream_direction == eth_chan_directions::SOUTH)) {
-            return;
-        }
-    }
-
-    update_header_and_cached_routing_fields<downstream_direction, has_both_axes>(packet_start, cached_routing_fields);
-
-    size_t idx = get_downstream_edm_interface_index<rx_channel_id, downstream_direction>();
+template <bool has_both_axes, eth_chan_directions downstream_direction>
+constexpr bool increment_pointers() {
     // need to determine if we need to increment pointers with an extra inline write
     // when increment pointers is false, we update via inline write
 #if defined(DYNAMIC_ROUTING_ENABLED)
@@ -748,8 +744,24 @@ FORCE_INLINE void forward_to_downstream_edm(
 #else
     constexpr bool increment_pointers = !has_both_axes;
 #endif
+    return increment_pointers;
+}
+
+#if defined(FABRIC_2D)
+template <uint8_t SENDER_NUM_BUFFERS, bool has_both_axes, eth_chan_directions downstream_direction>
+FORCE_INLINE void forward_to_downstream_edm(
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    uint16_t payload_size_bytes,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
+    tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_interface,
+    uint8_t transaction_id) {
+    if constexpr (my_direction == downstream_direction) {
+        // local packet is handled at the end
+        return;
+    }
+
     forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_pointers>(
-        packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
+        packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
 }
 #endif
 
@@ -759,16 +771,53 @@ template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS, eth_chan_directions
 void forward_to_downstream_edms(
     DownstreamDirections<DIRECTIONS...>,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    uint16_t payload_size_bytes,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     uint8_t transaction_id) {
     constexpr bool has_both_axes = PackTraits<DownstreamDirections<DIRECTIONS...>>::has_both_axes;
     constexpr bool has_local = PackHasLocal<DownstreamDirections<DIRECTIONS...>>::value;
-    uint16_t payload_size_bytes = packet_start->payload_size_bytes;
 
-    (forward_to_downstream_edm<rx_channel_id, SENDER_NUM_BUFFERS, has_both_axes, DIRECTIONS>(
-         packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id),
-     ...);
+    if constexpr (
+        PackTraits<DownstreamDirections<DIRECTIONS...>>::has_n && !drop_packet<eth_chan_directions::NORTH>() &&
+        my_direction != eth_chan_directions::NORTH) {
+        update_header_and_cached_routing_fields<eth_chan_directions::NORTH, has_both_axes>(
+            packet_start, cached_routing_fields);
+        constexpr size_t idx = get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::NORTH>();
+        constexpr bool increment_ptrs = increment_pointers<has_both_axes, eth_chan_directions::NORTH>();
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_ptrs>(
+            packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
+    }
+    if constexpr (
+        PackTraits<DownstreamDirections<DIRECTIONS...>>::has_s && !drop_packet<eth_chan_directions::SOUTH>() &&
+        my_direction != eth_chan_directions::SOUTH) {
+        update_header_and_cached_routing_fields<eth_chan_directions::SOUTH, has_both_axes>(
+            packet_start, cached_routing_fields);
+        constexpr size_t idx = get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::SOUTH>();
+        constexpr bool increment_ptrs = increment_pointers<has_both_axes, eth_chan_directions::SOUTH>();
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_ptrs>(
+            packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
+    }
+    if constexpr (
+        PackTraits<DownstreamDirections<DIRECTIONS...>>::has_e && !drop_packet<eth_chan_directions::EAST>() &&
+        my_direction != eth_chan_directions::EAST) {
+        update_header_and_cached_routing_fields<eth_chan_directions::EAST, has_both_axes>(
+            packet_start, cached_routing_fields);
+        constexpr size_t idx = get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::EAST>();
+        constexpr bool increment_ptrs = increment_pointers<has_both_axes, eth_chan_directions::EAST>();
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_ptrs>(
+            packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
+    }
+    if constexpr (
+        PackTraits<DownstreamDirections<DIRECTIONS...>>::has_w && !drop_packet<eth_chan_directions::WEST>() &&
+        my_direction != eth_chan_directions::WEST) {
+        update_header_and_cached_routing_fields<eth_chan_directions::WEST, has_both_axes>(
+            packet_start, cached_routing_fields);
+        constexpr size_t idx = get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::WEST>();
+        constexpr bool increment_ptrs = increment_pointers<has_both_axes, eth_chan_directions::WEST>();
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_ptrs>(
+            packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
+    }
 
     // handle local if present
     if constexpr (has_local) {
@@ -853,12 +902,15 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
     using eth_chan_directions::SOUTH;
     using eth_chan_directions::WEST;
 
-    switch (mask) {
+    auto payload_size_bytes = packet_start->payload_size_bytes;
+
+    switch (mask & 0xF) {
         case LowLatencyMeshRoutingFields::NOOP: return;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<EAST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -866,6 +918,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<WEST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -873,6 +926,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<EAST, WEST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -880,6 +934,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<NORTH>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -887,6 +942,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<SOUTH>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -894,6 +950,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<NORTH, SOUTH>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -901,6 +958,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<NORTH, SOUTH, EAST, WEST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -908,6 +966,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<NORTH, SOUTH, EAST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -915,6 +974,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<NORTH, SOUTH, WEST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -922,6 +982,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<SOUTH, EAST, WEST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -929,6 +990,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<NORTH, EAST, WEST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -936,6 +998,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<SOUTH, EAST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -943,6 +1006,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<SOUTH, WEST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -950,6 +1014,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<NORTH, EAST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
@@ -957,6 +1022,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forw
             return forward_to_downstream_edms<rx_channel_id, SENDER_NUM_BUFFERS>(
                 DownstreamDirections<NORTH, WEST>{},
                 packet_start,
+                payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface,
                 transaction_id);
