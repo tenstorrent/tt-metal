@@ -22,7 +22,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
-def test_mistral_vision_tower(mesh_device, use_program_cache, reset_seeds):
+def test_mistral_vision_tower(mesh_device, reset_seeds):
     pcc_required = 0.98
     dtype = ttnn.bfloat16
 
@@ -52,7 +52,7 @@ def test_mistral_vision_tower(mesh_device, use_program_cache, reset_seeds):
         configuration=model_args,
     )
 
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)], ref_model=reference_model)  # [0]
+    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(tt_output).squeeze(0)
     passing, pcc_message = comp_pcc(reference_output, tt_output, pcc_required)

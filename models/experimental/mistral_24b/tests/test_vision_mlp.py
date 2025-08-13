@@ -35,7 +35,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     "batch_size",
     (1,),
 )
-def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
+def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -64,7 +64,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, rese
         dtype=dtype,
         # model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(1, 1, seq_len, 1024)
+    torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
     print("torch_input shape:", torch_input.shape)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(

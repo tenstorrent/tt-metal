@@ -5,7 +5,7 @@ import pytest
 import os
 
 import ttnn
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
@@ -34,7 +34,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "batch_size",
     (1,),
 )
-def test_rmsnorm_inference(seq_len, batch_size, use_program_cache, reset_seeds, device):
+def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -50,7 +50,6 @@ def test_rmsnorm_inference(seq_len, batch_size, use_program_cache, reset_seeds, 
     reference_model = tt_model_args.reference_vision_rms()
 
     first_layer_prefix = "vision_tower.transformer.layers.0.ffn_norm."
-    # print("state_dict_prefix ")
 
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))

@@ -1594,20 +1594,21 @@ class ModelArgs:
     #     self.vision_n_global_layers = 8
 
     def _set_vision_params(self, vision_config):
-        self.vision_image_size = vision_config.get("image_size", 1540)
-        self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
         self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 8)
         self.vision_dim = vision_config.get("hidden_size", 1152)
-
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
+        self.vision_image_size = vision_config.get("image_size", 1540)
+        self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
+        self.image_token_index = vision_config.get("image_token_index", 10)
+
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
         self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
+        self.vision_attn_n_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
-        self.vision_n_layers = vision_config.get("num_hidden_layers", 27)
+        self.vision_n_layers = vision_config.get("num_hidden_layers") or vision_config.get("depth") or 27
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
@@ -1666,9 +1667,12 @@ class ModelArgs:
                 merged_text_config = merge_text_config(config)
                 self._set_params_from_dict(merged_text_config, is_hf=True)
 
-                if "vision_config" in config:
-                    merged_vision_config = merge_vision_config(config)
-                    self._set_vision_params(merged_vision_config)
+                if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                    self._set_vision_params(config["vision_config"])
+                else:
+                    if "vision_config" in config:
+                        merged_vision_config = merge_vision_config(config)
+                        self._set_vision_params(merged_vision_config)
             else:
                 self._set_params_from_dict(config, is_hf=True)
 
@@ -1785,12 +1789,8 @@ class ModelArgs:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
-            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
-                self.is_multimodal = False
-            elif self.is_multimodal:
-                state_dict = standardize_hf_keys_multimodal(state_dict)
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
             else:
                 state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
@@ -2314,7 +2314,7 @@ class ModelArgs:
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector.mm_soft_emb_norm
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_rms_norm_qwen(self):
@@ -2424,7 +2424,7 @@ class ModelArgs:
 
     def reference_vision_rms(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.transformer.layers[0].attention_norm
+        layer = model.vision_tower.ln_pre
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer

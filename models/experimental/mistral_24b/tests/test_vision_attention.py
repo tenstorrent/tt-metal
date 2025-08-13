@@ -65,12 +65,12 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
     )
 
     dim = model_args.vision_dim
-    pt_attention_input = torch.randn(batch_size, seq_len, dim)
-    attention_mask = torch.zeros(batch_size, 1, seq_len, seq_len)
+    pt_attention_input = torch.randn(batch_size, seq_len, dim).to(torch.bfloat16)
+    attention_mask = torch.zeros(batch_size, 1, seq_len, seq_len).to(torch.bfloat16)
 
     B, T, D = pt_attention_input.shape
-    cos = torch.ones((1, T, head_dim))
-    sin = torch.zeros((1, T, head_dim))
+    cos = torch.ones((1, T, head_dim)).to(torch.bfloat16)
+    sin = torch.zeros((1, T, head_dim)).to(torch.bfloat16)
 
     # attention_mask = torch.load("ref_attention_mask.pt")
     # pt_attention_input = torch.load("ref_patch_embeds.pt")

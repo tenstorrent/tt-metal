@@ -31,7 +31,7 @@ class TtMistralVisionTransformer(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix="multi_modal_projector.",
             dtype=dtype,
-            eps=1e-06,  # layer_norm_eps
+            eps=1e-05,  # layer_norm_eps
         )
 
     def forward(self, input_tensor, image_sizes=None):

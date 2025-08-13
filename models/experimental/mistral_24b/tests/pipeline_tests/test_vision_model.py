@@ -31,7 +31,7 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
     ],
     indirect=True,
 )
-def test_mistral_vision_model(mesh_device, use_program_cache, reset_seeds):
+def test_mistral_vision_model(mesh_device, reset_seeds):
     pcc_required = 0.97
     dtype = ttnn.bfloat8_b
 
@@ -43,6 +43,8 @@ def test_mistral_vision_model(mesh_device, use_program_cache, reset_seeds):
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if k.startswith(first_layer_prefix)
     }
 
+    print("partial_state_dict keys:", partial_state_dict.keys())
+
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)
@@ -52,6 +54,8 @@ def test_mistral_vision_model(mesh_device, use_program_cache, reset_seeds):
     mmp_partial_state_dict = {
         k[len(mmp_first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(mmp_first_layer_prefix))
     }
+
+    print("mmp_partial_state_dict keys:", mmp_partial_state_dict.keys())
 
     reference_mmp = model_args.reference_vision_multi_modal()
     reference_mmp.load_state_dict(mmp_partial_state_dict)
@@ -71,7 +75,7 @@ def test_mistral_vision_model(mesh_device, use_program_cache, reset_seeds):
         model_args=model_args,
     )
 
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)], ref_model=reference_model)  # [0]
+    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])  # [0]
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(tt_output)
 

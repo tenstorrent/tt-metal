@@ -63,30 +63,30 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
     )
 
     # Create PT input
-    pt_attention_input = torch.rand(batch, seq_len, dim)
-    attention_mask = torch.zeros(batch, 1, seq_len, seq_len)
+    pt_attention_input = torch.rand(batch, seq_len, dim).to(torch.bfloat16)
+    attention_mask = torch.zeros(batch, 1, seq_len, seq_len).to(torch.bfloat16)
 
     B, T, D = pt_attention_input.shape
-    cos = torch.ones((1, T, head_dim))
-    sin = torch.zeros((1, T, head_dim))
+    cos = torch.ones((1, T, head_dim)).to(torch.bfloat16)
+    sin = torch.zeros((1, T, head_dim)).to(torch.bfloat16)
 
-    # positional_embedding = (cos, sin)
+    position_embeddings = (cos, sin)
 
-    attention_mask = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_attention_mask.pt")
-    pt_attention_input = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_transformer.pt")
-    position_embeddings = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_position_embeddings.pt")
+    # attention_mask = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_attention_mask.pt")
+    # pt_attention_input = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_transformer.pt")
+    # position_embeddings = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_position_embeddings.pt")
 
-    position_embeddings_updated = []
-    for pe in position_embeddings:
-        pe = pe.unsqueeze(0)
-        position_embeddings_updated.append(pe)
+    # position_embeddings_updated = []
+    # for pe in position_embeddings:
+    #     pe = pe.unsqueeze(0)
+    #     position_embeddings_updated.append(pe)
 
-    print("Loaded real inputs")
-    print("pt_attention_input", pt_attention_input.shape)
-    print("attention_mask", attention_mask.shape)
-    print("position_embeddings", position_embeddings_updated[0].shape)
+    # print("Loaded real inputs")
+    # print("pt_attention_input", pt_attention_input.shape)
+    # print("attention_mask", attention_mask.shape)
+    # print("position_embeddings", position_embeddings_updated[0].shape)
 
-    cos, sin = position_embeddings_updated
+    cos, sin = position_embeddings
 
     cos_t = ttnn.from_torch(
         cos,

@@ -36,7 +36,7 @@ from models.experimental.mistral_24b.tt.vision_mmp import TTMistral3MultiModalPr
     (1,),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_multi_modal_inference(seq_len, batch_size, use_program_cache, reset_seeds, device):
+def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     print("device:", device)
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"

@@ -57,6 +57,8 @@ class MistralTTVisionMLP(LightweightModule):
         self.w2 = as_tensor("w2", dtype)
         self.b2 = as_tensor("w2", ttnn.bfloat16, is_bias=False)
 
+        self.compute_kernel_config_hifi4 = self.args.compute_kernel_config_hifi4
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Qwen HF MLP reference:
@@ -71,15 +73,34 @@ class MistralTTVisionMLP(LightweightModule):
         #     x = ttnn.reshape(x, [1, x.shape[-2] // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
 
         # Linear with SILU activation
-        w1_out = ttnn.linear(x, self.w1, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, activation="silu")
+        w1_out = ttnn.linear(
+            x,
+            self.w1,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            activation="silu",
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+        )
 
-        w3_out = ttnn.linear(x, self.w3, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        w3_out = ttnn.linear(
+            x,
+            self.w3,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+        )
 
         # Element-wise multiply
         w2_in = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat16)
 
         # Final projection
-        w2_out = ttnn.linear(w2_in, self.w2, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        w2_out = ttnn.linear(
+            w2_in,
+            self.w2,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+        )
 
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)

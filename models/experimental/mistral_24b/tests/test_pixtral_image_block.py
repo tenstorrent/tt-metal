@@ -26,7 +26,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
-def test_pixtral_image_block(batch, num_chunks, mesh_device, use_program_cache, reset_seeds):
+def test_pixtral_image_block(batch, num_chunks, mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
@@ -58,12 +58,12 @@ def test_pixtral_image_block(batch, num_chunks, mesh_device, use_program_cache, 
         configuration=model_args,
     )
 
-    pt_attention_input = torch.randn(batch, seq_len, dim)
-    attention_mask = torch.zeros(batch, 1, seq_len, seq_len)
+    pt_attention_input = torch.randn(batch, seq_len, dim).to(torch.bfloat16)
+    attention_mask = torch.zeros(batch, 1, seq_len, seq_len).to(torch.bfloat16)
 
     B, T, D = pt_attention_input.shape
-    cos = torch.ones((1, T, head_dim))
-    sin = torch.zeros((1, T, head_dim))
+    cos = torch.ones((1, T, head_dim)).to(torch.bfloat16)
+    sin = torch.zeros((1, T, head_dim)).to(torch.bfloat16)
 
     positional_embedding = (cos, sin)
     attention_input = model_args.prepare_residual_tensor_prefill(
