@@ -175,9 +175,6 @@ class TtLlamaAttention(LightweightModule):
             configuration.dim // configuration.num_devices, configuration.dim
         )
 
-        logger.info(f"pt_wo.shape: {pt_wo.shape}")
-        logger.info(f"self.model_config['SHARDED_WO_RING_MEMCFG']: {self.model_config['SHARDED_WO_RING_MEMCFG']}")
-        logger.info(f"wo_mem_config: {wo_mem_config}")
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=ttnn.bfloat8_b,
@@ -580,8 +577,6 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_1G4D_sharded)
         # print("done concat heads")
 
-        breakpoint()
-
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
         dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
             attn_output_cat,
@@ -593,7 +588,6 @@ class TtLlamaAttention(LightweightModule):
             dtype=ttnn.bfloat8_b,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
-        breakpoint()
         # [1, 1, 32, 2304]
         dense_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 32, 1280]
             dense_out_ttnn,
@@ -602,7 +596,6 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-        breakpoint()
         ttnn.deallocate(dense_out_ttnn)
 
         # print("done all reduce")

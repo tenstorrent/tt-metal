@@ -2061,6 +2061,7 @@ class TtQwenModelArgs(TtModelArgs):
             if block_w % subblock_w == 0:
                 break
             subblock_w -= 1
+        print("grid.x, grid.y", grid.x, grid.y)
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[grid.x, grid.y],
             subblock_w=subblock_w,
