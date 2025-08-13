@@ -19,6 +19,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "dprint_pages.h"
 // #include "compute_kernel_api/welford.h"
 
 ALWI void ACQ() { acquire_dst(); }
@@ -90,7 +91,7 @@ void MAIN {
     // x^2 (only used for RMS norm)
     constexpr auto cb_x2 = []() -> auto {
         if constexpr (rms_norm) {
-            return cb_xmm;
+            return tt::CBIndex::c_20;
         }
 
         return tt::CBIndex::SIZE;  // Invalid, just needed for compilation
@@ -226,6 +227,17 @@ void MAIN {
                 cb_push_back(cb_x2, blk);
                 REL();
             }
+            cb_wait_front(cb_x2, Wt);
+            DPRINT << "cb_xmm: " << static_cast<uint32_t>(cb_xmm) << ENDL();
+            DPRINT << "cb_x2: " << static_cast<uint32_t>(cb_x2) << ENDL();
+            DPRINT << "cb_xmm: " << ENDL();
+            tt::compute::common::print_full_tile(cb_xmm, 0);
+            DPRINT << "cb_x2: " << ENDL();
+            tt::compute::common::print_full_tile(cb_x2, 0);
+
+            if constexpr (!fuse_pre_add) {
+                reconfig_data_format(cb_xmm, cb_x2, cb_xmm, cb_scaler);
+            }
 
             // Accumulate x^2 into (∑x^2)/n
             if constexpr (FLOAT32_DTYPE) {
@@ -246,10 +258,6 @@ void MAIN {
             REL();
 
             cb_push_back(cb_ex2, onetile);
-        }
-
-        if constexpr (rms_norm && !fuse_pre_add) {
-            reconfig_data_format(cb_xmm, cb_x2, cb_xmm, cb_scaler);
         }
 
         // Var(x) + eps
