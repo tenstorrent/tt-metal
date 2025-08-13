@@ -67,11 +67,16 @@ concept DeviceOperationConcept = requires {
                       decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
                       tensor_return_value_t>);
 
-        // All program factories returned by `select_program_factory` must implement exactly one of
-        // `ProgramFactoryConcept` or `MeshWorkloadFactoryConcept`.
+        // All program factories returned by `select_program_factory` must not implement both
+        // `ProgramFactoryConcept` and `MeshWorkloadFactoryConcept` simultaneously. Additional forms (e.g. create_at)
+        // may be adapted downstream.
         const auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
         std::visit(
-            []<typename T>(const T&) { static_assert(ProgramFactoryConcept<T> != MeshWorkloadFactoryConcept<T>); },
+            []<typename T>(const T&) {
+                static_assert(
+                    !(ProgramFactoryConcept<T> && MeshWorkloadFactoryConcept<T>),
+                    "Factory must implement at most one of ProgramFactoryConcept or MeshWorkloadFactoryConcept");
+            },
             program_factory);
     };
 } && HasComputeOutputSpecs<device_operation_t>;
