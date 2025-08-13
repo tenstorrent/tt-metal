@@ -12,10 +12,91 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH="$CARGO_HOME/bin:$PATH"
 
-# Install runtime deps
+# Build a layer with the heavy dependencies that rarely change for de-dupe efficiency
+
+# 1) Install heavy system dependencies first so this layer is cacheable and not invalidated by frequent SFPI changes
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    gpg \
+    lsb-release \
+    software-properties-common \
+    gnupg \
+    wget \
+    curl \
+    jq \
+    xz-utils \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Add LLVM and Kitware repositories (for clang-17 and modern CMake)
+RUN set -eux; \
+    OS_CODENAME="$(. /etc/os-release; echo $UBUNTU_CODENAME)"; \
+    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -; \
+    echo "deb http://apt.llvm.org/${OS_CODENAME}/ llvm-toolchain-${OS_CODENAME}-17 main" > /etc/apt/sources.list.d/llvm-17.list; \
+    echo "deb http://apt.llvm.org/${OS_CODENAME}/ llvm-toolchain-${OS_CODENAME}-20 main" > /etc/apt/sources.list.d/llvm-20.list; \
+    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - > /usr/share/keyrings/kitware-archive-keyring.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ ${OS_CODENAME} main" > /etc/apt/sources.list.d/kitware.list; \
+    apt-get update
+
+# Core build/runtime deps for TT-Metal development (without g++ which varies by Ubuntu version)
+RUN apt-get install -y --no-install-recommends \
+    git \
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    pandoc \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    libhwloc-dev \
+    libnuma-dev \
+    libatomic1 \
+    libstdc++6 \
+    libboost-dev \
+    libtbb-dev \
+    libcapstone-dev \
+    libc++-17-dev \
+    libc++abi-17-dev \
+    openmpi-bin \
+    libopenmpi-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install correct g++ version depending on Ubuntu version (22.04 -> g++-12, 24.04 -> g++-14)
+RUN set -eux; \
+    ver=$( . /etc/os-release; echo "$VERSION_ID" ); \
+    apt-get update; \
+    if [ "$ver" = "24.04" ]; then \
+      add-apt-repository -y ppa:ubuntu-toolchain-r/test; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends g++-14; \
+    else \
+      apt-get install -y --no-install-recommends g++-12; \
+    fi; \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Ensure clang-17 is present so the script will skip re-installing LLVM
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang-17 \
+    lld-17 \
+    lldb-17 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Pre-install MPI ULFM package (heavy download) so it is cached
+RUN set -eux; \
+    TMP_DIR="$(mktemp -d)"; \
+    DEB_URL="https://github.com/tenstorrent/ompi/releases/download/v5.0.7/openmpi-ulfm_5.0.7-1_amd64.deb"; \
+    wget -q -O "$TMP_DIR/openmpi-ulfm.deb" "$DEB_URL"; \
+    apt-get update -qq; \
+    apt-get install -f -y "$TMP_DIR/openmpi-ulfm.deb"; \
+    rm -rf "$TMP_DIR" /var/lib/apt/lists/*
+
+# Pre-install Rust toolchain to cache heavy downloads
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.89.0 -y
+
+# Install SFPI in a separate, frequently-changing layer within base (keeps heavy deps cached; small delta on pulls)
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
+RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --sfpi
 
 #############################################################
 
