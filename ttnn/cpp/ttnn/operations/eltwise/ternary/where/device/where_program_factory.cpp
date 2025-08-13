@@ -454,14 +454,14 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_true_tensor_cb = cb1;
         value_true_tensor_cb_handle = cb1_handle;
 
-        // CB2 = true tensor (for compute kernel compatibility - using true tensor data)
+        // CB2 = false tensor (ROW_BCAST reader now reads all 3 tensors: predicate→CB0, true→CB1, false→CB2)
         auto [cb2, cb2_handle] = create_cb(
             tt::CBIndex::c_2,
             program,
             all_device_cores,
-            value_true_single_tile_size,
+            value_false_single_tile_size,
             num_tiles_per_cb,
-            value_true_data_format);
+            value_false_data_format);
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
     } else {
@@ -517,12 +517,15 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Row broadcast detection based on height dimension (second-to-last)
         auto pred_shape = predicate_tensor.logical_shape();
         auto true_shape = value_true_tensor.value().logical_shape();
+        auto false_shape = value_false_tensor.value().logical_shape();
 
         auto pred_h = pred_shape[pred_shape.rank() - 2];  // height dim
         auto true_h = true_shape[true_shape.rank() - 2];
+        auto false_h = false_shape[false_shape.rank() - 2];
 
-        pred_is_bcast = (pred_h == 1 && true_h > 1);
-        true_is_bcast = (true_h == 1 && pred_h > 1);
+        pred_is_bcast = (pred_h == 1 && (true_h > 1 || false_h > 1));
+        true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
+        false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
     }
 
     // READER KERNEL - Use kernel path from utils
@@ -559,13 +562,16 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED"] = predicate_sharded ? "1" : "0";     // CB0 sharding
-        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";  // CB1 sharding
+        bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
+        reader_defines["SRC_SHARDED"] = predicate_sharded ? "1" : "0";      // CB0 sharding
+        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";   // CB1 sharding
+        reader_defines["SRC_SHARDED_C"] = value_false_sharded ? "1" : "0";  // CB2 sharding
 
-        // Set broadcast defines to match row broadcast reader kernel expectations
-        // CB0 = predicate, CB1 = true tensor (hardcoded assignment)
-        reader_defines["SRC_BCAST"] = pred_is_bcast ? "1" : "0";    // First tensor (CB0)
-        reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";  // Second tensor (CB1)
+        // Set broadcast defines to match ternary reader kernel expectations
+        // CB0 = predicate, CB1 = true tensor, CB2 = false tensor
+        reader_defines["SRC_BCAST"] = pred_is_bcast ? "1" : "0";     // First tensor (CB0)
+        reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
+        reader_defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
         reader_defines["BCAST_LLK"] = "0";
@@ -680,8 +686,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
         kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
     } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // ROW_BCAST: Use CB1 (true tensor) for all 3 inputs as requested
-        kernel_defines["ROW_BCAST_USE_CB1_FOR_ALL"] = "1";
+        // ROW_BCAST: Now using standard 3-CB pattern (CB0=predicate, CB1=true, CB2=false)
+        // No special defines needed - using standard compute kernel logic
     }
 
     kernel_defines["WHERE_LLK"] = "where_tile";
