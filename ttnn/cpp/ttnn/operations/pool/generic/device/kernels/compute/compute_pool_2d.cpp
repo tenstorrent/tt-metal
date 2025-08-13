@@ -7,10 +7,9 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/tile_move_copy.h"
 
 #define DEBUG_PRINT 1
 
@@ -149,13 +148,12 @@ void MAIN {
 
                     // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
                     // PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
-                    // PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id, 0));
+                    // PACK(tt::compute::common::print_full_tile`(tile_idx_tmp_cb_id, 0));
 
-                    // transpose_wh_init(tile_tmp_cb_id, out_cb_id);
-                    transpose_wh_init_short(tile_tmp_cb_id);
-                    transpose_wh_tile(tile_tmp_cb_id, topk_cb_tile_idx, data_dst_idx);
-                    transpose_wh_init_short(tile_idx_tmp_cb_id);
-                    transpose_wh_tile(tile_idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
+                    copy_tile_to_dst_init_short(tile_tmp_cb_id);
+                    copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
+                    copy_tile_to_dst_init_short(tile_idx_tmp_cb_id);
+                    copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
 
                     // dprint_tensix_dest_reg(0);
                     // dprint_tensix_dest_reg(2);
@@ -164,14 +162,6 @@ void MAIN {
                     // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
                     topk_tile_init();
                     ckernel::topk_local_sort(data_dst_idx, 0, 4, 0);
-
-                    // dprint_tensix_dest_reg(0);
-                    // dprint_tensix_dest_reg(2);
-
-                    // re-transpose the tiles to get max values and indices from column 0 to row 0
-                    transpose_wh_dest_init_short();
-                    transpose_wh_dest(data_dst_idx);
-                    // transpose_wh_dest(index_dst_idx); // un-commenting this line causes a hang
 
                     // dprint_tensix_dest_reg(0);
                     // dprint_tensix_dest_reg(2);
