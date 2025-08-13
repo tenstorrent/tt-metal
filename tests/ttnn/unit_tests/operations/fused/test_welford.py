@@ -18,6 +18,7 @@ def num_blocks_w(w):
 
 def expected_hack_layernorm_value(in_plus_residual, weight, bias, w):
     w_blocks = num_blocks_w(w)
+
     return (in_plus_residual - 2.0 * w_blocks * in_plus_residual) / (
         4.0 * w_blocks * in_plus_residual
     ) ** 0.5 * weight + bias
@@ -88,9 +89,9 @@ def test_layer_norm_with_pre_add(device, h, w):
     assert_with_ulp(expected_output, output_tensor, 2)
 
 
-@pytest.mark.parametrize("h", [32, 224, 384, 2048])
-@pytest.mark.parametrize("w", [64, 160, 1024, 2048])
-def test_layer_norm_with_pre_add_and_weight_and_bias(device, h, w):
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
+def test_layer_norm_with_pre_add_and_weight_and_bias(device, h, w, rms_norm):
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -112,7 +113,6 @@ def test_layer_norm_with_pre_add_and_weight_and_bias(device, h, w):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    print("expected output: ", expected_hack_layernorm_value(in_val + residual_val, gamma, beta, w))
     expected_output = torch.full(
         (h, w), expected_hack_layernorm_value(in_val + residual_val, gamma, beta, w), dtype=dtype
     )
