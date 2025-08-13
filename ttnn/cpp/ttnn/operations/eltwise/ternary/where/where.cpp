@@ -87,7 +87,6 @@ Tensor WhereOperation::invoke(
             const auto& t_false = std::get<Tensor>(value_false);
             if (ternary_utils::have_same_shape(t_true, predicate) &&
                 ternary_utils::have_same_shape(predicate, t_false)) {
-                log_info(tt::LogOp, "Where LLK - TTT");
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
                 return ttnn::prim::where(
@@ -103,7 +102,6 @@ Tensor WhereOperation::invoke(
             // TTS case: tensor-tensor-scalar
             const auto& t_true = std::get<Tensor>(value_true);
             if (ternary_utils::have_same_shape(t_true, predicate)) {
-                log_info(tt::LogOp, "Where LLK - TTS");
                 float scalar_false = std::get<float>(value_false);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
@@ -120,7 +118,6 @@ Tensor WhereOperation::invoke(
             // TST case: tensor-scalar-tensor
             const auto& t_false = std::get<Tensor>(value_false);
             if (ternary_utils::have_same_shape(predicate, t_false)) {
-                log_info(tt::LogOp, "Where LLK - TST");
                 float scalar_true = std::get<float>(value_true);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
@@ -137,7 +134,6 @@ Tensor WhereOperation::invoke(
             // TSS case: tensor-scalar-scalar
             const auto& t_true = std::get<float>(value_true);
             const auto& t_false = std::get<float>(value_false);
-            log_info(tt::LogOp, "Where LLK - TSS");
             std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                       : std::optional<DataType>(predicate.dtype());
             unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
@@ -151,7 +147,6 @@ Tensor WhereOperation::invoke(
         }
     }
 
-    log_info(tt::LogOp, "Where - legacy");
     return std::visit(
         [&](const auto&... values) {
             return ternary_utils::where_impl(

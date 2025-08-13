@@ -146,7 +146,7 @@ void kernel_main() {
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
             if constexpr (batchB > 0) {
-                if (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_sparsity)[bB] == 0) {
+                if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] == 0) {
                     if constexpr (!bcast_A) {
                         in0_tensor_start_tile_id += MtKt;
                     }
