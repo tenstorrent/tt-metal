@@ -971,6 +971,8 @@ def reset_tensix(tt_open_devices=None):
         smi_reset_result = run_process_and_get_result(f"tt-smi -r {tt_open_devices_str}")
 
     logger.info(f"tt-smi reset status: {smi_reset_result.returncode}")
+    logger.info(f"Sleeping for 60 seconds to allow devices to reset")
+    time.sleep(60)
 
 
 @pytest.hookimpl(tryfirst=True)
