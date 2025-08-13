@@ -105,9 +105,9 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
     
     for (size_t i = 0; i < bool_metrics.size(); i++) {
         std::string path = get_cluster_wide_telemetry_path(*bool_metrics[i]);
-        snapshot->metric_indices.push_back(i);
-        snapshot->metric_names.push_back(path);
-        snapshot->metric_values.push_back(bool_metrics[i]->value());
+        snapshot->bool_metric_indices.push_back(i);
+        snapshot->bool_metric_names.push_back(path);
+        snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
     }
 
     for (auto &subscriber: subscribers) {
@@ -123,8 +123,8 @@ static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>> &
         if (!bool_metrics[i]->changed_since_transmission()) {
             continue;
         }
-        snapshot->metric_indices.push_back(i);
-        snapshot->metric_values.push_back(bool_metrics[i]->value());
+        snapshot->bool_metric_indices.push_back(i);
+        snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
         bool_metrics[i]->mark_transmitted();
     }
 
