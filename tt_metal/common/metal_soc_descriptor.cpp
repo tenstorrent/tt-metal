@@ -162,6 +162,15 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     }
 }
 
+// UMD expects virtual NOC coordinates for worker cores
+tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const {
+    tt::umd::CoreCoord virtual_coord =
+        translate_coord_to((tt_xy_pair)physical_cxy, CoordSystem::NOC0, get_umd_coord_system());
+    return tt_cxy_pair(physical_cxy.chip, virtual_coord.x, virtual_coord.y);
+}
+
+CoordSystem metal_SocDescriptor::get_umd_coord_system() const { return CoordSystem::VIRTUAL; }
+
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
     for (const auto& logical_coord : this->get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->logical_eth_core_to_chan_map.insert({{logical_coord.x, logical_coord.y}, logical_coord.y});
