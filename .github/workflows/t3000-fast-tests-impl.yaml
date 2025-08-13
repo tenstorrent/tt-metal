@@ -23,7 +23,7 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - tt-beta-ubuntu-2204-N300-llmbox-large-stable
+      - tt-ubuntu-2204-N300-llmbox-stable
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
