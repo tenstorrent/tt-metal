@@ -64,6 +64,7 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
             assert allclose, f"FAILED: {output}"
 
 
+@skip_for_blackhole("Bad pcc on BH P150. Issue #21875")
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("num_loops", [20])
 def test_attn_matmul_fp32(num_loops, in_dtype, device):
