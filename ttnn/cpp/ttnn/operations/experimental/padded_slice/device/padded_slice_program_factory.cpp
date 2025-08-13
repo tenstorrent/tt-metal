@@ -372,7 +372,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     }
 
     uint32_t num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
-    num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
+    num_tiles_per_channel = tt::div_up(num_tiles_per_channel, num_cores_channels);
     TT_FATAL(
         num_tiles_per_channel == tt::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH),
         "Number of tiles per channel {} should be equal to number of output shard width in tiles {}",
@@ -389,7 +389,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     std::vector<uint32_t> accumulated_total_tiles_per_dim(num_dims);
     std::vector<uint32_t> accumulated_total_sticks_per_dim(num_dims);
 
-    num_output_tiles_per_dim[0] = tt::div_up(actual_output_shape[-1], TILE_WIDTH) / num_cores_channels;
+    num_output_tiles_per_dim[0] = num_tiles_per_channel;
     num_output_tiles_per_dim[1] = (tt::round_up(output_tensor_start[-2] + actual_output_shape[-2], TILE_HEIGHT) -
                                    tt::round_down(output_tensor_start[-2], TILE_HEIGHT)) /
                                   TILE_HEIGHT;
@@ -399,7 +399,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     accumulated_total_tiles_per_dim[0] = tt::div_up(actual_output_shape[-1], TILE_WIDTH);
     accumulated_total_tiles_per_dim[1] = tt::div_up(input_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
 
-    num_input_tiles_per_dim[0] = tt::div_up(actual_output_shape[-1], TILE_WIDTH) - num_output_tiles_per_dim[0];
+    num_input_tiles_per_dim[0] = tt::div_up(input_padded_shape[-1], TILE_WIDTH) - num_output_tiles_per_dim[0];
     num_input_tiles_per_dim[1] =
         (tt::div_up(input_shape[-2], TILE_HEIGHT) - num_output_tiles_per_dim[1]) * accumulated_total_tiles_per_dim[0];
 
@@ -648,13 +648,8 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     std::vector<CoreCoord> iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
 
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output);
-    TT_FATAL(
-        num_tiles_per_channel % num_cores_channels == 0,
-        "Number of tiles in channel dimension {} must be divisible by num_cores_channels {} for padded_slice "
-        "operation with tiled inputs",
-        num_tiles_per_channel,
-        num_cores_channels);
-    num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
+
+    num_tiles_per_channel = tt::div_up(num_tiles_per_channel, num_cores_channels);
 
     [[maybe_unused]] uint32_t num_tiles_height_per_core =
         tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
