@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
         (2, [1, 1, 128, 1024], 3, ttnn.TILE_LAYOUT),
         (2, [1, 1, 32, 768], 3, ttnn.TILE_LAYOUT),
     ],
-    ids=["4_device_128_512", "4_device_32_4096", "2_device_128_1024", "2_device_32_768"],
+    ids=["4_device_128_2048", "4_device_32_4096", "2_device_128_1024", "2_device_32_768"],
 )
 @pytest.mark.parametrize(
     "rs_input_dtype",
