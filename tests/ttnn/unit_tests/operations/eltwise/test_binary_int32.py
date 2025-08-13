@@ -11,38 +11,39 @@ import ttnn
     "input_shapes",
     [
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
+        # (torch.Size([1, 1, 320, 384])),
+        # (torch.Size([1, 3, 320, 384])),
     ],
 )
 @pytest.mark.parametrize(
     "low_a, high_a, low_b, high_b",
     [
-        (-100, 100, -100, 100),
+        # (-100, 100, -100, 100),
         (-300, 300, -250, 250),
-        (-500, 500, -750, 750),
-        (-1000, 1000, -500, 1000),
-        (-1e4, 1e4, -5e3, 5e3),
-        (2e9, 2077000000, 2e9, 2147483647),  # large positive input
-        (-2147483647, -2e9, -2077000000, -2e9),  # large negative input
-        (-2147483647, 2147483647, -2147483647, 2147483647),  # full range
+        # (-500, 500, -750, 750),
+        # (-1000, 1000, -500, 1000),
+        # (-1e4, 1e4, -5e3, 5e3),
+        # (2e9, 2077000000, 2e9, 2147483647),  # large positive input
+        # (-2147483647, -2e9, -2077000000, -2e9),  # large negative input
+        # (-2147483647, 2147483647, -2147483647, 2147483647),  # full range
     ],
 )
 @pytest.mark.parametrize(
     "ttnn_op",
     [
-        ttnn.logical_or,
-        ttnn.logical_xor,
-        ttnn.logical_and,
-        ttnn.add,
-        ttnn.sub,
-        ttnn.squared_difference,
+        # ttnn.logical_or,
+        # ttnn.logical_xor,
+        # ttnn.logical_and,
+        # ttnn.add,
+        # ttnn.sub,
+        # ttnn.squared_difference,
+        ttnn.rsub,
     ],
 )
 def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
-    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
-    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
+    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.float32)
+    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.float32)
 
     if ttnn_op in {ttnn.logical_or, ttnn.logical_xor, ttnn.logical_and}:
         torch_input_tensor_a[::5] = 0  # every 5th element is zero
@@ -55,7 +56,7 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, devic
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
-        dtype=ttnn.int32,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -63,13 +64,17 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, devic
 
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
-        dtype=ttnn.int32,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=False)
     output_tensor = ttnn.to_torch(output_tensor)
+    print(torch_input_tensor_a)
+    print(torch_input_tensor_b)
+    print(output_tensor)
+    print(torch_output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
 

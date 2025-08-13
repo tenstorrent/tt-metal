@@ -161,6 +161,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
         // b - a
         case BinaryOpType::RSUB:
             if (is_sfpu_op()) {
+                // process_lhs = unary::UnaryOpType::NEG;
+                // binary_op = SfpuBinaryOp::ADD;
                 binary_op = SfpuBinaryOp::RSUB;
             } else {
                 process_lhs = unary::UnaryOpType::NEG;
