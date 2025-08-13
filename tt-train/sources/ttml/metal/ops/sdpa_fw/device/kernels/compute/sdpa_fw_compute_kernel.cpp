@@ -371,7 +371,9 @@ void MAIN {
     cb_wait_front(cb_reduction_scaler, onetile);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_query, Wt);
-        cb_wait_front(cb_attn_mask, Ht);  // wait until reader kernel has written kv_chunks_size tiles to cb_attn_mask
+
+
+        // cb_wait_front(cb_attn_mask, Ht);  // wait until reader kernel has written kv_chunks_size tiles to cb_attn_mask
 
         // set up ping pong buffers
         // we will swap these buffer after each row processing to avoid overwriting previous results
@@ -412,11 +414,16 @@ void MAIN {
             //   masked ones.
             // This way, after applying softmax, masked positions will effectively become zero,
             // and only the unmasked positions will retain meaningful attention weights
+            cb_wait_front(cb_attn_mask, onetile);
             copy_tile_init(cb_attn_mask);
+            // copy_tile(
+            //     cb_attn_mask,
+            //     /* tile_idx */ h,  // row of K define the column in (QK^T) matrix, so it define the column of
+            //                        // attn_mask
+            //     /* register idx */ mask_register);
             copy_tile(
                 cb_attn_mask,
-                /* tile_idx */ h,  // row of K define the column in (QK^T) matrix, so it define the column of
-                                   // attn_mask
+                /* tile_idx */ 0,
                 /* register idx */ mask_register);
 
             // Apply the attention mask to Q @ K^T scores:
@@ -442,8 +449,8 @@ void MAIN {
             pack_reconfig_data_format(cb_temp_accum);
             pack_tile(matmul_accum_reg, cb_temp_accum);
             tile_regs_release();
-
             cb_push_back(cb_temp_accum, onetile);
+            cb_pop_front(cb_attn_mask, onetile);
 
             // [Debug]: pack intermediate result to cb_intermediates
             // pack_intermediate_result(cb_temp_accum, cb_intermediates);
@@ -544,7 +551,7 @@ void MAIN {
         cb_pop_front(alias_cb_prev_sum_exp, onetile);      // pop previous exp
         cb_pop_front(alias_cb_prev_mm_out, Wt);  // pop previous matmul output to make space for next row
 
-        cb_pop_front(cb_attn_mask, Ht);  // pop attn_mask after processing all K and V rows
+        // cb_pop_front(cb_attn_mask, Ht);  // pop attn_mask after processing all K and V rows
         cb_pop_front(cb_query, Wt);
     }
 }

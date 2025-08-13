@@ -254,7 +254,7 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     using namespace ttml;
 
-    const uint32_t B = 1U, H = 1U, S = 128U, d = 768U;
+    const uint32_t B = 1U, H = 1U, S = 4096U, d = 768U;
     const float dropout_prob = 0.8F;
 
     std::random_device rd;
@@ -262,8 +262,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     xt::xarray<float> query_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
     xt::xarray<float> key_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
     xt::xarray<float> value_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
-    xt::xarray<float> attn_mask_tensor = xt::ones<float>({B, H, S, S});
-    // xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
+    // xt::xarray<float> attn_mask_tensor = xt::ones<float>({B, H, S, S});
+    xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
 
     // for (uint32_t b = 0; b < B; ++b) {
     //     for (uint32_t i = 0; i < S; ++i) {
@@ -304,7 +304,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
 
     // fmt::print("\n MSE result: {}, baseline MSE: {}\n", mse_result, mse_baseline);
 
-    for (size_t i = 0; i < 1U /* S */; ++i) {
+    for (size_t i = 0; i < S; ++i) {
         for (size_t j = 0; j < d; ++j) {
             float expected_value = expected_result(0, 0, i, j);
             float actual_value = result_xtensor(0, 0, i, j);
@@ -322,7 +322,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
             }
         }
     }
-    EXPECT_TRUE(xt::allclose(result_xtensor, baseline_result_xtensor, 3e-1F, 1e-2F));
+    EXPECT_TRUE(xt::allclose(result_xtensor, baseline_result_xtensor, 3e-2F, 2e-2F));
 
     if (return_intermediates) {
         assert((interm_xtensor.shape() == baseline_interm_xtensor.shape()));

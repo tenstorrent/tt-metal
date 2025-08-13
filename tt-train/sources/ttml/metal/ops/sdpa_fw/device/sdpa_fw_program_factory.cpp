@@ -50,6 +50,7 @@ constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // used for holding cur
 constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kNumScalerTiles = 1U;
+constexpr uint32_t kNumAttnMaskTiles = 1U;
 constexpr uint32_t kTempAccumTiles = 1U;  //[Debug] should be 2U
 constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
@@ -201,7 +202,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     //[DEBUG]:
     fmt::print(
-        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, num_cores={} ({}x{}), group1 cores={} rows/core={}, group2 "
+        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, total_rows_to_process = {}, num_cores={} ({}x{}), group1 cores={} rows/core={}, group2 "
         "cores={} "
         "rows/core={}\n",
         NC,
@@ -209,6 +210,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         Wt,
         1.0F / std::sqrt(static_cast<float>(Et)),
         block_size,
+        total_rows_to_process,
         num_cores,
         num_cores_x,
         num_cores_y,
@@ -234,7 +236,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         create_circular_buffer(program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
     auto cb_attn_mask = create_circular_buffer(
-        program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Ht_);
+        program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
 
     auto cb_intermediate = create_circular_buffer(
         program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
