@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     // Initialize interleaved address generator for DRAM access
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr auto src_args = TensorAccessorArgs<3>();
     const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
     // Process each block of data

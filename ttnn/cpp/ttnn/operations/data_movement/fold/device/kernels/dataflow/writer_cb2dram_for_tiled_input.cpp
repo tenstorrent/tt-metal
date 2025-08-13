@@ -17,6 +17,7 @@ void kernel_main() {
     constexpr uint32_t tiles_per_width_dim = get_compile_time_arg_val(6);    // Number of tiles per width dimension
     constexpr uint32_t element_size = get_compile_time_arg_val(7);           // Size of each element in bytes
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(8);            // Input circular buffer ID
+    constexpr auto dst_args = TensorAccessorArgs<9>();
 
     // Runtime arguments - Processing parameters
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);        // Base destination address in DRAM
@@ -29,7 +30,7 @@ void kernel_main() {
     constexpr uint32_t output_width = input_width / stride_width;  // Output tensor width
     constexpr uint32_t patch_size = stride_height * stride_width;  // Total elements per patch
     // Initialize DRAM address generator for interleaved memory access
-    const InterleavedAddrGen<true> dst = {.bank_base_address = dst_addr, .page_size = stick_nbytes};
+    const auto dst = TensorAccessor(dst_args, dst_addr, stick_nbytes);
 
     // Processing loop bounds and state variables
     const uint32_t end_block_id = start_block_id + num_blocks;
