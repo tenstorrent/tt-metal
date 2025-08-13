@@ -146,7 +146,7 @@ void MAIN {
                     tilize_init(curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
                     tilize_block(
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt(curr_in_idx_cb_id, tile_tmp_cb_id, tile_idx_tmp_cb_id);
+                    tilize_uninit_with_dt(curr_in_idx_cb_id, curr_in_cb_id, tile_idx_tmp_cb_id);
 
                     // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
                     // PACK(DPRINT << "TILE CB " << ENDL());
