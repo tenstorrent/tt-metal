@@ -23,6 +23,39 @@ void MAIN {
     unary_op_init_common(cb_pre_in1, cb_out);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
+#ifdef ROW_BCAST_USE_CB1_FOR_ALL
+        // ROW_BCAST: Use CB1 (true tensor) for all 3 inputs
+        cb_wait_front(cb_pre_in1, num_tiles_per_cycle);  // CB0 (predicate)
+        cb_wait_front(cb_pre_in2, num_tiles_per_cycle);  // CB1 (true tensor)
+        // No CB2 wait needed - using CB1 for everything
+
+        cb_reserve_back(cb_out, num_tiles_per_cycle);
+
+        tile_regs_acquire();
+
+        copy_tile_to_dst_init_short(cb_pre_in1);
+        copy_tile(cb_pre_in1, 0, 0);  // Copy predicate to dst reg 0
+
+        copy_tile_to_dst_init_short(cb_pre_in2);
+        copy_tile(cb_pre_in2, 0, 1);  // Copy true tensor to dst reg 1
+        copy_tile(cb_pre_in2, 0, 2);  // Copy true tensor to dst reg 2 (same as reg 1)
+
+        where_tile_init();
+        WHERE_LLK(0, 1, 2);
+
+        tile_regs_commit();
+        tile_regs_wait();
+
+        pack_tile(0, cb_out);
+
+        tile_regs_release();
+
+        cb_push_back(cb_out, num_tiles_per_cycle);
+        cb_pop_front(cb_pre_in1, num_tiles_per_cycle);  // Pop predicate
+        cb_pop_front(cb_pre_in2, num_tiles_per_cycle);  // Pop true tensor
+                                                        // No CB2 pop needed
+#else
+        // Standard 3-tensor mode: CB0=pred, CB1=true, CB2=false
         cb_wait_front(cb_pre_in1, num_tiles_per_cycle);
         cb_wait_front(cb_pre_in2, num_tiles_per_cycle);
         cb_wait_front(cb_pre_in3, num_tiles_per_cycle);
@@ -54,6 +87,7 @@ void MAIN {
         cb_pop_front(cb_pre_in1, num_tiles_per_cycle);
         cb_pop_front(cb_pre_in2, num_tiles_per_cycle);
         cb_pop_front(cb_pre_in3, num_tiles_per_cycle);
+#endif
     }
 }
 }  // namespace NAMESPACE
