@@ -78,6 +78,9 @@ void kernel_main() {
             const uint32_t input_addr = input_base_addr + input_page_offset;
             const uint32_t szbytes = map_ptr[seg_idx].num_elements * element_sz_bytes;
 
+            // for bfp8, the exponents are stored in the first 64 bytes of the tile in faceline order
+            // this kernel stores the exponents corresponsing to the output shape in a separate buffer
+            // then copies them to the appropriate address at the end
             if constexpr (is_bfp8) {
                 volatile tt_l1_ptr uint8_t* input_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(input_base_addr);
                 volatile tt_l1_ptr uint8_t* exp_buffer = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(exp_ptr_addr);
