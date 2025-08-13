@@ -112,7 +112,7 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     logger.info("Run Qwen_MLP_PF")
     # Explicitly allocate global CB to avoid memory fragmentation
     prefetcher_setup.create_global_cb()
-    for i in range(1):
+    for i in range(20):
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),
             num_layers=1,
@@ -170,8 +170,6 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         )  # [1, 4, 1, 25600]
         w2_in_torch0 = w2_in_torch[:, :1, :, :]
         ff1ff3_torch = ttnn.to_torch(ff1ff3, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
-
-        breakpoint()
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

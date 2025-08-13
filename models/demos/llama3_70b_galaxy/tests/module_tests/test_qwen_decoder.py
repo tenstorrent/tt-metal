@@ -4,7 +4,6 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     precompute_freqs,
@@ -13,7 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -26,11 +25,19 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
@@ -57,17 +64,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 165136000,
-            "fabric_config": True,
-        }
-    ],
-    indirect=True,
-)
 def test_llama_decoder_inference(
     max_seq_len,
     batch_size,
@@ -78,27 +74,6 @@ def test_llama_decoder_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
-
-    # Load reference model
-
-    # Note that the Llama3 tests use a reference Llama model, here we call MLP from tt_transformers
-    model_args_ref = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
-    model_args_ref.n_layers = 1  # For the unit test, just run a single layer
-
-    state_dict_ref = model_args_ref.load_state_dict()
-
-    first_layer_prefix = model_args_ref.get_state_dict_prefix("TransformerBlock", 0)
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    partial_state_dict_ref = {
-        k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
-    }
-
-    reference_model = model_args_ref.reference_decoder()
-    reference_model.load_state_dict(partial_state_dict_ref)
-
-    logger.info(f"Reference Model Loaded")
-
-    # Load Qwen3 model
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
     model_args.n_layers = 1
@@ -115,6 +90,16 @@ def test_llama_decoder_inference(
     )
 
     tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
+
+    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v
+        for k, v in state_dict.items()
+        if k.startswith(first_layer_prefix) and "q_norm" not in k and "k_norm" not in k
+    }
+    reference_model = TransformerBlock(layer_id=0, args=model_args, llama3=False)
+    reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 127
     generation_length = 10

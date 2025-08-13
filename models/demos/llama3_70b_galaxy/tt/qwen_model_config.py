@@ -371,7 +371,7 @@ class TtQwenModelArgs(TtModelArgs):
                         [
                             core_range,
                             ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
-                            ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),  # use 16 + 4 = 20 cores here
                         ]
                     ),
                     strategy=ttnn.ShardStrategy.WIDTH,
@@ -875,7 +875,7 @@ class TtQwenModelArgs(TtModelArgs):
             # QKV
             self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"] = (
                 ttnn.create_sharded_memory_config(
-                    shape=(32, 2304 // RING_SIZE),  # Use padded K
+                    shape=(32, 6144 // 4 // RING_SIZE),  # Use padded K
                     core_grid=ring_core_range_set,
                     strategy=ttnn.ShardStrategy.WIDTH,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -2033,6 +2033,7 @@ class TtQwenModelArgs(TtModelArgs):
             if block_w % subblock_w == 0:
                 break
             subblock_w -= 1
+        print("grid.x, grid.y", grid.x, grid.y)
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[grid.x, grid.y],
             subblock_w=subblock_w,
