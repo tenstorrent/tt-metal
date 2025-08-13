@@ -156,11 +156,6 @@ void RMSAllGather::validate(
                 TT_FATAL(M % input_height == 0, "M must be divisible by tile height.");
                 TT_FATAL(K % input_width == 0, "K must be divisible by tile width.");
                 const auto bbox = shard_spec.grid.bounding_box();
-                std::cout << "bbox: " << bbox.start_coord.x << ", " << bbox.start_coord.y << " " << bbox.end_coord.x
-                          << ", " << bbox.end_coord.y << std::endl;
-                std::cout << "program_config.compute_with_storage_grid_size: "
-                          << program_config.compute_with_storage_grid_size.x << ", "
-                          << program_config.compute_with_storage_grid_size.y << std::endl;
                 TT_FATAL(
                     bbox.end_coord.x - bbox.start_coord.x < program_config.compute_with_storage_grid_size.x &&
                         bbox.end_coord.y - bbox.start_coord.y < program_config.compute_with_storage_grid_size.y,

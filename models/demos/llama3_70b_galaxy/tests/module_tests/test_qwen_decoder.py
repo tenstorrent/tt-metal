@@ -219,7 +219,6 @@ def test_llama_decoder_inference(
             mode="decode",
             page_table=page_table_tt,
         )
-        breakpoint()
         tt_output_torch = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
