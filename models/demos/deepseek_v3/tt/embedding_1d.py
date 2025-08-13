@@ -76,8 +76,6 @@ class Embedding1D(AbstractModule):
             ttnn_weight, (hf_config.vocab_size, even_int_div(hf_config.hidden_size, mesh_device.get_num_devices()))
         )  # Remove the extra dimension added for sharding
 
-        ttnn.dump_tensor("embedding.weight", ttnn_weight)
-
         # Save to disk with standard naming - "embedding" must match the op name used in the model config
         # so that RunConfig can populate it with the actual weight tensors at runtime
         return {"embedding": {"weight": save_and_get_path(output_path / "embedding.weight", ttnn_weight)}}
@@ -159,19 +157,10 @@ class Embedding1D(AbstractModule):
 
     @classmethod
     def forward_prefill(cls, x, cfg):
-        return cls._forward(x, cfg)
-
-    @classmethod
-    def forward_decode(cls, x, cfg):
-        return cls._forward(x, cfg)
-
-    @classmethod
-    def _forward(cls, x, cfg):
-        """Unified forward pass for both prefill and decode modes."""
         assert len(x.shape) == 3, "Ids tensor must be 3D: [1, 1, batch]"
         assert (
             x.shape[-1] % ttnn.TILE_SIZE == 0
-        ), "Batch dimension must be divisible by TILE_SIZE"  # TODO: remove this restriction once all gather async supports subtile gathering
+        ), "Batch dimension must be divisible by TILE_SIZE for decode"  # TODO: remove this restriction once all gather async supports subtile gathering
 
         embeddings = ttnn.embedding(x, **cfg["embedding"])
         embeddings = ttnn.unsqueeze(embeddings, 0)
@@ -183,3 +172,36 @@ class Embedding1D(AbstractModule):
         ttnn.deallocate(embeddings_tc)
 
         return embeddings_ag
+
+    @classmethod
+    def forward_decode(cls, x, cfg):
+        assert len(x.shape) == 3, "Ids tensor must be 3D: [1, 1, batch]"
+
+        # TODO: remove this padding once all gather async supports subtile gathering
+        # Add padding so that the batch dimension is divisible by TILE_SIZE
+        _, _, original_seq_len = x.shape
+        if original_seq_len % ttnn.TILE_SIZE == 0:
+            embeddings = ttnn.embedding(x, **cfg["embedding"])
+        else:
+            x_padded = ttnn.pad(x, [(0, 0), (0, 0), (0, ttnn.TILE_SIZE - original_seq_len % ttnn.TILE_SIZE)], 0)
+            embeddings = ttnn.embedding(x_padded, **cfg["embedding"])
+            ttnn.deallocate(x_padded)
+
+        embeddings = ttnn.unsqueeze(embeddings, 0)
+
+        embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
+        ttnn.deallocate(embeddings)
+
+        embeddings_ag = ttnn.experimental.all_gather_async(embeddings_tc, **cfg["all_gather"])
+        ttnn.deallocate(embeddings_tc)
+
+        assert len(embeddings_ag.shape) == 4
+        if embeddings_ag.shape[-2] == original_seq_len:
+            return embeddings_ag
+
+        assert embeddings_ag.shape[-2] > original_seq_len
+
+        embeddings_ag_slice = embeddings_ag[:, :, :original_seq_len, :]
+        ttnn.deallocate(embeddings_ag)
+
+        return embeddings_ag_slice

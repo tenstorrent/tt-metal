@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.deepseek_v3.utils.composite_ops import mesh_scatter
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, OpConfigBase
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -23,7 +23,6 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     find_largest_divisor,
     get_activation_sharding_core_counts_for_dram_matmul,
     get_dram_sharded_matmul_config,
-    mesh_scatter,
     save_and_get_path,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -92,8 +91,6 @@ class LMHead(AbstractModule):
             ),
             mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, -1),
         )
-        print(f"{weight.memory_config()=}")
-        print(f"{weight.shape=}")
 
         return {
             "linear": {
@@ -251,12 +248,8 @@ class LMHead(AbstractModule):
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
-        print(f"{x.memory_config()=}")
         mesh_scatter(x, **cfg["mesh_scatter"])
-        print(f"{x.memory_config()=}")
 
-        print(f'{cfg["linear"]["input_tensor_b"].memory_config()=}')
-        print(f'{cfg["linear"]["input_tensor_b"].shape=}')
         output = ttnn.linear(x, **cfg["linear"])
         ttnn.deallocate(x)
         assert output.memory_config() == cfg["output_memory_config"]
@@ -294,7 +287,6 @@ class LMHead(AbstractModule):
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
-        print(f"{x.memory_config()=}")
         mesh_scatter(x, **cfg["mesh_scatter"])
 
         _, _, seq_len, _ = x.shape
@@ -302,18 +294,15 @@ class LMHead(AbstractModule):
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
             x = ttnn.reshape(x, [1, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
 
-        logger.info("running ttnn.linear")
         output = ttnn.linear(
             x, program_config=cls._get_prefill_pc(seq_len=seq_len, **cfg["linear_pc_gen"]), **cfg["linear"]
         )
         ttnn.deallocate(x)
 
         # De-chunk the output if the input was chunked
-        logger.info("De-chunking output")
         _, num_chunks, _, output_dim = output.shape
         if num_chunks > 1:
             output = ttnn.reshape(output, [1, 1, -1, output_dim])
 
         assert output.memory_config() == cfg["output_memory_config"]
-        logger.info("Finished LMHead")
         return output
