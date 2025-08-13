@@ -189,6 +189,11 @@ run_squeezebert_func() {
 
 }
 
+run_efficientnet_b0_func(){
+
+  pytest models/experimental/efficientnetb0/demo/demo.py
+
+}
 run_roberta_func() {
 
   pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600
@@ -342,6 +347,13 @@ run_yolov6l_demo() {
 run_yolov12x_demo() {
 
   pytest models/demos/yolov12x/demo/demo.py
+
+}
+
+
+run_vovnet_demo(){
+
+ pytest models/experimental/vovnet/demo/demo.py
 
 }
 
