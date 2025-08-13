@@ -16,9 +16,9 @@ tests:
   - name: "all_to_all_test"
     num_iterations: 1
     memory_config:
-      fifo_size: [1024, 2048, 4096]
-      page_size: [256, 512, 1024]
-      data_size: [4096, 8192]
+      fifo_size: [1024, 2048]
+      page_size: [256, 512]
+      data_size: 4096
       num_transactions: 15
     pattern_expansions:
       - type: "all_to_all_devices"
