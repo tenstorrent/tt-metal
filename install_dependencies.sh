@@ -189,7 +189,6 @@ init_packages() {
                 "cmake"
                 "ninja-build"
                 "pkg-config"
-                "cargo"
                 "$gpp_package"
                 "pandoc"
                 "xz-utils"
@@ -221,7 +220,6 @@ init_packages() {
                 "cmake"
                 "ninja-build"
                 "pkgconf-pkg-config"
-                "cargo"
                 "xz"
                 "python3-devel"
                 "python3-pip"
@@ -421,6 +419,10 @@ install_mpi_ulfm() {
     apt-get install -f -y "$TMP_DIR/$DEB_FILE"
 }
 
+install_rust() {
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.89.0 -y
+}
+
 # We don't really want to have hugepages dependency
 # This could be removed in the future
 
@@ -461,6 +463,7 @@ install() {
     install_sfpi
     install_llvm
     install_mpi_ulfm
+    install_rust
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
     if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
