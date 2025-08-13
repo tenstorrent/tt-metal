@@ -5,12 +5,13 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--verbosity=<verbosity>] [--run=<script>]...
+    triage [--initialize-with-noc1] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check]
 
 Options:
-    --initialize-with-noc1    Initialize tt-exalens with NOC1 enabled. [default: False]
-    --verbosity=<verbosity>   Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
-    --run=<script>            Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
+    --initialize-with-noc1           Initialize debugger context with NOC1 enabled. [default: False]
+    --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
+    --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
+    --skip-version-check    Do not enforce debugger version check. [default: False]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -41,6 +42,7 @@ except ImportError as e:
 from copy import deepcopy
 from dataclasses import dataclass, field
 import importlib
+import importlib.metadata as importlib_metadata
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -464,6 +466,78 @@ def serialize_result(script: TriageScript | None, result):
         print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
 
 
+def _enforce_dependencies(args: ScriptArguments) -> None:
+    """Enforce approved `ttexalens` version unless skipped.
+
+    Reads a single-line SHA from `ttexalens_ref.txt` in the parent
+    directory of this script (next to `install_debugger.sh`). Compares it to the
+    installed `ttexalens` version's dev hash and raises `TTTriageError` on
+    mismatch unless `--skip-version-check` is provided. If the ref file
+    is missing or empty, a warning is printed and the check is skipped.
+    """
+    # Skip flag for dependency checks
+    try:
+        skip_check = bool(args.get("--skip-version-check", False)) if args else False
+    except Exception:
+        skip_check = False
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    ref_path = os.path.abspath(os.path.join(os.path.dirname(script_dir), "ttexalens_ref.txt"))
+
+    try:
+        with open(ref_path, "r", encoding="utf-8") as f:
+            approved_ref = f.read().strip()
+    except FileNotFoundError:
+        utils.WARN("ttexalens_ref.txt not found. Skipping debugger version check. " f"Expected at: {ref_path}")
+        return
+    except Exception as e:
+        utils.WARN(f"Failed to read ttexalens_ref.txt: {e}. Skipping debugger version check.")
+        return
+
+    if not approved_ref:
+        utils.WARN("ttexalens_ref.txt is empty. Skipping debugger version check.")
+        return
+
+    # Get installed version string
+    try:
+        installed_version = importlib_metadata.version("ttexalens")
+        print(f"Installed ttexalens version: {installed_version}")
+    except importlib_metadata.PackageNotFoundError:
+        utils.WARN(
+            "Required debugger component is not installed. Please run scripts/install_debugger.sh to install debugger dependencies."
+        )
+        raise TTTriageError("Debugger dependency is not installed")
+
+    # Expected version format from setup.py: 0.1.<date>+dev.<short_hash>
+    installed_hash: str | None = None
+    if "+dev." in installed_version:
+        try:
+            installed_hash = installed_version.split("+dev.", 1)[1]
+        except Exception:
+            installed_hash = None
+
+    expected_hash: str | None = approved_ref
+
+    # Match by prefix to allow short-vs-long
+    match_ok = False
+    if installed_hash and expected_hash:
+        if expected_hash.startswith(installed_hash) or installed_hash.startswith(expected_hash):
+            match_ok = True
+
+    if not match_ok:
+        message = (
+            "Debugger version mismatch.\n"
+            f"  Installed: {installed_version} (hash: {installed_hash or 'unknown'})\n"
+            f"  Approved:  hash: {approved_ref}\n"
+            "Use scripts/install_debugger.sh to install the approved version, or run with --skip-version-check"
+        )
+        if skip_check:
+            utils.WARN(message)
+            utils.WARN("Proceeding due to --skip-version-check")
+        else:
+            raise TTTriageError(message)
+
+
 def run_script(
     script_path: str | None = None, args: ScriptArguments | None = None, context: Context | None = None
 ) -> Any:
@@ -504,6 +578,7 @@ def run_script(
 
     # Initialize context if not provided
     if context is None:
+        _enforce_dependencies(args)
         context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
 
     # Run scripts in order
@@ -575,7 +650,8 @@ def main():
         utils.WARN("Verbosity level must be an integer. Falling back to default value.")
     utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
 
-    # Initialize tt-exalens
+    # Enforce debugger dependencies, then initialize
+    _enforce_dependencies(args)
     context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
 
     # Check if we should run specific scripts
