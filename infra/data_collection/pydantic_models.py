@@ -521,6 +521,27 @@ class TestStatus1(Enum):
     error = "error"
 
 
+class TestParams1(BaseModel):
+    """
+    A test param is a set of test paramters and their values.
+    """
+
+    param_name: str = Field(description="Test parameter name.")
+
+    # Agreed with the data producers to avoid additional nested structures here.
+    # Test parameter values can be a single value, a list, or a tuple of values (tuples serialize as lists in JSON)
+    param_value: Union[
+        int,
+        float,
+        str,
+        List[Union[int, float, str]],
+        Tuple[Union[int, float, str], ...],
+    ] = Field(description="Test parameter value.")
+
+    class Config:
+        frozen = True
+
+
 class OpTest1(BaseModel):
     """
     Contains information about ML kernel operation tests, such as test execution,
@@ -544,13 +565,9 @@ class OpTest1(BaseModel):
     op_kind: str = Field(description="Kind of operation, e.g. Eltwise.")
     op_name: str = Field(description="Name of the operation, e.g. ttnn.conv2d")
     framework_op_name: str = Field(description="Name of the operation within the framework, e.g. torch.conv2d")
-    inputs: List[TensorDesc1] = Field(description="List of input tensors.")
-    outputs: List[TensorDesc1] = Field(description="List of output tensors.")
-    op_params: Optional[dict] = Field(
-        default=None,
-        description="Parametrization criteria for the operation, based on its kind, "
-        "as key/value pairs, e.g. stride, padding, etc.",
-    )
+    inputs: Optional[List[TensorDesc1]] = Field(description="List of input tensors.")
+    outputs: Optional[List[TensorDesc1]] = Field(description="List of output tensors.")
+    op_params: Optional[List[TestParams1]] = Field(description="List of operation parameters.")
     git_sha: Optional[str] = Field(description="Git commit SHA of the op test.")
     status: Optional[TestStatus] = Field(
         description="Status of the op test, e.g. compile_failed, " "run_failed, golden_failed, success."
