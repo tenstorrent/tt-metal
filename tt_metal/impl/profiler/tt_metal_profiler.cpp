@@ -754,7 +754,11 @@ void ReadDeviceProfilerResults(
             !tt::tt_metal::MetalContext::instance().dprint_server(),
             "Debug print server is running, cannot read device profiler data");
 
-        profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        } else {
+            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        }
     }
 #endif
 }
@@ -776,7 +780,11 @@ void ProcessDeviceProfilerResults(
             return;
         }
 
-        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        } else {
+            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        }
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
             profiler.pushTracyDeviceResults();
         }
