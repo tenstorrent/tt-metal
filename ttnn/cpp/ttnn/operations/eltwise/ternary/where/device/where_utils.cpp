@@ -18,9 +18,9 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 compute_kernel = KernelName::ComputeColBcastTTT;
                 writer_kernel = KernelName::WriterColBcastTTT;  // Use binary_ng compatible writer
             } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
-                // Row broadcast: use row broadcast reader but no-broadcast compute/writer
+                // Row broadcast: use row broadcast reader and compute, but no-broadcast writer
                 reader_kernel = KernelName::ReaderRowBcastTTT;
-                compute_kernel = KernelName::ComputeNoBcastTTT;
+                compute_kernel = KernelName::ComputeRowBcastTTT;
                 writer_kernel = KernelName::WriterNoBcastTTT;
             } else {
                 reader_kernel = KernelName::ReaderNoBcastTTT;
@@ -89,6 +89,8 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ComputeNoBcastTSS: return fmt::format(compute, root, "where_sfpu_no_bcast_tss.cpp");
         case KernelName::ComputeColBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_ttt.cpp";
+        case KernelName::ComputeRowBcastTTT:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_row_bcast_ttt.cpp";
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
