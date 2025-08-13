@@ -21,29 +21,6 @@
 namespace ttnn::operations::conv {
 namespace conv2d {
 
-// to enable activation reuse feature, we need to allocate space for input needed for
-// one output image width + extra space for diff we need to add for each following output image width
-// TODO(sjovic): reuse this function
-uint32_t calculate_act_cb_size_with_reuse_op_duplicate(
-    const uint32_t act_block_h_tiles,
-    const uint32_t act_block_w_tiles,
-    const uint32_t output_image_width,
-    const uint32_t padded_in_channels,
-    const std::array<uint32_t, 2>& kernel_size,
-    const uint32_t input_tile_size) {
-    const uint32_t image_width_tiles =
-        (output_image_width + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;  // todo(sjovic): ceil
-    const uint32_t reuse_loops = std::ceil(static_cast<float>(act_block_h_tiles) / image_width_tiles);
-    const uint32_t image_width_mod_tile = output_image_width % tt::constants::TILE_HEIGHT;
-    const uint32_t image_width_tile_leftover =
-        image_width_mod_tile == 0 ? 0 : tt::constants::TILE_HEIGHT - image_width_mod_tile;
-    const uint32_t reuse_length = reuse_loops * padded_in_channels * kernel_size[1] *
-                                  (1 + image_width_tile_leftover * kernel_size[0]) * 2;  // halo outputs bfloat16
-    const uint32_t reuse_tiles = (reuse_length + input_tile_size - 1) / input_tile_size;
-
-    return image_width_tiles * act_block_w_tiles + reuse_tiles;
-}
-
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     tt::tt_metal::Program& program,
     const Tensor& a,
@@ -666,23 +643,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         const uint32_t image_width_tile_leftover =
             image_width_mod_tile == 0 ? 0 : tt::constants::TILE_HEIGHT - image_width_mod_tile;
 
-        const uint32_t act_tile_size = tt::tt_metal::detail::TileSize(act_df);
-        act_cb_num_tiles_split = calculate_act_cb_size_with_reuse_op_duplicate(
-            act_block_h_nsubblocks_split,
-            act_block_w_ntiles,
-            output_image_width,
-            conv_act_size_c,
-            {filter_h, filter_w},
-            act_tile_size);
-
+        // we rely that double buffering is turned off here
+        act_cb_num_tiles_split = access_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages;
         if (enable_split_reader) {
-            act_cb_num_tiles_split_last = calculate_act_cb_size_with_reuse_op_duplicate(
-                act_block_h_nsubblocks_split_last,
-                act_block_w_ntiles,
-                output_image_width,
-                conv_act_size_c,
-                {filter_h, filter_w},
-                act_tile_size);
+            act_cb_num_tiles_split_last = access_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).num_pages;
         }
 
         reuse_window_offset =
