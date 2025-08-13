@@ -44,9 +44,26 @@ inline void writeDramBackdoor(
     log_info(tt::LogTest, "{} -- channel={} address={}", __FUNCTION__, channel, address);
     tt_metal::detail::WriteToDeviceDRAMChannel(device, channel, address, data);
 }
+inline void writeDramBackdoor(
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    uint32_t channel,
+    uint32_t address,
+    std::vector<uint32_t>& data) {
+    log_info(tt::LogTest, "{} -- channel={} address={}", __FUNCTION__, channel, address);
+    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], channel, address, data);
+}
 inline void readDramBackdoor(
     tt::tt_metal::IDevice* device, uint32_t channel, uint32_t address, uint32_t byte_size, std::vector<uint32_t>& data) {
     log_info(tt::LogTest, "{} -- channel={} address={} byte_size={}", __FUNCTION__, channel, address, byte_size);
     tt_metal::detail::ReadFromDeviceDRAMChannel(device, channel, address, byte_size, data);
+}
+inline void readDramBackdoor(
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    uint32_t channel,
+    uint32_t address,
+    uint32_t byte_size,
+    std::vector<uint32_t>& data) {
+    log_info(tt::LogTest, "{} -- channel={} address={} byte_size={}", __FUNCTION__, channel, address, byte_size);
+    tt_metal::detail::ReadFromDeviceDRAMChannel(mesh_device->get_devices()[0], channel, address, byte_size, data);
 }
 }  // namespace tt::test::buffer::detail
