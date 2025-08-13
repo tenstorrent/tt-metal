@@ -48,10 +48,6 @@ struct JitBuiltStateConfig {
 // Device specific
 class JitBuildEnv {
     friend class JitBuildState;
-    friend class JitBuildDataMovement;
-    friend class JitBuildCompute;
-    friend class JitBuildActiveEthernet;
-    friend class JitBuildIdleEthernet;
 
 public:
     JitBuildEnv();
