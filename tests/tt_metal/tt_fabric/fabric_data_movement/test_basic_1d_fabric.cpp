@@ -1077,6 +1077,11 @@ void RunTest2DMCastConnAPI(
     uint32_t south_branch_west_hops,
     uint32_t direct_right_hops,
     uint32_t direct_left_hops) {
+
+    if(north_hops > 0 && north_branch_east_hops == 0 && north_branch_west_hops == 0 || south_hops > 0 && south_branch_east_hops == 0 && south_branch_west_hops == 0){
+        GTEST_SKIP() << "Need branch hops in atleast one direction from trunk for this test.";
+    }
+    
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     std::vector<tt_metal::Program> receiver_programs;
