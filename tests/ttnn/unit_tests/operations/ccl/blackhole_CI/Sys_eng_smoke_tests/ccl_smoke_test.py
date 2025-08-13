@@ -14,8 +14,8 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
-        (4, [1, 1, 256, 64], 3, ttnn.TILE_LAYOUT),
-        (2, [1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
+        (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
+        (2, [1, 1, 256, 256], 3, ttnn.TILE_LAYOUT),
     ],
     ids=["4_device_test", "2_device_test"],
 )
@@ -41,10 +41,23 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
         ),
         (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
     ],
-    ids=["dram_only", "l1_only"],
+    ids=[
+        "DRAM_ONLY",
+        "L1_TO_DRAM",
+        "DRAM_TO_L1",
+        "L1_ONLY",
+    ],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
@@ -57,19 +70,27 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear", "fabric_ring"],
+    ids=["fabric_ring"],
+)
+@pytest.mark.parametrize(
+    "cluster_axis",
+    [
+        0,
+        1,
+    ],
+    ids=["row", "column"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
-def test_all_gather_nightly(
+def ccl_smoke_test(
     p150_mesh_device,
     num_devices,
     ag_output_shape,
+    cluster_axis,
     dim,
     num_links,
     ag_input_dtype,
@@ -83,12 +104,14 @@ def test_all_gather_nightly(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    if (p150_mesh_device.shape[0] != num_devices) and (all_gather_topology == ttnn.Topology.Ring):
+    if p150_mesh_device.shape[cluster_axis] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform in this axis")
+    if (p150_mesh_device.shape[cluster_axis] != num_devices) and (all_gather_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires the entire row or column so it loops around")
-    if ttnn.get_num_devices() < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-    submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    cluster_axis = 0
+    if cluster_axis == 0:
+        submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    else:
+        submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
         num_devices,
