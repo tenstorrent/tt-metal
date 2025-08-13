@@ -30,8 +30,8 @@ jobs:
       matrix:
         test-info: [
           {name: "N300 WH B0 not yet ported", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", civ2-compatible: false, timeout: 30, job-set1: false},
-          {name: "N300 WH B0 Set 1", arch: wormhole_b0, runs-on: ["tt-beta-ubuntu-2204-n300-large-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: true},
-          {name: "N300 WH B0 Set 2", arch: wormhole_b0, runs-on: ["tt-beta-ubuntu-2204-n300-large-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: false},
+          {name: "N300 WH B0 Set 1", arch: wormhole_b0, runs-on: ["tt-ubuntu-2204-n300-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: true},
+          {name: "N300 WH B0 Set 2", arch: wormhole_b0, runs-on: ["tt-ubuntu-2204-n300-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: false},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     runs-on: ${{ matrix.test-info.runs-on }}

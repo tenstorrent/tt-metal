@@ -169,7 +169,7 @@ jobs:
     runs-on: >-
       ${{
         matrix.test-group.civ2-compatible == true
-        && format('tt-beta-ubuntu-2204-{0}-large-stable', matrix.test-group.runner-label)
+        && format('tt-ubuntu-2204-{0}-stable', matrix.test-group.runner-label)
         || (matrix.test-group.runner-label == 'N300' && matrix.test-group.performance)
           && fromJSON(format('["{0}", "{1}", "bare-metal", "pipeline-perf"]',
               matrix.test-group.runner-label,

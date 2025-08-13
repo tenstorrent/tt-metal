@@ -162,7 +162,7 @@ jobs:
         card: [N150, N300]
         model: [yolov8s, vadv2]
     name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.model }}
-    runs-on: ${{ format('tt-beta-ubuntu-2204-{0}-large-stable', matrix.card) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', matrix.card) }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:

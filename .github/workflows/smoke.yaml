@@ -24,7 +24,7 @@ jobs:
   smoke:
     runs-on: >-
       ${{
-        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b' || contains(inputs.runner, 'viommu')) && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner))
+        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b' || contains(inputs.runner, 'viommu')) && format('tt-ubuntu-2204-{0}-stable', inputs.runner))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner))
       }}
     container:
