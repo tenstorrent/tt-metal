@@ -8,6 +8,8 @@ from loguru import logger
 from models.demos.t3000.llama2_70b.demo.demo import construct_arg, main
 from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+
 
 @pytest.mark.timeout(240000)
 @pytest.mark.parametrize(
@@ -85,6 +87,9 @@ def test_LlamaModel_demo(
     max_batch_size,
     max_context_len,
 ):
+    if implementation == "tt" and n_devices > 1 and decode_only is True:
+        pytest.skip(LEGACY_SKIP)
+
     logger.info("Running LlamaModel demo")
     ## Get model config
 

@@ -24,7 +24,10 @@ from models.utility_functions import (
     comp_allclose,
 )
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
+
+@pytest.mark.skip(reason=LEGACY_SKIP)
 @pytest.mark.timeout(600)
 def test_grok_moe_inference(t3k_mesh_device, reset_seeds):
     pcc = 0.87  # real weights = 0.99
