@@ -13,6 +13,8 @@ COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_depende
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 #############################################################
 
 FROM base AS ci-build
