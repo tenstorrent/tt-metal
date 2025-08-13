@@ -32,16 +32,15 @@ using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
 // RAII guard for managing mesh binding environment variables
 class ScopedMeshBinding {
 public:
-    ScopedMeshBinding(const char* mesh_id, const char* host_rank)
-        : mesh_id_guard_("TT_MESH_ID", mesh_id),
-          host_rank_guard_("TT_HOST_RANK", host_rank) {}
+    ScopedMeshBinding(const char* mesh_id, const char* host_rank) :
+        mesh_id_guard_("TT_MESH_ID", mesh_id), host_rank_guard_("TT_MESH_HOST_RANK", host_rank) {}
 
     // Convenience constructor for numeric values
-    ScopedMeshBinding(uint32_t mesh_id, uint32_t host_rank)
-        : mesh_id_str_(std::to_string(mesh_id)),
-          host_rank_str_(std::to_string(host_rank)),
-          mesh_id_guard_("TT_MESH_ID", mesh_id_str_.c_str()),
-          host_rank_guard_("TT_HOST_RANK", host_rank_str_.c_str()) {}
+    ScopedMeshBinding(uint32_t mesh_id, uint32_t host_rank) :
+        mesh_id_str_(std::to_string(mesh_id)),
+        host_rank_str_(std::to_string(host_rank)),
+        mesh_id_guard_("TT_MESH_ID", mesh_id_str_.c_str()),
+        host_rank_guard_("TT_MESH_HOST_RANK", host_rank_str_.c_str()) {}
 
 private:
     std::string mesh_id_str_;
@@ -146,9 +145,9 @@ TEST_F(ControlPlaneLocalMeshBinding, PartialEnvironmentVariables) {
             std::runtime_error);
     }
 
-    // Test with only TT_HOST_RANK set
+    // Test with only TT_MESH_HOST_RANK set
     {
-        ScopedEnvVar host_only("TT_HOST_RANK", "0");
+        ScopedEnvVar host_only("TT_MESH_HOST_RANK", "0");
         EXPECT_THROW(
             {
                 auto chip_mapping = get_dual_host_chip_mapping();

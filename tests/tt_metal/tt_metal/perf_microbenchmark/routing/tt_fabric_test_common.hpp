@@ -1370,7 +1370,7 @@ private:
 
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
         const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
-        const auto host_rank_str = std::string(std::getenv("TT_HOST_RANK"));
+        const auto host_rank_str = std::string(std::getenv("TT_MESH_HOST_RANK"));
 
         const auto local_mesh_id = MeshId{std::stoi(mesh_id_str)};
         local_host_rank_ = HostRankId{std::stoi(host_rank_str)};

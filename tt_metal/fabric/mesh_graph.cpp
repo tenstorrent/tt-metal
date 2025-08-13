@@ -4,6 +4,7 @@
 
 #include "mesh_graph.hpp"
 
+#include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <yaml-cpp/yaml.h>
 #include <array>
@@ -266,42 +267,18 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         std::iota(chip_ids.begin(), chip_ids.end(), 0);
         this->mesh_to_chip_ids_.emplace(*mesh_id, MeshContainer<chip_id_t>(mesh_shape, chip_ids));
 
-        // Fill in host ranks for Mesh
-        TT_FATAL(
-            mesh["host_ranks"].IsSequence() and mesh["host_ranks"].size() == mesh_board_ns_size,
-            "MeshGraph: Expecting host_ranks to define a 2D array that matches host topology NS size {}",
-            mesh_board_ns_size);
-
+        // Assign ranks in row-major order based on host topology.
         std::vector<HostRankId> mesh_host_ranks_values;
-        mesh_host_ranks_values.reserve(mesh_board_ns_size * mesh_board_ew_size);
-
-        // Track the start and end coordinates of each host rank
-        std::unordered_map<HostRankId, std::pair<MeshCoordinate, MeshCoordinate>> host_rank_submesh_start_end_coords;
-        for (std::uint32_t i = 0; i < mesh_board_ns_size; i++) {
-            TT_FATAL(
-                mesh["host_ranks"][i].IsSequence() and mesh["host_ranks"][i].size() == mesh_board_ew_size,
-                "MeshGraph: Expecting host_ranks to define a 2D array that matches host topology EW size {}",
-                mesh_board_ew_size);
-            for (std::uint32_t j = 0; j < mesh_board_ew_size; j++) {
-                HostRankId host_rank{mesh["host_ranks"][i][j].as<std::uint32_t>()};
-                if (host_rank_submesh_start_end_coords.find(host_rank) == host_rank_submesh_start_end_coords.end()) {
-                    host_rank_submesh_start_end_coords.insert(
-                        {host_rank, std::make_pair(MeshCoordinate(i, j), MeshCoordinate(i, j))});
-                } else {
-                    host_rank_submesh_start_end_coords.at(host_rank).second = MeshCoordinate(i, j);
-                }
-                mesh_host_ranks_values.push_back(host_rank);
-            }
-        }
-        // Fill in all host rank coordinate ranges
-        for (const auto& [host_rank, coords] : host_rank_submesh_start_end_coords) {
-            this->mesh_host_rank_coord_ranges_.emplace(
-                std::make_pair(*mesh_id, host_rank),
+        uint32_t next_rank = 0;
+        for (const auto& host_coord : MeshCoordinateRange(MeshShape(mesh_board_ns_size, mesh_board_ew_size))) {
+            mesh_host_ranks_values.push_back(HostRankId{next_rank++});
+            mesh_host_rank_coord_ranges_.emplace(
+                std::make_pair(*mesh_id, mesh_host_ranks_values.back()),
                 MeshCoordinateRange(
-                    MeshCoordinate(coords.first[0] * board_ns_size, coords.first[1] * board_ew_size),
-                    MeshCoordinate(
-                        (coords.second[0] + 1) * board_ns_size - 1, (coords.second[1] + 1) * board_ew_size - 1)));
+                    MeshCoordinate(host_coord[0] * board_ns_size, host_coord[1] * board_ew_size),
+                    MeshCoordinate((host_coord[0] + 1) * board_ns_size - 1, (host_coord[1] + 1) * board_ew_size - 1)));
         }
+
         this->mesh_host_ranks_[*mesh_id] =
             MeshContainer<HostRankId>(MeshShape(mesh_board_ns_size, mesh_board_ew_size), mesh_host_ranks_values);
 
@@ -429,9 +406,10 @@ void MeshGraph::print_connectivity() const {
 }
 
 void MeshGraph::validate_mesh_id(MeshId mesh_id) const {
-    if (this->mesh_to_chip_ids_.find(mesh_id) == this->mesh_to_chip_ids_.end()) {
-        TT_THROW("Invalid mesh_id {} in get_mesh_shape", mesh_id);
-    }
+    TT_FATAL(
+        this->mesh_to_chip_ids_.find(mesh_id) != this->mesh_to_chip_ids_.end(),
+        "MeshGraph: mesh_id {} not found",
+        mesh_id);
 }
 
 MeshShape MeshGraph::get_mesh_shape(MeshId mesh_id, std::optional<HostRankId> host_rank) const {
@@ -448,7 +426,13 @@ MeshCoordinateRange MeshGraph::get_coord_range(MeshId mesh_id, std::optional<Hos
     this->validate_mesh_id(mesh_id);
 
     if (host_rank.has_value()) {
-        return this->mesh_host_rank_coord_ranges_.at(std::make_pair(mesh_id, *host_rank));
+        auto it = this->mesh_host_rank_coord_ranges_.find(std::make_pair(mesh_id, *host_rank));
+        TT_FATAL(
+            it != this->mesh_host_rank_coord_ranges_.end(),
+            "MeshGraph: host_rank {} not found for mesh {}",
+            *host_rank,
+            *mesh_id);
+        return it->second;
     }
     auto mesh_shape = this->mesh_to_chip_ids_.at(mesh_id).shape();
     return MeshCoordinateRange(mesh_shape);
