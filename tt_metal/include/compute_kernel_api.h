@@ -106,7 +106,7 @@ ALWI void sigmoid_tile_init() {
 // clang-format on
 template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx>(idst, vec_mode)));
+    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
 }
 
 /**
@@ -130,7 +130,7 @@ ALWI void log_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void log_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_log<APPROX>(idst))); }
+ALWI void log_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_log<APPROX, DST_ACCUM_MODE>(idst))); }
 
 /**
  * Please refer to documentation for any_init.
@@ -155,7 +155,7 @@ ALWI void log_with_base_tile_init() {
  */
 // clang-format on
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX>(idst, base_scale)));
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, DST_ACCUM_MODE>(idst, base_scale)));
 }
 
 // TODO: Move to trigonometry.h
@@ -182,7 +182,7 @@ ALWI void tanh_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void tanh_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tanh<APPROX>(idst))); }
+ALWI void tanh_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tanh<APPROX, DST_ACCUM_MODE>(idst))); }
 
 /**
  * Please refer to documentation for any_init.
@@ -440,7 +440,7 @@ ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_heaviside_in
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void expm1_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_expm1<true>(idst))); }
+ALWI void expm1_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_expm1<true, 8, DST_ACCUM_MODE>(idst))); }
 
 /**
  * Please refer to documentation for any_init.
@@ -451,7 +451,7 @@ ALWI void expm1_tile_init() { MATH((llk_math_eltwise_unary_sfpu_expm1_init<true>
 // Function SILU (same as Swish)
 // use activation Silu[x] = x*Sigmoid[x]
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
-ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX>(idst))); }
+ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, 8, DST_ACCUM_MODE>(idst))); }
 
 ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>())); }
 
