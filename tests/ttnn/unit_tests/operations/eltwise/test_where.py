@@ -87,13 +87,15 @@ def test_ttnn_where_bcast(c_shape, t_shape, f_shape, condition, device):
     C = torch.ones(c_shape, dtype=torch.float32) * condition
     T = torch.randn(t_shape, dtype=torch.float32)
     F = torch.ones(f_shape, dtype=torch.float32) * 10
-    golden = torch.where(T.bool(), T, T)
+    golden = torch.where(C.bool(), T, T)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
+    print(result)
+    print(golden)
 
     assert torch_equal_nan(result, golden)
 
