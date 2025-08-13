@@ -20,9 +20,8 @@ struct type_caster<bfloat16> {
             value = bfloat16(src.cast<float>());
             return true;
         } else if (isinstance<pybind11::int_>(src)) {
-            // Handle Python int (can be int32, uint32, int16, etc.)
-            int64_t int_value = src.cast<int64_t>();
-            value = bfloat16(static_cast<float>(int_value));
+            int32_t int_value = src.cast<int32_t>();
+            value = bfloat16(int_value);
             return true;
         }
 
