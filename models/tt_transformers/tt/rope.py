@@ -99,6 +99,8 @@ class ScaledRotaryEmbedding(RotaryEmbedding, ABC):
         freqs = torch.outer(t, freqs).float()
         cos = torch.cos(freqs)
         sin = torch.sin(freqs)
+        self.register_buffer("freqs_cis", torch.complex(cos, sin).to(dtype), persistent=False)
+
         cos, sin = gather_cos_sin(torch.arange(seq_len), cos, sin)
 
         self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
@@ -269,6 +271,15 @@ def rotary_embedding_factory(
             base=base,
             **rope_scaling.model_dump(exclude_none=True),
         )
+
+
+def compute_freqs_cis(
+    dhead: int, end: int, theta: float, rope_scaling: Optional[RopeScaling]
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    rotary_embedding = rotary_embedding_factory(
+        dim=dhead, max_position_embeddings=end // 2, base=theta, rope_scaling=rope_scaling
+    )
+    return rotary_embedding.freqs_cis
 
 
 def compute_gather_cos_sin(

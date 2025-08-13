@@ -10,10 +10,10 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
+from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.rope import RotarySetup, compute_freqs_cis
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -91,6 +91,9 @@ def test_decoder_inference(
     )
     transformation_mats_global = rope_global_setup.get_both_trans_mats()
 
+    rope_local_setup = None
+    transformation_mats_local = None
+
     if model_args.rope_theta_local:
         rope_local_setup = RotarySetup(
             mesh_device,
@@ -147,14 +150,12 @@ def test_decoder_inference(
 
     seqlen = 1
 
-    cos, sin = precompute_freqs(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.rope_scaling.factor if model_args.rope_scaling else None,
-        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+    freqs_cis = compute_freqs_cis(
+        dhead=model_args.head_dim,
+        end=model_args.max_seq_len * 2,
+        theta=model_args.rope_theta,
+        rope_scaling=model_args.rope_scaling,
     )
-    freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])

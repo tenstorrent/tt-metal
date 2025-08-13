@@ -2243,7 +2243,8 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            rotary_emb_local = model.model.rotary_emb_local if hasattr(model.model, "rotary_emb_local") else None
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb, rotary_emb_local)
             return wrapper
 
     def reference_attention(self):
@@ -2254,7 +2255,10 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
+            use_position_embeddings = self.from_hf_url or layer.__class__.__name__ in (
+                "Qwen3Attention",
+                "MistralAttention",
+            )
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2408,34 +2412,43 @@ class HfAttentionWrapper:
 
 
 class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb):
+    def __init__(self, decoder, head_dim, rotary_emb_global, rotary_emb_local=None):
         from transformers import DynamicCache
 
         self.decoder = decoder
         self.head_dim = head_dim
-        self.rotary_emb = rotary_emb
+        self.rotary_emb_global = rotary_emb_global
+        self.rotary_emb_local = rotary_emb_local
         self.past_key_values = DynamicCache()
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
         position_embeddings_global = self.rotary_emb_global(x, position_ids)
-        position_embeddings_local = (
-            self.rotary_emb_local(x, position_ids) if self.rotary_emb_local is not None else None
-        )
 
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
 
-        result = self.decoder.forward(
-            x,
-            position_embeddings_global=position_embeddings_global,
-            position_embeddings_local=position_embeddings_local,
-            past_key_value=self.past_key_values,
-            use_cache=True,
-            position_ids=position_ids,
-            attention_mask=mask,
-        )
+        if self.rotary_emb_local is not None:
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
+            result = self.decoder.forward(
+                x,
+                position_embeddings_global=position_embeddings_global,
+                position_embeddings_local=position_embeddings_local,
+                past_key_value=self.past_key_values,
+                use_cache=True,
+                position_ids=position_ids,
+                attention_mask=mask,
+            )
+        else:
+            result = self.decoder.forward(
+                x,
+                position_embeddings=position_embeddings_global,
+                past_key_value=self.past_key_values,
+                use_cache=True,
+                position_ids=position_ids,
+                attention_mask=mask,
+            )
         output = result[0]
         return output
 

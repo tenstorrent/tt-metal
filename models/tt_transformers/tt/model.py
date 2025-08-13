@@ -69,8 +69,8 @@ class Transformer(LightweightModule):
         )
 
         self.trans_mats_global_dict = self.rope_setup.get_both_trans_mats()
-        self.trans_mats_local_dict = None
 
+        self.trans_mats_local_dict = None
         if args.rope_theta_local:
             self.rope_local_setup = RotarySetup(
                 mesh_device,
@@ -78,10 +78,9 @@ class Transformer(LightweightModule):
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
+                None,  # No scaling for local RoPE
             )
-            self.trans_mats_local_dict = (
-                self.rope_local_setup.get_both_trans_mats() if self.rope_local_setup is not None else None
-            )
+            self.trans_mats_local_dict = self.rope_local_setup.get_both_trans_mats()
 
         self.layers = [
             TransformerBlock(
