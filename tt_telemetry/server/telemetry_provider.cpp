@@ -1,7 +1,16 @@
-//TODO: wait until subscribers have all finished before fetching a new buffer (just keep using same buffer)
-//TODO: get rid of is_absolute
-//TODO: hostname may contain _. We need to transmit path a different way (vector to web client?) It is unsafe to rely on _ delimiter!
-
+/*
+ * TODO:
+ * -----
+ * - Wait until subscribers have all finished before fetching a new buffer. Continue to use
+ *   existing buffer until ready to hand off.
+ * - Get rid of is_absolute. Contract should simply be that if names have been transmitted,
+ *   all data represents new metrics. Otherwise, the snapshot contains delta metrics (of existing
+ *   metrics).
+ * - Hostname may contain "_" character, so using this as a path component delimiter is unsafe.
+ *   We should instead use either a different separator (like "/") or encode paths as vectors.
+ *   For future exporters that need to export a single string, these can be formed when exporting.
+ */
+ 
 #include <future>
 #include <queue>
 #include <unistd.h>
