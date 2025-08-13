@@ -3,6 +3,9 @@ name: "[internal] Blackhole 20-cores tests impl"
 on:
   workflow_call:
     inputs:
+      arch:
+        required: true
+        type: string
       build-artifact-name:
         description: 'Build artifact name'
         required: true
@@ -28,7 +31,6 @@ jobs:
       matrix:
         test-group:
           - name: "test_sharding_on_bh_20_cores_test1"
-            arch: blackhole
             cmd:  tests/ttnn/unit_tests/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
     name: ${{ matrix.test-group.name }}
     runs-on: ["in-service", "${{ inputs.runner-label }}"]
@@ -54,7 +56,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run ${{ matrix.test-group.name }}
         env:
-          ARCH_NAME: ${{ matrix.test-group.arch }}
+          ARCH_NAME: ${{ inputs.arch }}
           BH_ARCH_YAML_TODEPRECATE: blackhole_20_arch.yaml
         run: |
           pytest ${{ matrix.test-group.cmd }}
