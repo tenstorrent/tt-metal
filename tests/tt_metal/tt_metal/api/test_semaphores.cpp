@@ -144,7 +144,6 @@ void try_creating_more_than_max_num_semaphores(
     auto& program = workload.get_programs().at(device_range);
     ASSERT_TRUE(program.num_semaphores() == 0);
     create_and_read_max_num_semaphores(mesh_device, workload, core_range);
-    std::cout << "created max num semaphores" << std::endl;
     constexpr static uint32_t val = 5;
     ASSERT_ANY_THROW(tt_metal::CreateSemaphore(program, core_range, val));
 }
