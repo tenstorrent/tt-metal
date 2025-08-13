@@ -28,9 +28,9 @@ static constexpr uint32_t CHURN_LOOP_COUNT = CHURN_TARGET / cb_step_size;
 // Values we write to the churn pages.
 static constexpr uint32_t CHURN_LOOP_VALUE = 0xFFFF;
 // Values we write to the areas that could be overwritten by incorrect reserve calls.
-static constexpr uint32_t WRAP_WRITE_VALUE = 0xFF00;
+static constexpr uint32_t WRAP_WRITE_VALUE = 0xAAAA;
 // Values used to overwrite the buffer in the last few pages.
-static constexpr uint32_t WRITE_OVER_VALUE = 0xC0FE;
+static constexpr uint32_t WRITE_OVER_VALUE = 0xBBBB;
 
 void fill_page(uint32_t value, std::size_t page_offset = 0) {
     auto ptr = (get_local_cb_interface(cb_id).fifo_wr_ptr + page_offset) << 4;
