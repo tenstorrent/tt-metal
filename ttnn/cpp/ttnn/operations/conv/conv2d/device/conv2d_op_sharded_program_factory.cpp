@@ -131,16 +131,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     }
 
     // Activation reuse validation
-    TT_FATAL(
-        !(enable_activation_reuse && enable_act_double_buffer),
-        "Activation data reuse and double buffer cannot be enabled together");
-    TT_FATAL(!(enable_activation_reuse && block_sharded), "Activation data reuse is not supported for block sharded");
-    TT_FATAL(
-        !(enable_activation_reuse && (dilation_h != 1 || dilation_w != 1)),
-        "Activation data reuse is not supported for dilation > 1");
-    TT_FATAL(
-        !(enable_activation_reuse && (stride_h != 1 || stride_w != 1)),
-        "Activation data reuse is not supported for stride > 1");
+    if (enable_activation_reuse) {
+        TT_FATAL(!block_sharded, "Activation data reuse is not supported for block sharded");
+        TT_FATAL(dilation_h == 1 && dilation_w == 1, "Activation data reuse is not supported for dilation > 1");
+        TT_FATAL(stride_h == 1 && stride_w == 1, "Activation data reuse is not supported for stride > 1");
+    }
 
     const bool is_conv_1d_depthwise_conv =
         is_1d_deptwise_conv(groups, ashape[3], output_channels, filter_w, ashape[2], has_bias);

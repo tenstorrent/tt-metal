@@ -4300,7 +4300,7 @@ def test_conv2d_activation_reuse(
         enable_split_reader=enable_split_reader,
         input_layout= input_layout,
         activation="relu",
-        enable_act_double_buffer=False,
+        enable_act_double_buffer=True,  # will be disabled if activation reuse is enabled
         input_dtype = input_dtype,
         enable_activation_reuse=enable_activation_reuse
     )
@@ -4405,7 +4405,7 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
         groups=groups,
         in_place=in_place,
         deallocate_activation=True,
-        enable_act_double_buffer=False,
+        enable_act_double_buffer=True, # will be disabled if activation reuse is enabled
         enable_weights_double_buffer=True,
         activation="relu",
         input_dtype=ttnn.bfloat16,
