@@ -123,7 +123,7 @@ static Tensor pool2d_invoke(
                                                                                       : 8U;
         }
 
-        ttnn::Shape input_tensor_shape = input_tensor.logical_shape();
+        ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
         uint32_t input_tensor_width_snapped_to_channels_alignment =
             tt::round_up(input_tensor_shape[3], num_cores_c * input_channels_alignment);
 
