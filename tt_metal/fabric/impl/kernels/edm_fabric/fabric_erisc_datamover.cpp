@@ -716,7 +716,7 @@ FORCE_INLINE bool check_space_in_downstream_edm(
     if constexpr (my_direction == downstream_direction || drop_packet<downstream_direction>()) {
         return true;
     } else {
-        size_t idx = get_downstream_edm_interface_index<rx_channel_id, downstream_direction>();
+        constexpr size_t idx = get_downstream_edm_interface_index<rx_channel_id, downstream_direction>();
         return downstream_edm_interface[idx].edm_has_space_for_packet();
     }
 }
