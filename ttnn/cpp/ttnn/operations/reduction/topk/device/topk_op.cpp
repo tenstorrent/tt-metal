@@ -5,11 +5,73 @@
 #include "topk_op.hpp"
 #include "topk_program_factory.hpp"
 #include "topk_constants.hpp"
-#include "topk_utils.hpp"
-#include "tt-metalium/allocator.hpp"
-#include "tt-metalium/assert.hpp"
 
 using namespace tt::tt_metal;
+
+namespace topk_utils {
+
+static inline uint32_t largest_power_of_two(std::uint32_t x) { return x == 0 ? 0 : (1 << (31 - __builtin_clz(x))); }
+
+static inline bool verify_multi_core_cost(
+    const std::vector<Tensor>& input_tensors,
+    uint32_t width,
+    uint32_t min_dim,
+    uint32_t max_dim,
+    uint32_t k,
+    const CoreRangeSet& core_range_set) {
+    auto device = input_tensors.at(0).device();
+    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
+    tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
+
+    uint32_t value_tile_size = tile_size(value_cb_data_format);
+    uint32_t index_tile_size = tile_size(index_cb_data_format);
+
+    const auto core_range = core_range_set.ranges().at(0);
+    const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
+    uint32_t start_split_size = width / largest_power_of_two(max_cores);
+    for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
+        uint32_t rem = width % split_size;
+        uint32_t num_cores = width / split_size + (rem > 0);
+        uint32_t memory_cost_gather =
+            2 * num_cores * (value_tile_size + index_tile_size);  // gathering one index and one value tile from each
+                                                                  // local core, allocating two CBs for each
+        uint32_t memory_cost_local =
+            (split_size / tt::constants::TILE_WIDTH) *
+            (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
+                                                  // as a matching set of indices, is processed by a core
+        if (num_cores <= max_cores &&
+            (memory_cost_gather + (memory_cost_local * num_cores)) < (device->l1_size_per_core() * num_cores) &&
+            num_cores > 1 && split_size >= min_dim) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tensors, uint32_t k, bool uint16_output) {
+    uint32_t num_cb_unit = 2;
+    uint32_t cb_in_units = 2 * num_cb_unit;
+    uint32_t Ktiles = tt::div_up(k, tt::constants::TILE_WIDTH);
+    uint32_t input_cb_tile_count = cb_in_units;
+    uint32_t transposed_cb_tile_count = 4;
+    uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // intermediate output
+    uint32_t output_cb_tile_count = Ktiles;
+
+    auto device = input_tensors.at(0).device();
+    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
+    tt::DataFormat index_cb_data_format = uint16_output ? tt::DataFormat::UInt16 : tt::DataFormat::UInt32;
+
+    uint32_t value_tile_size = tile_size(value_cb_data_format);
+    uint32_t index_tile_size = tile_size(index_cb_data_format);
+
+    uint32_t memory_cost_local =
+        (input_cb_tile_count + transposed_cb_tile_count + result_prep_cb_tile_count + output_cb_tile_count) *
+        (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
+                                              // as a matching set of indices, is processed by a core
+    return memory_cost_local < device->l1_size_per_core();
+}
+
+}  // namespace topk_utils
 
 namespace ttnn::operations::reduction {
 
@@ -71,26 +133,13 @@ void TopK::validate_with_output_tensors(
 
     bool uint16_output = (input_shape[this->dim] <= std::numeric_limits<uint16_t>::max());
     if (input_shape[dim] >= topk::constants::multi_core_min_width) {  // multicore implementation
-        auto device = input_tensors.at(0).device();
-        tt::DataFormat value_cb_data_format =
-            tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
-        tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
-
-        uint32_t value_tile_size = tile_size(value_cb_data_format);
-        uint32_t index_tile_size = tile_size(index_cb_data_format);
-
-        const auto core_range = this->sub_core_grids.ranges().at(0);
-
         can_run = topk_utils::verify_multi_core_cost(
             input_tensors,
             input_shape[this->dim],
             topk::constants::min_dim_per_core,
             input_shape[this->dim] / 2,
             this->k,
-            core_range,
-            device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).largest_free_block_bytes,
-            value_tile_size,
-            index_tile_size);
+            this->sub_core_grids);
 
         TT_FATAL(
             this->sub_core_grids.ranges().size() == 1,
@@ -157,25 +206,13 @@ operation::ProgramWithCallbacks TopK::create_program(
                                              // supported, we default to single core
     multicore_supported &= (this->k <= 64);  // multicore implementation only supports k <= 64
     if (multicore_supported) {               // don't bother with longer check if already false
-        auto device = input_tensors.at(0).device();
-        tt::DataFormat value_cb_data_format =
-            tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
-        tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
-
-        uint32_t value_tile_size = tile_size(value_cb_data_format);
-        uint32_t index_tile_size = tile_size(index_cb_data_format);
-
-        const auto core_range = this->sub_core_grids.ranges().at(0);
         multicore_supported &= topk_utils::verify_multi_core_cost(
             input_tensors,
             input_shape[this->dim],
             topk::constants::min_dim_per_core,
             input_shape[this->dim] / 2,
             this->k,
-            core_range,
-            device->l1_size_per_core(),
-            value_tile_size,
-            index_tile_size);
+            this->sub_core_grids);
     }
 
     if (multicore_supported) {
