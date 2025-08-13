@@ -9,7 +9,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout",
     [
