@@ -7,8 +7,8 @@ from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeach
 from loguru import logger
 
 
-from models.common.utility_functions import (
-    torch_to_tt_tensor_rm,
+from models.utility_functions import (
+    torch_to_tt_tensor_tile,
     tt_to_torch_tensor,
     comp_pcc,
     comp_allclose_and_pcc,
@@ -34,7 +34,7 @@ def test_deit_for_image_classification_with_teacher_inference(device, hf_cat_ima
 
         torch_output = torch_model(**inputs).logits
 
-        tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
+        tt_inputs = torch_to_tt_tensor_tile(inputs["pixel_values"], device, put_on_device=False)
         tt_model = TtDeiTForImageClassificationWithTeacher(
             config, device=device, state_dict=state_dict, base_address=""
         )

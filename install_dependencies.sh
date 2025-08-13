@@ -239,6 +239,7 @@ init_packages() {
                 "libstdc++"
                 "tbb-devel"
                 "capstone-devel"
+                "opencv-devel"
                 "wget"
                 "curl"
                 "vim-common" # Includes xxd
