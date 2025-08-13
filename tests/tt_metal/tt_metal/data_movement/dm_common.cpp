@@ -57,6 +57,15 @@ DramAddressInfo get_dram_address_and_size(const IDevice* device) {
     return {dram_base_address, dram_size};
 }
 
+DramAddressInfo get_dram_address_and_size(const std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    // Obtaining DRAM address and size //
+
+    auto dram_base_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t dram_size = tt::tt_metal::MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::UNRESERVED);
+
+    return {dram_base_address, dram_size};
+}
+
 std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(const tt::ARCH arch, const IDevice* device) {
     auto [_, max_transmittable_bytes] = get_l1_address_and_size(device);
     uint32_t bytes_per_page = obtain_page_size_bytes(arch);
