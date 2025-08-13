@@ -118,8 +118,6 @@ void py_bind_llama_all_gather_matmul_async(pybind11::module& module) {
         Example:
             >>> input_tensor0 = torch.randn([1, 1, 32, 896], dtype=torch.bfloat8)
             >>> input_tensor1 = torch.randn([1, 1, 3584, 2048], dtype=torch.bfloat8)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
             >>> ttnn_tensor = ttnn.from_torch(
                             full_tensor,
                             dtype=input_dtype,
