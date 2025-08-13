@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -37,11 +38,18 @@ struct CoreBidirectionalConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirectionalConfig& test_config) {
     /* ================ SETUP ================ */
 
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Buffer Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
@@ -49,7 +57,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
     // Obtain L1 Address for Storing Data
 
     L1AddressInfo master_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.master_core_coord);
+        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.master_core_coord);
 
     // Check if the L1 size is sufficient for the test configuration
     if (master_l1_info.size / 2 < bytes_per_transaction) {
@@ -62,7 +70,8 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
     uint32_t l1_base_read_address = l1_base_write_address + master_l1_info.size / 2;
 
     // Physical Core Coordinates
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    CoreCoord physical_subordinate_core =
+        mesh_device->worker_core_from_logical_core(test_config.subordinate_core_coord);
     uint32_t packed_subordinate_core_coordinates =
         physical_subordinate_core.x << 16 | (physical_subordinate_core.y & 0xFFFF);
 
@@ -86,7 +95,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
             (uint32_t)test_config.write_vc};
 
         CreateKernel(
-            program,
+            program_,
             sender_and_requestor_kernel_path,
             test_config.master_core_coord,
             DataMovementConfig{
@@ -109,7 +118,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
             (uint32_t)test_config.write_vc};
 
         CreateKernel(
-            program,
+            program_,
             sender_kernel_path,
             test_config.master_core_coord,
             DataMovementConfig{
@@ -130,7 +139,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
             (uint32_t)packed_subordinate_core_coordinates};
 
         CreateKernel(
-            program,
+            program_,
             requestor_kernel_path,
             test_config.master_core_coord,
             DataMovementConfig{
@@ -141,7 +150,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     /* ================ RUNNING THE PROGRAM ================ */
 
@@ -158,7 +167,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // LAUNCH THE PROGRAM
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     // Record Output from Subordinate L1
     std::vector<uint32_t> packed_sender_output;
@@ -191,7 +200,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
 
 void directed_ideal_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    std::vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
@@ -227,7 +236,7 @@ void directed_ideal_test(
 
 void same_vc_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    std::vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
@@ -241,7 +250,7 @@ void same_vc_test(
 
 void packet_sizes_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    std::vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
@@ -287,7 +296,7 @@ void packet_sizes_test(
 
 // ========== Directed Ideal Tests ==========
 
-TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealSameKernel) {
+TEST_F(MeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealSameKernel) {
     // Test ID (Arbitrary)
     uint32_t test_id = 140;
     bool same_kernel = true;
@@ -299,7 +308,7 @@ TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealSameKernel
         arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentKernels) {
+TEST_F(MeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentKernels) {
     // Test ID (Arbitrary)
     uint32_t test_id = 141;
     bool same_kernel = false;
@@ -313,7 +322,7 @@ TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentK
 
 // ========== Same VC Tests ==========
 
-TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKernel) {
+TEST_F(MeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKernel) {
     // Test ID (Arbitrary)
     uint32_t test_id = 142;
     bool same_kernel = true;
@@ -324,7 +333,7 @@ TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKernel) {
         arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord, same_kernel);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels) {
+TEST_F(MeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels) {
     // Test ID (Arbitrary)
     uint32_t test_id = 143;
     bool same_kernel = false;
@@ -337,7 +346,7 @@ TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels)
 
 // ========== Write VC Sweep Tests ==========
 
-TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel) {
+TEST_F(MeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel) {
     // Test ID base
     uint32_t test_id_base = 146;
     bool same_kernel = true;
@@ -353,7 +362,7 @@ TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel)
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
+TEST_F(MeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
     // Test ID base
     uint32_t test_id_base = 150;
     bool same_kernel = false;
@@ -371,7 +380,7 @@ TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKe
 
 // ========== Packet Sizes Tests ==========
 
-TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) {
+TEST_F(MeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) {
     // Test ID
     uint32_t test_id = 144;
     bool same_kernel = true;
@@ -382,7 +391,7 @@ TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) 
         arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord, same_kernel);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
+TEST_F(MeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
     // Test ID
     uint32_t test_id = 145;
     bool same_kernel = false;
@@ -395,7 +404,7 @@ TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKer
 
 // ========== Custom Test Case ==========
 
-TEST_F(DeviceFixture, TensixDataMovementCoreBidirectionalCustom) {
+TEST_F(MeshDeviceFixture, TensixDataMovementCoreBidirectionalCustom) {
     // Test ID
     uint32_t test_id = 147;
     bool same_kernel = true;
