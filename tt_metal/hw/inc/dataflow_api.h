@@ -699,9 +699,8 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
  * Refer to \a noc_async_write for more details.
  */
 // clang-format on
-FORCE_INLINE
 template <uint32_t noc = noc_index>
-void noc_async_write_one_packet(
+FORCE_INLINE void noc_async_write_one_packet(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr,
     std::uint32_t size,
@@ -767,9 +766,8 @@ inline void noc_async_write(
  * Refer to \a noc_async_write_multicast for more details.
  */
 // clang-format on
-FORCE_INLINE
 template <uint32_t noc = noc_index>
-void noc_async_write_multicast_one_packet(
+FORCE_INLINE void noc_async_write_multicast_one_packet(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t size,
