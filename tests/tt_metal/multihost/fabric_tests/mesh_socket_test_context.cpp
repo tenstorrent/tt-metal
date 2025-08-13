@@ -194,6 +194,7 @@ std::vector<tt::tt_metal::distributed::MeshSocket> MeshSocketTestContext::create
 tt::tt_metal::distributed::SocketConfig MeshSocketTestContext::convert_to_socket_config(
     const TestSocketConfig& test_socket_config, const ParsedMemoryConfig& memory_config) {
     std::vector<tt::tt_metal::distributed::SocketConnection> connections;
+    connections.reserve(test_socket_config.connections.size());
     for (const auto& conn_config : test_socket_config.connections) {
         connections.push_back(convert_to_socket_connection(conn_config));
     }
