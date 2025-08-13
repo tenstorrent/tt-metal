@@ -81,13 +81,13 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
         ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 128)),
     ],
 )
-@pytest.mark.parametrize("condition", [1])
+@pytest.mark.parametrize("condition", [0])
 def test_ttnn_where_bcast(c_shape, t_shape, f_shape, condition, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.float32) * condition
     T = torch.randn(t_shape, dtype=torch.float32)
     F = torch.ones(f_shape, dtype=torch.float32) * 10
-    golden = torch.where(C.bool(), T, T)
+    golden = torch.where(C.bool(), T, F)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
