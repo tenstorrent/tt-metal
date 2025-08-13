@@ -18,7 +18,37 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "dprint_pages.h"
+#include "dprint_tensix.h"
+
 namespace NAMESPACE {
+
+// ================================
+// Remove when Welford's is hooked up
+// Dummy mean and variance calculations
+// Mean = 2 * Wt * x (dst1)
+// Variance = 4 * Wt * x (dst2)
+inline void dummy_mean_and_variance(
+    uint32_t cb_x, uint32_t j, uint32_t wt, uint32_t Wt, uint32_t dst0, uint32_t dst1, uint32_t dst2) {
+    if (wt + j < Wt - 1) {
+        return;
+    }
+
+    copy_tile_to_dst_init_short(cb_x, 0);
+    copy_tile(cb_x, 0, dst1);
+    copy_tile_to_dst_init_short(cb_x, 0);
+    copy_tile(cb_x, 0, dst2);
+
+    add_binary_tile_init();
+    for (uint32_t i = 0; i < 4 * Wt - 1; i++) {
+        if (i < 2 * Wt - 1) {
+            add_binary_tile(dst1, dst0);
+        }
+        add_binary_tile(dst2, dst0);
+    }
+}
+// ================================
 
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -32,7 +62,6 @@ void MAIN {
     constexpr bool rms_norm = static_cast<bool>(get_compile_time_arg_val(7));
     constexpr bool fuse_pre_add = static_cast<bool>(get_compile_time_arg_val(8));
 
-    constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
     // TODO(AP): check that if DST is indeed zeroed by release_dst (and initially), we can use it as zeroes
 
@@ -51,29 +80,25 @@ void MAIN {
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto layernorm = !rms_norm;
+    constexpr uint32_t onetile = 1;
 
     if constexpr (fuse_pre_add) {
-        if constexpr (rms_norm) {
-            constexpr uint32_t cb_x = cb_xmm;
-        } else {
-            constexpr uint32_t cb_x = tt::CBIndex::c_23;
-        }
-        binary_op_init_common(cb_in, cb_inb, cb_x);
+        binary_op_init_common(cb_in, cb_inb, rms_norm ? cb_xmm : tt::CBIndex::c_23);
     } else {
-        constexpr uint32_t cb_x = cb_in;
+        constexpr auto first_out_cb = layernorm ? cb_ex : cb_ex2;
+        unary_op_init_common(cb_in, first_out_cb);
     }
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
-    constexpr int onetile = 1;
-    constexpr int dst0 = 0;
+    // =====================================
+    // Hack before Welford's is hooked up
+    // Change to 0, 1, 2 when Welford's is hooked up
+    constexpr int dst0 = 2;
     constexpr int dst1 = 1;
-    constexpr int dst2 = 2;
-
-    if constexpr (layernorm) {
-        uint32_t start_N = 1;
-    }
+    constexpr int dst2 = 0;
+    // =====================================
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         tile_regs_acquire();
@@ -84,6 +109,7 @@ void MAIN {
         // Layernorm: Calculate E[x] and Var[x]
         // RMS norm: Calculate (∑x^2)/n
         // =====================================
+        cb_reserve_back(cb_ex2, onetile);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // Wait for block of input
             cb_wait_front(cb_in, blk);
@@ -93,7 +119,8 @@ void MAIN {
                 // Go tile-by-tile in the block
                 for (uint32_t j = 0; j < blk; j++) {
                     // Copy input tile to dst0
-                    copy_tile_init(cb_in);  // TODO RM: Is this needed every iteration?
+                    // Welford's requires a transposed input tile
+                    copy_tile_to_dst_init_short(cb_in, /*transpose*/ 1);
                     copy_tile(cb_in, j, dst0);
 
                     if constexpr (fuse_pre_add) {
@@ -105,25 +132,13 @@ void MAIN {
                         cb_pop_front(cb_inb, 1);
                     }
 
-                    // Accumulate E[x] and Var[x].
-                    // Welford's requires a transposed input tile
-                    transpose_wh_dest_init_short();
-                    transpose_wh_dest(dst0);
-                    reconfig_data_format(cb_in, cb_scaler);  // TODO RM: Is this needed every iteration?
-                    welford_init();
-                    welford(dst0, dst1, dst2, start_N, W, wt + j + 1 == Wt);
-                    start_N += tile_width;
+                    reconfig_data_format(cb_in, cb_scaler);
+                    // welford_init();
+                    // welford(dst0, dst1, dst2, /*start_N*/ (wt + j) * tile_width, /*end_N*/W, /*last_run*/ wt + j ==
+                    // Wt);
+                    dummy_mean_and_variance(cb_in, j, wt, Wt, dst0, dst1, dst2);
+                    cb_pop_front(cb_in, 1);
                 }
-                // TODO RM: Is this needed every iteration?
-                pack_reconfig_data_format(cb_ex);
-                pack_reconfig_data_format(cb_ex2);
-
-                cb_reserve_back(cb_ex, onetile);
-                cb_reserve_back(cb_ex2, onetile);
-                pack_tile(dst1, cb_ex);
-                pack_tile(dst2, cb_ex2);
-                cb_push_back(cb_ex, onetile);
-                cb_push_back(cb_ex2, onetile);
             } else {
                 // RMS: Calculate (∑x^2)/n
                 // Copy tiles in block to dst regs
@@ -160,12 +175,41 @@ void MAIN {
                 binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_scaler);
                 binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_scaler, 0, dst0);
 
+                if (wt > 0) {
+                    // This block's result is accumulated in dst0
+                    // Copy the previous block's result to dst1 and
+                    // add to current
+                    cb_wait_front(cb_ex2, onetile);
+                    reconfig_data_format_srca(cb_ex2);
+                    copy_tile_init(cb_ex2);
+                    copy_tile(cb_ex2, 0, dst1);
+
+                    add_binary_tile_init();
+                    add_binary_tile(dst0, dst1);
+                    cb_pop_front(cb_ex2, onetile);
+                }
+
                 // Push to CB
-                cb_reserve_back(cb_ex2, onetile);
                 pack_tile(dst0, cb_ex2);
                 cb_push_back(cb_ex2, onetile);
             }
         }
+
+        if constexpr (layernorm) {
+            cb_reserve_back(cb_ex, onetile);
+            pack_reconfig_data_format(cb_ex);
+            pack_tile(dst1, cb_ex);
+            DPRINT << "Pushing to cb_ex" << ENDL();
+            cb_push_back(cb_ex, onetile);
+
+            pack_reconfig_data_format(cb_ex2);
+            pack_tile(dst2, cb_ex2);
+            DPRINT << "Pushing to cb_ex2" << ENDL();
+            cb_push_back(cb_ex2, onetile);
+        }
+
+        tile_regs_commit();
+        tile_regs_release();
 
         // =====================================
         // Calculate 1/(√(Var(X) + ε)).
@@ -174,6 +218,7 @@ void MAIN {
         tile_regs_acquire();
         tile_regs_wait();
 
+        DPRINT << "Waiting for cb_ex2" << ENDL();
         cb_wait_front(cb_ex2, onetile);
 
         reconfig_data_format(cb_ex2, cb_eps);
@@ -193,6 +238,7 @@ void MAIN {
         cb_push_back(cb_ex2pe, onetile);
         tile_regs_release();
 
+        DPRINT << "Popping from cb_ex2" << ENDL();
         cb_pop_front(cb_ex2, onetile);
         cb_wait_front(cb_ex2pe, onetile);
 
@@ -206,6 +252,7 @@ void MAIN {
         tile_regs_commit();
         pack_tile(dst0, cb_ex2pe);
         tile_regs_release();
+        DPRINT << "Pushing to cb_ex2pe" << ENDL();
         cb_push_back(cb_ex2pe, onetile);
 
         // =====================================
@@ -226,20 +273,20 @@ void MAIN {
             cb_reserve_back(cb_out, blk);
             cb_wait_front(cb_ex, 1);
             cb_wait_front(cb_in, blk);
-            if constexpr (rms_norm) {
-                // RMS: Just copy input
-                reconfig_data_format_srca(cb_in);
-                copy_tile_init(cb_in);
-                for (uint32_t j = 0; j < blk; j++) {
-                    copy_tile(cb_in, j, j);
-                }
-            } else {
+            if constexpr (layernorm) {
                 // Layernorm: Calculate x-E[x]
                 reconfig_data_format(cb_in, cb_ex);
                 sub_bcast_cols_init_short(cb_in, cb_ex);
                 // x-E[x]
                 for (uint32_t j = 0; j < blk; j++) {
                     sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
+                }
+            } else {
+                // RMS: Just copy input
+                reconfig_data_format_srca(cb_in);
+                copy_tile_init(cb_in);
+                for (uint32_t j = 0; j < blk; j++) {
+                    copy_tile(cb_in, j, j);
                 }
             }
             cb_pop_front(cb_in, blk);
