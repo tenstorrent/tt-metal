@@ -58,46 +58,9 @@ public:
         requires(name == reflect::fixed_string{"report_path"})
     std::optional<std::filesystem::path> get() const {
         if (this->attributes.report_name.has_value()) {
-            // Convert report_name value to clean snake_case
-            std::string name_str = this->attributes.report_name.value().string();
-            std::transform(name_str.begin(), name_str.end(), name_str.begin(), [](unsigned char c) {
-                if (std::isalnum(c)) return static_cast<char>(std::tolower(c));
-                return '_';
-            });
-
-            name_str.erase(std::unique(name_str.begin(), name_str.end(), [](char a, char b) {
-                return a == '_' && b == '_';
-            }), name_str.end());
-
-            if (!name_str.empty() && name_str.front() == '_') name_str.erase(0, 1);
-            if (!name_str.empty() && name_str.back() == '_') name_str.pop_back();
-
-            // Get current date and time
-            auto now = std::chrono::system_clock::now();
-            std::time_t now_c = std::chrono::system_clock::to_time_t(now);
-            std::tm tm{};
-        #if defined(_WIN32)
-            localtime_s(&tm, &now_c);
-        #else
-            localtime_r(&now_c, &tm);
-        #endif
-            std::ostringstream oss;
-            oss << std::put_time(&tm, "%b");
-            std::string month = oss.str();
-            std::transform(month.begin(), month.end(), month.begin(), ::tolower);
-
-            std::ostringstream date_time;
-            date_time << month
-                    << std::setw(2) << std::setfill('0') << tm.tm_mday << "_"
-                    << std::setw(2) << std::setfill('0') << tm.tm_hour
-                    << std::setw(2) << std::setfill('0') << tm.tm_min;
-
-            std::string dir_name = name_str + "_" + date_time.str();
-
-            // snake_cased(report_name)_monthdd_HHMM
-            return this->attributes.root_report_path / dir_name;
+            auto hash = std::hash<std::string>{}(this->attributes.report_name.value());
+            return this->attributes.root_report_path / std::to_string(hash);
         }
-
         return std::nullopt;
     }
 
