@@ -171,12 +171,14 @@ void JitBuildEnv::init(
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
     if (tt::tt_metal::getDeviceProfilerState()) {
+        uint32_t profiler_options = 1;
         if (rtoptions.get_profiler_do_dispatch_cores()) {
-            // TODO(MO): Standard bit mask for device side profiler options
-            this->defines_ += "-DPROFILE_KERNEL=2 ";
-        } else {
-            this->defines_ += "-DPROFILE_KERNEL=1 ";
+            profiler_options |= PROFILER_OPT_DO_DISPATCH_CORES;
         }
+        if (rtoptions.get_profiler_trace_only()) {
+            profiler_options |= PROFILER_OPT_DO_TRACE_ONLY;
+        }
+        this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled

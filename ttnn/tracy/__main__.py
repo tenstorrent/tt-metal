@@ -71,6 +71,13 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--device-trace-profiler",
+        dest="device_trace_profiler",
+        action="store_true",
+        help="Profile device side trace durations",
+        default=[],
+    )
+    parser.add_option(
         "--push-device-data-mid-run",
         dest="mid_run_device_data",
         action="store_true",
@@ -152,6 +159,9 @@ def main():
 
     if options.sync_host_device:
         os.environ["TT_METAL_PROFILER_SYNC"] = "1"
+
+    if options.device_trace_profiler:
+        os.environ["TT_METAL_TRACE_PROFILER"] = "1"
 
     if options.collect_noc_traces:
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
