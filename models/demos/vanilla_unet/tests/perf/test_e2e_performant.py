@@ -14,6 +14,11 @@ from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerfor
 from models.utility_functions import run_for_wormhole_b0
 
 
+def get_expected_times(name):
+    base = {"ttnn_vanilla_unet": (0.013)}
+    return base[name]
+
+
 def run_e2e_performant(
     device, device_batch_size, act_dtype, weight_dtype, model_location_generator, resolution, channels=3
 ):
@@ -41,6 +46,15 @@ def run_e2e_performant(
     performant_runner.release()
 
     inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
+
+    tolerance = 0.03
+    expected_inference_time = get_expected_times("ttnn_vanilla_unet")
+
+    assert abs(inference_time_avg - expected_inference_time) <= tolerance, (
+        f"Inference time regression detected! "
+        f"Avg: {inference_time_avg:.6f}s, "
+        f"Expected: {expected_inference_time:.6f}s ± {tolerance:.2f}s"
+    )
     logger.info(
         f"ttnn_vanilla_unet batch_size: {total_batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(total_batch_size/inference_time_avg)}"
     )
