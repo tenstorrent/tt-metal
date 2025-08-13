@@ -49,6 +49,7 @@ static ParsedSenderPage parse_sender_page(
     const uint8_t* page_base, uint32_t l1_alignment, uint32_t max_num_downstreams) {
     ParsedSenderPage parsed;
     // copy the static md
+    EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(page_base) % l1_alignment);
     std::memcpy(&parsed.md, page_base, sizeof(sender_socket_md));
 
     const uint32_t md_size_aligned = align_up_local(sizeof(sender_socket_md), l1_alignment);
@@ -59,7 +60,9 @@ static ParsedSenderPage parse_sender_page(
     parsed.bytes_acked.resize(parsed.md.num_downstreams);
     for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
         uint32_t v = 0;
-        std::memcpy(&v, page_base + ack_base + i * ack_stride, sizeof(uint32_t));
+        auto bytes_acked_addr = page_base + ack_base + i * ack_stride;
+        EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(bytes_acked_addr) % l1_alignment);
+        std::memcpy(&v, bytes_acked_addr, sizeof(uint32_t));
         parsed.bytes_acked[i] = v;
     }
 
@@ -69,7 +72,9 @@ static ParsedSenderPage parse_sender_page(
     parsed.encodings.resize(parsed.md.num_downstreams);
     for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
         sender_downstream_encoding enc{};
-        std::memcpy(&enc, page_base + enc_base + i * enc_stride, sizeof(sender_downstream_encoding));
+        auto encoding_addr = page_base + enc_base + i * enc_stride;
+        EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(encoding_addr) % l1_alignment);
+        std::memcpy(&enc, encoding_addr, sizeof(sender_downstream_encoding));
         parsed.encodings[i] = enc;
     }
     return parsed;
