@@ -20,6 +20,10 @@ bool use_composite_reduce_scatter(
     const int32_t dim,
     std::optional<uint32_t> cluster_axis,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+
     // Composite only supported when barrier_semaphore is provided
     if (!barrier_semaphore.has_value()) {
         return false;
@@ -31,10 +35,6 @@ bool use_composite_reduce_scatter(
     if (scatter_dim != 3) {
         return false;
     }
-
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    uint32_t tile_height = tile_shape[0];
-    uint32_t tile_width = tile_shape[1];
 
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
@@ -59,7 +59,7 @@ bool use_composite_reduce_scatter(
     // Use composite if tiled and scattering on padded dim 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
-    if (scatter_dim == 3 && output_shape[scatter_dim] % 32 != 0) {
+    if (scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) {
         return true;
     }
 
