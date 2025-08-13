@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -31,13 +32,20 @@ struct ReshardConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const ReshardConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReshardConfig& test_config) {
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Kernels
     auto receiver_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/reshard_hardcoded/kernels/reshard_reader.cpp",
         test_config.dest_core_set,
         DataMovementConfig{
@@ -46,7 +54,7 @@ bool run_dm(IDevice* device, const ReshardConfig& test_config) {
             .compile_args = test_config.dest_core_compile_args});
 
     // Runtime Arguments
-    SetRuntimeArgs(program, receiver_kernel, test_config.dest_core_set, test_config.dest_core_runtime_args);
+    SetRuntimeArgs(program_, receiver_kernel, test_config.dest_core_set, test_config.dest_core_runtime_args);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
