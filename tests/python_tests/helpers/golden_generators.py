@@ -473,6 +473,7 @@ class UnarySFPUGolden:
             MathOperation.Exp: self._exp,
             MathOperation.Exp2: self._exp2,
             MathOperation.Hardsigmoid: self._hardsigmoid,
+            MathOperation.Threshold: self._threshold,
         }
         self.data_format = None
         self.dest_acc = DestAccumulation.No
@@ -658,6 +659,14 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.nn.functional.hardsigmoid(input_tensor).item()
+
+    def _threshold(self, x, t=5, v=10):
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.nn.functional.threshold(input_tensor, t, v).item()
 
 
 @register_golden
