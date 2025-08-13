@@ -355,8 +355,6 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNumbers) {
 
 /* ========== Directed Ideal Test Case; Test id = 65 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageDirectedIdeal) {
-    GTEST_SKIP() << "Skipping test";
-
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
@@ -645,8 +643,6 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageWriteNumbers) {
 
 /* ========== Directed Ideal Test Case; Test id = 71 ========== */
 TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageDirectedIdeal) {
-    GTEST_SKIP() << "Skipping test";
-
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
