@@ -71,7 +71,7 @@ void kernel_main() {
     constexpr uint16_t zero = 0x0;
 
     generate_tile_with_bfloat16_value(
-        cb_reduction_scaler, one);  // generate tile with bfloat16 value 1.0 for reduction scaler
+        cb_reduction_scaler, one);                      // generate tile with bfloat16 value 1.0 for reduction scaler
     generate_matmul_row_reduce_tile(cb_matmul_reduce);  // generate tile for matmul row reduce
 
     const float scaler = uint32_to_float(scaler_bits);
@@ -98,26 +98,13 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_query, Wt);
 
-
-
-        // TODO[improve]: I can read attn_mask by tiles while I'm reading K and V, because I need one tile of attn_mask
-        // for one row of K and V row index of Q define the row index of (QK^T) matrix, so I need to read the same row
-        // of attn_mask
+        // I need one tile of attn_mask for one row of K and V.
+        // row index of Q define the row index of (QK^T) matrix, so I need to read the same row of attn_mask
         uint32_t attn_mask_idx = (start_row + i) * Ht;
-        // cb_reserve_back(cb_attn_mask, Ht);
-        // uint32_t attn_mask_l1_write_addr = get_write_ptr(cb_attn_mask);
-        // for (uint32_t col = 0; col < Ht; ++col) {
-        //     noc_async_read_tile(attn_mask_idx + col, mask_address_generator, attn_mask_l1_write_addr);
-        //     attn_mask_l1_write_addr += tile_bytes;
-        // }
-        // noc_async_read_barrier();
-        // cb_push_back(cb_attn_mask, Ht);
-
 
         // stream K and V by rows while processing Q row
-        for (uint32_t h = 0; h < Ht; ++h) {  // read all
-            uint32_t k_idx =
-                key_page_offset + h * Wt;  // add row offset in case I need to read second batch
+        for (uint32_t h = 0; h < Ht; ++h) {             // read all
+            uint32_t k_idx = key_page_offset + h * Wt;  // add row offset in case I need to read second batch
             // read key row block_size tiles
 
             // we read key by rows to compute matmul Q by K^T

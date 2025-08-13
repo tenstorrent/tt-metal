@@ -254,7 +254,7 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     using namespace ttml;
 
-    const uint32_t B = 1U, H = 1U, S = 4096U, d = 768U;
+    const uint32_t B = 2U, H = 1U, S = 4096U, d = 768U;
     const float dropout_prob = 0.8F;
 
     std::random_device rd;
@@ -326,12 +326,13 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
 
     if (return_intermediates) {
         assert((interm_xtensor.shape() == baseline_interm_xtensor.shape()));
-        for(size_t i = 0; i < S; ++i) {
+        for (size_t i = 0; i < S; ++i) {
             for (size_t j = 0; j < 1U /*d*/; ++j) {
                 float expected_interm_value = baseline_interm_xtensor(0, 0, i, j);
                 float actual_interm_value = interm_xtensor(0, 0, i, j);
 
-                if (std::abs(actual_interm_value - expected_interm_value) >= 1e-2F + std::abs(expected_interm_value) * 3e-2F) {
+                if (std::abs(actual_interm_value - expected_interm_value) >=
+                    1e-2F + std::abs(expected_interm_value) * 3e-2F) {
                     std::cout << "Mismatch in intermediate at (" << i << ", " << j << "): "
                               << "expected " << expected_interm_value << ", got " << actual_interm_value << '\n';
                 }

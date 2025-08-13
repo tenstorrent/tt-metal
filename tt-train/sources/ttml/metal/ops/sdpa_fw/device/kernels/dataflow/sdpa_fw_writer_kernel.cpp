@@ -57,14 +57,5 @@ void kernel_main() {
         noc_async_write_tile(intermediate_idx, intermediates_addr_generator, l1_intermediates_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, onetile);
-
-        // cb_wait_front(cb_intermediates, Wt);
-        // uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        // for (uint32_t col = 0; col < Wt; ++col) {
-        //     noc_async_write_tile(idx + col, intermediates_addr_generator, l1_intermediates_read_addr);
-        //     l1_intermediates_read_addr += tile_bytes;
-        // }
-        // noc_async_write_barrier();159 383 552
-        // cb_pop_front(cb_intermediates, Wt);
     }
 }
