@@ -39,7 +39,14 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
     // SETUP
 
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     const size_t total_size_bytes = test_config.pages_per_transaction * test_config.bytes_per_page;
 
@@ -59,7 +66,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
 
     // Initialize semaphore ID
     CoreRangeSet core_range_set = CoreRangeSet({CoreRange(test_config.core_coord)});
-    const uint32_t sem_id = CreateSemaphore(program, core_range_set, 0);
+    const uint32_t sem_id = CreateSemaphore(program_, core_range_set, 0);
 
     // Compile-time arguments for kernels
     vector<uint32_t> reader_compile_args = {
@@ -85,7 +92,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
 
     // Kernels
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/reader_unary.cpp",
         test_config.core_coord,
         DataMovementConfig{
@@ -94,7 +101,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
             .compile_args = reader_compile_args});
 
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/writer_unary.cpp",
         test_config.core_coord,
         DataMovementConfig{
