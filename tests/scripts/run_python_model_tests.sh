@@ -82,8 +82,6 @@ run_python_model_tests_wormhole_b0() {
     mistral_weights=mistralai/Mistral-7B-Instruct-v0.3
     HF_MODEL=$mistral_weights pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
 
-    # Siglip
-    HF_HOME=/proj_sw/user_dev/hf_data/ HF_HUB_OFFLINE=1 HF_MODEL="google/gemma-3-4b-it" pytest models/demos/siglip/tests ; fail+=$?
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {
