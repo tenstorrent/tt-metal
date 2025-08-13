@@ -175,15 +175,8 @@ void MAIN {
                     // Welford's needs transposed input tile
                     copy_tile_to_dst_init_short(cb_x, /*transpose*/ 1);
                     copy_tile(cb_x, j, dst0);
-                    // DPRINT << "===== input =====" << ENDL();
-                    // dprint_tensix_dest_reg(dst0);
                     welford_init();
                     welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
-                    // DPRINT << "===== mean after welford =====" << ENDL();
-                    // dprint_tensix_dest_reg(dst1);
-                    // DPRINT << "===== variance after welford =====" << ENDL();
-                    // dprint_tensix_dest_reg(dst2);
-                    // dummy_mean_and_variance(cb_x, j, wt, Wt, dst0, dst1, dst2);
                     start_N += tile_width;
                 }
             }
@@ -192,8 +185,12 @@ void MAIN {
             pack_tile(dst1, cb_ex);
             pack_reconfig_data_format(cb_ex2);
             pack_tile(dst2, cb_ex2);
+            REL();
             cb_push_back(cb_ex, onetile);
             cb_push_back(cb_ex2, onetile);
+            ACQ();
+            cb_wait_front(cb_ex, onetile);
+            cb_wait_front(cb_ex2, onetile);
             transpose_wh_init_short(cb_ex);
             reconfig_data_format_srca(cb_ex);
             transpose_wh_tile(cb_ex, 0, dst1);
