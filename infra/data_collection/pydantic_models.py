@@ -483,3 +483,94 @@ class OpRun(BaseModel):
     run_end_ts: Optional[datetime] = Field(None, description="Timestamp with timezone when the sweeps run ended.")
     status: RunStatus = Field(description="Overall run status aggregated from testcases.")
     results: List[OpTest] = Field(description="List of per-vector op test execution results.")
+
+
+class TensorDesc1(BaseModel):
+    """
+    Contains descriptions of tensors used as inputs or outputs of the operation in a ML
+    kernel operation test.
+    """
+
+    shape: List[int] = Field(description="Shape of the tensor.")
+    data_type: str = Field(description="Data type of the tensor, e.g. Float32, " "BFloat16, etc.")
+    buffer_type: str = Field(description="Memory space of the tensor, e.g. Dram, L1, " "System.")
+    layout: str = Field(description="Layout of the tensor, e.g. Interleaved, " "SingleBank, HeightSharded.")
+    grid_shape: List[int] = Field(
+        description="The grid shape describes a 2D region of cores which are used to "
+        "store the tensor in memory. E.g. You have a tensor with shape "
+        "128x128, you might decide to put this on a 2x2 grid of cores, "
+        "meaning each core has a 64x64 slice."
+    )
+
+
+class TestStatus1(Enum):
+    """
+    Status of the test execution.
+    """
+
+    compile_failed = "compile_failed"
+    run_failed = "run_failed"
+    golden_failed = "golden_failed"
+    success = "success"
+    fail_assert_exception = "fail_assert_exception"
+    fail_l1_out_of_mem = "fail_l1_out_of_mem"
+    fail_watcher = "fail_watcher"
+    fail_crash_hang = "fail_crash_hang"
+    fail_unsupported_device_perf = "fail_unsupported_device_perf"
+    skipped = "skipped"
+    error = "error"
+
+
+class OpTest1(BaseModel):
+    """
+    Contains information about ML kernel operation tests, such as test execution,
+    results, configuration.
+    """
+
+    github_job_id: Optional[int] = Field(
+        description="Identifier for the Github Actions CI job, which ran the test.",
+    )
+    full_test_name: str = Field(description="Test name plus config.")
+    test_start_ts: datetime = Field(description="Timestamp with timezone when the test execution started.")
+    test_end_ts: datetime = Field(description="Timestamp with timezone when the test execution ended.")
+    test_case_name: str = Field(description="Name of the pytest function.")
+    filepath: str = Field(description="Test file path and name.")
+    success: bool = Field(description="Test execution success.")
+    skipped: bool = Field(description="Some tests in a job can be skipped.")
+    error_message: Optional[str] = Field(None, description="Succinct error string, such as exception type.")
+    config: Optional[dict] = Field(default=None, description="Test configuration, as key/value pairs.")
+    frontend: str = Field(description="ML frontend or framework used to run the test.")
+    model_name: str = Field(description="Name of the ML model in which this operation is used.")
+    op_kind: str = Field(description="Kind of operation, e.g. Eltwise.")
+    op_name: str = Field(description="Name of the operation, e.g. ttnn.conv2d")
+    framework_op_name: str = Field(description="Name of the operation within the framework, e.g. torch.conv2d")
+    inputs: List[TensorDesc1] = Field(description="List of input tensors.")
+    outputs: List[TensorDesc1] = Field(description="List of output tensors.")
+    op_params: Optional[dict] = Field(
+        default=None,
+        description="Parametrization criteria for the operation, based on its kind, "
+        "as key/value pairs, e.g. stride, padding, etc.",
+    )
+    git_sha: Optional[str] = Field(description="Git commit SHA of the op test.")
+    status: Optional[TestStatus] = Field(
+        description="Status of the op test, e.g. compile_failed, " "run_failed, golden_failed, success."
+    )
+    card_type: Optional[str] = Field(description="Type of hardware card used for testing, e.g. N150, N300.")
+    backend: Optional[str] = Field(description="Backend used for the op test.")
+    data_source: Optional[str] = Field(None, description="Source of the data generated ie.'ttnn-op")
+    input_hash: Optional[str] = Field(None, description="Hash of the input vector for deduplication and traceability.")
+    message: Optional[str] = Field(None, description="Optional informational message about the execution outcome.")
+    exception: Optional[str] = Field(None, description="Exception text when a failure occurred, if any.")
+    perf: Optional[set[PerfMetric]] = Field(
+        None, description="Device-level performance measurements, when device profiling is enabled."
+    )
+    initiated_by: Optional[str] = Field(None, description="User or CI pipeline that initiated the run.")
+    host: Optional[str] = Field(None, description="Hostname of the machine executing the run.")
+    device: Optional[str] = Field(None, description="Target device/architecture identifier, if available.")
+    run_type: Optional[str] = Field(None, description="Type of op test run (e.g., sweeps, unit_test).")
+    run_contents: Optional[str] = Field(
+        None, description="Human-readable description of run contents (e.g., module/suite selection)."
+    )
+    git_author: Optional[str] = Field(None, description="Git author configured in the environment.")
+    git_branch_name: Optional[str] = Field(None, description="Current git branch name.")
+    git_commit_hash: Optional[str] = Field(None, description="Short git commit hash for the run.")
