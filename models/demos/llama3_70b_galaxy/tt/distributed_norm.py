@@ -64,22 +64,10 @@ class DistributedNorm(LightweightModule):
         """Apply a norm, possibly gathering inputs if required."""
         if self.TG:
             if mode == "decode":
-                # if self.args.qk_norm:
-                #     return (
-                #         tt_qwen_sharded_distributed_rmsnorm(
-                #             x,
-                #             epsilon=self.norm.eps,
-                #             gamma=self.norm.weight_distributed,
-                #             mesh_device=self.args.mesh_device,
-                #             ln_sharded_input_memcfg=self.gather_in_mem_cfg,
-                #             ln_sharded_progcfg=self.ln_prg_cfg,
-                #             ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
-                #         ),
-                #         res,
-                #     )
-                # else:
-                x = ttnn.to_memory_config(x, self.gather_in_mem_cfg)
-                res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
+                if self.args.qk_norm:
+                    x = ttnn.to_memory_config(x, self.gather_in_mem_cfg)
+                    res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
+
                 return tt_sharded_distributed_rmsnorm(
                     x,
                     res,
@@ -93,6 +81,7 @@ class DistributedNorm(LightweightModule):
                     output_mem_config=self.norm.output_mem_config,
                     ccl_topology=self.ccl_topology,
                 )
+
             else:
                 return tt_distributed_rmsnorm(
                     x,
