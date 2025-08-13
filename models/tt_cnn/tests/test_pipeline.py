@@ -11,6 +11,7 @@ import torch
 import ttnn
 from models.tt_cnn.tt.executor import (
     ModelExecutor,
+    MultiCQModelOverlappedInputExecutor,
     MultiCQTracedModelOverlappedInputExecutor,
     MultiCQTracedModelPipelinedIOExecutor,
     TracedModelExecutor,
@@ -103,6 +104,14 @@ EXECUTOR_CONFIGS = [
         all_transfers_on_separate_command_queue=False,
         requires_minimum_inputs=1,
         expected_executor_type=TracedModelExecutor,
+    ),
+    ExecutorTestConfig(
+        name="MultiCQModelOverlappedInputExecutor",
+        use_trace=False,
+        num_command_queues=2,
+        all_transfers_on_separate_command_queue=False,
+        requires_minimum_inputs=1,
+        expected_executor_type=MultiCQModelOverlappedInputExecutor,
     ),
     ExecutorTestConfig(
         name="MultiCQTracedModelOverlappedInputExecutor",
