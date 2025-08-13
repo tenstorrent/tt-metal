@@ -101,7 +101,7 @@ ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
-    const std::optional<ScatterReductionType>& opt_reduction,
+    const ScatterReductionType& opt_reduction,
     const QueueId& queue_id) {
     return {
         operation_attributes_t{dim, output_memory_config, opt_reduction},

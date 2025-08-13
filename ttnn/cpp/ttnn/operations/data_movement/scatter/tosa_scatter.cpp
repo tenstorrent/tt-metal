@@ -153,7 +153,7 @@ Tensor TOSAScatterOperation::invoke(
         processed_index_tensor,
         processed_source_tensor,
         final_memory_config,
-        std::nullopt,
+        scatter::ScatterReductionType::INVALID,
         queue_id);
     return CMAKE_UNIQUE_NAMESPACE::post_tosa_scatter_transform_tensor(output, N, K, W, C, input_tensor.layout());
 }
