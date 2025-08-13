@@ -1421,11 +1421,6 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
     FabricNodeId src_fabric_node_id{mesh_id, chip_id};
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
-    const auto& fabric_context = this->get_fabric_context();
-    const auto& edm_config = fabric_context.get_fabric_router_config();
-    const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = topology == Topology::Mesh;
-
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
 
     // Get all physically connected ethernet channels directly from the cluster
@@ -1448,26 +1443,12 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
                 break;
             }
 
-            CoreCoord fabric_router_virtual_core =
-                cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
-
             // Populate connection info for fabric-routed channels
-            const auto sender_channel = is_2d_fabric ? router_direction : 0;
             auto& connection_info = fabric_connections.read_only[eth_channel_id];
             connection_info.edm_direction = router_direction;
-            connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
-            connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
-            connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
-            connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
-            connection_info.edm_l1_sem_addr =
-                edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel];
-            connection_info.edm_connection_handshake_addr =
-                edm_config.sender_channels_connection_semaphore_address[sender_channel];
-            connection_info.edm_worker_location_info_addr =
-                edm_config.sender_channels_worker_conn_info_base_address[sender_channel];
-            connection_info.buffer_size_bytes = edm_config.channel_buffer_size_bytes;
-            connection_info.buffer_index_semaphore_id =
-                edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
+
+            // Use helper function to populate the connection info for both cases
+            this->populate_fabric_connection_info(connection_info, physical_chip_id, eth_channel_id, router_direction);
 
             // Mark this connection as valid for fabric communication
             fabric_connections.valid_connections_mask |= (1u << eth_channel_id);
@@ -1620,6 +1601,11 @@ FabricContext& ControlPlane::get_fabric_context() const {
 }
 
 void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
+
+void ControlPlane::initialize_fabric_tensix_config() {
+    TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
+    this->fabric_context_->initialize_tensix_config();
+}
 
 void ControlPlane::initialize_intermesh_eth_links() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -2112,6 +2098,71 @@ MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scop
 bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
     const auto& local_mesh_ids = local_mesh_binding_.mesh_ids;
     return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+}
+
+void ControlPlane::populate_fabric_connection_info(
+    tt::tt_fabric::fabric_connection_info_t& connection_info,
+    chip_id_t physical_chip_id,
+    chan_id_t eth_channel_id,
+    eth_chan_directions router_direction) const {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& fabric_context = this->get_fabric_context();
+    const auto topology = fabric_context.get_fabric_topology();
+    const bool is_2d_fabric = topology == Topology::Mesh;
+    const auto sender_channel = is_2d_fabric ? router_direction : 0;
+
+    // Check if fabric tensix config is enabled, if so populate mux config instead of fabric router config
+    if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+        tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // Access fabric tensix config from fabric context for mux configuration
+        const auto& tensix_config = fabric_context.get_fabric_tensix_config();
+
+        // Get the mux core that handles this ethernet channel
+        CoreCoord mux_core_logical = tensix_config.get_core_for_channel(eth_channel_id);
+
+        // Convert logical core to virtual coordinates for NOC access (similar to write_to_all_tensix_cores)
+        CoreCoord mux_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
+            physical_chip_id, mux_core_logical, CoreType::WORKER);
+
+        // Get the RISC ID that handles this ethernet channel
+        auto risc_id = tensix_config.get_risc_id_for_channel(eth_channel_id);
+
+        // Use tensix config methods for mux configuration
+        connection_info.edm_noc_x = static_cast<uint8_t>(mux_core_virtual.x);
+        connection_info.edm_noc_y = static_cast<uint8_t>(mux_core_virtual.y);
+        connection_info.edm_buffer_base_addr = tensix_config.get_channels_base_address(risc_id, sender_channel);
+        connection_info.num_buffers_per_channel = tensix_config.get_num_buffers_per_channel();
+        connection_info.buffer_size_bytes = tensix_config.get_buffer_size_bytes_full_size_channel();
+
+        // Use tensix config wrapper APIs for semaphore addresses
+        connection_info.edm_l1_sem_addr =
+            tensix_config.get_local_flow_control_semaphore_address(eth_channel_id, sender_channel);
+        connection_info.edm_connection_handshake_addr =
+            tensix_config.get_connection_semaphore_address(eth_channel_id, sender_channel);
+        connection_info.edm_worker_location_info_addr =
+            tensix_config.get_worker_conn_info_base_address(eth_channel_id, sender_channel);
+        connection_info.buffer_index_semaphore_id =
+            tensix_config.get_buffer_index_semaphore_address(eth_channel_id, sender_channel);
+    } else {
+        // Use original fabric router configuration
+        const auto& edm_config = fabric_context.get_fabric_router_config();
+        CoreCoord fabric_router_virtual_core =
+            cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
+
+        connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
+        connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
+        connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
+        connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
+        connection_info.edm_l1_sem_addr =
+            edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel];
+        connection_info.edm_connection_handshake_addr =
+            edm_config.sender_channels_connection_semaphore_address[sender_channel];
+        connection_info.edm_worker_location_info_addr =
+            edm_config.sender_channels_worker_conn_info_base_address[sender_channel];
+        connection_info.buffer_size_bytes = edm_config.channel_buffer_size_bytes;
+        connection_info.buffer_index_semaphore_id =
+            edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
+    }
 }
 
 ControlPlane::~ControlPlane() = default;

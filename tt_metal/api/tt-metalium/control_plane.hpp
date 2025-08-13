@@ -251,6 +251,13 @@ private:
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
 
+    // Helper to populate fabric connection info for both router and mux configurations
+    void populate_fabric_connection_info(
+        tt::tt_fabric::fabric_connection_info_t& connection_info,
+        chip_id_t physical_chip_id,
+        chan_id_t eth_channel_id,
+        eth_chan_directions router_direction) const;
+
     // TODO: remove once UMD can provide all intermesh links
     // Populate the local intermesh link to remote intermesh link table
     void generate_local_intermesh_link_table();
