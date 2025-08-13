@@ -116,7 +116,7 @@ CPMAddPackage(
 CPMAddPackage(
     NAME tokenizers-cpp
     GITHUB_REPOSITORY mlc-ai/tokenizers-cpp
-    GIT_TAG 5de6f656c06da557d4f0fb1ca611b16d6e9ff11d
+    GIT_TAG 55d53aa38dc8df7d9c8bd9ed50907e82ae83ce66
     PATCH_COMMAND
         patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch
     OPTIONS

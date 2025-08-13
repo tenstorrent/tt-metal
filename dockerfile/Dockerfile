@@ -8,6 +8,10 @@ FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH="$CARGO_HOME/bin:$PATH"
+
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
