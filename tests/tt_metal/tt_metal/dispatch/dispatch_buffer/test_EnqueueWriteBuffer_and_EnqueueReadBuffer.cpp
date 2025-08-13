@@ -2443,9 +2443,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, StressWrapTest) {
 // Creates a large tensor, writes to device, reads back, and verifies data integrity
 struct DRAMReadbackParams {
     uint32_t page_size;
-    uint64_t dim0;
-    uint64_t dim1;
-    uint64_t dim2;
+    uint64_t total_elements;
 };
 
 class DRAMReadbackFixture : public ::testing::TestWithParam<DRAMReadbackParams> {
@@ -2461,88 +2459,64 @@ INSTANTIATE_TEST_SUITE_P(
         DRAMReadbackParams{
             // < 4 GB buffer
             .page_size = 2048,
-            .dim0 = (1 << 5),
-            .dim1 = (1 << 12),
-            .dim2 = (1 << 12),
+            .total_elements = 1ull << 30,
         },
         DRAMReadbackParams{
             // 4 GB buffer
             .page_size = 2048,
-            .dim0 = (1 << 5),
-            .dim1 = (1 << 13),
-            .dim2 = (1 << 13),
+            .total_elements = 1ull << 31,
         },
         DRAMReadbackParams{
             // 8 GB buffer
             .page_size = 2048,
-            .dim0 = (1 << 6),
-            .dim1 = (1 << 13),
-            .dim2 = (1 << 13),
+            .total_elements = 1ull << 32,
         },
         DRAMReadbackParams{
             // almost 12 GB buffer (anymore would fail allocation on WH)
             .page_size = 2048,
-            .dim0 = 1,
-            .dim1 = 1,
-            .dim2 = 6 * (1ull << 30) - (12 * 1024),
+            .total_elements = 6 * (1ull << 30) - (12 * 1024),
         },
         // 64 KB page size
         DRAMReadbackParams{
             // < 4 GB buffer
             .page_size = (1 << 16),
-            .dim0 = (1 << 5),
-            .dim1 = (1 << 12),
-            .dim2 = (1 << 12),
+            .total_elements = 1ull << 30,
         },
         DRAMReadbackParams{
             // 4 GB buffer
             .page_size = (1 << 16),
-            .dim0 = (1 << 5),
-            .dim1 = (1 << 13),
-            .dim2 = (1 << 13),
+            .total_elements = 1ull << 31,
         },
         DRAMReadbackParams{
             // 8 GB buffer
             .page_size = (1 << 16),
-            .dim0 = (1 << 6),
-            .dim1 = (1 << 13),
-            .dim2 = (1 << 13),
+            .total_elements = 1ull << 32,
         },
         DRAMReadbackParams{
             // almost 12 GB buffer (anymore would fail allocation on WH)
             .page_size = (1 << 16),
-            .dim0 = 1,
-            .dim1 = 1,
-            .dim2 = 6 * (1ull << 30) - (1 << 15),
+            .total_elements = 6 * (1ull << 30) - (1 << 15),
         },
         // 1 MB page size ("large" page size)
         DRAMReadbackParams{
             // < 4 GB buffer
             .page_size = (1 << 20),
-            .dim0 = (1 << 5),
-            .dim1 = (1 << 12),
-            .dim2 = (1 << 12),
+            .total_elements = 1ull << 30,
         },
         DRAMReadbackParams{
             // 4 GB buffer
             .page_size = (1 << 20),
-            .dim0 = (1 << 5),
-            .dim1 = (1 << 13),
-            .dim2 = (1 << 13),
+            .total_elements = 1ull << 31,
         },
         DRAMReadbackParams{
             // 8 GB buffer
             .page_size = (1 << 20),
-            .dim0 = (1 << 6),
-            .dim1 = (1 << 13),
-            .dim2 = (1 << 13),
+            .total_elements = 1ull << 32,
         },
         DRAMReadbackParams{
             // almost 12 GB buffer (anymore would fail allocation on WH)
             .page_size = (1 << 20),
-            .dim0 = 1,
-            .dim1 = 1,
-            .dim2 = 6 * (1ull << 30) - (1 << 19),
+            .total_elements = 6 * (1ull << 30) - (1 << 19),
         }));
 
 TEST_P(DRAMReadbackFixture, TensixTestReadback) {
@@ -2563,10 +2537,7 @@ TEST_P(DRAMReadbackFixture, TensixTestReadback) {
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
 
     // Create tensor with dimensions from test parameters
-    const uint64_t dim0 = params.dim0;
-    const uint64_t dim1 = params.dim1;
-    const uint64_t dim2 = params.dim2;
-    const uint64_t total_elements = dim0 * dim1 * dim2;
+    const uint64_t total_elements = params.total_elements;
     const DeviceAddr size_bytes = total_elements * sizeof(uint16_t);  // bfloat16 is 16-bit
     // Create initialized input data
     std::vector<uint16_t> input_data(total_elements);
@@ -2644,9 +2615,7 @@ TEST_P(DRAMReadbackFixture, TensixTestReadback) {
 // Creates a large tensor, writes to device, reads back, and verifies data integrity
 struct DRAMShardedReadbackParams {
     uint32_t page_size;
-    uint64_t dim0;
-    uint64_t dim1;
-    uint64_t dim2;
+    uint64_t total_elements;
     std::array<uint32_t, 2> num_cores;
 };
 
@@ -2660,43 +2629,34 @@ INSTANTIATE_TEST_SUITE_P(
     DRAMShardedReadbackFixture,
     ::testing::Values(
         // Small buffer (< 4 GB) - expected to pass
-        DRAMShardedReadbackParams{
-            .page_size = 2048, .dim0 = (1 << 4), .dim1 = (1 << 11), .dim2 = (1 << 11), .num_cores = {2, 2}},
+        DRAMShardedReadbackParams{.page_size = 2048, .total_elements = 1ull << 26, .num_cores = {2, 2}},
 
         // Large buffers (> 4 GB) - 4 GB buffer size
         DRAMShardedReadbackParams{
-            .page_size = 2048, .dim0 = (1 << 5), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {4, 1}
-            // For HEIGHT_SHARDED
+            .page_size = 2048, .total_elements = 1ull << 31, .num_cores = {4, 1}  // For HEIGHT_SHARDED
         },
         DRAMShardedReadbackParams{
-            .page_size = 2048, .dim0 = (1 << 5), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {1, 4}
-            // For WIDTH_SHARDED
+            .page_size = 2048, .total_elements = 1ull << 31, .num_cores = {1, 4}  // For WIDTH_SHARDED
         },
         DRAMShardedReadbackParams{
-            .page_size = 2048, .dim0 = (1 << 5), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {2, 2}
-            // For BLOCK_SHARDED
+            .page_size = 2048, .total_elements = 1ull << 31, .num_cores = {2, 2}  // For BLOCK_SHARDED
         },
 
         // Large buffers (> 4 GB) - 8 GB buffer size
         DRAMShardedReadbackParams{
-            .page_size = 2048, .dim0 = (1 << 6), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {6, 1}
-            // For HEIGHT_SHARDED
+            .page_size = 2048, .total_elements = 1ull << 32, .num_cores = {6, 1}  // For HEIGHT_SHARDED
         },
         DRAMShardedReadbackParams{
-            .page_size = 2048, .dim0 = (1 << 6), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {1, 6}
-            // For WIDTH_SHARDED
+            .page_size = 2048, .total_elements = 1ull << 32, .num_cores = {1, 6}  // For WIDTH_SHARDED
         },
         DRAMShardedReadbackParams{
-            .page_size = 2048, .dim0 = (1 << 6), .dim1 = (1 << 13), .dim2 = (1 << 13), .num_cores = {3, 2}
-            // For BLOCK_SHARDED
+            .page_size = 2048, .total_elements = 1ull << 32, .num_cores = {3, 2}  // For BLOCK_SHARDED
         },
 
         // Large buffer approaching 12 GB limit
         DRAMShardedReadbackParams{
             .page_size = 2048,
-            .dim0 = 1,
-            .dim1 = 1,
-            .dim2 = 6 * (1ull << 30) - (64 * 1024),  // ~12 GB - 64KB
+            .total_elements = 6 * (1ull << 30) - (64 * 1024),  // ~12 GB - 64KB
             .num_cores = {6, 1}  // Will test with all layouts but cores optimized for HEIGHT_SHARDED
         }));
 
@@ -2718,10 +2678,7 @@ TEST_P(DRAMShardedReadbackFixture, TensixTestShardedReadback) {
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
 
     // Create tensor with dimensions from test parameters
-    const uint64_t dim0 = params.dim0;
-    const uint64_t dim1 = params.dim1;
-    const uint64_t dim2 = params.dim2;
-    const uint64_t total_elements = dim0 * dim1 * dim2;
+    const uint64_t total_elements = params.total_elements;
     const DeviceAddr size_bytes = total_elements * sizeof(uint16_t);  // bfloat16 is 16-bit
 
     // Create initialized input data
