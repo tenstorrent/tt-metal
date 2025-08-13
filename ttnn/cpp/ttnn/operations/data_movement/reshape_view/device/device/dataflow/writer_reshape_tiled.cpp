@@ -91,10 +91,11 @@ void kernel_main() {
                 uint32_t exp_idx = faceline_row * output_subtile_id + output_row_id;
                 exp_buffer[exp_idx] = input_ptr[faceline_row * subtile_id + row_id];
 
-                if (map_ptr[seg_idx].num_elements == faceline_row * 2) {  // if reading 2 facelines at a time
-
-                    exp_buffer[exp_idx + 1] = input_ptr[faceline_row * subtile_id + row_id + 1];
-                    faceline_ctr = two_facelines ? faceline_ctr + 1 : faceline_ctr + 2;
+                if (map_ptr[seg_idx].num_elements > faceline_row) {  // if reading more than one faceline at a time
+                    for (uint32_t f = 1; f < map_ptr[seg_idx].num_elements / faceline_row; f++) {
+                        exp_buffer[exp_idx + f] = input_ptr[faceline_row * subtile_id + row_id + f];
+                        faceline_ctr = two_facelines ? faceline_ctr + 1 : faceline_ctr + 2;
+                    }
                 }
                 faceline_ctr = two_facelines ? faceline_ctr + 1 : faceline_ctr + 2;
             }

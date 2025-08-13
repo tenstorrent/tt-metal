@@ -642,19 +642,49 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
 
 
 @pytest.mark.parametrize(
-    "input_shape, output_shape",
+    "H, W, C",
     [
-        ((1, 1018, 1018, 32), (1, 1, 1036324, 32)),
-        ((1, 990, 990, 64), (1, 1, 980100, 64)),
-        ((1, 1006, 254, 64), (1, 1, 255524, 64)),
-        ((1, 1020, 1020, 32), (1, 1, 1040400, 32)),
-        ((2, 2, 2), (1, 4, 2)),
-        ((2, 2, 16), (1, 4, 16)),
-        ((10, 17, 18), (1, 170, 18)),
-        ((984, 21, 129), (1, 20664, 129)),
+        ((4096, 512, 10)),
+        ((2048, 256, 64)),
+        ((1024, 128, 64)),
+        ((512, 64, 64)),
+        ((1024, 1024, 4)),
+        ((1020, 1020, 32)),
+        ((1016, 1016, 48)),
+        ((1008, 256, 56)),
+        ((992, 992, 64)),
+        ((1024, 1024, 128)),
+        ((128, 128, 16)),
+        ((1024, 1024, 256)),
+        ((512, 512, 256)),
+        ((256, 256, 512)),
+        ((512, 512, 512)),
+        ((1008, 1008, 56)),
     ],
 )
-def test_dram_tile_bfp8(input_shape, output_shape, device):
+def test_dram_tile_bfp8(H, W, C, device):
+    # 2D to 4D
+    input_shape = (1, 1, H * W, C)
+    output_shape = (1, H, W, C)
+    torch_input_tensor = torch.randn(input_shape)
+    torch_result = torch_input_tensor.reshape(output_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_output = ttnn.reshape(input_tensor, output_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_result, output, 0.9999)
+
+    # 4D to 2D
+    output_shape = (1, 1, H * W, C)
+    input_shape = (1, H, W, C)
     torch_input_tensor = torch.randn(input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
 
