@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
+#include "debug/dprint.h"
 #include "compute_kernel_api/reduce.h"
+#include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -12,7 +13,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
-    reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
+    reduce_max_row_init();
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -25,16 +26,10 @@ void MAIN {
             acquire_dst();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 cb_wait_front(tt::CBIndex::c_0, onetile);
-#if (MATH_ONLY == 1)
-                UNPACK((llk_unpack_AB(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(reduce_dst_idx);
-#elif (MATH_ONLY == 0)
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
-#endif
+                reduce_tile_max_row(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, reduce_dst_idx);
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
+            // dprint_tensix_dest_reg(0);
 
             cb_reserve_back(tt::CBIndex::c_16, onetile);
             pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
