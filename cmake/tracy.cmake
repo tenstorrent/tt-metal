@@ -50,46 +50,7 @@ endif()
 
 # Our current fork of tracy does not have CMake support for these subdirectories
 # Once we update, we can change this
-include(ExternalProject)
-ExternalProject_Add(
-    tracy_csv_tools
-    PREFIX ${TRACY_HOME}/csvexport/build/unix
-    SOURCE_DIR ${TRACY_HOME}/csvexport/build/unix
-    BINARY_DIR ${PROJECT_BINARY_DIR}/tools/profiler/bin
-    INSTALL_DIR ${PROJECT_BINARY_DIR}/tools/profiler/bin
-    STAMP_DIR "${PROJECT_BINARY_DIR}/tmp/tracy_stamp"
-    TMP_DIR "${PROJECT_BINARY_DIR}/tmp/tracy_tmp"
-    DOWNLOAD_COMMAND
-        ""
-    CONFIGURE_COMMAND
-        ""
-    INSTALL_COMMAND
-        cp ${TRACY_HOME}/csvexport/build/unix/csvexport-release .
-    BUILD_COMMAND
-        cd ${TRACY_HOME}/csvexport/build/unix && CXX=g++ TRACY_NO_LTO=1 make -f
-        ${TRACY_HOME}/csvexport/build/unix/Makefile
-)
-ExternalProject_Add(
-    tracy_capture_tools
-    PREFIX ${TRACY_HOME}/capture/build/unix
-    SOURCE_DIR ${TRACY_HOME}/capture/build/unix
-    BINARY_DIR ${PROJECT_BINARY_DIR}/tools/profiler/bin
-    INSTALL_DIR ${PROJECT_BINARY_DIR}/tools/profiler/bin
-    STAMP_DIR "${PROJECT_BINARY_DIR}/tmp/tracy_stamp"
-    TMP_DIR "${PROJECT_BINARY_DIR}/tmp/tracy_tmp"
-    DOWNLOAD_COMMAND
-        ""
-    CONFIGURE_COMMAND
-        ""
-    INSTALL_COMMAND
-        cp ${TRACY_HOME}/capture/build/unix/capture-release .
-    BUILD_COMMAND
-        cd ${TRACY_HOME}/capture/build/unix && CXX=g++ TRACY_NO_LTO=1 make -f ${TRACY_HOME}/capture/build/unix/Makefile
-)
-add_custom_target(
-    tracy_tools
-    ALL
-    DEPENDS
-        tracy_csv_tools
-        tracy_capture_tools
-)
+
+# Build Tracy tools (csvexport and capture) using CMake
+add_subdirectory(${TRACY_HOME}/csvexport)
+add_subdirectory(${TRACY_HOME}/capture)
