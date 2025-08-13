@@ -188,7 +188,7 @@ jobs:
   # and ensures that models attributes are in sync.
   models-chart-sync:
     needs: [find-changed-files]
-    if: needs.find-changed-files.outputs.model-charts-changed == 'true'
+    if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
