@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -36,9 +37,16 @@ struct OneFromOneConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneConfig& test_config) {
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     const size_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
 
@@ -49,9 +57,9 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     // NOTE: We don't know if the whole block of memory is actually available.
     //       This is something that could probably be checked
     L1AddressInfo master_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.master_core_coord);
+        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.master_core_coord);
     L1AddressInfo subordinate_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.subordinate_core_coord);
+        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.subordinate_core_coord);
     // Checks that both master and subordinate cores have the same L1 base address and size
     if (master_l1_info.base_address != subordinate_l1_info.base_address ||
         master_l1_info.size != subordinate_l1_info.size) {
@@ -76,7 +84,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
 
     // Kernels
     auto requestor_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/requestor.cpp",
         master_core_set,
         DataMovementConfig{
@@ -85,13 +93,14 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
             .compile_args = requestor_compile_args});
 
     // Runtime Arguments
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    CoreCoord physical_subordinate_core =
+        mesh_device->worker_core_from_logical_core(test_config.subordinate_core_coord);
     SetRuntimeArgs(
-        program, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
+        program_, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
@@ -106,7 +115,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     // Launch program and record outputs
     detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
     vector<uint32_t> packed_output;
     detail::ReadFromDeviceL1(
         device, test_config.master_core_coord, l1_base_address, transaction_size_bytes, packed_output);
@@ -128,7 +137,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
 
 void directed_ideal_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_id,
     CoreCoord master_core_coord,
@@ -163,7 +172,7 @@ void directed_ideal_test(
 
 void packet_sizes_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_id,
     CoreCoord master_core_coord,
@@ -207,7 +216,7 @@ void packet_sizes_test(
 
 void virtual_channels_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
@@ -257,7 +266,7 @@ void virtual_channels_test(
 
 void custom_test(
     ARCH arch_,
-    vector<IDevice*>& devices_,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_id,
     CoreCoord master_core_coord,
@@ -297,7 +306,7 @@ void custom_test(
 }  // namespace unit_tests::dm::core_from_core
 
 /* ========== Test case for one from one data movement; Test id = 5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     uint32_t test_id = 5;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
@@ -307,7 +316,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
 }
 
 /* ========== Test case for one from one data movement; Test id = 51 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
     uint32_t test_id = 51;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};
@@ -316,7 +325,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
         arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
     uint32_t test_id = 151;
@@ -331,7 +340,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
     );
 }
 
-TEST_F(DeviceFixture, TensixDataMovementOneFromOneCustom) {
+TEST_F(MeshDeviceFixture, TensixDataMovementOneFromOneCustom) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_id = 160;
 
