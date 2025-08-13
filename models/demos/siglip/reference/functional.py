@@ -11,7 +11,7 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-from models.demos.gemma3.tests.common import convert_state_dict
+from models.demos.siglip.tests.common import convert_state_dict
 
 
 def siglip_attention(
@@ -68,27 +68,88 @@ def siglip_attention(
 
     return attn_output, attn_weights
 
-    """SigLIP for image classification."""
-    # Get vision features (without pooling head for classification)
-    last_hidden_state, _ = siglip_vision_transformer(
-        pixel_values,
-        state_dict["vision_model"],
-        interpolate_pos_encoding=interpolate_pos_encoding,
-        patch_size=patch_size,
-        image_size=image_size,
-        num_hidden_layers=num_hidden_layers,
+
+def siglip_layer_norm(x: torch.Tensor, state_dict: Dict, eps: float = 1e-5) -> torch.Tensor:
+    """Layer normalization."""
+    state_dict = convert_state_dict(state_dict)
+    return F.layer_norm(x, x.shape[-1:], state_dict["weight"], state_dict["bias"], eps)
+
+
+def siglip_mlp(x: torch.Tensor, state_dict: Dict, hidden_act: str = "gelu") -> torch.Tensor:
+    """SigLIP MLP with configurable activation function."""
+    state_dict = convert_state_dict(state_dict)
+    # First linear layer
+    hidden_states = F.linear(x, state_dict["fc1"]["weight"], state_dict["fc1"].get("bias"))
+
+    # Activation function
+    if hidden_act == "gelu":
+        hidden_states = F.gelu(hidden_states)
+    elif hidden_act == "relu":
+        hidden_states = F.relu(hidden_states)
+    elif hidden_act == "silu":
+        hidden_states = F.silu(hidden_states)
+    else:
+        # Default to GELU for SigLIP
+        hidden_states = F.gelu(hidden_states)
+
+    # Second linear layer
+    hidden_states = F.linear(hidden_states, state_dict["fc2"]["weight"], state_dict["fc2"].get("bias"))
+
+    return hidden_states
+
+
+def siglip_encoder_layer(
+    hidden_states: torch.Tensor,
+    state_dict: Dict,
+    state_dict_prefix: str = "",
+    weight_cache_path: str = None,
+    dtype: torch.dtype = torch.bfloat16,
+    attention_mask: Optional[torch.Tensor] = None,
+    vision_dim: int = 1152,
+    num_heads: int = 16,
+    patch_size: int = 14,
+    layer_norm_eps: float = 1e-5,
+    hidden_act: str = "gelu",
+    attention_dropout: float = 0.0,
+) -> torch.Tensor:
+    """SigLIP encoder layer with pre-norm architecture."""
+    state_dict = convert_state_dict(state_dict)
+    # Self-attention block
+    residual = hidden_states
+
+    # Pre-attention layer norm
+    hidden_states = siglip_layer_norm(hidden_states, state_dict["layer_norm1"], layer_norm_eps)
+
+    # Self-attention
+    import pdb
+
+    pdb.set_trace()
+    hidden_states, attn_weights = siglip_attention(
+        hidden_states,
+        state_dict["self_attn"],
+        state_dict_prefix=state_dict_prefix,
+        weight_cache_path=weight_cache_path,
+        dtype=dtype,
+        vision_dim=vision_dim,
         num_heads=num_heads,
-        head_dim=head_dim,
-        layer_norm_eps=layer_norm_eps,
-        hidden_act=hidden_act,
-        attention_dropout=attention_dropout,
-        use_head=False,  # Don't use the attention pooling head for classification
+        patch_size=patch_size,
+        dropout=attention_dropout,
+        attention_mask=attention_mask,
     )
 
-    # Global average pooling over patch tokens
-    sequence_output = torch.mean(last_hidden_state, dim=1)  # [B, hidden_size]
+    # Add residual connection
+    hidden_states = residual + hidden_states
 
-    # Classification head
-    logits = F.linear(sequence_output, state_dict["classifier"]["weight"], state_dict["classifier"].get("bias"))
+    # MLP block
+    residual = hidden_states
 
-    return logits
+    # Pre-MLP layer norm
+    hidden_states = siglip_layer_norm(hidden_states, state_dict["layer_norm2"], layer_norm_eps)
+
+    # MLP
+    hidden_states = siglip_mlp(hidden_states, state_dict["mlp"], hidden_act)
+
+    # Add residual connection
+    hidden_states = residual + hidden_states
+
+    return hidden_states
