@@ -49,7 +49,7 @@ class TtDeiTLayer(nn.Module):
         output_attentions: bool = False,
     ) -> Union[Tuple[ttnn.Tensor, ttnn.Tensor], Tuple[ttnn.Tensor]]:
         self_attention_outputs = self.attention(
-            self.layernorm_before(hidden_states),  # in DeiT, layernorm is applied before self-attention
+            ttnn.to_layout(self.layernorm_before(hidden_states),ttnn.TILE_LAYOUT),  # in DeiT, layernorm is applied before self-attention
             head_mask,
             output_attentions=output_attentions,
         )
@@ -61,6 +61,7 @@ class TtDeiTLayer(nn.Module):
 
         # in DeiT, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)
+        layer_output = ttnn.to_layout(layer_output,ttnn.TILE_LAYOUT)
         layer_output = self.intermediate(layer_output)
 
         # second residual connection is done here

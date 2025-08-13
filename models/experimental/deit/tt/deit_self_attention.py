@@ -8,8 +8,8 @@ from typing import Optional
 
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
-from models.common.utility_functions import torch_to_tt_tensor_rm
-from models.common.helper_funcs import Linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor_tile
+from models.helper_funcs import Linear as TtLinear
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
 
@@ -24,26 +24,29 @@ class TtDeiTSelfAttention(nn.Module):
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
+        self.device = device
 
-        self.query_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.weight"], device)
-        self.query_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.bias"], device)
+        self.query_weight = torch_to_tt_tensor_tile(state_dict[f"{base_address}.query.weight"], device)
+        self.query_bias = torch_to_tt_tensor_tile(state_dict[f"{base_address}.query.bias"], device)
 
-        self.key_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.weight"], device)
-        self.key_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.bias"], device)
+        self.key_weight = torch_to_tt_tensor_tile(state_dict[f"{base_address}.key.weight"], device)
+        self.key_bias = torch_to_tt_tensor_tile(state_dict[f"{base_address}.key.bias"], device)
 
-        self.value_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.weight"], device)
-        self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.bias"], device)
+        self.value_weight = torch_to_tt_tensor_tile(state_dict[f"{base_address}.value.weight"], device)
+        self.value_bias = torch_to_tt_tensor_tile(state_dict[f"{base_address}.value.bias"], device)
 
         self.query = TtLinear(config.hidden_size, self.all_head_size, self.query_weight, self.query_bias)
         self.key = TtLinear(config.hidden_size, self.all_head_size, self.key_weight, self.key_bias)
         self.value = TtLinear(config.hidden_size, self.all_head_size, self.value_weight, self.value_bias)
 
     def transpose_for_scores(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        new_x_shape = list(x.padded_shape)[1:-1] + [
+        x = ttnn.to_layout(x,ttnn.ROW_MAJOR_LAYOUT)
+        new_x_shape = list(x.shape)[1:-1] + [
             self.num_attention_heads,
             self.attention_head_size,
         ]
         x = fallback_ops.reshape(x, *new_x_shape)
+        x = ttnn.to_layout(x,ttnn.TILE_LAYOUT)
         x = ttnn.permute(x, (0, 2, 1, 3))
         return x
 
@@ -66,7 +69,7 @@ class TtDeiTSelfAttention(nn.Module):
 
         attention_scores = ttnn.matmul(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = ttnn.full(attention_scores.padded_shape, self.attention_head_size)
+        attention_head_size_tt = ttnn.full(attention_scores.shape, self.attention_head_size,layout=ttnn.TILE_LAYOUT,device=self.device)
         attention_head_size_tt = ttnn.sqrt(attention_head_size_tt)
         attention_head_size_tt = ttnn.reciprocal(attention_head_size_tt)
 
@@ -74,6 +77,7 @@ class TtDeiTSelfAttention(nn.Module):
 
         # Normalize the attention scores to probabilities.
         attention_probs = fallback_ops.softmax(attention_scores, dim=-1)
+        attention_probs = ttnn.to_layout(attention_probs,ttnn.TILE_LAYOUT)
 
         # Mask heads if we want to
         if head_mask is not None:
@@ -83,6 +87,7 @@ class TtDeiTSelfAttention(nn.Module):
         context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
         new_context_layer_shape = (1,) + tuple(context_layer.padded_shape)[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
+        context_layer = ttnn.to_layout(context_layer,ttnn.TILE_LAYOUT)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
