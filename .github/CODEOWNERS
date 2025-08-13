@@ -143,29 +143,29 @@ ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-co
 ttnn/cpp/ttnn/operations/data_movement/sort/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nsorabaTT
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @jbbieniekTT @nsorabaTT
-ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
-ttnn/cpp/ttnn/operations/matmul/**/CMakeLists.txt @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT
+ttnn/cpp/ttnn/operations/matmul/**/CMakeLists.txt @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 ttnn/cpp/ttnn/operations/experimental/ccl/**/CMakeLists.txt @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/conv3d/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/cnn/ @tenstorrent/metalium-developers-convolutions @esmalTT
 ttnn/cpp/ttnn/operations/experimental/cnn/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @esmalTT @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
-ttnn/cpp/ttnn/operations/experimental/matmul/**/CMakeLists.txt @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT
+ttnn/cpp/ttnn/operations/experimental/matmul/**/CMakeLists.txt @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-developers-convolutions @sjameelTT @ntarafdar @amorrisonTT
 ttnn/cpp/ttnn/operations/experimental/padded_slice/ @tenstorrent/metalium-developers-convolutions @sjameelTT @ntarafdar @amorrisonTT
-ttnn/cpp/ttnn/operations/experimental/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @aczajkowskiTT
-ttnn/cpp/ttnn/operations/experimental/reduction/**/CMakeLists.txt @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @aczajkowskiTT @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @aczajkowskiTT
+ttnn/cpp/ttnn/operations/experimental/reduction/**/CMakeLists.txt @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @aczajkowskiTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 ttnn/cpp/ttnn/operations/eltwise/**/CMakeLists.txt @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/eltwise/quantization/ @wenbinlyuTT @patrickroberts @sjameelTT
 ttnn/cpp/ttnn/operations/eltwise/quantization/**/CMakeLists.txt @wenbinlyuTT @patrickroberts @sjameelTT @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @aczajkowskiTT
+ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @aczajkowskiTT
 ttnn/cpp/ttnn/operations/reduction/accumulation/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT @jbbieniekTT
-ttnn/cpp/ttnn/operations/reduction/**/CMakeLists.txt @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @aczajkowskiTT @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @bbradelTT @vsureshTT @edwinleeTT @nsorabaTT
-ttnn/cpp/ttnn/operations/normalization/**/CMakeLists.txt @yugaoTT @bbradelTT @vsureshTT @edwinleeTT @nsorabaTT @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/reduction/**/CMakeLists.txt @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @aczajkowskiTT @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @bbradelTT @vsureshTT @edwinleeTT @rmillerTT @nsorabaTT
+ttnn/cpp/ttnn/operations/normalization/**/CMakeLists.txt @yugaoTT @bbradelTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT
 ttnn/cpp/ttnn/operations/embedding/**/CMakeLists.txt @ntarafdar @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/embedding_backward/ @ntarafdar @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT
@@ -192,21 +192,21 @@ tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @cfjchu @omilyutin-tt
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
-tests/ttnn/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/ttnn/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT
 tests/ttnn/unit_tests/operations/data_movement/ @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @yugi957 @jvegaTT
-/tests/ttnn/**/unit_tests/operations/fused/ @yugaoTT @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
-/tests/ttnn/**/unit_tests/operations/reduce/ @bbradelTT @sjameelTT @nsorabaTT @vsureshTT @edwinleeTT @aczajkowskiTT @jbbieniekTT @mgajewskiTT @nmauriceTT
+/tests/ttnn/**/unit_tests/operations/fused/ @yugaoTT @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT
+/tests/ttnn/**/unit_tests/operations/reduce/ @bbradelTT @sjameelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @aczajkowskiTT @jbbieniekTT @mgajewskiTT @nmauriceTT
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
-tests/ttnn/nightly/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/ttnn/nightly/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @yugi957 @llongTT @jvegaTT @nardoTT @amorrisonTT
-tests/sweep_framework/sweeps/fused/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
-tests/sweep_framework/sweeps/matmul/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
-tests/sweep_framework/sweeps/reduction/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @aczajkowskiTT
+tests/sweep_framework/sweeps/fused/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT
+tests/sweep_framework/sweeps/matmul/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT
+tests/sweep_framework/sweeps/reduction/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @aczajkowskiTT
 
 # TTNN Distributed
 ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
