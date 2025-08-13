@@ -42,9 +42,10 @@ def test_attention(attention_func):
         hidden_states=random_inputs,
         attention_mask=None,
     )
-
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh_device = ttnn.open_mesh_device()
     result = attention_func(
-        mesh_device=ttnn.open_mesh_device(),
+        mesh_device=mesh_device,
         hidden_states=random_inputs,
         state_dict=reference_attention.state_dict(),
         state_dict_prefix="",
@@ -54,7 +55,7 @@ def test_attention(attention_func):
         dropout=0.0,
         attention_mask=None,
     )
-
+    ttnn.close_mesh_device(mesh_device)
     result, pcc = comp_pcc(reference_output[0], result[0])
 
     if result:
