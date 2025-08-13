@@ -59,7 +59,7 @@ jobs:
       - name: Run ${{ matrix.test-group.name }}
         env:
           ARCH_NAME: ${{ matrix.test-group.arch }}
-          BH_ARCH_YAML: blackhole_20_arch.yaml
+          BH_ARCH_YAML_TODEPRECATE: blackhole_20_arch.yaml
         run: |
           pytest ${{ matrix.test-group.cmd }}
 
