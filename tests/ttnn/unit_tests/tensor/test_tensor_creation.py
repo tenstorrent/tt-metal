@@ -356,3 +356,26 @@ def test_tensor_creation_with_tensor_spec(tensor_spec, device):
     assert tt_tensor.spec == tensor_spec
     py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
     assert torch.allclose(py_tensor, py_tensor_after_round_trip)
+
+
+@pytest.mark.parametrize(
+    "dtype,buffer",
+    [
+        (ttnn.uint8, [[1, 2, 3], [4, 5, 6]]),
+        (ttnn.uint16, [[1000, 2000, 3000], [4000, 5000, 6000]]),
+        (ttnn.int32, [[-100, -200, -300], [400, 500, 600]]),
+        (ttnn.uint32, [[1000000, 2000000, 3000000], [4000000, 5000000, 6000000]]),
+        (ttnn.float32, [[1.5, 2.7, 3.14], [4.2, 5.8, 6.9]]),
+        (ttnn.bfloat16, [[1.25, 2.75, 3.125], [4.375, 5.625, 6.875]]),
+    ],
+)
+def test_tensor_creation_from_buffer(dtype, buffer, device):
+    tt_tensor = ttnn.from_buffer(buffer, dtype, ttnn.ROW_MAJOR_LAYOUT, device)
+    assert tt_tensor.shape == [2, 3]
+    assert tt_tensor.dtype == dtype
+    assert tt_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    if dtype == ttnn.float32:
+        rounded = [[round(v, 5) for v in row] for row in tt_tensor.to_list()]
+        assert rounded == buffer
+    else:
+        assert tt_tensor.to_list() == buffer
