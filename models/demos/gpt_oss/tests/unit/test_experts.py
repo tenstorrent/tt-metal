@@ -106,7 +106,7 @@ def test_experts(
     reference_model = ReferenceExperts(config)
     state_dict = reference_model.state_dict()
     ccl_manager = CCLManager(mesh_device)
-    tt_model = Experts(mesh_device, config, state_dict, ccl_manager, tensor_cache_path=tensor_cache_dir)
+    tt_model = Experts(mesh_device, config, state_dict, ccl_manager, tensor_cache_path=None)
 
     # Run forward passes
     reference_output = reference_model(hidden_states, routing_weights)

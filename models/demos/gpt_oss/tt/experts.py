@@ -178,7 +178,7 @@ class SparseExperts(Experts):
 
         glu = gate * ttnn.sigmoid(gate * self.alpha)
         down_in0 = (up2 + 1) * glu
-        down_in0 = ttnn.reshape(down_in0, (1, seq_len, self.num_experts, self.hidden_size // 2))
+        down_in0 = ttnn.reshape(down_in0, (1, self.num_experts, seq_len, self.hidden_size // 2))
         # next_states = ttnn.matmul(((up2 + 1) * glu), self.down_proj) + self.down_proj_bias
 
         down_proj2 = ttnn.permute(self.down_proj, (1, 0, 2, 3))
@@ -190,6 +190,7 @@ class SparseExperts(Experts):
             nnz=self.num_experts_per_tok,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
+            batched_input_a=True,
         )
         next_states = (
             ttnn.reshape(down2, (self.num_experts, batch_size, seq_len, self.hidden_size)) + self.down_proj_bias

@@ -393,6 +393,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)0,      // batchB
             (std::uint32_t)false,  // sparsity_is_dram
             (std::uint32_t)0,      // sparsity_log2_of_pagesize
+            (std::uint32_t)true    // bcast_A
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
