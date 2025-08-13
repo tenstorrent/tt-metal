@@ -33,8 +33,6 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     // one gain parameter per channel
     assert((gamma->get_value().logical_shape().to_array_4D() == std::array<uint32_t, 4>{1, 1, 1, C}));
 
-    auto device = &autograd::ctx().get_device();
-
     auto rmsnorm_fw_result = ttml::metal::rmsnorm_fw(tensor->get_value(), gamma->get_value(), true, epsilon);
     if (rmsnorm_fw_result.size() != 2U) {
         throw std::runtime_error(fmt::format(
