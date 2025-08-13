@@ -15,7 +15,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
-        (4, [1, 1, 256, 64], 3, ttnn.TILE_LAYOUT),
+        (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
         (2, [1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
     ],
     ids=["4_device_test", "2_device_test"],
