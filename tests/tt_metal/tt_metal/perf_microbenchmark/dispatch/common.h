@@ -123,7 +123,7 @@ DeviceData::DeviceData(
     this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
 
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
+    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
     for (const CoreCoord& core_coord : pcie_cores) {
         CoreCoord core = {core_coord.x, core_coord.y};
         // TODO: make this all work w/ phys coords
