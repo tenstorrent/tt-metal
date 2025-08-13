@@ -28,7 +28,7 @@ jobs:
     name: ttnn stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        contains('P150b, N150, N300', inputs.runner-label) && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
         || (inputs.runner-label == 'config-tg' || inputs.runner-label == 'topology-6u') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
