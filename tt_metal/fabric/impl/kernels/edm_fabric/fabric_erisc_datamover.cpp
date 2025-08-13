@@ -2079,7 +2079,8 @@ void kernel_main() {
     const auto downstream_edm_vc0_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     // remote address for flow control
-    const auto downstream_edm_vc0_semaphore_id = get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID
+    const auto downstream_edm_vc0_semaphore_id =
+        get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID // UC: Remove
     const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -2091,7 +2092,8 @@ void kernel_main() {
     const auto downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     // remote address for flow control
-    const auto downstream_edm_vc1_semaphore_id = get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID
+    const auto downstream_edm_vc1_semaphore_id =
+        get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID // UC: Remove
     const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_vc1_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -2304,7 +2306,6 @@ void kernel_main() {
                     (downstream_edm_vc0_noc_y >> (edm_index * 8)) & 0xFF,
                     downstream_edm_vc0_buffer_base_address,
                     DOWNSTREAM_SENDER_NUM_BUFFERS,
-                    downstream_edm_vc0_semaphore_id,
                     downstream_edm_vc0_worker_registration_id,
                     downstream_edm_vc0_worker_location_info_address,
                     channel_buffer_size,
@@ -2375,7 +2376,6 @@ void kernel_main() {
                     downstream_edm_vc1_noc_y,
                     downstream_edm_vc1_buffer_base_address,
                     DOWNSTREAM_SENDER_NUM_BUFFERS,
-                    downstream_edm_vc1_semaphore_id,
                     downstream_edm_vc1_worker_registration_id,
                     downstream_edm_vc1_worker_location_info_address,
                     channel_buffer_size,

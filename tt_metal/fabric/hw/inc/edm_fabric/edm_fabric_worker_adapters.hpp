@@ -135,7 +135,6 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_y,
             edm_buffer_base_addr,
             num_buffers_per_channel,
-            edm_l1_sem_id,
             edm_connection_handshake_l1_addr,
             edm_worker_location_info_addr,  // The EDM's location for `EDMChannelWorkerLocationInfo`
             buffer_size_bytes,
@@ -157,7 +156,6 @@ struct WorkerToFabricEdmSenderImpl {
         uint8_t edm_worker_y,
         std::size_t edm_buffer_base_addr,
         uint8_t num_buffers_per_channel,
-        size_t edm_l1_sem_id,  // may also be an address
         std::size_t edm_connection_handshake_l1_id,
         std::size_t edm_worker_location_info_addr,  // The EDM's location for `EDMChannelWorkerLocationInfo`
         uint16_t buffer_size_bytes,
@@ -171,7 +169,6 @@ struct WorkerToFabricEdmSenderImpl {
         uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
         this->direction = direction;
         this->edm_buffer_addr = edm_buffer_base_addr;
-        this->edm_buffer_slot_write_counter_addr = edm_l1_sem_id;
         this->worker_credits_stream_id = worker_credits_stream_id.get();
 
         this->edm_buffer_local_free_slots_read_ptr =
@@ -221,7 +218,6 @@ struct WorkerToFabricEdmSenderImpl {
         uint8_t edm_worker_y,
         std::size_t edm_buffer_base_addr,
         uint8_t num_buffers_per_channel,
-        size_t edm_l1_sem_id,  // may also be an address
         std::size_t edm_connection_handshake_l1_id,
         std::size_t edm_worker_location_info_addr,  // The EDM's location for `EDMChannelWorkerLocationInfo`
         uint16_t buffer_size_bytes,
@@ -240,7 +236,6 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_y,
             edm_buffer_base_addr,
             num_buffers_per_channel,
-            edm_l1_sem_id,
             edm_connection_handshake_l1_id,
             edm_worker_location_info_addr,
             buffer_size_bytes,
@@ -505,10 +500,6 @@ struct WorkerToFabricEdmSenderImpl {
 
     std::array<uint32_t, EDM_NUM_BUFFER_SLOTS> edm_buffer_slot_addrs;
 
-    // the L1 address of buffer_slot wrptr on the EDM we are writing to
-    // Writing to this address will tell the EDM that the wrptr is changed and
-    // that new data is available
-    size_t edm_buffer_slot_write_counter_addr;
     uint32_t worker_credits_stream_id;
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_read_ptr;
     size_t edm_buffer_remote_free_slots_update_addr;
