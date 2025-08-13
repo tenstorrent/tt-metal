@@ -22,7 +22,7 @@ jobs:
     secrets: inherit
     with:
       branch_name: ${{ github.head_ref }}
-      runs_on: tt-beta-ubuntu-2204-n150-large-stable
+      runs_on: tt-ubuntu-2204-n150-stable
 
   test-tt-metal-blackhole:
     name: "🕳️ Running tests (Blackhole)"
@@ -31,4 +31,4 @@ jobs:
     secrets: inherit
     with:
       branch_name: ${{ github.head_ref }}
-      runs_on: tt-beta-ubuntu-2204-p150b-large-stable
+      runs_on: tt-ubuntu-2204-p150b-stable

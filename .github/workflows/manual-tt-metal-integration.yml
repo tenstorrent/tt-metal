@@ -12,9 +12,9 @@ on:
         required: true
         type: choice
         options:  # List of options for the dropdown
-          - tt-beta-ubuntu-2204-n150-large-stable
-          - tt-beta-ubuntu-2204-n300-large-stable
-        default: "tt-beta-ubuntu-2204-n150-large-stable"
+          - tt-ubuntu-2204-n150-stable
+          - tt-ubuntu-2204-n300-stable
+        default: "tt-ubuntu-2204-n150-stable"
 
 jobs:
   test-tt-metal:
