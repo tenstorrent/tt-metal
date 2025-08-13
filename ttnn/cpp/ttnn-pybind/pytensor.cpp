@@ -407,7 +407,6 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
         // the float32 tiling on device might lose precision,
         {{"float16", DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
         {{"float16", DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32, "int32" }},
-        {{"float16", DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16, std::nullopt }},
         {{"float32", DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
         {{"float32", DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32, "int32" }},
 
