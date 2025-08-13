@@ -3,8 +3,8 @@
         "4U": {
             "prefill_pcc": 0.9125991571810271,
             "decode_pcc": 0.9498023316321954,
-            "throughput": 61.00,
-            "absolute_margin": 1.0,
+            "throughput": 59.87,
+            "absolute_margin": 2.0,
             "token_pos": 127
         }
     },
