@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -84,6 +83,7 @@ class TtLlamaAttention(LightweightModule):
         self.qk_norm = configuration.qk_norm
 
         self.max_seq_len = configuration.max_seq_len
+        self.max_seq_len = 256
         self.grid_size = configuration.max_grid_size
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
@@ -143,8 +143,6 @@ class TtLlamaAttention(LightweightModule):
 
         # Llama3: [1, 1, 8192, 10240] -> [2304, 1536]
         # Qwen3: [1, 1, 5120, 10240] -> [1280, 1536]
-        print(f"qkv_cat.shape: {qkv_cat.shape}")
-        print(f"self.model_config['SHARDED_QKV_RING_MEMCFG']: {self.model_config['SHARDED_QKV_RING_MEMCFG']}")
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.dtype,
@@ -176,9 +174,6 @@ class TtLlamaAttention(LightweightModule):
             configuration.dim // configuration.num_devices, configuration.dim
         )
 
-        logger.info(f"pt_wo.shape: {pt_wo.shape}")
-        logger.info(f"self.model_config['SHARDED_WO_RING_MEMCFG']: {self.model_config['SHARDED_WO_RING_MEMCFG']}")
-        logger.info(f"wo_mem_config: {wo_mem_config}")
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=ttnn.bfloat8_b,
@@ -341,8 +336,8 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        xqkv_fused_sharded = ttnn.matmul(
-            x,
+        xqkv_fused_sharded = ttnn.matmul(  # [1, 1, 32, 1280]
+            x,  # [1, 1, 32, 1280]
             self.wqkv,
             program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
@@ -486,7 +481,7 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(q_heads_1BQD)
 
-        attn_output_cat = self.tt_ccl.all_gather_concat(
+        attn_output_cat = self.tt_ccl.all_gather_concat(  # [1, 1, 32, 1024]
             attn_output_1G4D_sharded,
             dim=1,
             cluster_axis=1,
@@ -497,10 +492,8 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_1G4D_sharded)
         # print("done concat heads")
 
-        breakpoint()
-
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
-        dense_out_ttnn = ttnn.matmul(
+        dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
             attn_output_cat,
             self.wo,
             program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
@@ -510,17 +503,14 @@ class TtLlamaAttention(LightweightModule):
             dtype=ttnn.bfloat8_b,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
-        breakpoint()
         # [1, 1, 32, 2304]
-        # print("done matmul")
-        dense_out_reduced = self.tt_ccl.line_all_reduce(
+        dense_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 32, 1280]
             dense_out_ttnn,
             cluster_axis=0,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-        breakpoint()
         ttnn.deallocate(dense_out_ttnn)
 
         # print("done all reduce")

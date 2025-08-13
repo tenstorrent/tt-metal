@@ -206,21 +206,42 @@ class TT_CCL:
 
         # Layernorm
         grid_offset = ttnn.CoreCoord(1, 0)
-        tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-            shape=(32, 128),
-            core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+        tt_stats_sharded_config = (
+            ttnn.create_sharded_memory_config(
+                shape=(32, 128),
+                core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            if not self.use_qwen_mlp
+            else ttnn.create_sharded_memory_config(
+                shape=(32, 64),
+                core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
         )
 
-        tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, M, 128)),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=tt_stats_sharded_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        tt_buffer = (
+            ttnn.from_torch(
+                torch.zeros((1, 1, M, 128)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=tt_stats_sharded_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            if not self.use_qwen_mlp
+            else ttnn.from_torch(
+                torch.zeros((1, 1, M, 64)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
         )
         persistent_buffers["LAYERNORM"] = tt_buffer
 
@@ -1242,3 +1263,35 @@ def tt_sharded_distributed_rmsnorm(
     )
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, res
+
+
+def tt_qwen_sharded_distributed_rmsnorm(
+    inp, epsilon, gamma, mesh_device, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
+):
+    inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
+
+    # Run distributed rmsnorm part 1
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
+
+    # All gather stats
+    tt_stats = ttnn.all_gather(
+        tt_stats,
+        3,
+        num_links=1,
+        cluster_axis=1,
+        mesh_device=mesh_device,
+        memory_config=ln_sharded_stats_memcfg,
+        topology=ttnn.Topology.Linear,
+    )
+
+    # Run distributed rmsnorm part 2
+    tt_out = ttnn.rms_norm_post_all_gather(
+        inp,
+        epsilon=epsilon,
+        weight=gamma,
+        program_config=ln_sharded_progcfg,
+        stats=tt_stats,
+    )
+    tt_stats.deallocate(True)
+
+    return tt_out
