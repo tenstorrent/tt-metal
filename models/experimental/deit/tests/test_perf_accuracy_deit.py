@@ -14,14 +14,14 @@ from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeach
 from models.experimental.deit.tt.deit_for_image_classification_with_teacher import (
     deit_for_image_classification_with_teacher,
 )
-from models.common.utility_functions import (
+from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    torch_to_tt_tensor_rm,
+    torch_to_tt_tensor_tile,
     profiler,
 )
 from models.perf.perf_utils import prep_perf_report
-from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import torch_to_tt_tensor_tile, tt_to_torch_tensor
 from models.experimental.deit.tests.demo_utils import get_data
 
 
@@ -45,11 +45,11 @@ def run_perf_deit(
 
     sample_image = hf_cat_image_sample_input
 
-    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
-    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    image_processor = AutoImageProcessor.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1")
+    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1")
     input = image_processor(sample_image, return_tensors="pt")
 
-    tt_input = torch_to_tt_tensor_rm(input["pixel_values"], device, put_on_device=False)
+    tt_input = torch_to_tt_tensor_tile(input["pixel_values"], device)
     tt_model_with_teacher = deit_for_image_classification_with_teacher(device)
 
     with torch.no_grad():
@@ -100,7 +100,7 @@ def run_perf_deit(
                 input_image = input_image.convert(mode="RGB")
 
             inputs = image_processor(images=input_image, return_tensors="pt")
-            tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
+            tt_inputs = torch_to_tt_tensor_tile(inputs["pixel_values"], device)
 
             tt_output_with_teacher = tt_model_with_teacher(tt_inputs)[0]
             tt_output_with_teacher = tt_to_torch_tensor(tt_output_with_teacher).squeeze(0)[:, 0, :]
@@ -160,6 +160,7 @@ def run_perf_deit(
 )
 def test_perf_bare_metal(
     device,
+    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
@@ -189,6 +190,7 @@ def test_perf_bare_metal(
 )
 def test_perf_virtual_machine(
     device,
+    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,

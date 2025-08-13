@@ -7,20 +7,26 @@ import torch
 from loguru import logger
 
 
-from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, torch_to_tt_tensor_tile
 from models.experimental.deit.tt.deit_for_image_classification import deit_for_image_classification
 
 
 def test_gs_demo(hf_cat_image_sample_input, device):
     image = hf_cat_image_sample_input
 
-    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    image_processor = AutoImageProcessor.from_pretrained(
+        "/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1",local_files_only=True
+    )
     inputs = image_processor(images=image, return_tensors="pt")
 
-    torch_model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    torch_model = DeiTForImageClassification.from_pretrained(
+        "/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1",local_files_only=True
+    )
     torch_model.eval()
 
-    tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
+    tt_inputs = torch_to_tt_tensor_tile(
+        inputs["pixel_values"], device
+    )
     tt_model = deit_for_image_classification(device)
 
     with torch.no_grad():
