@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <random>
 #include <set>
+
+#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_context.hpp"
 
 #include <tt-logger/tt-logger.hpp>
