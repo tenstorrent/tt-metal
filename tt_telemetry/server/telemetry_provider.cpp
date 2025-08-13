@@ -18,8 +18,8 @@
 #include "impl/context/metal_context.hpp"
 
 #include <server/telemetry_provider.hpp>
-#include <telemetry/ethernet_endpoint.hpp>
-#include <telemetry/ethernet_helpers.hpp>
+#include <telemetry/ethernet/ethernet_endpoint.hpp>
+#include <telemetry/ethernet/ethernet_helpers.hpp>
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
 

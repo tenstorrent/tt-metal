@@ -1,5 +1,5 @@
-#include <telemetry/ethernet_endpoint.hpp>
-#include <telemetry/ethernet_helpers.hpp>
+#include <telemetry/ethernet/ethernet_endpoint.hpp>
+#include <telemetry/ethernet/ethernet_helpers.hpp>
 
 #include <boost/functional/hash.hpp>
 
