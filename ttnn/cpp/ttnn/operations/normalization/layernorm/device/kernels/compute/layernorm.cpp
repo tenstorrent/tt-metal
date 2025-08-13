@@ -121,14 +121,14 @@ void MAIN {
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
     if constexpr (fuse_pre_add) {
-        compute_kernel_hw_startup(cb_in, cb_inb, cb_x);
+        binary_op_init_common(cb_in, cb_inb, cb_x);
         pack_reconfig_data_format(cb_x);
     } else {
         if constexpr (rms_norm) {
-            compute_kernel_hw_startup(cb_xmm, cb_xmm, cb_x2);
+            binary_op_init_common(cb_xmm, cb_xmm, cb_x2);
             pack_reconfig_data_format(cb_x2);
         } else {
-            compute_kernel_hw_startup(cb_in, cb_scaler, cb_ex);
+            binary_op_init_common(cb_in, cb_scaler, cb_ex);
             pack_reconfig_data_format(cb_ex);
         }
     }
@@ -137,6 +137,8 @@ void MAIN {
         if constexpr (fuse_pre_add) {
             // x = in + b
             add_tiles_init(cb_in, cb_inb);
+            reconfig_data_format(cb_in, cb_inb);
+            pack_reconfig_data_format(cb_x);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 ACQ();
                 cb_wait_front(cb_in, blk);
@@ -215,6 +217,8 @@ void MAIN {
             // RMS norm
             // x^2
             mul_tiles_init(cb_xmm, cb_xmm);
+            reconfig_data_format(cb_xmm, cb_xmm);
+            pack_reconfig_data_format(cb_x2);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
                 cb_reserve_back(cb_x2, blk);      // can probably use less space for this if we block
