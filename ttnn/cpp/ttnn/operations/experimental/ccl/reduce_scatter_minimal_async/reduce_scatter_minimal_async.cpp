@@ -32,11 +32,6 @@ bool use_composite_reduce_scatter(
         return false;
     }
 
-    // Use composite for row major tensors
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        return true;
-    }
-
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -50,8 +45,19 @@ bool use_composite_reduce_scatter(
         num_devices = ttnn::ccl::get_active_physical_devices(input_tensor).size();
     }
 
+    // Must scatter evenly
+    auto input_shape = input_tensor.logical_shape();
+    if (input_shape[scatter_dim] % num_devices != 0) {
+        return false;
+    }
+
+    // Use composite for row major tensors
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        return true;
+    }
+
     // Use composite if tiled and scattering on padded dim 3
-    auto output_shape = input_tensor.logical_shape();
+    auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
     if (scatter_dim == 3 && output_shape[scatter_dim] % 32 != 0) {
         return true;
