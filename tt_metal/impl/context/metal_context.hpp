@@ -85,6 +85,7 @@ public:
         std::optional<uint8_t> num_routing_planes = std::nullopt,
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED);
     void initialize_fabric_config();
+    void initialize_fabric_tensix_config();
     tt_fabric::FabricConfig get_fabric_config() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
