@@ -229,7 +229,15 @@ class TtEulerDiscreteScheduler(nn.Module):
         # NOTE: "original_sample" should not be an expected prediction_type but is left in for
         # backwards compatibility
         assert self.prediction_type == "epsilon"
-        pred_original_sample = sample - model_output * sigma_hat
+        pred_original_sample = model_output * sigma_hat
+        print(f"pred_original_sample shape: {pred_original_sample.shape}")
+        print(f"pred_original_sample memory config: {pred_original_sample.memory_config()}")
+        print(f"pred_original_sample layout: {pred_original_sample.layout}")
+        print(f"sample shape: {sample.shape}")
+        print(f"sample memory config: {sample.memory_config()}")
+        print(f"sample layout: {sample.layout}")
+        
+        pred_original_sample = sample - pred_original_sample
 
         # 2. Convert to an ODE derivative
         derivative = (sample - pred_original_sample) * ttnn.reciprocal(sigma_hat)
