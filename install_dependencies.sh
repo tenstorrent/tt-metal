@@ -208,6 +208,8 @@ init_packages() {
                 "libcapstone-dev"
                 "libc++-17-dev"
                 "libc++abi-17-dev"
+                "libopencv-dev"
+                "libopencv-contrib-dev"
                 "wget"
                 "curl"
                 "xxd"
@@ -239,6 +241,7 @@ init_packages() {
                 "libstdc++"
                 "tbb-devel"
                 "capstone-devel"
+                "opencv-devel"
                 "wget"
                 "curl"
                 "vim-common" # Includes xxd
