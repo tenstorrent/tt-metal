@@ -14,17 +14,19 @@ namespace operations {
 
 namespace unary {
 
-Tensor Tanh_accurate::invoke(
+namespace {
+inline Tensor invoke_accurate_common(
     QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    UnaryOpType op_type) {
     auto input_dtype = input_tensor.dtype();
     DataType output_dtype = input_dtype;
 
     TT_FATAL(
         input_dtype == DataType::BFLOAT16 || input_dtype == DataType::FLOAT32,
-        "Supported dtypes for tanh with accuracy mode enabled is : BFLOAT16 or FLOAT32");
+        "Supported dtypes for accurate operations is : BFLOAT16 or FLOAT32");
 
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
 
@@ -38,7 +40,7 @@ Tensor Tanh_accurate::invoke(
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
 
-    const std::vector<UnaryWithParam>& op_chain = {UnaryWithParam{UnaryOpType::TANH}};
+    const std::vector<UnaryWithParam>& op_chain = {UnaryWithParam{op_type}};
     return prim::tanh_accurate(
         queue_id,
         input_tensor,
@@ -50,39 +52,23 @@ Tensor Tanh_accurate::invoke(
         bfp8_pack_precise,
         optional_output_tensor);
 }
+}  // namespace
+
+Tensor Tanh_accurate::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return invoke_accurate_common(queue_id, input_tensor, memory_config, optional_output_tensor, UnaryOpType::TANH);
+}
 
 Tensor Tanhshrink_accurate::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    auto input_dtype = input_tensor.dtype();
-    DataType output_dtype = input_dtype;
-
-    bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
-
-    bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
-                            output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
-                            input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
-
-    bool bfp8_pack_precise = input_dtype == DataType::BFLOAT8_B;
-
-    auto output_memory_config = optional_output_tensor.has_value()
-                                    ? optional_output_tensor.value().memory_config()
-                                    : memory_config.value_or(input_tensor.memory_config());
-
-    const std::vector<UnaryWithParam>& op_chain = {UnaryWithParam{UnaryOpType::TANHSHRINK}};
-
-    return prim::tanh_accurate(
-        queue_id,
-        input_tensor,
-        op_chain,
-        output_dtype,
-        output_memory_config,
-        fp32_dest_acc_en,
-        preserve_fp32_precision,
-        bfp8_pack_precise,
-        optional_output_tensor);
+    return invoke_accurate_common(
+        queue_id, input_tensor, memory_config, optional_output_tensor, UnaryOpType::TANHSHRINK);
 }
 
 }  // namespace unary
