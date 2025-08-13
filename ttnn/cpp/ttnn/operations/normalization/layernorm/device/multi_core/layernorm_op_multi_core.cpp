@@ -351,7 +351,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         compute_args.push_back(W);
         compute_args.push_back(ttnn::types::TILE_SIZE);
         compute_args.push_back(static_cast<uint32_t>(rms_norm));
-        compute_args.push_back(static_cast<uint32_t>(b.has_value()));
+        compute_args.push_back(static_cast<uint32_t>(fuse_pre_add));
     }
 
     auto compute_kernels_id = CreateKernel(
@@ -1463,7 +1463,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
-    float winv = 1.0f / block_w;                                                               // bcast-w scaler
+    float winv = 1.0f / block_w;
     float cinv = is_post_all_gather ? (1.0f / num_distributed_devices) : (1.0f / num_blocks);  // bcast-cores scaler
     float cinv_one = 1.0f;  // bcast-cores scaler for all-to-all cores not on first row/col
     auto bfloat_cinv_value = bfloat16(cinv);
