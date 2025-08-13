@@ -92,9 +92,10 @@ RISC-V cores can only access their private memory and the local shared SRAM dire
     * Stack variables cannot be used as DMA source or destination
     * L1 buffers (allocated in the host program) and circular buffers are accessible via NoC
 
-    e.g. The following will not work.
+    e.g. The following **will not** work.
 
-    .. code-block::
+    .. code-block:: c++
+
         // This WILL NOT work as arr lives on the stack this the private memory
         int arr[8];
         noc_async_read(noc_addr, uint32_t(&arr), sizeof(arr));
