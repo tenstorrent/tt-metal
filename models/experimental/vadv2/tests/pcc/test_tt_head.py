@@ -5,7 +5,6 @@
 import pytest
 import torch
 import ttnn
-import os
 import torch.nn as nn
 import numpy as np
 from models.experimental.vadv2.reference import head
@@ -30,6 +29,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_layernorm_parameter,
 )
+from models.experimental.vadv2.common import load_torch_model
 
 
 def custom_preprocessor(model, name):
@@ -346,10 +346,8 @@ def create_vadv2_model_parameters_head(model: ResNet, device=None):
 def test_vadv2_head(
     device,
     reset_seeds,
+    model_location_generator,
 ):
-    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = head.VADHead(
         with_box_refine=True,
         as_two_stage=False,
@@ -417,13 +415,9 @@ def test_vadv2_head(
         valid_fut_ts=6,
     )
 
-    torch_dict = torch.load(weights_path)
-
-    state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("pts_bbox_head"))}
-
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), state_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model=torch_model, layer="pts_bbox_head", model_location_generator=model_location_generator
+    )
 
     parameter = create_vadv2_model_parameters_head(torch_model, device=device)
 

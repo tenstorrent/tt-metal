@@ -11,13 +11,16 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.utils.common_demo_utils import load_coco_class_names
+from models.demos.utils.common_demo_utils import (
+    LoadImages,
+    get_mesh_mappers,
+    load_coco_class_names,
+    postprocess,
+    preprocess,
+    save_yolo_predictions_by_model,
+)
 from models.demos.yolov12x.common import YOLOV12_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov12x.demo.demo_utils import LoadImages
 from models.demos.yolov12x.runner.performant_runner import YOLOv12xPerformantRunner
-from models.demos.yolov12x.tt.common import get_mesh_mappers
-from models.experimental.yolo_eval.evaluate import save_yolo_predictions_by_model
-from models.experimental.yolo_eval.utils import postprocess, preprocess
 from models.utility_functions import disable_persistent_kernel_cache
 
 
