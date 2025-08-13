@@ -15,6 +15,7 @@ from models.demos.siglip.tests.common import convert_state_dict
 
 
 def siglip_attention(
+    mesh_device,
     hidden_states: torch.Tensor,
     state_dict: Dict,
     state_dict_prefix: str,

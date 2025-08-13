@@ -11,9 +11,10 @@ import torch
 from transformers import AutoConfig
 from transformers.models.siglip.modeling_siglip import SiglipSdpaAttention
 
+import ttnn
 from models.demos.siglip.compare import comp_pcc
 from models.demos.siglip.reference.functional import siglip_attention
-from models.demos.siglip.reference.functional_ttnn import siglip_attention_ttnn
+from models.demos.siglip.tt.attention import siglip_attention_ttnn
 
 
 @pytest.mark.parametrize("attention_func", [siglip_attention, siglip_attention_ttnn])
@@ -43,6 +44,7 @@ def test_attention(attention_func):
     )
 
     result = attention_func(
+        mesh_device=ttnn.open_mesh_device(),
         hidden_states=random_inputs,
         state_dict=reference_attention.state_dict(),
         state_dict_prefix="",
