@@ -714,8 +714,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
         kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
     } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // ROW_BCAST: Now using standard 3-CB pattern (CB0=predicate, CB1=true, CB2=false)
-        // No special defines needed - using standard compute kernel logic
+        // ROW_BCAST: Using dedicated row broadcast compute kernel
+        // No special defines needed - the row broadcast compute kernel handles broadcast logic
     }
 
     kernel_defines["WHERE_LLK"] = "where_tile";
