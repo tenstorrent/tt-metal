@@ -25,7 +25,7 @@ void bind_scatter(py::module& module) {
                 * `src` (Tensor): The tensor containing the source values to be scattered onto input.
 
             Keyword Arguments:
-                * `reduce` (ScatterReductionType, optional): currently not supported - this is the option to reduce numbers going to the same destination in output with a function like `amax`, `amin`, `sum`, etc.
+                * `reduce` (str, optional): this is the option to reduce numbers going to the same destination in output with any of the following functions: 'max', 'min', 'add', 'multiply'
                 * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
 
             Additional info:
@@ -64,7 +64,7 @@ void bind_scatter(py::module& module) {
                const ttnn::Tensor& index_tensor,
                const ttnn::Tensor& source_tensor,
                const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
-               const std::optional<scatter::ScatterReductionType>& opt_reduction) -> Tensor {
+               const std::optional<std::string>& opt_reduction) -> Tensor {
                 return self(input_tensor, dim, index_tensor, source_tensor, opt_out_memory_config, opt_reduction);
             },
             py::arg("input").noconvert(),
