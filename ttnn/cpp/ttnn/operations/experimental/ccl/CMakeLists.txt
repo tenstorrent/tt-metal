@@ -14,7 +14,7 @@ set_target_properties(
 target_sources(
     ttnn_op_experimental_ccl
     PUBLIC
-        FILE_SET headers
+        FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
@@ -92,7 +92,7 @@ install(
     TARGETS
         ttnn_op_experimental_ccl
     FILE_SET
-    headers
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl
         COMPONENT ttnn-runtime
 )
