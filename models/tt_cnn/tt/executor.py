@@ -241,21 +241,16 @@ class MultiCQModelOverlappedInputExecutor(Executor):
         """
         Compiles the model by running it once to generate kernels using multi-command queue synchronization.
         """
-        # Validate input
         if host_input.storage_type() != ttnn.StorageType.HOST:
             raise ValueError("Input tensor must be on host")
 
-        # Allocate persistent DRAM input tensor
         self.dram_input_tensor = ttnn.allocate_tensor_on_device(
             host_input.shape, host_input.dtype, host_input.layout, self.device, self.dram_input_memory_config
         )
 
-        # Initialize synchronization event
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
 
-        # Run model once to compile kernels
         self._compile_model(host_input)
-
         ttnn.synchronize_device(self.device)
 
     def _compile_model(self, host_input):
@@ -272,8 +267,6 @@ class MultiCQModelOverlappedInputExecutor(Executor):
         l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         output_tensor = self.model(l1_input_tensor)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
-
-        # Cleanup tensors
         if l1_input_tensor.is_allocated():
             ttnn.deallocate(l1_input_tensor, force=True)
         if output_tensor.is_allocated():
@@ -294,8 +287,6 @@ class MultiCQModelOverlappedInputExecutor(Executor):
         l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         output_tensor = self.model(l1_input_tensor)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
-
-        # Cleanup L1 input tensor
         if l1_input_tensor.is_allocated():
             ttnn.deallocate(l1_input_tensor, force=True)
 
@@ -354,24 +345,17 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         Compiles the model by running it once to generate kernels, then capturing a trace
         for efficient repeated execution using multi-command queue synchronization.
         """
-        # Validate input
         if host_input.storage_type() != ttnn.StorageType.HOST:
             raise ValueError("Input tensor must be on host")
 
-        # Allocate persistent DRAM input tensor
         self.dram_input_tensor = ttnn.allocate_tensor_on_device(
             host_input.shape, host_input.dtype, host_input.layout, self.device, self.dram_input_memory_config
         )
 
-        # Initialize synchronization event
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
 
-        # Run model once to compile kernels
         self._compile_model(host_input)
-
-        # Capture trace for efficient repeated execution
         self._capture_trace(host_input)
-
         ttnn.synchronize_device(self.device)
 
     def _compile_model(self, host_input):

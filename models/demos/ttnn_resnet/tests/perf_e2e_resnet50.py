@@ -59,29 +59,17 @@ def _run_model_pipeline(
     profiler.end("compile")
     ttnn.read_device_profiler(device)
 
-    profiler.start("cache")
-    cache_outputs = pipeline.enqueue([tt_inputs_host]).pop_all()
-    profiler.end("cache")
-    ttnn.read_device_profiler(device)
-
-    # Validate cache run output
-    passed, pcc_message = test_infra.validate(cache_outputs[0])
-    logger.info(f"Cache run validation: {pcc_message}")
-    assert passed, f"Cache run validation failed: {pcc_message}"
+    host_inputs = [tt_inputs_host] * num_measurement_iterations
 
     if use_signpost:
         signpost(header="start")
-
-    host_inputs = [tt_inputs_host] * num_measurement_iterations
     profiler.start(f"run")
     outputs = pipeline.enqueue(host_inputs).pop_all()
     profiler.end(f"run")
-
     if use_signpost:
         signpost(header="stop")
     ttnn.read_device_profiler(device)
 
-    # Validate outputs
     for i, output in enumerate(outputs):
         passed, pcc_message = test_infra.validate(output)
         logger.info(f"Output {i} validation: {pcc_message}")

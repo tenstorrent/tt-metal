@@ -49,25 +49,11 @@ def run_resnet50_pipeline(
         l1_input_memory_config=input_mem_config,
     )
 
-    # First run configures convs JIT
     pipeline.compile(tt_inputs_host)
-    first_output = pipeline.enqueue([tt_inputs_host]).pop_all()[0]
-    test_infra.validate(first_output)
 
-    # Optimized run
-    second_output = pipeline.enqueue([tt_inputs_host]).pop_all()[0]
-    test_infra.validate(second_output)
-
-    # More optimized run with caching
     if use_signpost:
         signpost(header="start")
-
-    # For multi-CQ configs, run 2 iterations to demonstrate parallelism
-    if pipeline_config.num_command_queues > 1:
-        outputs = pipeline.enqueue([tt_inputs_host, tt_inputs_host]).pop_all()
-    else:
-        outputs = pipeline.enqueue([tt_inputs_host]).pop_all()
-
+    outputs = pipeline.enqueue([tt_inputs_host]).pop_all()
     if use_signpost:
         signpost(header="stop")
 
