@@ -13,6 +13,8 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
+#include <enchantum/enchantum.hpp>
+#include <tt_stl/tt_stl/caseless_comparison.hpp>
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
@@ -303,12 +305,9 @@ FabricConfig MeshSocketYamlParser::parse_fabric_config(const YAML::Node& node) {
 
     std::string topology_str = node["topology"].as<std::string>();
 
-    if (topology_str == "Linear") {
-        config.topology = tt::tt_fabric::Topology::Linear;
-    } else if (topology_str == "Ring") {
-        config.topology = tt::tt_fabric::Topology::Ring;
-    } else if (topology_str == "Mesh") {
-        config.topology = tt::tt_fabric::Topology::Mesh;
+    auto topology = enchantum::cast<tt::tt_fabric::Topology>(topology_str, ttsl::ascii_caseless_comp);
+    if (topology.has_value()) {
+        config.topology = topology.value();
     } else {
         throw_parse_error("Invalid topology value: " + topology_str, node["topology"]);
     }
@@ -316,10 +315,9 @@ FabricConfig MeshSocketYamlParser::parse_fabric_config(const YAML::Node& node) {
     if (node["routing_type"]) {
         std::string routing_str = node["routing_type"].as<std::string>();
 
-        if (routing_str == "LowLatency") {
-            config.routing_type = RoutingType::LowLatency;
-        } else if (routing_str == "Dynamic") {
-            config.routing_type = RoutingType::Dynamic;
+        auto routing = enchantum::cast<RoutingType>(routing_str, ttsl::ascii_caseless_comp);
+        if (routing.has_value()) {
+            config.routing_type = routing.value();
         } else {
             throw_parse_error("Invalid routing_type value: " + routing_str, node["routing_type"]);
         }
