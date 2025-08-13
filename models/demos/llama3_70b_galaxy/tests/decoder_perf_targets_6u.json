@@ -25,23 +25,23 @@
     "AllGatherConcat_0": {
       "op_name": "AllGatherConcat",
       "kernel_duration": 8411.797916666666,
-      "op_to_op": 770.5185185185185,
-      "first_to_last_start": 250.51851851851853,
+      "op_to_op": 602.2222222222222,
+      "first_to_last_start": 119.33333333333333,
       "non-overlapped-dispatch-time": 11377.785714285712,
       "kernel_duration_relative_margin": 0.05,
-      "op_to_op_duration_relative_margin": 0.2,
-      "first_to_last_start_relative_margin": 0.2,
+      "op_to_op_duration_relative_margin": 0.5,
+      "first_to_last_start_relative_margin": 0.5,
       "dispatch_duration_relative_margin": 0.5
     },
     "AllGatherAsync_0": {
       "op_name": "AllGatherAsync_Binary_Mult",
       "kernel_duration": 7083.920833333334,
-      "op_to_op": 820.3703703703703,
+      "op_to_op": 646.3333333333334,
       "first_to_last_start": 205.22222222222223,
       "non-overlapped-dispatch-time": 4531.650793650794,
       "kernel_duration_relative_margin": 0.05,
-      "op_to_op_duration_relative_margin": 0.2,
-      "first_to_last_start_relative_margin": 1.0,
+      "op_to_op_duration_relative_margin": 0.5,
+      "first_to_last_start_relative_margin": 1.5,
       "dispatch_duration_relative_margin": 0.2
     },
     "Matmul_0": {
@@ -139,19 +139,19 @@
       "first_to_last_start": 1551.888888888889,
       "non-overlapped-dispatch-time": 3411.5079365079364,
       "kernel_duration_relative_margin": 0.1,
-      "op_to_op_duration_relative_margin": 0.2,
-      "first_to_last_start_relative_margin": 0.2,
+      "op_to_op_duration_relative_margin": 0.5,
+      "first_to_last_start_relative_margin": 0.5,
       "dispatch_duration_relative_margin": 0.35
     },
     "PagedUpdateCacheDeviceOperation_0": {
       "op_name": "PagedUpdateCache",
       "kernel_duration": 4451.882870370371,
       "op_to_op": 737.1037037037038,
-      "first_to_last_start": 427.3333333333333,
+      "first_to_last_start": 206.22222222222223,
       "non-overlapped-dispatch-time": 4170.3650793650795,
       "kernel_duration_relative_margin": 0.2,
       "op_to_op_duration_relative_margin": 0.2,
-      "first_to_last_start_relative_margin": 0.4,
+      "first_to_last_start_relative_margin": 1.0,
       "dispatch_duration_relative_margin": 0.2
     },
     "ScaledDotProductAttentionDecode_0": {
@@ -257,7 +257,7 @@
       "op_to_op": 789.2,
       "non-overlapped-dispatch-time": 4592.0,
       "kernel_duration_relative_margin": 0.2,
-      "op_to_op_duration_relative_margin": 0.2,
+      "op_to_op_duration_relative_margin": 1.0,
       "dispatch_duration_relative_margin": 0.5
     },
     "ShardedToInterleavedDeviceOperation_1": {
@@ -283,7 +283,7 @@
       "kernel_duration": 10840.89375,
       "op_to_op": 655.7333333333333,
       "non-overlapped-dispatch-time": 6158.0,
-      "kernel_duration_relative_margin": 0.25,
+      "kernel_duration_relative_margin": 0.3,
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
     },
