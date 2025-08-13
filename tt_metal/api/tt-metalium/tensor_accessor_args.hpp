@@ -14,6 +14,7 @@ namespace tt::tt_metal {
 
 class TensorAccessorArgs {
 public:
+    TensorAccessorArgs() = default;
     explicit TensorAccessorArgs(
         const Buffer& buffer, tensor_accessor::ArgsConfig args_config = tensor_accessor::ArgConfig::None);
     explicit TensorAccessorArgs(
