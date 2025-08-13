@@ -176,6 +176,18 @@ tests:
   75:
     name: "L1 Interleaved Page Write Noc Swap"
 
+  80:
+    name: "One Packet Read Sizes"
+
+  81:
+    name: "One Packet Write Sizes"
+
+  82:
+    name: "One Packet Read Directed Ideal"
+
+  83:
+    name: "One Packet Write Directed Ideal"
+
   100:
     name: "Multicast Schemes (Loopback Enabled)"
 
