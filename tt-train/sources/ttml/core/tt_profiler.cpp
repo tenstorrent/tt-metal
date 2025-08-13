@@ -6,7 +6,6 @@
 
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
-#include "tt-metalium/host_api.hpp"
 
 #if defined(TRACY_ENABLE)
 constexpr bool is_tracy_enabled = true;
