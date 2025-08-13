@@ -104,7 +104,12 @@ class RotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
-    def update_cos_sin(self):
+    def update_cos_sin(self, cos_matrix_pt=None, sin_matrix_pt=None):
+        if cos_matrix_pt is not None:
+            self.cos_matrix_pt.copy_(cos_matrix_pt)
+        if sin_matrix_pt is not None:
+            self.sin_matrix_pt.copy_(sin_matrix_pt)
+
         # [INFO] we avoid re-allocating the cos_matrix and sin_matrix tensors to allow for correct processing of captured trace
         assert hasattr(self, "cos_matrix")
         assert hasattr(self, "sin_matrix")
@@ -182,7 +187,6 @@ class RotarySetup(LightweightModule):
             pos_i = position_idxs[i : i + 1]
             cos_i = ttnn.embedding(pos_i, self.cos_matrix[i : i + 1, ...])  # [1, head_dim]
             sin_i = ttnn.embedding(pos_i, self.sin_matrix[i : i + 1, ...])  # [1, head_dim]
-
             cos = cos_i if cos is None else ttnn.concat([cos, cos_i], dim=0)  # towards [batch_size, head_dim]
             sin = sin_i if sin is None else ttnn.concat([sin, sin_i], dim=0)  # towards [batch_size, head_dim]
 

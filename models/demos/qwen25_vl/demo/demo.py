@@ -455,9 +455,7 @@ def test_demo(
             prompt_lens=decoding_pos,
         )
         # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
-        model.rope_setup.cos_matrix_pt.copy_(cos)
-        model.rope_setup.sin_matrix_pt.copy_(sin)
-        model.rope_setup.update_cos_sin()
+        model.rope_setup.update_cos_sin(cos_matrix_pt=cos, sin_matrix_pt=sin)
         # torch.save(logits, f"ttnn_logits.pt")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
