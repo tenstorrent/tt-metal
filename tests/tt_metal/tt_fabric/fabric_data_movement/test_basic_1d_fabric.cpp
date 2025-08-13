@@ -1067,7 +1067,7 @@ void RunTestMCastConnAPI(
     }
 }
 
-void RunTestTrue2DMCastConnAPI(
+void RunTest2DMCastConnAPI(
     BaseFabricFixture* fixture,
     uint32_t north_hops,
     uint32_t north_branch_east_hops,
@@ -1350,7 +1350,7 @@ void RunTestTrue2DMCastConnAPI(
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_3way_2d_mcast_tx.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_2d_mcast_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
