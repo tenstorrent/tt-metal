@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * telemetry/chip_identifier.hpp
+ * telemetry/ethernet/chip_identifier.hpp
  *
  * Enriched chip identification, including information about tray and board position, where
  * applicable (e.g., on Galaxy machines). The basic tt::umd::chip_id_t is always the fallback.

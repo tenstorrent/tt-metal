@@ -37,11 +37,11 @@ target_sources(
         server/main.cpp
         server/telemetry_provider.cpp
         server/web_server.cpp
-        telemetry/chip_identifier.cpp
-        telemetry/ethernet_endpoint.cpp
-        telemetry/ethernet_link.cpp
-        telemetry/ethernet_helpers.cpp
-        telemetry/print_helpers.cpp
+        telemetry/ethernet/chip_identifier.cpp
+        telemetry/ethernet/ethernet_endpoint.cpp
+        telemetry/ethernet/ethernet_link.cpp
+        telemetry/ethernet/ethernet_helpers.cpp
+        telemetry/ethernet/print_helpers.cpp
 )
 target_include_directories(
     tt_telemetry_server
