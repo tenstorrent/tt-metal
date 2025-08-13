@@ -2054,7 +2054,8 @@ void kernel_main() {
     const auto downstream_edm_vc0_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     // remote address for flow control
-    const auto downstream_edm_vc0_semaphore_id = get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID
+    const auto downstream_edm_vc0_semaphore_id =
+        get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID // UC: Remove
     const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -2066,7 +2067,8 @@ void kernel_main() {
     const auto downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     // remote address for flow control
-    const auto downstream_edm_vc1_semaphore_id = get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID
+    const auto downstream_edm_vc1_semaphore_id =
+        get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID // UC: Remove
     const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_vc1_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -2077,6 +2079,7 @@ void kernel_main() {
     // 1D has 1 downstream EDM for line and 2 downstream EDMs for ring.
     // 2D has 3 downstream EDMs for mesh but we allocate 4 to simplify connectivity. 1 corresponding to router's own
     // direction stays unused. 2D torus has 4 downstream EDMs but we allocate 5 with one unused.
+    // UC: Remove
     const auto my_sem_for_ack_from_downstream_edm_0 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_ack_from_downstream_edm_1 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_ack_from_downstream_edm_2 = get_arg_val<uint32_t>(arg_idx++);
@@ -2165,15 +2168,6 @@ void kernel_main() {
                 local_sender_channel_3_connection_buffer_index_id,
                 local_sender_channel_4_connection_buffer_index_id});
 
-    const auto& local_sem_for_acks_from_downstream_edm =
-        take_first_n_elements<NUM_USED_RECEIVER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
-                my_sem_for_ack_from_downstream_edm_0,
-                my_sem_for_ack_from_downstream_edm_1,
-                my_sem_for_ack_from_downstream_edm_2,
-                my_sem_for_ack_from_downstream_edm_3,
-                my_sem_for_ack_from_downstream_edm_4});
-
     const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_USED_RECEIVER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
@@ -2245,14 +2239,10 @@ void kernel_main() {
         uint32_t edm_index = 0;
         while (has_downstream_edm) {
             if (has_downstream_edm & 0x1) {
-                // Receiver channels local semaphore for managing flow control with the downstream EDM.
-                // The downstream EDM should be sending semaphore updates to this address any time it can
-                // accept a new message
-                const auto local_sem_address_for_acks = local_sem_for_acks_from_downstream_edm[edm_index];
                 const auto teardown_sem_address = local_sem_for_teardown_from_downstream_edm[edm_index];
                 // reset the handshake addresses to 0 (this is for router -> router handshake for connections over noc)
-                *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
+
                 auto downstream_direction = edm_index;
                 auto receiver_channel_free_slots_stream_id =
                     is_2d_fabric ? StreamId{receiver_channel_free_slots_stream_ids[downstream_direction]}
@@ -2263,17 +2253,15 @@ void kernel_main() {
                     // connections we must always use semaphore lookup
                     // For 2D, downstream_edm_vc0_semaphore_id is an address.
                     is_persistent_fabric,
-                    0,  // Unused in routers. Used by workers to get edm direction for 2D.
                     (downstream_edm_vc0_noc_x >> (edm_index * 8)) & 0xFF,
                     (downstream_edm_vc0_noc_y >> (edm_index * 8)) & 0xFF,
                     downstream_edm_vc0_buffer_base_address,
                     DOWNSTREAM_SENDER_NUM_BUFFERS,
-                    downstream_edm_vc0_semaphore_id,
                     downstream_edm_vc0_worker_registration_id,
                     downstream_edm_vc0_worker_location_info_address,
                     channel_buffer_size,
                     local_sender_channel_connection_buffer_index_id[edm_index],
-                    reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
+                    0,
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
                                                                            // dest.
@@ -2307,12 +2295,9 @@ void kernel_main() {
 
     if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[0]) {
         if (has_downstream_edm_vc1_buffer_connection) {
-            const auto local_sem_address_for_acks =
-                local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1];
             const auto teardown_sem_address =
                 local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1];
             // reset the handshake addresses to 0
-            *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
             *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
 
             auto downstream_sender_channel_credit_stream_id =
@@ -2323,17 +2308,15 @@ void kernel_main() {
                     // persistent_mode -> hardcode to false because for EDM -> EDM
                     //  connections we must always use semaphore lookup
                     is_persistent_fabric,
-                    0,  // Unused in routers. Used by workers to get edm direction for 2D.
                     downstream_edm_vc1_noc_x,
                     downstream_edm_vc1_noc_y,
                     downstream_edm_vc1_buffer_base_address,
                     DOWNSTREAM_SENDER_NUM_BUFFERS,
-                    downstream_edm_vc1_semaphore_id,
                     downstream_edm_vc1_worker_registration_id,
                     downstream_edm_vc1_worker_location_info_address,
                     channel_buffer_size,
                     local_sender_channel_connection_buffer_index_id[NUM_USED_RECEIVER_CHANNELS - 1],
-                    reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
+                    0,
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc1_noc_interface_buffer_index_local_addr,
 
@@ -2479,7 +2462,6 @@ void kernel_main() {
                             false,
                             use_posted_writes_for_connection_open,
                             tt::tt_fabric::worker_handshake_noc>();
-                    *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_free_slots_ptr = 0;
                 }
             }
             edm_index++;
@@ -2489,7 +2471,6 @@ void kernel_main() {
             if (has_downstream_edm_vc1_buffer_connection) {
                 downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
-                *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_free_slots_ptr = 0;
             }
         }
     } else {

@@ -906,7 +906,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.edm_noc_y = connection.edm_noc_y;
     connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
     connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
-    connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;
     connection_info.edm_connection_handshake_addr = connection.edm_connection_handshake_addr;
     connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
