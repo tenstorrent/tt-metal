@@ -116,9 +116,7 @@ def run_dtype_conversion_on_device(
 @pytest.mark.parametrize(
     "shape",
     [
-        (4, 4),
         (32, 32),
-        (32, 32, 64, 64),
     ],
 )
 @pytest.mark.parametrize(

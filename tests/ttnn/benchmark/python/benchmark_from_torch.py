@@ -46,6 +46,7 @@ def test_benchmark_from_torch_two_copy(benchmark):
     "torch_dtype",
     [
         torch.float16,
+        torch.bfloat16,
         torch.float32,
         torch.int32,
         torch.int64,
