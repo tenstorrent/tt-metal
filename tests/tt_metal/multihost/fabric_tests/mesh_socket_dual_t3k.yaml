@@ -6,12 +6,12 @@ fabric_config:
 # Test definitions (required)
 tests:
   - name: "all_to_all_test"
-    num_iterations: 1
+    num_iterations: 5
     memory_config:
-      fifo_size: [1024, 2048, 4096]
-      page_size: [256, 512, 1024]
-      data_size: [4096, 8192]
-      num_transactions: 15
+      fifo_size: [1024, 2048]
+      page_size: [256, 512]
+      data_size: 8192
+      num_transactions: 20
     pattern_expansions:
       - type: "all_to_all"
         core_coord: [0, 0]
