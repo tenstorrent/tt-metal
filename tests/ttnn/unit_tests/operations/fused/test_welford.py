@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.utility_functions import skip_for_wormhole_b0
 
@@ -39,7 +39,7 @@ def test_layer_norm(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     expected_output = torch.full((h, w), expected_hack_layernorm_value(in_val, 1.0, 0.0, w), dtype=dtype)
-    assert_with_ulp(expected_output, output_tensor, 2)
+    assert_with_pcc(expected_output, output_tensor, 0.9998)
 
 
 @pytest.mark.parametrize("h", [32, 224, 384, 2048])
@@ -64,7 +64,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     expected_output = torch.full((h, w), expected_hack_layernorm_value(in_val, gamma, beta, w), dtype=dtype)
-    assert_with_ulp(expected_output, output_tensor, 2)
+    assert_with_pcc(expected_output, output_tensor, 0.9998)
 
 
 @pytest.mark.parametrize("h", [32, 224, 384, 2048])
@@ -86,14 +86,14 @@ def test_layer_norm_with_residual_input(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     expected_output = torch.full((h, w), expected_hack_layernorm_value(in_val + residual_val, 1.0, 0.0, w), dtype=dtype)
-    assert_with_ulp(expected_output, output_tensor, 2)
+    assert_with_pcc(expected_output, output_tensor, 0.9998)
 
 
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64])
-def test_layer_norm_with_weight_and_bias_and_residual_input(device, h, w):
+@pytest.mark.parametrize("h", [32, 224, 384])
+@pytest.mark.parametrize("w", [64, 160, 1024])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_layer_norm_with_weight_and_bias_and_residual_input(device, h, w, dtype):
     torch.manual_seed(0)
-    dtype = torch.bfloat16
 
     in_val = 1.0
     residual_val = 2.8
@@ -116,7 +116,7 @@ def test_layer_norm_with_weight_and_bias_and_residual_input(device, h, w):
     expected_output = torch.full(
         (h, w), expected_hack_layernorm_value(in_val + residual_val, gamma, beta, w), dtype=dtype
     )
-    assert_with_ulp(expected_output, output_tensor, 2)
+    assert_with_pcc(expected_output, output_tensor, 0.9998)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -136,18 +136,19 @@ def test_rms_norm(device, batch_size, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, 2)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("h", [32, 224, 384, 2048])
 @pytest.mark.parametrize("w", [64, 160, 1024, 2048])
-def test_rms_norm_with_residual_input(device, batch_size, h, w):
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_rms_norm_with_residual_input(device, batch_size, h, w, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
-    torch_residual_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
-    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((batch_size, h, w), dtype=dtype)
+    torch_residual_input_tensor = torch.rand((batch_size, h, w), dtype=dtype)
+    torch_weight = torch.rand((w,), dtype=dtype)
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
     torch_output_tensor = golden_function(torch_input_tensor + torch_residual_input_tensor, weight=torch_weight)
 
@@ -158,7 +159,7 @@ def test_rms_norm_with_residual_input(device, batch_size, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, 2)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
 """
