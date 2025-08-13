@@ -11,7 +11,6 @@ import torch
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, Field
 
-
 import ttnn
 
 
