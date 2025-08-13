@@ -392,6 +392,14 @@ install_llvm() {
         $TEMP_DIR/llvm.sh 20
     fi
 
+    # CMake + clang++-20 use llvm-ar-20 / llvm-ranlib-20 for static archives (e.g. Tracy
+    # tools, Boost). On apt.llvm.org Ubuntu those live in the llvm-20 package, not clang-20
+    # and not llvm-20-tools (which is mostly lit/FileCheck utilities).
+    if command -v clang-20 &> /dev/null && ! command -v llvm-ar-20 &> /dev/null; then
+        echo "[INFO] Installing llvm-20 for llvm-ar-20 / llvm-ranlib-20 (archive/LTO support)..."
+        DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends llvm-20
+    fi
+
     rm -rf "$TEMP_DIR"
 }
 
