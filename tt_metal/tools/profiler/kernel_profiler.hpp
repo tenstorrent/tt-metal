@@ -103,8 +103,10 @@ __attribute__((noinline)) void init_profiler(
     wIndex = CUSTOM_MARKERS;
     stackSize = 0;
 
+    sumIDs[0] = 8139;
+    sumIDs[1] = 51511;
+
     for (int i = 0; i < SUM_COUNT; i++) {
-        sumIDs[i] = 0;
         sums[i] = 0;
     }
 
@@ -494,16 +496,10 @@ struct profileScopeGuaranteed {
 
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeAccumulate {
-    uint64_t start_time = 0;
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-
-    inline __attribute__((always_inline)) profileScopeAccumulate() {
-        start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
-    }
-    inline __attribute__((always_inline)) ~profileScopeAccumulate() {
-        sumIDs[index] = timer_id;
-        sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
-    }
+    inline __attribute__((always_inline)) void set_counter(uint32_t value) { sums[index] = value; }
+    inline __attribute__((always_inline)) uint32_t get_counter() { return sums[index]; }
+    inline __attribute__((always_inline)) void inc_counter() { sums[index] += 1; }
+    inline __attribute__((always_inline)) void dec_counter() { sums[index] -= 1; }
 };
 
 // performs quick push to DRAM if buffers appear full
