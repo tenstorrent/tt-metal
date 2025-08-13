@@ -83,6 +83,7 @@ run_python_model_tests_wormhole_b0() {
     # HF_MODEL=$mistral_weights pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
 
     # Siglip
+    pip install -r models/demos/siglip/requirements.txt
     HF_HOME=/mnt/MLPerf/huggingface/ HF_HUB_OFFLINE=1 HF_MODEL="google/gemma-3-4b-it" pytest models/demos/siglip/tests ; fail+=$?
 }
 
