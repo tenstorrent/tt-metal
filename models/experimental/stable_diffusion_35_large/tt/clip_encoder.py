@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import torch
 import ttnn
+from ttnn.distributed.distributed import ConcatMeshToTensor
 
 from .linear import TtLinear, TtLinearParameters
 from .substate import indexed_substates, substate
@@ -661,31 +662,90 @@ class TtCLIPTextTransformer:
 
         return encoder_output, projected_output
 
+    # def _gather_eos_impl(
+    #     self, input_ids_torch: torch.Tensor, seq_emb_torch: torch.Tensor, eos_token_id: int
+    # ) -> torch.Tensor:
+    #     # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
+    #     if eos_token_id == 2:
+    #         # use argmax (highest token ID position)
+    #         eos_idx = input_ids_torch.to(dtype=torch.int, device=input_ids_torch.device).argmax(dim=-1)
+    #     else:
+    #         # search for specific eos_token_id
+    #         eos_mask = (input_ids_torch.to(dtype=torch.int, device=input_ids_torch.device) == eos_token_id).int()
+    #         eos_idx = eos_mask.argmax(dim=-1)
+
+    #     b = torch.arange(seq_emb_torch.size(0))
+    #     pooled_t = seq_emb_torch[b, eos_idx]  # [B, H]
+
+    #     return pooled_t
+
     def _gather_eos(
-        self, seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device
+        self,
+        seq_emb: ttnn.Tensor,
+        input_ids: ttnn.Tensor,
+        eos_token_id: int,
+        device: ttnn.Device,
+        encoder_parallel_manager: EncoderParallelManager = None,
     ) -> ttnn.Tensor:
-        ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
+        if encoder_parallel_manager is not None:
+            # This is a temp hack.
+            # If encoder parallel manager is not None, it means we are in TP mode, and we have 1 prompt split over 1 device, so we just get the first device tensor
+            ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
+            seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
 
-        # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
-        if eos_token_id == 2:
-            # use argmax (highest token ID position)
-            eos_idx = ids_t.to(dtype=torch.int, device=ids_t.device).argmax(dim=-1)
+            # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
+            if eos_token_id == 2:
+                # use argmax (highest token ID position)
+                eos_idx = ids_t.to(dtype=torch.int, device=ids_t.device).argmax(dim=-1)
+            else:
+                # search for specific eos_token_id
+                eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
+                eos_idx = eos_mask.argmax(dim=-1)
+
+            b = torch.arange(seq_t.size(0))
+            pooled_t = seq_t[b, eos_idx]  # [B, H]
+
+            return ttnn.from_torch(
+                pooled_t,
+                dtype=seq_emb.get_dtype(),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
         else:
-            # search for specific eos_token_id
-            eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
-            eos_idx = eos_mask.argmax(dim=-1)
+            ids_t = ttnn.to_torch(input_ids, mesh_composer=ConcatMeshToTensor(device, dim=0))
+            seq_t = ttnn.to_torch(seq_emb, mesh_composer=ConcatMeshToTensor(device, dim=0))
+            # Handle both single batch and multiple batches
+            batch_size = seq_t.size(0)
+            pooled_results = []
 
-        seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
-        b = torch.arange(seq_t.size(0))
-        pooled_t = seq_t[b, eos_idx]  # [B, H]
+            # Process each batch element independently (same logic, more explicit)
+            for batch_idx in range(batch_size):
+                # Get IDs for this batch element
+                batch_ids = ids_t[batch_idx]  # [S]
 
-        return ttnn.from_torch(
-            pooled_t,
-            dtype=seq_emb.get_dtype(),
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        )
+                # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
+                if eos_token_id == 2:
+                    # use argmax (highest token ID position)
+                    eos_idx = batch_ids.to(dtype=torch.int, device=batch_ids.device).argmax(dim=-1)
+                else:
+                    # search for specific eos_token_id
+                    eos_mask = (batch_ids.to(dtype=torch.int, device=batch_ids.device) == eos_token_id).int()
+                    eos_idx = eos_mask.argmax(dim=-1)
+
+                # Get pooled output for this batch element
+                batch_pooled = seq_t[batch_idx, eos_idx]  # [H]
+                pooled_results.append(batch_pooled)
+
+            # Stack results back to [B, H]
+            pooled_t = torch.stack(pooled_results, dim=0)
+            return ttnn.from_torch(
+                pooled_t,
+                dtype=seq_emb.get_dtype(),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+            )
 
 
 # adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py
