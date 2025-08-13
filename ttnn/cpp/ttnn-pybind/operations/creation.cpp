@@ -12,11 +12,12 @@
 #include <fmt/format.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
+#include "ttnn-pybind/bfloat16_type_caster.hpp"  // NOLINT - for pybind11 bfloat16 binding support.
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn-pybind/types.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::creation {
 namespace {
@@ -68,6 +69,55 @@ auto create_pybind_full_like_overload() {
         py::arg("memory_config") = std::nullopt,
         py::arg("optional_tensor") = std::nullopt,
         py::arg("queue_id") = ttnn::DefaultQueueId};
+}
+
+template <typename creation_operation_t>
+auto create_pybind_from_buffer_overload() {
+    return ttnn::pybind_overload_t{
+        [](const creation_operation_t& self,
+           const py::object& buffer,
+           const DataType& dtype,
+           const Layout& layout,
+           MeshDevice* device,
+           const MemoryConfig& memory_config) -> ttnn::Tensor {
+            // Overloading this with templates is not working quite as expected,
+            // the problem is that the buffer is a py::object, so we can't deduce the type of the data.
+            // and sometimes the wrong type is handling the data.
+            // For instance, a list of int16 can be interpreted as a list of int32 and the data will be a missmatch
+            // in further validations.
+            switch (dtype) {
+                case DataType::UINT8: {
+                    auto cpp_buffer = buffer.cast<std::vector<std::vector<uint8_t>>>();
+                    return self(cpp_buffer, dtype, layout, device, memory_config);
+                }
+                case DataType::UINT16: {
+                    auto cpp_buffer = buffer.cast<std::vector<std::vector<uint16_t>>>();
+                    return self(cpp_buffer, dtype, layout, device, memory_config);
+                }
+                case DataType::INT32: {
+                    auto cpp_buffer = buffer.cast<std::vector<std::vector<int32_t>>>();
+                    return self(cpp_buffer, dtype, layout, device, memory_config);
+                }
+                case DataType::UINT32: {
+                    auto cpp_buffer = buffer.cast<std::vector<std::vector<uint32_t>>>();
+                    return self(cpp_buffer, dtype, layout, device, memory_config);
+                }
+                case DataType::FLOAT32: {
+                    auto cpp_buffer = buffer.cast<std::vector<std::vector<float>>>();
+                    return self(cpp_buffer, dtype, layout, device, memory_config);
+                }
+                case DataType::BFLOAT16: {
+                    auto cpp_buffer = buffer.cast<std::vector<std::vector<::bfloat16>>>();
+                    return self(cpp_buffer, dtype, layout, device, memory_config);
+                }
+                default: throw std::runtime_error("Unsupported DataType!");
+            }
+        },
+        py::arg("buffer"),
+        py::arg("dtype"),
+        py::arg("layout"),
+        py::arg("device"),
+        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG};
 }
 
 template <typename creation_operation_t>
@@ -377,6 +427,32 @@ void bind_empty_operation(py::module& module, const creation_operation_t& operat
 }
 
 template <typename creation_operation_t>
+void bind_from_buffer_operation(py::module& module, const creation_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc(
+        Creates a device tensor with values from a buffer of the specified shape, data type, layout, and memory configuration.
+
+        Args:
+            buffer (List[List[Any]]): The buffer to be used to create the tensor.
+            dtype (ttnn.DataType): The tensor data type.
+            layout (ttnn.Layout): The tensor layout.
+            device (ttnn.Device | ttnn.MeshDevice): The device where the tensor will be allocated.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+
+        Returns:
+            ttnn.Tensor: A tensor with the values from the buffer.
+
+        Example:
+            >>> tensor = ttnn.{0}(buffer=[[1, 2, 3], [4, 5, 6]], shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR, device=device)
+            >>> print(tensor)
+            ttnn.Tensor([[[[1, 2, 3], [4, 5, 6]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+        )doc",
+        operation.base_name());
+
+    bind_registered_operation(module, operation, doc, create_pybind_from_buffer_overload<creation_operation_t>());
+}
+
+template <typename creation_operation_t>
 void bind_empty_like_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
@@ -470,6 +546,8 @@ void py_module(py::module& module) {
         |    BFLOAT_8                |          TILE                   |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
     bind_empty_like_operation(module, ttnn::empty_like);
+
+    bind_from_buffer_operation(module, ttnn::from_buffer);
 }
 
 }  // namespace ttnn::operations::creation
