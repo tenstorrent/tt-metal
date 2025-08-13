@@ -108,14 +108,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, output_cb_page_size, output_cb_num_pages, output_cb_data_format);
 
-    // Reader compile time arguments (standard pattern)
-    const bool src_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool grid_is_dram = grid_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool src_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(aligned_input_stick_nbytes);
-    const uint32_t src_log2_size = src_size_is_power_of_two ? (std::uint32_t)log2(aligned_input_stick_nbytes) : 0;
-    const bool grid_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(aligned_grid_stick_nbytes);
-    const uint32_t grid_log2_size = grid_size_is_power_of_two ? (std::uint32_t)log2(aligned_grid_stick_nbytes) : 0;
-
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,              // input CB index
         (std::uint32_t)grid_cb_index,               // grid CB index
@@ -128,7 +120,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     };
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
-
     tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(reader_compile_time_args);
 
     const uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -210,10 +201,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
                 .defines = get_defines(pool::Pool2DType::AVG_POOL2D)  // Use avg pool defines
             });
     }
-
-    const bool dst_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool dst_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(aligned_output_stick_nbytes);
-    const uint32_t dst_log2_size = dst_size_is_power_of_two ? (std::uint32_t)log2(aligned_output_stick_nbytes) : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,              // output CB index
