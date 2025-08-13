@@ -24,12 +24,13 @@ using tt_fabric::MeshId;
 using tt_fabric::MeshScope;
 
 TEST(BigMeshDualRankTest2x4, DistributedContext) {
-    auto& dctx = MetalContext::instance().global_distributed_context();
-    EXPECT_EQ(dctx.size(), multihost::Size(2));
+    auto& dctx = MetalContext::instance().get_distributed_context();
+    auto world_size = dctx.size();
+    EXPECT_EQ(*world_size, 2);
 }
 
 TEST(BigMeshDualRankTest2x4, LocalRankBinding) {
-    auto& dctx = MetalContext::instance().global_distributed_context();
+    auto& dctx = MetalContext::instance().get_distributed_context();
     auto& control_plane = MetalContext::instance().get_control_plane();
 
     tt_fabric::HostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
