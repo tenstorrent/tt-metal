@@ -83,6 +83,8 @@ void MAIN {
     constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
+    constexpr auto cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
+
     constexpr auto scaler0 = 0;
 
     // x^2 (only used for RMS norm)
@@ -94,7 +96,7 @@ void MAIN {
         return tt::CBIndex::SIZE;  // Invalid, just needed for compilation
     }();
 
-    //  Either x or x + b if doing fused pre-add
+    //  Either in or in + b if doing fused pre-add
     constexpr auto cb_x = []() -> auto {
         if constexpr (fuse_pre_add) {
             if constexpr (rms_norm) {
@@ -118,13 +120,22 @@ void MAIN {
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
-    constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
+    if constexpr (fuse_pre_add) {
+        compute_kernel_hw_startup(cb_in, cb_inb, cb_x);
+        pack_reconfig_data_format(cb_x);
+    } else {
+        if constexpr (rms_norm) {
+            compute_kernel_hw_startup(cb_xmm, cb_xmm, cb_x2);
+            pack_reconfig_data_format(cb_x2);
+        } else {
+            compute_kernel_hw_startup(cb_in, cb_scaler, cb_ex);
+            pack_reconfig_data_format(cb_ex);
+        }
+    }
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
             // x = in + b
-            binary_op_init_common(cb_in, cb_inb, cb_x);
-            pack_reconfig_data_format(cb_x);
             add_tiles_init(cb_in, cb_inb);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 ACQ();
@@ -145,20 +156,10 @@ void MAIN {
             } else {
                 reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
             }
-        } else {
-            if constexpr (rms_norm) {
-                compute_kernel_hw_startup(cb_in, cb_scaler, cb_ex);
-                pack_reconfig_data_format(cb_x2);
-            } else {
-                compute_kernel_hw_startup(cb_in, cb_scaler, cb_ex);
-                pack_reconfig_data_format(cb_ex);
-            }
         }
 
         if constexpr (layernorm) {
-            /*
-             * Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
-             */
+            // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
             ACQ();
 
             cb_reserve_back(cb_ex, onetile);
@@ -186,14 +187,12 @@ void MAIN {
             cb_push_back(cb_ex, onetile);
             cb_push_back(cb_ex2, onetile);
 
-            /*
-             * x - E[x]
-             * compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
-             */
+            // x - E[x]
+            // Reuse cb_x since we didn't pop anything from it
             if constexpr (FLOAT32_DTYPE) {
                 reconfig_data_format(cb_x, cb_ex);
             }
-            cb_wait_front(cb_ex, 1);  // should have 1 tile
+            cb_wait_front(cb_ex, onetile);  // should have 1 tile
             cb_reserve_back(cb_xmm, Wt);
             sub_bcast_cols_init_short(cb_x, cb_ex);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
@@ -215,7 +214,6 @@ void MAIN {
         } else {
             // RMS norm
             // x^2
-            binary_op_init_common(cb_xmm, cb_xmm, cb_x2);
             mul_tiles_init(cb_xmm, cb_xmm);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
@@ -223,7 +221,6 @@ void MAIN {
                 ACQ();
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);
-                    // mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
                     pack_tile(wtr, cb_x2);
                 }
                 cb_push_back(cb_x2, blk);
@@ -234,7 +231,7 @@ void MAIN {
             if constexpr (FLOAT32_DTYPE) {
                 reconfig_data_format(cb_x2, cb_scaler);
             }
-            cb_reserve_back(cb_ex2, 1);
+            cb_reserve_back(cb_ex2, onetile);
             ACQ();
             cb_wait_front(cb_x2, Wt);
             reduce_init(cb_x2, cb_scaler, cb_ex2);
@@ -248,41 +245,39 @@ void MAIN {
             pack_tile(dst0, cb_ex2);
             REL();
 
-            cb_push_back(cb_ex2, 1);
-            cb_wait_front(cb_ex2, 1);
+            cb_push_back(cb_ex2, onetile);
         }
 
         if constexpr (rms_norm && !fuse_pre_add) {
             reconfig_data_format(cb_xmm, cb_x2, cb_xmm, cb_scaler);
         }
 
-        /* Var(x) + eps
-         * add epsilon E[(x-E[x])^2]+eps
-         */
+        // Var(x) + eps
+        binary_op_init_common(cb_ex2, cb_eps, cb_ex2pe);
         if constexpr (FLOAT32_DTYPE) {
             reconfig_data_format(cb_ex2, cb_eps);
         }
-        cb_wait_front(cb_ex2, 1);  // should have 1 tile
+        cb_wait_front(cb_ex2, onetile);  // should have 1 tile
         ACQ();
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
-        cb_reserve_back(cb_ex2pe, 1);  // 1
+        cb_reserve_back(cb_ex2pe, onetile);
         sqrt_tile_init();
         sqrt_tile(dst0);
         recip_tile_init();
         recip_tile(dst0);
         pack_tile(dst0, cb_ex2pe);
-        cb_push_back(cb_ex2pe, 1);
+        cb_push_back(cb_ex2pe, onetile);
         REL();
-        cb_pop_front(cb_ex2, 1);
+        cb_pop_front(cb_ex2, onetile);
 
         /* ln(x) * gamma + beta (gamma and beta are optional)
          * now xmm = (x-E[x])
          * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
          * just need to bcast_mul xmm with cb_ex2pe
          */
-        cb_wait_front(cb_ex2pe, 1);
+        cb_wait_front(cb_ex2pe, onetile);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr (do_gamma == 0 && do_beta == 0) {
@@ -354,7 +349,7 @@ void MAIN {
                 REL();
             }
         }
-        cb_pop_front(cb_ex2pe, 1);
+        cb_pop_front(cb_ex2pe, onetile);
         cb_pop_front(cb_xmm, Wt);
 
     }  // NCHt loop
