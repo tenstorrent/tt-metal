@@ -154,7 +154,7 @@ def test_qwen_attention_inference(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )
 
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, use_qwen_mlp=True)
 
     tt_model = TtLlamaAttention(
         mesh_device,
@@ -234,7 +234,10 @@ def test_qwen_attention_inference(
         # In this test all users have the same position (if using batch > 1)
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
-        reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
+        reference_output = reference_model(
+            pt_attention_input.to(torch.bfloat16), current_pos[0].to(torch.bfloat16), freqs_cis_i, mask=None
+        )
+        breakpoint()
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

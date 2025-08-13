@@ -140,7 +140,7 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         )
 
         logger.info("Run Qwen_MLP")
-        tt_output, w1_out_reduced, w3_out_reduced, w2_in, ff1ff3 = tt_model(tt_input, mode)
+        tt_output = tt_model(tt_input, mode)
         logger.info(f"tt_output shape: {tt_output.shape}")
 
         tt_output_torch = ttnn.to_torch(
@@ -153,23 +153,7 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
         ref_input = torch_input[:, :, :, : model_args.dim]
-        w1_out_ref, w3_out_ref, silu_w1_ref, ff1ff3_ref, reference_output = reference_model(ref_input)
-
-        # Compute true reference
-        w1_rel = ttnn.to_torch(
-            tt_model.w1,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 2), mesh_shape=model_args.cluster_shape),
-        )
-        www = torch_input @ w1_rel  # pcc > 0.99 with w1_out_ref
-
-        w1_torch = ttnn.to_torch(w1_out_reduced, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
-        w3_torch = ttnn.to_torch(w3_out_reduced, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
-        w2_in_torch = ttnn.to_torch(
-            w2_in,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
-        )  # [1, 4, 1, 25600]
-        w2_in_torch0 = w2_in_torch[:, :1, :, :]
-        ff1ff3_torch = ttnn.to_torch(ff1ff3, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+        reference_output = reference_model(ref_input)
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

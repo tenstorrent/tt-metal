@@ -239,7 +239,7 @@ class TT_CCL:
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=tt_stats_sharded_config,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
         )
