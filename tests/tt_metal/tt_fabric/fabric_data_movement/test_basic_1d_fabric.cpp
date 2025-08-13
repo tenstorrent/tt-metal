@@ -1100,7 +1100,6 @@ void RunTest2DMCastConnAPI(
     // Find a device num_hops away in specified direction.
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
-    std::unordered_map<RoutingDirection, uint32_t> branch_hops;
 
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
     chip_id_t src_phys_chip_id;
