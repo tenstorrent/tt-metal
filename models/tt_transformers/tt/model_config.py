@@ -477,8 +477,8 @@ class ModelArgs:
             self.TOKENIZER_PATH = HF_MODEL
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
-            else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
-                self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
+            else:  # For HF models, always append the model and device name device name (e.g. N150/N300/T3K/TG) to the cache path
+                self.CACHE_PATH = os.path.join(self.CACHE_PATH, HF_MODEL, self.device_name)
             self.model_name = HF_MODEL.strip("/").split("/")[
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
