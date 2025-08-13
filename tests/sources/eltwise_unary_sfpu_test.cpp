@@ -138,6 +138,9 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format)
             ckernel::sfpu::_init_hardsigmoid_<APPROX_MODE>();
             ckernel::sfpu::_calculate_activation_<APPROX_MODE, ckernel::ActivationType::Hardsigmoid, iterations>();
             break;
+        case SfpuType::threshold:
+            ckernel::sfpu::_calculate_threshold_<APPROX_MODE, iterations>(5.0f, 10.0f);
+            break;
         default:
             return;
     }

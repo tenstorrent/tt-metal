@@ -97,6 +97,7 @@ enum class SfpuType
     prelu,
     reshuffle_rows,
     hardsigmoid,
+    threshold,
     where,
     atanh,
     asinh,
