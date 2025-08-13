@@ -29,8 +29,8 @@ private:
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
 
     // Telemetry data
-    std::unordered_map<size_t, std::string> metric_name_by_index_;
-    std::unordered_map<size_t, bool> metric_value_by_index_;
+    std::unordered_map<size_t, std::string> bool_metric_name_by_index_;
+    std::unordered_map<size_t, bool> bool_metric_value_by_index_;
     std::mutex snapshot_mutex_;
     std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
@@ -45,10 +45,10 @@ private:
         // Construct snapshot from current data
         TelemetrySnapshot full_snapshot;
         full_snapshot.is_absolute = true;
-        for (const auto &[index, name]: metric_name_by_index_) {
-            full_snapshot.metric_indices.push_back(index);
-            full_snapshot.metric_names.push_back(name);
-            full_snapshot.metric_values.push_back(metric_value_by_index_[index]);
+        for (const auto &[index, name]: bool_metric_name_by_index_) {
+            full_snapshot.bool_metric_indices.push_back(index);
+            full_snapshot.bool_metric_names.push_back(name);
+            full_snapshot.bool_metric_values.push_back(bool_metric_value_by_index_[index]);
         }
         json j = full_snapshot;
         std::string message = "data: " + j.dump() + "\n\n";
@@ -84,17 +84,17 @@ private:
         //TODO: assert vectors are equal length
         if (snapshot->is_absolute) {
             // Absolute snapshot -- replace everything with new data
-            metric_name_by_index_.clear();
-            metric_value_by_index_.clear();
+            bool_metric_name_by_index_.clear();
+            bool_metric_value_by_index_.clear();
         }
 
-        for (size_t i = 0; i < snapshot->metric_indices.size(); i++) {
-            size_t idx = snapshot->metric_indices[i];
-            if (snapshot->metric_names.size() > 0) {
+        for (size_t i = 0; i < snapshot->bool_metric_indices.size(); i++) {
+            size_t idx = snapshot->bool_metric_indices[i];
+            if (snapshot->bool_metric_names.size() > 0) {
                 // Names were included, which indicates new metrics added!
-                metric_name_by_index_[idx] = snapshot->metric_names[i];
+                bool_metric_name_by_index_[idx] = snapshot->bool_metric_names[i];
             }
-            metric_value_by_index_[idx] = snapshot->metric_values[i];
+            bool_metric_value_by_index_[idx] = snapshot->bool_metric_values[i];
         }
     }
 
