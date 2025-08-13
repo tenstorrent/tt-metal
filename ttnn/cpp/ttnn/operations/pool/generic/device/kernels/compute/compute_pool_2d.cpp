@@ -86,8 +86,6 @@ void MAIN {
         tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
             in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
         pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
-    } else {
-        unary_op_init_common(in_cb_id_0, tile_tmp_cb_id);
     }
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -136,11 +134,12 @@ void MAIN {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     }
                 } else {
-                    // pack_reconfig_data_format(tile_tmp_cb_id);
+                    unary_op_init_common(in_cb_id_0, tile_tmp_cb_id);
+
                     tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
                     tilize_block(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id, tile_tmp_cb_id);
-                    // pack_reconfig_data_format(tile_idx_tmp_cb_id);
+
                     tilize_init(curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
                     tilize_block(
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
@@ -148,17 +147,17 @@ void MAIN {
 
                     // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
                     // PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
-                    // PACK(tt::compute::common::print_full_tile`(tile_idx_tmp_cb_id, 0));
+                    // PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id, 0));
 
                     copy_tile_to_dst_init_short(tile_tmp_cb_id);
                     copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
+
                     copy_tile_to_dst_init_short(tile_idx_tmp_cb_id);
                     copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
 
                     // dprint_tensix_dest_reg(0);
                     // dprint_tensix_dest_reg(2);
 
-                    // llk_topk_sort -> inplace
                     // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
                     topk_tile_init();
                     ckernel::topk_local_sort(data_dst_idx, 0, 4, 0);
@@ -183,7 +182,7 @@ void MAIN {
                     cb_push_back(out_cb_id, max_tiles_per_iter);
                 }
             } else {
-                pack_untilize_dest_init<1>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
+                pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
 
                 pack_reconfig_data_format(out_cb_id);
                 pack_untilize_dest<topk_output_tiles>(
