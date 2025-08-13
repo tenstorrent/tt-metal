@@ -5,6 +5,7 @@
 import hashlib
 import json
 import os
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -764,6 +765,9 @@ def test_demo_text(
 
         logger.info(f"Starting decode loop...")
 
+        decode_outputs_queue = deque()
+        read_events_queue = deque()
+
         # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
         while users_decoding:
@@ -776,33 +780,52 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits = generator.decode_forward_text(
+            decode_output_device = generator.decode_forward_text(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
+                read_from_device=False,
+            )
+
+            decode_output_host, read_events = generator.async_transfer_decode_output_to_host(decode_output_device)
+            decode_outputs_queue.append(decode_output_host)
+            read_events_queue.append(read_events)
+
+            if iteration == 0:  # First iteration will account the compile time
+                profiler.end(f"compile_decode", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
+                iteration += 1
+                continue
+
+            read_events = read_events_queue.popleft()
+            for event in read_events:
+                ttnn.event_synchronize(event)
+
+            decode_output = generator.read_decode_output(
+                decode_outputs_queue.popleft(), is_tokens=(device_sampling_params is not None)
             )
 
             # Get the next token
             if device_sampling_params is not None:
-                out_tok = logits.unsqueeze(1)
+                out_tok = decode_output.unsqueeze(1)
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
-                    logits,
+                    decode_output,
                     temperature=sampling_params["temperature"],
                     top_p=sampling_params["top_p"],
                     on_host=True,
                 )
 
-            if iteration == 0:  # First iteration will account the compile time
-                profiler.end(f"compile_decode", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-            else:
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            # if iteration == 0:  # First iteration will account the compile time
+            #     profiler.end(f"compile_decode", iteration=batch_idx)
+            #     decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
+            # else:
+            profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
