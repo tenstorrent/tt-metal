@@ -93,6 +93,11 @@ public:
     }
 };
 
+class MeshDeviceFixtureWithL1Small : public MeshDeviceFixture {
+public:
+    MeshDeviceFixtureWithL1Small() : MeshDeviceFixture(24 * 1024) {}
+};
+
 class DeviceFixture : public DispatchFixture {
 private:
     std::map<chip_id_t, tt::tt_metal::IDevice*> id_to_device_;
