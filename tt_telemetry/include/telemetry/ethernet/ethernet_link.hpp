@@ -9,7 +9,7 @@
 
 #include <vector>
 
-#include <telemetry/ethernet_endpoint.hpp>
+#include <telemetry/ethernet/ethernet_endpoint.hpp>
 
 using EthernetLink = std::pair<EthernetEndpoint, EthernetEndpoint>;
 

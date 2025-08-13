@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * telemetry/ethernet_helpers.hpp
+ * telemetry/ethernet/ethernet_helpers.hpp
  *
  * Misc. helper functions.
  */
@@ -9,7 +9,7 @@
 #include <map>
 #include <unordered_map>
 
-#include <telemetry/ethernet_endpoint.hpp>
+#include <telemetry/ethernet/ethernet_endpoint.hpp>
 
 std::map<
     tt::umd::chip_id_t, 

@@ -2,8 +2,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include <telemetry/ethernet_link.hpp>
-#include <telemetry/ethernet_helpers.hpp>
+#include <telemetry/ethernet/ethernet_link.hpp>
+#include <telemetry/ethernet/ethernet_helpers.hpp>
 
 // TODO: using get_ethernet_connections() in here. This will only map links on the same host. We will want a more generic scheme eventually for remote ones.
 static std::unordered_map<EthernetEndpoint, EthernetEndpoint> map_endpoints_to_remote_endpoints(const tt::Cluster &cluster) {

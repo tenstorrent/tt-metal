@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * telemetry/ethernet_endpoint.hpp
+ * telemetry/ethernet/ethernet_endpoint.hpp
  *
  * Describes Ethernet link endpoints (single side).
  */
@@ -10,7 +10,7 @@
  #include <ostream>
  #include <vector>
 
- #include <telemetry/chip_identifier.hpp>
+ #include <telemetry/ethernet/chip_identifier.hpp>
  #include <tt-metalium/core_coord.hpp>
  #include <tt-metalium/cluster.hpp>
 

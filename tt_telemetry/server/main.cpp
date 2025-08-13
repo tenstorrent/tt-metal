@@ -31,11 +31,11 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 
-#include <telemetry/chip_identifier.hpp>
-#include <telemetry/ethernet_endpoint.hpp>
-#include <telemetry/ethernet_link.hpp>
-#include <telemetry/ethernet_helpers.hpp>
-#include <telemetry/print_helpers.hpp>
+#include <telemetry/ethernet/chip_identifier.hpp>
+#include <telemetry/ethernet/ethernet_endpoint.hpp>
+#include <telemetry/ethernet/ethernet_link.hpp>
+#include <telemetry/ethernet/ethernet_helpers.hpp>
+#include <telemetry/ethernet/print_helpers.hpp>
 #include <server/mock_telemetry_provider.hpp>
 #include <server/telemetry_provider.hpp>
 #include <server/web_server.hpp>

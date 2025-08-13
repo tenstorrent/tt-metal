@@ -1,4 +1,4 @@
-#include <telemetry/ethernet_helpers.hpp>
+#include <telemetry/ethernet/ethernet_helpers.hpp>
 
 static auto make_ordered_ethernet_connections(const auto &unordered_connections) {
     std::map<
