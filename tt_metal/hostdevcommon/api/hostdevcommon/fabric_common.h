@@ -122,19 +122,25 @@ struct tensix_routing_l1_info_t {
 } __attribute__((packed));
 
 struct fabric_connection_info_t {
-    uint8_t edm_direction;
-    uint8_t edm_noc_x;
-    uint8_t edm_noc_y;
     uint32_t edm_buffer_base_addr;
-    uint8_t num_buffers_per_channel;
     uint32_t edm_l1_sem_addr;
     uint32_t edm_connection_handshake_addr;
     uint32_t edm_worker_location_info_addr;
-    uint16_t buffer_size_bytes;
     uint32_t buffer_index_semaphore_id;
+    uint16_t buffer_size_bytes;
+    uint8_t edm_direction;
+    uint8_t edm_noc_x;
+    uint8_t edm_noc_y;
+    uint8_t num_buffers_per_channel;
+    // NOTE: This padding can be removed once "non device-init fabric"
+    //       is completely removed
+    uint8_t padding[2];
 } __attribute__((packed));
 
-static_assert(sizeof(fabric_connection_info_t) == 26, "Struct size mismatch!");
+static_assert(sizeof(fabric_connection_info_t) == 28, "Struct size mismatch!");
+// NOTE: This assertion can be removed once "non device-init fabric"
+//       is completely removed
+static_assert(sizeof(fabric_connection_info_t) % 4 == 0, "Struct size must be 4-byte aligned");
 
 struct fabric_aligned_connection_info_t {
     // 16-byte aligned semaphore address for flow control
