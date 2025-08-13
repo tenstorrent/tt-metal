@@ -1924,6 +1924,8 @@ class TtQwenModelArgs(TtModelArgs):
         num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # 25
         num_blocks_total = num_blocks_y * num_blocks_x  # 25
 
+        print(num_blocks_total, num_cores)
+
         if num_blocks_total != num_cores:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
 
