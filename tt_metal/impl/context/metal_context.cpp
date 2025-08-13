@@ -420,7 +420,8 @@ void MetalContext::teardown_fabric_config() {
 void MetalContext::set_fabric_config(
     const tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
-    std::optional<uint8_t> num_routing_planes) {
+    std::optional<uint8_t> num_routing_planes,
+    tt_fabric::FabricTensixConfig fabric_tensix_config) {
     if (is_2d_fabric_config(fabric_config) && cluster_->get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
         const auto fabric_type = get_fabric_type(fabric_config);
         if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_Y ||
@@ -480,6 +481,9 @@ void MetalContext::set_fabric_config(
             new_val);
     }
     this->num_fabric_active_routing_planes_ = new_val;
+
+    // Set the fabric tensix config
+    this->set_fabric_tensix_config(fabric_tensix_config);
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -495,9 +499,20 @@ void MetalContext::initialize_fabric_config() {
     }
     control_plane.configure_routing_tables_for_fabric_ethernet_channels(
         this->fabric_config_, this->fabric_reliability_mode_);
+
+    // Initialize fabric tensix config after routing tables are configured
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        control_plane.initialize_fabric_tensix_config();
+    }
 }
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
+
+void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
+    fabric_tensix_config_ = fabric_tensix_config;
+}
+
+tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
