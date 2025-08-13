@@ -201,8 +201,8 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
 
-        # ttnn.deallocate(w3_out_reduced)
-        # ttnn.deallocate(w1_out_reduced)
+        ttnn.deallocate(w3_out_reduced)
+        ttnn.deallocate(w1_out_reduced)
 
         w2_in = self.tt_ccl.line_all_gather(  # [1, 1, 32, 3200]
             ff1ff3,
@@ -214,7 +214,7 @@ class TtLlamaMLP(LightweightModule):
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
 
-        # ttnn.deallocate(ff1ff3)
+        ttnn.deallocate(ff1ff3)
 
         w2_out = ttnn.linear(  # [1, 1, 32, 1280]
             w2_in,
@@ -267,7 +267,7 @@ class TtLlamaMLP(LightweightModule):
             # )
         ttnn.deallocate(w2_out)
 
-        return w2_out_reduced, w1_out_reduced, w3_out_reduced, w2_in, ff1ff3
+        return w2_out_reduced
 
     def forward_prefill(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """

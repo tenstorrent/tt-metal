@@ -1737,6 +1737,7 @@ class TtQwenModelArgs(TtModelArgs):
             AssertionError: If it's not possible to find such a grid configuration.
         """
         max_rows = 8
+        # max_rows = 10
         max_cols = 8
         max_cores = max_rows * max_cols
 
@@ -2033,7 +2034,6 @@ class TtQwenModelArgs(TtModelArgs):
             if block_w % subblock_w == 0:
                 break
             subblock_w -= 1
-        print("grid.x, grid.y", grid.x, grid.y)
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[grid.x, grid.y],
             subblock_w=subblock_w,
