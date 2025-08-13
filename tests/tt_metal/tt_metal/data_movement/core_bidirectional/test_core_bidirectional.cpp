@@ -45,7 +45,14 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
     /* ================ SETUP ================ */
 
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Buffer Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
@@ -66,7 +73,8 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
     uint32_t l1_base_read_address = l1_base_write_address + master_l1_info.size / 2;
 
     // Physical Core Coordinates
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    CoreCoord physical_subordinate_core =
+        mesh_device->worker_core_from_logical_core(test_config.subordinate_core_coord);
     uint32_t packed_subordinate_core_coordinates =
         physical_subordinate_core.x << 16 | (physical_subordinate_core.y & 0xFFFF);
 
@@ -90,7 +98,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
             (uint32_t)test_config.write_vc};
 
         CreateKernel(
-            program,
+            program_,
             sender_and_requestor_kernel_path,
             test_config.master_core_coord,
             DataMovementConfig{
@@ -113,7 +121,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
             (uint32_t)test_config.write_vc};
 
         CreateKernel(
-            program,
+            program_,
             sender_kernel_path,
             test_config.master_core_coord,
             DataMovementConfig{
@@ -134,7 +142,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
             (uint32_t)packed_subordinate_core_coordinates};
 
         CreateKernel(
-            program,
+            program_,
             requestor_kernel_path,
             test_config.master_core_coord,
             DataMovementConfig{
@@ -145,7 +153,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     /* ================ RUNNING THE PROGRAM ================ */
 
