@@ -302,10 +302,11 @@ void write_socket_configs(
                 uint32_t enc_offset = idx * sender_total_size_bytes / sizeof(uint32_t) +
                                       md_size_bytes / sizeof(uint32_t) + ack_size_bytes / sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_downstreams_per_core.at(sender_core); ++i) {
-                    config_data[enc_offset++] = *downstream_mesh_id;  // downstream_mesh_id
-                    config_data[enc_offset++] = downstream_chip_id;   // downstream_chip_id
-                    config_data[enc_offset++] = recv_virtual_core.y;  // downstream_noc_y
-                    config_data[enc_offset++] = recv_virtual_core.x;  // downstream_noc_x
+                    config_data[enc_offset] = *downstream_mesh_id;      // downstream_mesh_id
+                    config_data[enc_offset + 1] = downstream_chip_id;   // downstream_chip_id
+                    config_data[enc_offset + 2] = recv_virtual_core.y;  // downstream_noc_y
+                    config_data[enc_offset + 3] = recv_virtual_core.x;  // downstream_noc_x
+                    enc_offset += l1_alignment / sizeof(uint32_t);
                 }
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
