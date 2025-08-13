@@ -271,6 +271,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
         this->topology,
         this->semaphore,
         this->barrier_semaphore,
+        this->using_persistent_buffers,
         this->sub_device_id,
         this->chunks_per_sync,
         this->num_workers_per_link,
@@ -287,6 +288,7 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->intermediate_mem_config,
         this->topology,
         this->barrier_semaphore.has_value(),
+        this->using_persistent_buffers,
         this->sub_device_id,
         this->cluster_axis,
         this->chunks_per_sync,
@@ -348,8 +350,10 @@ Tensor reduce_scatter_minimal_async_impl(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
+    bool using_persistent_buffers = persistent_output_buffers.has_value();
+
     std::vector<std::optional<Tensor>> optional_output_tensors =
-        persistent_output_buffers
+        using_persistent_buffers
             ? std::vector<std::optional<Tensor>>(persistent_output_buffers->begin(), persistent_output_buffers->end())
             : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt};
 
@@ -364,6 +368,7 @@ Tensor reduce_scatter_minimal_async_impl(
                    ccl_topology,
                    multi_device_global_semaphore,
                    barrier_semaphore,
+                   using_persistent_buffers,
                    sub_device_id,
                    cluster_axis,
                    chunks_per_sync,
