@@ -24,7 +24,8 @@ MeshSocketTestContext::~MeshSocketTestContext() { cleanup(); }
 
 void MeshSocketTestContext::initialize() {
     log_info(tt::LogTest, "Initializing MeshSocketTestContext...");
-
+    const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
+    local_mesh_id_ = MeshId{std::stoi(mesh_id_str)};
     if (config_.physical_mesh_config.has_value()) {
         initialize_and_validate_custom_physical_config(config_.physical_mesh_config.value());
     }
@@ -104,13 +105,6 @@ const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& MeshSocketTestCont
 
 void MeshSocketTestContext::initialize_and_validate_custom_physical_config(
     const PhysicalMeshConfig& physical_mesh_config) {
-    const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
-    const auto host_rank_str = std::string(std::getenv("TT_HOST_RANK"));
-    log_info(tt::LogTest, "host_rank_str: {}", host_rank_str);
-
-    local_mesh_id_ = MeshId{std::stoi(mesh_id_str)};
-    const auto local_rank = tt::tt_metal::distributed::multihost::Rank{std::stoi(host_rank_str)};
-
     const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
