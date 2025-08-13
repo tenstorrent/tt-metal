@@ -29,6 +29,7 @@ parameters = {
             [8, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, True],
             # requires reversed local reads on some cores, and forward reads on others, large kernel
             [32, 32, 264, 40, 5, 5, 2, 2, 2, 2, 1, 1, True],
+            [1, 1, 159, 159, 3, 3, 1, 1, 1, 1, 1, 1, False],  # OFT Decoder
         ],
     },
     "width_shard_tests": {
