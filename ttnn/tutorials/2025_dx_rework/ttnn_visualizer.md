@@ -63,7 +63,7 @@ ttnn-visualizer
 
 This starts a local server at [http://localhost:8000](http://localhost:8000). Open this address in a browser (preferably Chrome). You’ll be greeted by the visualizer’s homepage:
 
-![TTNN Visualizer Homepage](images/1_ttnn-visualizer-homepage.jpg)
+![TTNN Visualizer Homepage](media/ttnn_visualizer/1_ttnn_visualizer_homepage.jpg)
 
 Initially, you’ll only see the **Reports** tab active. Once the memory and performance reports are uploaded, all other tabs become available.
 
@@ -201,7 +201,7 @@ Upload this entire directory to the visualizer as the **Performance report**.
 
 Once both report directories are uploaded, all analysis tabs will become available:
 
-![Upload](2_upload_files.jpg)
+![Upload](media/ttnn_visualizer/2_upload_files.jpg)
 
 > **NOTE:**
 > If everything went according to plan, you should see a message at the bottom of the page that both reports have been synchronized.
@@ -217,7 +217,7 @@ This tab provides a complete, interactive list of all operations in your model:
 * See Python-level execution time,
 * Click “Memory Details” to inspect memory layout for each operation.
 
-![Operations Tab](3_Operations_tab.jpg)
+![Operations Tab](media/ttnn_visualizer/3_operations_tab.jpg)
 
 Memory Details offers a breakdown of:
 
@@ -225,7 +225,7 @@ Memory Details offers a breakdown of:
 * Tile layout and memory reuse,
 * Operation-to-buffer relationships.
 
-![Operation Memory Details](4_operation_details.jpg)
+![Operation Memory Details](media/ttnn_visualizer/4_operation_details.jpg)
 
 ---
 
@@ -238,11 +238,11 @@ The Tensors tab provides detailed insights into all tensors used throughout your
 * Sharding details,
 * Tensor movement between operations.
 
-![Tensors Tab](5_Tensors_tab.jpg)
+![Tensors Tab](media/ttnn_visualizer/5_tensors_tab.jpg)
 
 You can also filter tensors by high memory usage, making it easy to identify optimization candidates.
 
-![High Usage Tensors](6_Tensors_high_usage)
+![High Usage Tensors](media/ttnn_visualizer/6_tensors_high_usage.jpg)
 
 ---
 
@@ -257,7 +257,7 @@ Visualize all memory buffers used during execution:
 
 Useful for estimating memory headroom or pinpointing inefficient allocations.
 
-![Buffers Tab](7_Buffers_tab.jpg)
+![Buffers Tab](media/ttnn_visualizer/7_buffers_tab.jpg)
 
 ---
 
@@ -270,7 +270,7 @@ Visual representation of the model:
 * Zoom and pan to explore subnetworks or specific paths,
 * Helpful for understanding overall model structure and execution paths.
 
-![Graph Tab](8_graph_tab.jpg)
+![Graph Tab](media/ttnn_visualizer/8_graph_tab.jpg)
 
 ---
 
@@ -286,13 +286,17 @@ Here you’ll find advanced profiling data:
 
 Toggle **Matmul Optimization Analysis** to get hints about suboptimal matrix ops.
 
-![Performance Tab](9_Performance_tab.jpg)
+![Performance Tab](media/ttnn_visualizer/9_performance_tab.jpg)
 
 Use this tab to:
 
 * Optimize kernel configurations,
 * Increase parallelism where needed,
 * Understand memory and compute utilization in detail.
+
+Visualize performance on graphs.
+
+![Performance Graph](media/ttnn_visualizer/10_performance_graph.jpg)
 
 > **NOTE**
 > A comprehensive performance report analysis guide can be found in the official [tt-perf-report](https://github.com/tenstorrent/tt-perf-report) repository.
