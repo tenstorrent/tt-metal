@@ -60,10 +60,11 @@ jobs:
               ./build/test/tt_metal/unit_tests_debug_tools
           - name: ttnn tensor accessor
             cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
-          - name: user kernel path
-            cmd: |
-              rm -rf /tmp/kernels
-              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
+          # Disabled due to https://github.com/tenstorrent/tt-metal/issues/25411
+          # - name: user kernel path
+          #   cmd: |
+          #     rm -rf /tmp/kernels
+          #     TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
