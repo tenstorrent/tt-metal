@@ -312,16 +312,16 @@
                                 for (let i = 0; i < bool_metric_indices.length; i++) {
                                     const path = bool_metric_names[i];
                                     const id = bool_metric_indices[i];
-                                    const state = bool_metric_values[i];
-                                    this._telemetryStore.addPath(path, id, state);
+                                    const value = bool_metric_values[i];
+                                    this._telemetryStore.addPath(path, id, value);
                                     did_update = true;
                                 }
                             } else {
                                 // Delta updates
                                 for (let i = 0; i < bool_metric_indices.length; i++) {
                                     const id = bool_metric_indices[i];
-                                    const state = bool_metric_values[i];
-                                    this._telemetryStore.updateState(id, state);
+                                    const value = bool_metric_values[i];
+                                    this._telemetryStore.updateBoolValue(id, value);
                                     did_update = true;
                                 }
                             }
@@ -387,7 +387,7 @@
                     const item_path = [...this.currentPath, item_name].join("_");
                     items.push({
                         name: item_name,
-                        status: this._telemetryStore.getState(item_path)
+                        status: this._telemetryStore.getValue(item_path)
                     });
                 }
 
