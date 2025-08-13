@@ -81,7 +81,7 @@ def test_decoder_inference(
     all_tests_pass = True
 
     # Setup RoPE transformation matrices
-    rope_setup = RotarySetup(
+    rope_global_setup = RotarySetup(
         mesh_device,
         model_args.max_batch_size,
         model_args.head_dim,
@@ -89,7 +89,18 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
     )
-    transformation_mats = rope_setup.get_both_trans_mats()
+    transformation_mats_global = rope_global_setup.get_both_trans_mats()
+
+    if model_args.rope_theta_local:
+        rope_local_setup = RotarySetup(
+            mesh_device,
+            model_args.max_batch_size,
+            model_args.head_dim,
+            model_args.max_seq_len,
+            model_args.rope_theta_local,
+            None,  # Use no rope scaling for local RoPE
+        )
+        transformation_mats_local = rope_local_setup.get_both_trans_mats()
 
     # Prepare page table for paged attention
     page_table_tt = None
@@ -129,7 +140,8 @@ def test_decoder_inference(
         state_dict=state_dict,
         layer_num=0,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=transformation_mats,
+        transformation_mats_global=transformation_mats_global,
+        transformation_mats_local=transformation_mats_local,
         paged_attention_config=paged_attention_config,
     )
 
@@ -175,13 +187,15 @@ def test_decoder_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats_global = rope_global_setup.get_rot_mats(current_pos)
+        rot_mats_local = rope_local_setup.get_rot_mats(current_pos) if rope_local_setup is not None else None
 
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats_global=rot_mats,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
             mode="decode",
             page_table=page_table_tt,
         )

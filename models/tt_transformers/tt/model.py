@@ -68,6 +68,9 @@ class Transformer(LightweightModule):
             rope_scaling=args.rope_scaling,
         )
 
+        self.trans_mats_global_dict = self.rope_setup.get_both_trans_mats()
+        self.trans_mats_local_dict = None
+
         if args.rope_theta_local:
             self.rope_local_setup = RotarySetup(
                 mesh_device,
@@ -76,8 +79,9 @@ class Transformer(LightweightModule):
                 args.max_seq_len,
                 args.rope_theta_local,
             )
-
-        self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
+            self.trans_mats_local_dict = (
+                self.rope_local_setup.get_both_trans_mats() if self.rope_local_setup is not None else None
+            )
 
         self.layers = [
             TransformerBlock(
@@ -88,7 +92,8 @@ class Transformer(LightweightModule):
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
                 layer_num=i,
-                transformation_mats=self.trans_mats_dict,
+                transformation_mats_global=self.trans_mats_global_dict,
+                transformation_mats_local=self.trans_mats_local_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
                 attention_class=attention_class,
