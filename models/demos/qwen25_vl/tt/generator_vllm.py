@@ -237,13 +237,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         return logits, rot_mats
 
     def decode_forward(self, *args, **kwargs):
-        rot_mats_seq_ids = kwargs.pop("rot_mats_seq_ids", None)
+        rot_mats_seq_ids: list = kwargs.pop("rot_mats_seq_ids", None)
         assert rot_mats_seq_ids is not None, "rot_mats_seq_ids must be provided for Qwen2.5-VL"
 
         # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
-        for seq_id, (cos, sin) in rot_mats_seq_ids.items():
-            self.model.rope_setup.cos_matrix_pt[seq_id] = cos[0]
-            self.model.rope_setup.sin_matrix_pt[seq_id] = sin[0]
+        for i, (cos, sin) in enumerate(rot_mats_seq_ids):
+            self.model.rope_setup.cos_matrix_pt[i] = cos[0]
+            self.model.rope_setup.sin_matrix_pt[i] = sin[0]
         self.model.rope_setup.update_cos_sin()
 
         return super().decode_forward_text(*args, **kwargs)
