@@ -74,18 +74,18 @@ void kernel_main() {
         // RMS norm: Calculate (∑x^2)/n
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
-            if constexpr (fuse_pre_add) {
-                read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
-            }
+#ifdef FUSE_PRE_ADD
+            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+#endif
         }  // wt loop
 
         // Second pass
         // Calculate final output
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
-            if constexpr (fuse_pre_add) {
-                read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
-            }
+#ifdef FUSE_PRE_ADD
+            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+#endif
 #ifdef FUSE_GAMMA
             {
                 read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
