@@ -8,7 +8,6 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-import torch.nn.functional.rms_norm
 
 from models.utility_functions import skip_for_wormhole_b0
 
