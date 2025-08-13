@@ -137,23 +137,27 @@ void MAIN {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     }
                 } else {
-                    pack_reconfig_data_format(tile_tmp_cb_id);
+                    // pack_reconfig_data_format(tile_tmp_cb_id);
                     tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
                     tilize_block(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
-                    tilize_uninit(curr_in_cb_id, tile_tmp_cb_id);
-                    pack_reconfig_data_format(tile_idx_tmp_cb_id);
+                    tilize_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id, tile_tmp_cb_id);
+                    // pack_reconfig_data_format(tile_idx_tmp_cb_id);
                     tilize_init(curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
                     tilize_block(
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
-                    tilize_uninit(curr_in_idx_cb_id, tile_idx_tmp_cb_id);
+                    tilize_uninit_with_dt(curr_in_idx_cb_id, tile_tmp_cb_id, tile_idx_tmp_cb_id);
 
-                    // PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
-                    // PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id, 0));
+                    PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
+                    PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id, 0));
 
                     // transpose_wh_init(tile_tmp_cb_id, out_cb_id);
                     transpose_wh_init_short(tile_tmp_cb_id);
+                    // UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(tile_idx_tmp_cb_id,
+                    // tile_tmp_cb_id)));
                     transpose_wh_tile(tile_tmp_cb_id, topk_cb_tile_idx, data_dst_idx);
                     transpose_wh_init_short(tile_idx_tmp_cb_id);
+                    // UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(tile_tmp_cb_id,
+                    // tile_idx_tmp_cb_id)));
                     transpose_wh_tile(tile_idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
 
                     // dprint_tensix_dest_reg(0);
