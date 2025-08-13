@@ -14,7 +14,9 @@ from ...tt.model import Model
 from ...tt.rope import ApplyRotaryPosEmb
 
 local_model_path = "models/demos/gpt_oss/reference"
-tensor_cache_dir = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16") + "/ttnn_cache"
+tensor_cache_dir = (
+    os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16") + "/ttnn_cache_demo"
+)
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 tokenizer = load_tokenizer(local_weights_path)
 

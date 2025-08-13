@@ -242,9 +242,6 @@ def test_sparse_experts(
     tt_routing_weights = ttnn.from_torch(
         routing_weights, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
-    tt_routing_weights2 = ttnn.from_torch(
-        routing_weights, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
-    )
 
     # Create models
     reference_model = ReferenceExperts(config)
@@ -254,7 +251,7 @@ def test_sparse_experts(
 
     # # Run forward passes
     reference_output = reference_model(hidden_states, routing_weights)
-    tt_output = tt_model(tt_hidden_states, tt_routing_weights, tt_routing_weights2)
+    tt_output = tt_model(tt_hidden_states, tt_routing_weights)
 
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
 

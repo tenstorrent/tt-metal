@@ -13,6 +13,7 @@ from ...reference.hf_utils import get_state_dict
 from ...tt.ccl import CCLManager
 from ...tt.mlp import MLP
 
+tensor_cache_dir = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16") + "/ttnn_cache"
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
 
@@ -137,7 +138,7 @@ def test_mlp(
     state_dict = reference_model.state_dict()
 
     ccl_manager = CCLManager(mesh_device)
-    tt_model = MLP(mesh_device, config, state_dict, ccl_manager, dtype=dtype)
+    tt_model = MLP(mesh_device, config, state_dict, ccl_manager, dtype=dtype, tensor_cache_path=tensor_cache_dir)
 
     # Run tt forward pass first to get the routing scores to use in reference execution
     tt_output, tt_router_scores = tt_model(tt_hidden_states)
