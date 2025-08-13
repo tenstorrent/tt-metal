@@ -12,8 +12,8 @@ from models.demos.segformer.reference.segformer_model import SegformerModelRefer
 from models.demos.segformer.tests.pcc.test_segformer_encoder import (
     create_custom_mesh_preprocessor as create_customer_preprocessor_encoder,
 )
-from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_model import TtSegformerModel
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

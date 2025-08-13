@@ -15,8 +15,9 @@ from models.demos.segformer.tests.pcc.test_segformer_layer import (
 from models.demos.segformer.tests.pcc.test_segformer_overlap_path_embeddings import (
     create_custom_mesh_preprocessor as create_customer_preprocessor_overlap_path,
 )
-from models.demos.segformer.tt.common import get_mesh_mappers, preprocess_layernorm_parameter
+from models.demos.segformer.tt.common import preprocess_layernorm_parameter
 from models.demos.segformer.tt.ttnn_segformer_encoder import TtSegformerEncoder
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
