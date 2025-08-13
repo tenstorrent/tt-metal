@@ -407,6 +407,14 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
         {{.torch_dtype = "float32", .optional_data_type = DataType::INT32,     .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = "int32" }},
         {{.torch_dtype = "float32", .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::UINT32, .torch_convert_dtype = "int32" }},
 
+        // Below cases require on-device ROW-MAJOR -> TILE conversion and suffer from the precision loss described at #23405. Once the issue is resolved the cases can be re-enabled
+        // {{.torch_dtype = "float32", .optional_data_type = DataType::UINT8,  .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::FLOAT32, .torch_convert_dtype = std::nullopt }},
+        // {{.torch_dtype = "float32", .optional_data_type = DataType::UINT16,  .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::FLOAT32, .torch_convert_dtype = std::nullopt }},
+        // {{.torch_dtype = "float32", .optional_data_type = DataType::BFLOAT16,  .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::FLOAT32, .torch_convert_dtype = std::nullopt }},
+        // {{.torch_dtype = "float32", .optional_data_type = DataType::BFLOAT4_B,  .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::FLOAT32, .torch_convert_dtype = std::nullopt }},
+        // {{.torch_dtype = "float32", .optional_data_type = DataType::BFLOAT8_B,  .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::FLOAT32, .torch_convert_dtype = std::nullopt }},
+        // {{.torch_dtype = "float32", .optional_data_type = DataType::FLOAT32,  .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::FLOAT32, .torch_convert_dtype = std::nullopt }},
+
         // int32 conversion can be safely done on device
         {{.torch_dtype = "int32",   .optional_data_type = DataType::FLOAT32,   .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::BFLOAT16,  .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = std::nullopt }},
@@ -415,6 +423,15 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
         {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT8,     .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::ROW_MAJOR}, {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = std::nullopt }},
+
+        // int64 cannot be stored in the torch tensor, and since the intermediate type is int32, all `int64` -> T conversions are also safe
+        // uint8, int32, uint32 conversion does not have show any performance improvement when done on device, and thus excluded
+        {{.torch_dtype = "int64",   .optional_data_type = DataType::FLOAT32,   .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = "int32" }},
+        {{.torch_dtype = "int64",   .optional_data_type = DataType::BFLOAT16,  .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = "int32" }},
+        {{.torch_dtype = "int64",   .optional_data_type = DataType::BFLOAT8_B, .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = "int32" }},
+        {{.torch_dtype = "int64",   .optional_data_type = DataType::BFLOAT4_B, .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = "int32" }},
+
+
 
         {{.torch_dtype = "uint8",   .optional_data_type = DataType::INT32,     .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::INT32,  .torch_convert_dtype = "int32" }},
         {{.torch_dtype = "uint8",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::UINT32, .torch_convert_dtype = "int32" }},
@@ -501,18 +518,14 @@ Tensor convert_python_tensor_to_tt_tensor_on_device(
         }
     };
 
-    if (strategy.torch_convert_dtype) {
-        // Conversion was done on device, only need to adjust layout
-        if (optional_layout.has_value()) {
-            set_layout(optional_layout.value());
-        }
-    } else if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
+    if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
         // Need to perform final data conversion on device, typecast requires TILE layout.
         set_layout(Layout::TILE);
         output = ttnn::typecast(output, optional_data_type.value());
-        if (optional_layout.has_value()) {
-            set_layout(optional_layout.value());
-        }
+    }
+
+    if (optional_layout.has_value()) {
+        set_layout(optional_layout.value());
     }
 
     return output;
@@ -596,8 +609,9 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     std::optional<PyTensorPreparedConversion> strategy = prepare_torch_tensor_conversion(
         py_tensor, optional_data_type, optional_layout, device != nullptr, memory_config, optional_tile);
+    Tensor output;
     if (strategy) {
-        return convert_python_tensor_to_tt_tensor_on_device(
+        output = convert_python_tensor_to_tt_tensor_on_device(
             py_tensor,
             optional_data_type,
             optional_layout,
@@ -609,7 +623,7 @@ Tensor convert_python_tensor_to_tt_tensor(
             mesh_mapper,
             strategy.value());
     } else {
-        return convert_python_tensor_to_tt_tensor_on_host(
+        output = convert_python_tensor_to_tt_tensor_on_host(
             py_tensor,
             optional_data_type,
             optional_layout,
@@ -620,6 +634,9 @@ Tensor convert_python_tensor_to_tt_tensor(
             pad_value,
             mesh_mapper);
     }
+
+    GraphTracker::instance().track_function_end(output);
+    return output;
 }
 
 // Wrapper around HostBuffer that provides a row-major view of the data, handles padding / logical view, and provides

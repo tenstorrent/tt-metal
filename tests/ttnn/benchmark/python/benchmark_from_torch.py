@@ -48,6 +48,7 @@ def test_benchmark_from_torch_two_copy(benchmark):
         torch.float16,
         torch.float32,
         torch.int32,
+        torch.int64,
         torch.uint8,
     ],
 )
@@ -80,7 +81,7 @@ def test_benchmark_from_torch(
         pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
     height = int(8096 / 16) * size_multiplier
     width = int(8100 / 16) * size_multiplier
-    if torch_dtype in [torch.int32, torch.uint8]:
+    if torch_dtype in [torch.int32, torch.uint8, torch.int64]:
         torch_input_tensor = torch.randint(0, 100, (height, width), dtype=torch_dtype)
     else:
         torch_input_tensor = torch.rand((height, width), dtype=torch_dtype)
