@@ -48,16 +48,22 @@ static inline uint32_t align_up_local(uint32_t value, uint32_t alignment) {
 static ParsedSenderPage parse_sender_page(
     const uint8_t* page_base, uint32_t l1_alignment, uint32_t max_num_downstreams) {
     ParsedSenderPage parsed;
+    // copy the static md
     std::memcpy(&parsed.md, page_base, sizeof(sender_socket_md));
+
     const uint32_t md_size_aligned = align_up_local(sizeof(sender_socket_md), l1_alignment);
     const uint32_t ack_stride = align_up_local(sizeof(uint32_t), l1_alignment);
     const uint32_t ack_base = md_size_aligned;
+
+    // copy each of the acked bytes
     parsed.bytes_acked.resize(parsed.md.num_downstreams);
     for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
         uint32_t v = 0;
         std::memcpy(&v, page_base + ack_base + i * ack_stride, sizeof(uint32_t));
         parsed.bytes_acked[i] = v;
     }
+
+    // copy each of the encodings
     const uint32_t enc_stride = align_up_local(sizeof(sender_downstream_encoding), l1_alignment);
     const uint32_t enc_base = ack_base + max_num_downstreams * ack_stride;
     parsed.encodings.resize(parsed.md.num_downstreams);
