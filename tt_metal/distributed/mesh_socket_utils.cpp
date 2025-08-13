@@ -264,7 +264,7 @@ void write_socket_configs(
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
 
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-
+    const auto& l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     if (is_sender) {
         auto align_up = [l1_alignment](uint32_t v) { return ((v + l1_alignment - 1) / l1_alignment) * l1_alignment; };
         const auto num_downstreams_per_core = get_num_downstreams_per_core(config);
@@ -275,7 +275,6 @@ void write_socket_configs(
         uint32_t enc_size_bytes = align_up(sizeof(sender_downstream_encoding)) * num_downstreams;
         uint32_t sender_total_size_bytes = md_size_bytes + ack_size_bytes + enc_size_bytes;
         std::vector<uint32_t> config_data(sender_total_size_bytes / sizeof(uint32_t), 0);
-        uint32_t connection_index = 0;
         for (const auto& [device_coord, indexed_connections] : grouped_connections) {
             for (const auto& [conn_idx, connection] : indexed_connections) {
                 const auto& [sender_core, recv_core] = connection;
@@ -289,30 +288,24 @@ void write_socket_configs(
                 auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
 
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
-                sender_socket_md md;
-                md.num_downstreams = num_downstreams_per_core.at(sender_core);
-                md.write_ptr = peer_descriptor.data_buffer_address;
-                md.bytes_sent = 0;
-                md.downstream_fifo_addr = peer_descriptor.data_buffer_address;
-                md.downstream_fifo_total_size = config.socket_mem_config.fifo_size;
-                md.downstream_bytes_sent_addr = peer_config_buf_addr;
-                md.is_sender = is_sender;
-
-                // copy static metadata
-                std::memcpy(config_data.data() + connection_index * sender_total_size_bytes, &md, sizeof(md));
+                // write sender_socket_md
+                uint32_t md_offset = idx * sender_total_size_bytes / sizeof(uint32_t);
+                config_data[md_offset++] = num_downstreams_per_core.at(sender_core);  // num_downstreams
+                config_data[md_offset++] = peer_descriptor.data_buffer_address;       // write_ptr
+                config_data[md_offset++] = 0;                                         // bytes_sent
+                config_data[md_offset++] = peer_config_buf_addr;                      // downstream_bytes_sent_addr
+                config_data[md_offset++] = peer_descriptor.data_buffer_address;       // downstream_fifo_addr
+                config_data[md_offset++] = config.socket_mem_config.fifo_size;        // downstream_fifo_total_size
+                config_data[md_offset++] = is_sender;                                 // is_sender
 
                 // copy each reciever; acks are already 0
+                uint32_t enc_offset = idx * sender_total_size_bytes / sizeof(uint32_t) +
+                                      md_size_bytes / sizeof(uint32_t) + ack_size_bytes / sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_downstreams_per_core.at(sender_core); ++i) {
-                    sender_downstream_encoding enc;
-                    enc.downstream_mesh_id = *downstream_mesh_id;
-                    enc.downstream_chip_id = downstream_chip_id;
-                    enc.downstream_noc_y = recv_virtual_core.y;
-                    enc.downstream_noc_x = recv_virtual_core.x;
-                    std::memcpy(
-                        config_data.data() + connection_index * sender_total_size_bytes + md_size_bytes +
-                            ack_size_bytes + i * (sizeof(sender_downstream_encoding)),
-                        &enc,
-                        sizeof(enc));
+                    config_data[enc_offset++] = *downstream_mesh_id;  // downstream_mesh_id
+                    config_data[enc_offset++] = downstream_chip_id;   // downstream_chip_id
+                    config_data[enc_offset++] = recv_virtual_core.y;  // downstream_noc_y
+                    config_data[enc_offset++] = recv_virtual_core.x;  // downstream_noc_x
                 }
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
