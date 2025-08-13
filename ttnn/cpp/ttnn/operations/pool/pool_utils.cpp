@@ -143,7 +143,8 @@ FactoryParameters get_factory_parameters(
 
     auto dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
-    tt::DataFormat index_format = datatype_to_dataformat_converter(DataType::UINT16);
+    tt::DataFormat index_format =
+        datatype_to_dataformat_converter(dtype);  // use same as data indexes will be reinterpreted
     uint32_t nbytes = datum_size(data_format);
     uint32_t index_nbytes = datum_size(index_format);
 
