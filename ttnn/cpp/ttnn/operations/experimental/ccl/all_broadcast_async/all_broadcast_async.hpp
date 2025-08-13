@@ -15,12 +15,12 @@ struct ExecuteAllBroadcastAsync {
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         const GlobalSemaphore& multi_device_global_semaphore,
+        const GlobalSemaphore& barrier_semaphore,
         uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         std::optional<uint32_t> cluster_axis = std::nullopt,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl
