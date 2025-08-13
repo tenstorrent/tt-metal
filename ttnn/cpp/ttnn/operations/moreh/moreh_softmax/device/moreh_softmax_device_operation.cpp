@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_softmax_device_operation.hpp"
-#include <enchantum/enchantum.hpp>  // to_string
-#include <enchantum/iostream.hpp>   // iostream support
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::moreh::moreh_softmax {
@@ -74,8 +73,7 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
 MorehSoftmaxOperation::program_factory_t MorehSoftmaxOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto strategy = get_parallelization_strategy(operation_attributes, tensor_args);
-    std::cout << "moreh_softmax_device_operation.cpp:select_program_factory - strategy: "
-              << enchantum::to_string(strategy) << std::endl;
+
     switch (strategy) {
         case MorehSoftmaxOpParallelizationStrategy::SMALL_W: return MorehSoftmaxWSmallFactory{};
         case MorehSoftmaxOpParallelizationStrategy::SMALL_H: return MorehSoftmaxHSmallFactory{};
@@ -91,7 +89,11 @@ void MorehSoftmaxOperation::validate_inputs(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((input.layout() == Layout::TILE), "Inputs to softmax must be tilized");
-
+    TT_FATAL(
+        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||
+            input.dtype() == DataType::FLOAT32,
+        "Inputs must be of bfloat16, bfloat8_b or float32 type. Received: {}",
+        input.dtype());
     const auto rank = input.logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
@@ -154,8 +156,7 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmaxOperation::get_parallelization
     const auto strategy = operation_attributes.strategy;
     const auto dim = operation_attributes.dim;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
-    std::cout << "moreh_softmax_device_operation.cpp:get_parallelization_strategy - strategy: "
-              << enchantum::to_string(strategy) << std::endl;
+
     auto rank = input.logical_shape().rank();
     if (strategy == MorehSoftmaxOpParallelizationStrategy::NONE) {
         if (rank - 1 == dim) {
