@@ -148,13 +148,6 @@ void MAIN {
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt(curr_in_idx_cb_id, tile_tmp_cb_id, tile_idx_tmp_cb_id);
 
-                    PACK(uint32_t in_rd_ptr = get_local_cb_interface(curr_in_cb_id).fifo_rd_ptr);
-                    PACK(uint32_t in_wr_ptr = get_local_cb_interface(curr_in_cb_id).fifo_wr_ptr);
-                    PACK(uint32_t tmp_rd_ptr = get_local_cb_interface(tile_tmp_cb_id).fifo_rd_ptr);
-                    PACK(uint32_t tmp_wr_ptr = get_local_cb_interface(tile_tmp_cb_id).fifo_wr_ptr);
-                    PACK(DPRINT << "IN_CB FIFO RD " << in_rd_ptr << " WR " << in_wr_ptr << ENDL());
-                    PACK(DPRINT << "TILE_TMP_CB FIFO RD " << tmp_rd_ptr << " WR " << tmp_wr_ptr << ENDL());
-
                     // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
                     // PACK(DPRINT << "TILE CB " << ENDL());
                     // PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
