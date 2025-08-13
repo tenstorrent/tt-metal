@@ -12,6 +12,7 @@ import ttnn
 from .executor import (
     Executor,
     ModelExecutor,
+    MultiCQModelOverlappedInputExecutor,
     MultiCQTracedModelOverlappedInputExecutor,
     MultiCQTracedModelPipelinedIOExecutor,
     TracedModelExecutor,
@@ -168,8 +169,19 @@ def create_pipeline_from_config(
             )
     elif config.num_command_queues == 2:
         if not config.use_trace:
-            raise ValueError("Non-traced runs not supported when using multiple command queues")
-        if config.all_transfers_on_separate_command_queue:
+            # Non-traced multi-CQ executor that overlaps input transfers
+            if config.all_transfers_on_separate_command_queue:
+                raise ValueError("Pipelined I/O (all_transfers_on_separate_command_queue) requires tracing")
+            if not dram_input_memory_config:
+                raise ValueError("dram_input_memory_config must be provided when using multi-CQ executor")
+            logger.debug("Creating MultiCQModelOverlappedInputExecutor with multiple command queues (non-traced)")
+            executor = MultiCQModelOverlappedInputExecutor(
+                model,
+                device,
+                dram_input_memory_config=dram_input_memory_config,
+                l1_input_memory_config=l1_input_memory_config,
+            )
+        elif config.all_transfers_on_separate_command_queue:
             if not dram_output_memory_config:
                 raise ValueError(
                     "dram_output_memory_config must be provided when all_transfers_on_separate_command_queue=True."
