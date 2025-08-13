@@ -317,8 +317,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 this->topology,
                 this->semaphore,
                 this->barrier_semaphore,
+                this->using_persistent_buffers,
                 this->sub_device_id,
-		this->chunks_per_sync,
+                this->chunks_per_sync,
                 this->num_workers_per_link,
                 this->num_buffers_per_channel);
 
@@ -372,6 +373,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         this->topology,
         this->cluster_axis,
         this->barrier_semaphore.has_value(),
+        this->using_persistent_buffers,
         this->chunks_per_sync,
         this->num_workers_per_link,
         this->num_buffers_per_channel,
@@ -414,6 +416,8 @@ Tensor all_gather_async_impl(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
+    bool using_persistent_buffers = false;
+
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync(
                    devices,
@@ -427,6 +431,7 @@ Tensor all_gather_async_impl(
                    /*cluster_axis=*/std::nullopt,
                    use_optimal_ccl_for_llama,
                    barrier_semaphore,
+                   using_persistent_buffers,
                    std::nullopt,
                    std::nullopt,
                    std::nullopt),
@@ -471,6 +476,8 @@ Tensor all_gather_async_impl(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
+    bool using_persistent_buffers = persistent_output_buffer.has_value();
+
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     return tt::tt_metal::operation::run(
@@ -486,6 +493,7 @@ Tensor all_gather_async_impl(
                    cluster_axis,
                    use_optimal_ccl_for_llama,
                    barrier_semaphore,
+                   using_persistent_buffers,
                    chunks_per_sync,
                    num_workers_per_link,
                    num_buffers_per_channel),
@@ -524,6 +532,8 @@ Tensor all_gather_async_impl(
         rank - 1,
         dim);
 
+    bool using_persistent_buffers = persistent_output_tensor.has_value();
+
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
 
     CoreCoord grid_size = mesh_device.compute_with_storage_grid_size();
@@ -542,6 +552,7 @@ Tensor all_gather_async_impl(
                    cluster_axis,
                    use_optimal_ccl_for_llama,
                    barrier_semaphore,
+                   using_persistent_buffers,
                    std::nullopt,
                    std::nullopt,
                    std::nullopt},

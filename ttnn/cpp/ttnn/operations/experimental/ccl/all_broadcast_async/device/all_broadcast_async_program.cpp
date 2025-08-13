@@ -49,8 +49,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
+    const GlobalSemaphore& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    bool using_persistent_buffers) {
     tt::tt_metal::Program program{};
 
     auto mesh_device = input_tensor.mesh_device();
@@ -254,12 +255,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             drain_sync_core.x,                               // out_ready_sem_noc0_x
             drain_sync_core.y,                               // out_ready_sem_noc0_y
             out_ready_sem_wait_value,                        // out_ready_sem_wait_value
-            barrier_semaphore.has_value(),                   // use_barrier
-            barrier_semaphore.has_value()                    // barrier_sem
-                ? barrier_semaphore.value().address()
-                : 0,
-            barrier_core.x,  // barrier_sem_noc0_x
-            barrier_core.y   // barrier_sem_noc0_y
+            !using_persistent_buffers,                       // use_barrier
+            barrier_semaphore.address(),                     // barrier_sem
+            barrier_core.x,                                  // barrier_sem_noc0_x
+            barrier_core.y                                   // barrier_sem_noc0_y
         };
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
@@ -311,10 +310,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output_tensors[ring_index].buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
-
-                if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[10] = barrier_semaphore.value().address();
-                }
+                worker_writer_sender_runtime_args[10] = barrier_semaphore.address();
             }
         };
 

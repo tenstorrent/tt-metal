@@ -41,6 +41,7 @@ def run_all_gather_impl(
     num_iters=1,
     enable_trace=True,
     use_barrier=False,
+    use_persistent_buffers=True,
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
@@ -207,7 +208,7 @@ def run_all_gather_impl(
             else:
                 tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
-                    persistent_output_buffer=None if use_barrier else persistent_output_buffers[i],
+                    persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
                     dim=dim,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     num_links=num_links,
@@ -248,7 +249,7 @@ def run_all_gather_impl(
                 tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.all_gather_matmul_async(
                     input_tensor_mesh_list[i],
                     weight_tt,
-                    persistent_output_buffer=None if use_barrier else persistent_output_buffers[i],
+                    persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
                     dim=dim,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     all_gather_core_grid_offset=(0, 6),
@@ -362,12 +363,13 @@ def run_all_gather_impl(
     ids=["separate", "fused"],
 )
 @pytest.mark.parametrize(
-    "use_barrier",
+    "use_barrier, use_persistent_buffers",
     [
-        True,
-        False,
+        (True, True),
+        (True, False),
+        (False, True),
     ],
-    ids=["barrier_active", "barrier_inactive"],
+    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
 )
 @pytest.mark.parametrize(
     "chunks_per_sync, num_workers_per_link, num_buffers_per_channel",
@@ -409,6 +411,7 @@ def test_all_gather_matmul_async(
     enable_trace,
     use_non_fused,
     use_barrier,
+    use_persistent_buffers,
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
@@ -443,6 +446,7 @@ def test_all_gather_matmul_async(
         use_legacy_allgather=use_legacy_allgather,
         num_iters=num_iters,
         use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,

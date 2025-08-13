@@ -167,6 +167,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
         this->all_gather_async_struct.topology,
         this->all_gather_async_struct.semaphore,
         this->all_gather_async_struct.barrier_semaphore,
+        this->all_gather_async_struct.using_persistent_buffers,
         this->all_gather_async_struct.sub_device_id,
         this->all_gather_async_struct.chunks_per_sync,
         this->all_gather_async_struct.num_workers_per_link,
@@ -189,7 +190,6 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->all_gather_async_struct.semaphore.at(0).address();
 
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsync>(
         this->all_gather_async_struct.dim,
@@ -198,12 +198,17 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
         this->all_gather_async_struct.output_mem_config,
         this->all_gather_async_struct.topology,
         this->all_gather_async_struct.sub_device_id,
+        this->all_gather_async_struct.cluster_axis,
+        this->all_gather_async_struct.barrier_semaphore.has_value(),
+        this->all_gather_async_struct.using_persistent_buffers,
+        this->all_gather_async_struct.chunks_per_sync,
+        this->all_gather_async_struct.num_workers_per_link,
+        this->all_gather_async_struct.num_buffers_per_channel,
         this->all_gather_core_grid_offset,
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config,
-        semaphore_address);
+        input_memory_config);
 }
 
 namespace operations {
@@ -247,6 +252,8 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         optional_input_tensors.push_back(std::nullopt);
     }
 
+    bool using_persistent_buffers = persistent_output_buffer.has_value();
+
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     /* AllGather setup */
@@ -262,6 +269,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         /*cluster_axis=*/std::nullopt,
         false,
         barrier_semaphore,
+        using_persistent_buffers,
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel);
