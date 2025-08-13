@@ -28,6 +28,13 @@ enum class RoutingType : uint32_t {
     Dynamic = 1,
 };
 
+/*  TODO: Add support for other patterns.
+    Patterns need to split into three layers:
+    1. host patterns (number of host pairs)
+    2. device level patterns (number of sockets between each host pair)
+    3. socket level patterns (number of connection in each socket)
+    Currently patterns are only at the device level,
+    going between all host pairs and one connection per socket. */
 enum class PatternType : uint32_t {
     AllToAllDevices = 0,
     AllHostsRandomSockets = 1,

@@ -171,9 +171,8 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
 }
 
 std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(
-    // TODO: Add support for other patterns
-    const PatternExpansionConfig& pattern,
-    const MeshSocketTestContext& test_context) {
+
+    const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context) {
     switch (pattern.type) {
         case PatternType::AllToAllDevices: return expand_all_to_all_devices_pattern(pattern, test_context);
         case PatternType::AllHostsRandomSockets: return expand_all_hosts_random_sockets_pattern(pattern, test_context);
