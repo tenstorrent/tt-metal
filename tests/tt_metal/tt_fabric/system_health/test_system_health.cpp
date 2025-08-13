@@ -222,38 +222,6 @@ std::string build_local_connectivity_desc_yaml(
     return emitter.c_str();
 }
 
-// auto deserialized_sys_desc = deserialize_system_descriptor_from_bytes(serialized_sys_desc);
-// TT_FATAL(deserialized_sys_desc.asic_ids == system_desc.asic_ids, "Deserialized ASIC IDs do not match original");
-
-// std::cout << "Eth Connectivity Size: " << deserialized_sys_desc.eth_connectivity_descs.size() << std::endl;
-
-// for (auto desc_idx = 0; desc_idx < deserialized_sys_desc.eth_connectivity_descs.size(); desc_idx++) {
-//     const auto& deserialized_desc = deserialized_sys_desc.eth_connectivity_descs[desc_idx];
-//     const auto& original_desc = system_desc.eth_connectivity_descs[desc_idx];
-//     std::cout << "Local Eth Connections Size: " << deserialized_desc.local_eth_connections.size() << std::endl;
-//     std::cout << "Remote Eth Connections Size: " << deserialized_desc.remote_eth_connections.size() << std::endl;
-//     for (const auto& [local_chan, remote_chan] : deserialized_desc.local_eth_connections) {
-//         TT_FATAL(
-//             original_desc.local_eth_connections.count(local_chan) > 0,
-//             "Local channel {} not found in original descriptor",
-//             local_chan);
-//         TT_FATAL(
-//             original_desc.local_eth_connections.at(local_chan) == remote_chan,
-//             "Remote channel for local channel {} does not match original",
-//             local_chan);
-//     }
-
-//     for (const auto& [local_chan, remote_pair] : deserialized_desc.remote_eth_connections) {
-//         TT_FATAL(
-//             original_desc.remote_eth_connections.count(local_chan) > 0,
-//             "Local channel {} not found in original descriptor",
-//             local_chan);
-//         TT_FATAL(
-//             original_desc.remote_eth_connections.at(local_chan) == remote_pair,
-//             "Remote pair for local channel {} does not match original",
-//             local_chan);
-//     }
-// }
 TEST(Cluster, GetLocalEthernetConnectivity) {
     using namespace tt::tt_metal::distributed::multihost;
 
@@ -269,6 +237,11 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     gethostname(hostname, sizeof(hostname));
     std::string hostname_str = std::string(hostname) + "_" + std::to_string(my_rank);
     std::cout << "Hostname: " << hostname_str << std::endl;
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        const auto eth_coord = cluster.get_user_chip_ethernet_coordinates().at(chip_id);
+        std::cout << "ASIC: " << unique_id << " " << eth_coord.x << " " << eth_coord.y << std::endl;
+        ;
+    }
 
     tt::tt_fabric::EthConnectivityDescriptor eth_connectivity_desc;
     std::vector<tt::tt_fabric::ASICDescriptor> asic_descriptors;
