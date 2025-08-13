@@ -91,7 +91,15 @@ const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb c
 CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);
 
 bool is_split_reader_supported(
-    TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles);
+    TensorMemoryLayout memory_layout,
+    bool is_1d_depthwise_conv,
+    uint32_t act_block_h_ntiles,
+    uint32_t per_core_out_matrix_height_ntiles,
+    uint32_t input_tile_size,
+    uint32_t weights_tile_size,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    uint32_t kernel_width);
 
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv

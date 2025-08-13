@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d_op_program_factory_common.hpp"
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::conv {
 namespace conv2d {
 
@@ -191,7 +193,16 @@ std::vector<CBInfo> get_cb_info(
         // ACT and ACT_SECOND_READER CB
         uint32_t act_cb_num_tiles = act_block_num_tiles;
         uint32_t act_block_split_num_tiles = 0;
-        if (is_split_reader_supported(sharding_scheme, is_1d_depthwise_conv, block_config.act_block_h_ntiles)) {
+        if (is_split_reader_supported(
+                sharding_scheme,
+                is_1d_depthwise_conv,
+                block_config.act_block_h_ntiles,
+                pconfig.per_core_out_matrix_height_ntile,
+                input_tile_size,
+                weights_tile_size,
+                weights_shape[2] / (kernel_size[0] * kernel_size[1]),
+                weights_shape[3],
+                kernel_size[1])) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -360,9 +371,41 @@ CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_n
     return const_cast<CBInfo&>(get_cb_info_by_name(cb_info, cb_name));
 }
 
+bool is_split_reader_viable(
+    uint32_t per_core_out_matrix_height_ntiles,
+    uint32_t input_tile_size,
+    uint32_t weights_tile_size,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    uint32_t kernel_width) {
+    const float_t noc_transfer_c = 0.054;
+    const float_t upper_bound_noc_transfer_c = 27.7;
+    const float_t noc_transfer_unit = 2 * input_channels * kernel_width;
+    const float_t noc_transfer_time =
+        noc_transfer_unit / fmin(noc_transfer_c * noc_transfer_unit, upper_bound_noc_transfer_c);
+
+    return 8 * per_core_out_matrix_height_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_time >
+           input_channels * output_channels * kernel_width;
+}
+
 bool is_split_reader_supported(
-    TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles) {
-    return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1;
+    TensorMemoryLayout memory_layout,
+    bool is_1d_depthwise_conv,
+    uint32_t act_block_h_ntiles,
+    uint32_t per_core_out_matrix_height_ntiles,
+    uint32_t input_tile_size,
+    uint32_t weights_tile_size,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    uint32_t kernel_width) {
+    return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1 &&
+           is_split_reader_viable(
+               per_core_out_matrix_height_ntiles,
+               input_tile_size,
+               weights_tile_size,
+               input_channels,
+               output_channels,
+               kernel_width);
 }
 
 }  // namespace conv2d
