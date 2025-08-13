@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+import torch.nn.functional.rms_norm
 
 from models.utility_functions import skip_for_wormhole_b0
 
@@ -69,7 +70,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w):
 
 @pytest.mark.parametrize("h", [32, 224, 384, 2048])
 @pytest.mark.parametrize("w", [64, 160, 1024, 2048])
-def test_layer_norm_with_pre_add(device, h, w):
+def test_layer_norm_with_residual_input(device, h, w):
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -91,7 +92,7 @@ def test_layer_norm_with_pre_add(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_layer_norm_with_pre_add_and_weight_and_bias(device, h, w, rms_norm):
+def test_layer_norm_with_weight_and_bias_and_residual_input(device, h, w):
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -136,7 +137,29 @@ def test_rms_norm(device, batch_size, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    assert_with_ulp(torch_output_tensor, output_tensor, 2)
+
+
+@pytest.mark.parametrize("batch_size", [1, 8])
+@pytest.mark.parametrize("h", [32, 224, 384, 2048])
+@pytest.mark.parametrize("w", [64, 160, 1024, 2048])
+def test_rms_norm_with_residual_input(device, batch_size, h, w):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
+    torch_residual_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rms_norm)
+    torch_output_tensor = golden_function(torch_input_tensor + torch_residual_input_tensor, weight=torch_weight)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+    weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
+    residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.rms_norm(input_tensor, weight=weight, residual_input_tensor=residual_input_tensor)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_ulp(torch_output_tensor, output_tensor, 2)
 
 
 """
