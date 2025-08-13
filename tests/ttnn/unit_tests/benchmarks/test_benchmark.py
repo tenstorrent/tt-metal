@@ -51,6 +51,7 @@ from models.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_
 from pathlib import Path
 import os
 import numpy as np
+import itertools
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
@@ -139,75 +140,136 @@ def get_profiler_build_enabled():
 # These configs are all based on a 1x1 compute grid, and will be scaled by the benchmark according to the max grid size
 # M will be scaled by Y (num cols), N and K will be scaled by X (num rows)
 # (m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
-matmul_shapes_bfloat16 = [
-    (64, 64, 64, True, True, 1, 1, 1),
-    (64, 128, 128, True, True, 1, 1, 1),
-    (64, 128, 256, True, True, 1, 1, 1),
-    (128, 128, 128, True, True, 1, 1, 1),
-    (128, 128, 256, True, True, 1, 1, 1),
-    (128, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 384, True, True, 1, 1, 1),
-    (256, 384, 384, True, True, 2, 1, 1),
-    (384, 384, 384, True, True, 4, 1, 1),
-    (384, 384, 512, False, False, 2, 1, 1),
-    (384, 512, 512, False, False, 2, 1, 1),
-    (512, 512, 512, False, False, 1, 2, 2),
-    (1024, 1024, 1024, False, False, 2, 4, 4),
-    (2048, 2048, 2048, False, False, 4, 8, 8),
+
+# Best configs for n150 (DataType.BFLOAT16)
+matmul_shapes_n150_bfloat16 = [
+    (64, 64, 64, False, False, 1, 1, 1),
+    (64, 128, 128, False, False, 1, 1, 1),
+    (64, 128, 256, False, False, 1, 1, 1),
+    (128, 128, 128, False, False, 1, 1, 1),
+    (128, 128, 256, False, False, 1, 1, 1),
+    (128, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 384, False, False, 1, 1, 1),
+    (256, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 384, False, False, 1, 1, 2),
+    (384, 384, 512, False, False, 1, 1, 2),
+    (384, 512, 512, False, False, 1, 1, 4),
+    (512, 512, 512, True, False, 8, 4, 4),
 ]
 
-matmul_shapes_bfloat8_b = [
-    (64, 64, 64, True, True, 1, 1, 1),
-    (64, 128, 128, True, True, 1, 1, 1),
-    (64, 128, 256, True, True, 1, 1, 1),
-    (128, 128, 128, True, True, 1, 1, 1),
-    (128, 128, 256, True, True, 1, 1, 1),
-    (128, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 384, True, True, 1, 1, 1),
-    (256, 384, 384, True, True, 1, 1, 1),
-    (384, 384, 384, True, True, 2, 1, 1),
-    (384, 384, 512, True, True, 2, 1, 1),
-    (512, 512, 512, False, False, 1, 2, 2),
-    (1024, 1024, 1024, False, False, 2, 4, 4),
-    (2048, 2048, 2048, False, False, 4, 8, 8),
+# Best configs for n150 (DataType.BFLOAT8_B)
+matmul_shapes_n150_bfloat8_b = [
+    (64, 64, 64, False, False, 2, 2, 1),
+    (64, 128, 128, False, False, 1, 1, 2),
+    (64, 128, 256, False, False, 1, 1, 1),
+    (128, 128, 128, False, False, 1, 1, 1),
+    (128, 128, 256, False, False, 1, 1, 1),
+    (128, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 384, False, False, 1, 1, 1),
+    (256, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 512, False, False, 1, 1, 1),
+    (384, 512, 512, False, False, 1, 1, 2),
+    (512, 512, 512, False, False, 1, 1, 2),
 ]
 
-matmul_shapes_bfloat4_b = [
-    (64, 64, 64, True, True, 1, 1, 1),
-    (64, 128, 128, True, True, 1, 1, 1),
-    (64, 128, 256, True, True, 1, 1, 1),
-    (128, 128, 128, True, True, 1, 1, 1),
-    (128, 128, 256, True, True, 1, 1, 1),
-    (128, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 384, True, True, 1, 1, 1),
-    (256, 384, 384, True, True, 1, 1, 1),
-    (384, 384, 384, True, True, 1, 1, 1),
-    (384, 384, 512, True, True, 1, 1, 1),
-    (384, 512, 512, True, True, 2, 1, 1),
-    (512, 512, 512, True, True, 2, 1, 1),
-    (1024, 1024, 1024, False, False, 2, 2, 2),
-    (2048, 2048, 2048, False, False, 4, 4, 4),
+# Best configs for n150 (DataType.BFLOAT4_B)
+matmul_shapes_n150_bfloat4_b = [
+    (64, 64, 64, False, False, 2, 2, 1),
+    (64, 128, 128, False, False, 1, 1, 1),
+    (64, 128, 256, False, False, 1, 1, 1),
+    (128, 128, 128, False, False, 1, 1, 1),
+    (128, 128, 256, False, False, 1, 1, 1),
+    (128, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 384, False, False, 1, 1, 1),
+    (256, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 512, False, False, 1, 1, 1),
+    (384, 512, 512, False, False, 1, 1, 1),
+    (512, 512, 512, False, False, 1, 1, 2),
 ]
 
-# (dtype, math_fidelity, use_trace)
-matmul_configs = [
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
+# Best configs for p150 (DataType.BFLOAT16)
+matmul_shapes_p150_bfloat16 = [
+    (64, 64, 64, False, False, 1, 1, 1),
+    (64, 128, 128, False, False, 1, 1, 1),
+    (64, 128, 256, False, False, 1, 1, 1),
+    (128, 128, 128, False, False, 1, 1, 1),
+    (128, 128, 256, False, False, 1, 1, 1),
+    (128, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 384, False, False, 1, 1, 2),
+    (256, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 384, False, False, 1, 1, 2),
+    (384, 384, 512, False, False, 1, 1, 2),
+    (384, 512, 512, False, False, 1, 1, 4),
+    (512, 512, 512, False, False, 1, 1, 4),
+]
+
+# Best configs for p150 (DataType.BFLOAT8_B)
+matmul_shapes_p150_bfloat8_b = [
+    (64, 64, 64, False, False, 1, 1, 1),
+    (64, 128, 128, False, False, 1, 1, 1),
+    (64, 128, 256, False, False, 1, 1, 1),
+    (128, 128, 128, False, False, 1, 1, 1),
+    (128, 128, 256, False, False, 1, 1, 1),
+    (128, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 384, False, False, 1, 1, 1),
+    (256, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 512, False, False, 1, 1, 1),
+    (384, 512, 512, False, False, 1, 1, 2),
+    (512, 512, 512, False, False, 1, 1, 2),
+]
+
+# Best configs for p150 (DataType.BFLOAT4_B)
+matmul_shapes_p150_bfloat4_b = [
+    (64, 64, 64, False, False, 1, 1, 1),
+    (64, 128, 128, False, False, 1, 1, 1),
+    (64, 128, 256, False, False, 1, 1, 1),
+    (128, 128, 128, False, False, 1, 1, 1),
+    (128, 128, 256, False, False, 1, 1, 1),
+    (128, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 384, False, False, 1, 1, 1),
+    (256, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 512, False, False, 1, 1, 1),
+    (384, 512, 512, False, False, 1, 1, 1),
+    (512, 512, 512, False, False, 1, 1, 2),
 ]
 
 
-@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+def get_matmul_shapes(dtype, device):
+    """Get the appropriate matmul shapes based on dtype and device."""
+    # Get compute grid size to determine device type
+    compute_grid_size = device.compute_with_storage_grid_size()
+
+    # n150 has 8x8 grid, p150 has 13x10 grid
+    is_n150 = compute_grid_size.x == 8 and compute_grid_size.y == 8
+
+    if is_n150:
+        if dtype == ttnn.bfloat16:
+            return matmul_shapes_n150_bfloat16
+        elif dtype == ttnn.bfloat8_b:
+            return matmul_shapes_n150_bfloat8_b
+        elif dtype == ttnn.bfloat4_b:
+            return matmul_shapes_n150_bfloat4_b
+    else:  # p150
+        if dtype == ttnn.bfloat16:
+            return matmul_shapes_p150_bfloat16
+        elif dtype == ttnn.bfloat8_b:
+            return matmul_shapes_p150_bfloat8_b
+        elif dtype == ttnn.bfloat4_b:
+            return matmul_shapes_p150_bfloat4_b
+    raise ValueError(f"Unsupported dtype {dtype} or device with grid size {compute_grid_size.x}x{compute_grid_size.y}")
+
+
+# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -276,12 +338,7 @@ def test_matmul_2d_host_perf(
         writer.writerow(header)
 
         for dtype, math_fidelity, use_trace in matmul_configs:
-            if dtype == ttnn.bfloat16:
-                matmul_shapes = matmul_shapes_bfloat16
-            elif dtype == ttnn.bfloat8_b:
-                matmul_shapes = matmul_shapes_bfloat8_b
-            elif dtype == ttnn.bfloat4_b:
-                matmul_shapes = matmul_shapes_bfloat4_b
+            matmul_shapes = get_matmul_shapes(dtype, device)
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 profiler.clear()
 
@@ -540,7 +597,7 @@ matmul_configs_oob = [
 ]
 
 
-@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -742,3 +799,349 @@ def test_matmul_2d_host_perf_out_of_box(
                     )
                 writer.writerow(csv_data)
                 file.flush()
+
+
+def get_host_utilization_vs_selected_grid(inference_time_avg, m, k, n, grid_size, device_freq, cycle_per_tile):
+    """Calculate host utilization vs selected grid size."""
+    num_cores_user_grid = grid_size[0] * grid_size[1]
+    ideal_cycle_user_grid = m * k * n / 32 / 32 / 32 * cycle_per_tile / num_cores_user_grid
+    inference_cycle = inference_time_avg * device_freq * 1e6
+    return ideal_cycle_user_grid / inference_cycle * 100
+
+
+def get_host_utilization_vs_full_grid(inference_time_avg, m, k, n, compute_grid_size, device_freq, cycle_per_tile):
+    """Calculate host utilization vs full available grid size."""
+    num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
+    ideal_cycle_full_grid = m * k * n / 32 / 32 / 32 * cycle_per_tile / num_cores_full_grid
+    inference_cycle = inference_time_avg * device_freq * 1e6
+    return ideal_cycle_full_grid / inference_cycle * 100
+
+
+def get_device_utilization_vs_selected_grid(inference_time_avg, m, k, n, grid_size, cycle_per_tile):
+    """Calculate device utilization vs selected grid size."""
+    num_cores_user_grid = grid_size[0] * grid_size[1]
+    ideal_cycle_user_grid = m * k * n / 32 / 32 / 32 * cycle_per_tile / num_cores_user_grid
+    return ideal_cycle_user_grid / inference_time_avg * 100
+
+
+def get_device_utilization_vs_full_grid(inference_time_avg, m, k, n, compute_grid_size, cycle_per_tile):
+    """Calculate device utilization vs full available grid size."""
+    num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
+    ideal_cycle_full_grid = m * k * n / 32 / 32 / 32 * cycle_per_tile / num_cores_full_grid
+    return ideal_cycle_full_grid / inference_time_avg * 100
+
+
+# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
+@pytest.mark.parametrize("tile_h", [32])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("num_warmup_iterations", [5])
+@pytest.mark.parametrize("num_measurement_iterations", [10])
+def test_matmul_2d_host_perf_sweep_all(
+    device,
+    grid_size,
+    tile_h,
+    tile_w,
+    num_warmup_iterations,
+    num_measurement_iterations,
+):
+    shape_ratios_list = [
+        (1, 1, 1),
+        (1, 2, 4),
+        (1, 2, 8),
+    ]
+    for shape_ratios in shape_ratios_list:
+        matmul_configs = [
+            (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
+            (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
+            (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
+            (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
+            (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
+            (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
+        ]
+    ENVS = dict(os.environ)
+    TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
+    ARTIFACTS_DIR = TT_METAL_HOME / "generated"
+    FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_sweep_all.csv"
+
+    calc_device_utilization = get_profiler_build_enabled()
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size is None:
+        grid_size = (compute_grid_size.x, compute_grid_size.y)
+    if compute_grid_size.y < grid_size[1] or compute_grid_size.x < grid_size[0]:
+        pytest.skip(
+            f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
+        )
+
+    LoFi_cycle = 16
+    HiFi2_cycle = LoFi_cycle * 2
+    HiFi3_cycle = LoFi_cycle * 3
+    HiFi4_cycle = LoFi_cycle * 4
+
+    with open(FILE_NAME, mode="w", newline="") as file:
+        writer = csv.writer(file)
+        header = [
+            "m",
+            "k",
+            "n",
+            "use_trace",
+            "grid_size",
+            "dtype",
+            "math_fidelity",
+            "tflops",  # Changed from best_tflops since we're saving all configs
+            "in0_sharded",
+            "out_sharded",
+            "in0_block_w_div",
+            "num_out_blocks_h",
+            "num_out_blocks_w",
+            "in0_block_w",
+            "out_subblock_h",
+            "out_subblock_w",
+            "out_block_h",
+            "out_block_w",
+            "per_core_M",
+            "per_core_N",
+            "inference_time_avg [ns]",
+            f"Host based utilization[%] (vs user selected grid {grid_size[0]}x{grid_size[1]})",
+            f"Host based utilization[%] (vs full available grid {compute_grid_size.x}x{compute_grid_size.y})",
+        ]
+        if calc_device_utilization:
+            header.extend(
+                [
+                    f"Device based utilization[%] (vs user selected grid {grid_size[0]}x{grid_size[1]})",
+                    f"Device based utilization[%] (vs full available grid {compute_grid_size.x}x{compute_grid_size.y})",
+                ]
+            )
+        writer.writerow(header)
+
+        for dtype, math_fidelity, use_trace in matmul_configs:
+            matmul_shapes = get_matmul_shapes(dtype, device)
+            for (
+                m_base,
+                k_base,
+                n_base,
+                base_in0_sharded,
+                base_out_sharded,
+                base_in0_block_w_div,
+                base_num_out_blocks_h,
+                base_num_out_blocks_w,
+            ) in matmul_shapes:
+                profiler.clear()
+
+                m = m_base * shape_ratios[0] * grid_size[1]
+                k = k_base * shape_ratios[1] * grid_size[0]
+                n = n_base * shape_ratios[2] * grid_size[0]
+
+                per_core_M = m // grid_size[1] // tile_h
+                per_core_N = n // grid_size[0] // tile_w
+                in0_block_w_base = k // grid_size[0] // 32
+
+                if per_core_M == 0 or per_core_N == 0 or in0_block_w_base == 0:
+                    logger.warning(f"Skipping shape {m}x{k}x{n} due to invalid per_core dimensions or in0_block_w_base")
+                    continue
+
+                sharding_options = list(itertools.product([False, True], [False, True]))
+                in0_block_w_divs = [i for i in [1, 2, 4, 8] if in0_block_w_base % i == 0]
+                num_out_blocks_hs = [i for i in [1, 2, 4, 8] if per_core_M % i == 0]
+                num_out_blocks_ws = [i for i in [1, 2, 4, 8] if per_core_N % i == 0]
+
+                for in0_sharded, out_sharded in sharding_options:
+                    for in0_block_w_div, num_out_blocks_h, num_out_blocks_w in itertools.product(
+                        in0_block_w_divs, num_out_blocks_hs, num_out_blocks_ws
+                    ):
+                        try:
+                            in0_shape = [1, 1, m, k]
+                            in1_shape = [1, 1, k, n]
+
+                            in0_block_w = in0_block_w_base // in0_block_w_div
+                            out_block_h = per_core_M // num_out_blocks_h
+                            out_block_w = per_core_N // num_out_blocks_w
+
+                            if in0_block_w == 0 or out_block_h == 0 or out_block_w == 0:
+                                continue
+
+                            out_subblock_h, out_subblock_w = get_subblock_sizes(out_block_h, out_block_w, out_sharded)
+
+                            config_str = f"in0_sharded={in0_sharded}, out_sharded={out_sharded}, in0_block_w_div={in0_block_w_div}, num_out_blocks_h={num_out_blocks_h}, num_out_blocks_w={num_out_blocks_w}"
+                            logger.info(f"Trying config: {config_str}")
+
+                            in0 = torch.ones(in0_shape).bfloat16()
+                            in1 = torch.randn(in1_shape).bfloat16()
+
+                            if in0_sharded:
+                                in0_memory_config = ttnn.create_sharded_memory_config(
+                                    (1, 1, m, k),
+                                    core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+                                    strategy=ttnn.ShardStrategy.BLOCK,
+                                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                                )
+                            else:
+                                in0_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+                            in0_t = ttnn.from_torch(
+                                in0,
+                                tile=ttnn.Tile((tile_h, 32)),
+                                dtype=dtype,
+                                layout=ttnn.TILE_LAYOUT,
+                                device=device,
+                                memory_config=in0_memory_config,
+                            )
+                            in1_t = ttnn.from_torch(
+                                in1,
+                                tile=ttnn.Tile((32, tile_w)),
+                                dtype=dtype,
+                                layout=ttnn.TILE_LAYOUT,
+                                device=device,
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            )
+
+                            program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                                compute_with_storage_grid_size=grid_size,
+                                in0_block_w=in0_block_w,
+                                out_subblock_h=out_subblock_h,
+                                out_subblock_w=out_subblock_w,
+                                out_block_h=out_block_h,
+                                out_block_w=out_block_w,
+                                per_core_M=per_core_M,
+                                per_core_N=per_core_N,
+                                transpose_mcast=False,
+                                fused_activation=None,
+                            )
+
+                            if is_grayskull():
+                                compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+                                    math_fidelity=math_fidelity, math_approx_mode=True
+                                )
+                            else:
+                                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                                    math_fidelity=math_fidelity,
+                                    math_approx_mode=True,
+                                    fp32_dest_acc_en=False,
+                                    packer_l1_acc=True,
+                                )
+
+                            if out_sharded:
+                                out_mem_config = ttnn.MemoryConfig(
+                                    memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                                    buffer_type=ttnn.BufferType.L1,
+                                )
+                            else:
+                                out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+                            output_tile = ttnn.Tile([tile_h, tile_w])
+
+                            output_t = ttnn.matmul(
+                                in0_t,
+                                in1_t,
+                                program_config=program_config,
+                                memory_config=out_mem_config,
+                                dtype=dtype,
+                                compute_kernel_config=compute_kernel_config,
+                                output_tile=output_tile,
+                            )
+
+                            for _ in range(num_warmup_iterations):
+                                output_t = ttnn.matmul(
+                                    in0_t,
+                                    in1_t,
+                                    program_config=program_config,
+                                    memory_config=out_mem_config,
+                                    dtype=dtype,
+                                    compute_kernel_config=compute_kernel_config,
+                                    output_tile=output_tile,
+                                )
+                            ttnn.synchronize_device(device)
+
+                            profiler.start("run")
+                            for _ in range(num_measurement_iterations):
+                                output_t = ttnn.matmul(
+                                    in0_t,
+                                    in1_t,
+                                    program_config=program_config,
+                                    memory_config=out_mem_config,
+                                    dtype=dtype,
+                                    compute_kernel_config=compute_kernel_config,
+                                    output_tile=output_tile,
+                                )
+                            ttnn.synchronize_device(device)
+                            profiler.end("run")
+
+                            inference_time_avg = profiler.get("run") / num_measurement_iterations
+                            tflops = (2 * m * k * n) / 1e12 / inference_time_avg
+
+                            # Get device frequency and cycle per tile
+                            device_freq = get_device_frequency()
+                            if math_fidelity == ttnn.MathFidelity.LoFi:
+                                cycle_per_tile = LoFi_cycle
+                            elif math_fidelity == ttnn.MathFidelity.HiFi2:
+                                cycle_per_tile = HiFi2_cycle
+                            elif math_fidelity == ttnn.MathFidelity.HiFi3:
+                                cycle_per_tile = HiFi3_cycle
+                            elif math_fidelity == ttnn.MathFidelity.HiFi4:
+                                cycle_per_tile = HiFi4_cycle
+
+                            # Calculate performance metrics
+                            host_util_vs_selected = get_host_utilization_vs_selected_grid(
+                                inference_time_avg, m, k, n, grid_size, device_freq, cycle_per_tile
+                            )
+                            host_util_vs_full = get_host_utilization_vs_full_grid(
+                                inference_time_avg, m, k, n, compute_grid_size, device_freq, cycle_per_tile
+                            )
+
+                            # Save all configurations and their performance
+                            row = [
+                                m,
+                                k,
+                                n,
+                                use_trace,
+                                f"{grid_size[0]}x{grid_size[1]}",
+                                dtype,
+                                math_fidelity,
+                                f"{tflops:.2f}",
+                                in0_sharded,
+                                out_sharded,
+                                in0_block_w_div,
+                                num_out_blocks_h,
+                                num_out_blocks_w,
+                                in0_block_w,
+                                out_subblock_h,
+                                out_subblock_w,
+                                out_block_h,
+                                out_block_w,
+                                per_core_M,
+                                per_core_N,
+                                f"{inference_time_avg * 1e9:.2f}",
+                                f"{host_util_vs_selected:.2f}",
+                                f"{host_util_vs_full:.2f}",
+                            ]
+
+                            if calc_device_utilization:
+                                device_util_vs_selected = get_device_utilization_vs_selected_grid(
+                                    inference_time_avg, m, k, n, grid_size, cycle_per_tile
+                                )
+                                device_util_vs_full = get_device_utilization_vs_full_grid(
+                                    inference_time_avg, m, k, n, compute_grid_size, cycle_per_tile
+                                )
+                                row.extend([f"{device_util_vs_selected:.2f}", f"{device_util_vs_full:.2f}"])
+
+                            writer.writerow(row)
+                            file.flush()
+
+                            # Clean up tensors
+                            ttnn.deallocate(in0_t)
+                            ttnn.deallocate(in1_t)
+                            ttnn.deallocate(output_t)
+
+                        except Exception as e:
+                            logger.warning(f"Failed to run config {config_str}: {e}")
+                            # Clean up any allocated tensors in case of error
+                            if "in0_t" in locals() and ttnn.is_tensor_storage_on_device(in0_t):
+                                ttnn.deallocate(in0_t)
+                            if "in1_t" in locals() and ttnn.is_tensor_storage_on_device(in1_t):
+                                ttnn.deallocate(in1_t)
+                            if "output_t" in locals() and ttnn.is_tensor_storage_on_device(output_t):
+                                ttnn.deallocate(output_t)
+                            continue
+
+    print(f"Sweep results saved to {FILE_NAME}")
