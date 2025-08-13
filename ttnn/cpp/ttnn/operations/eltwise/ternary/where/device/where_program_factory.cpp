@@ -551,18 +551,21 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
         reader_defines["BCAST_LLK"] = "0";
     } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // ROW_BCAST defines for reader kernel compatibility
+        // ROW_BCAST: need dataflow defines for FILL_TILE_WITH_FIRST_ROW_B etc.
+        reader_defines = make_dataflow_defines(
+            predicate_tensor.dtype(),
+            value_true_tensor.value().dtype(),
+            value_false_tensor.value().dtype());  // For predicate (a) and value_true (b)
+
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        bool value_false_sharded = value_true_sharded;  // Using same as value_true for now
-        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_FALSE"] = value_false_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED"] = predicate_sharded ? "1" : "0";     // CB0 sharding
+        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";  // CB1 sharding
 
-        // Set broadcast defines based on actual detection
-        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
-        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";
-        reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+        // Set broadcast defines to match row broadcast reader kernel expectations
+        // CB0 = predicate, CB1 = true tensor (hardcoded assignment)
+        reader_defines["SRC_BCAST"] = pred_is_bcast ? "1" : "0";    // First tensor (CB0)
+        reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";  // Second tensor (CB1)
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
         reader_defines["BCAST_LLK"] = "0";
