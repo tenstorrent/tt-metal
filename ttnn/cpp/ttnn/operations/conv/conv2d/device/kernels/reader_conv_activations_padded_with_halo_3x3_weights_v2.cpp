@@ -28,7 +28,7 @@ void kernel_main() {
 #ifdef ACTIVATION_REUSE
     constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(27);
     constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(28);
-    constexpr bool output_image_starts_from_row_beginning = get_compile_time_arg_val(29) == 1;
+    constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(29) == 1;
     constexpr uint32_t image_width_tiles = get_compile_time_arg_val(30);
     constexpr uint32_t output_image_width = get_compile_time_arg_val(31);
     constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(32);
@@ -118,7 +118,7 @@ void kernel_main() {
                 cb_id_act,
                 act_reuse_cb_tiles,
                 act_block_w_tiles,
-                output_image_starts_from_row_beginning,
+                readers_process_full_image_widths,
                 image_width_tiles,
                 output_image_width,
                 window_reuse_offset,

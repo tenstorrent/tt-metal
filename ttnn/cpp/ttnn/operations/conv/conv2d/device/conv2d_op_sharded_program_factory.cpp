@@ -631,7 +631,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     // reader kernel args
     uint32_t image_width_tiles = 0, image_width_mod_tile = 0, act_cb_num_tiles_split = 0,
              act_cb_num_tiles_split_last = 0, reuse_window_offset = 0;
-    bool output_image_starts_from_row_beginning = false;
+    bool readers_process_full_image_widths = false;
 
     // compute kernel args
     uint32_t tilized_cb_row_offset = 0, tilized_cb_second_reader_offset = 0;
@@ -666,9 +666,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         // - shards contain full image widths only, but split reader splits shard in the middle of the image width
         // - output image width is not a multiple of the tile height, so we need to process more than one image width at
         // once
-        const bool readers_read_full_image_widths = act_block_h_nsubblocks_split % image_width_tiles == 0 &&
-                                                    act_block_h_nsubblocks_split_last % image_width_tiles == 0;
-        output_image_starts_from_row_beginning = readers_read_full_image_widths && image_width_tile_leftover == 0;
+        readers_process_full_image_widths = act_block_h_nsubblocks_split % image_width_tiles == 0 &&
+                                            act_block_h_nsubblocks_split_last % image_width_tiles == 0;
+        readers_process_full_image_widths = readers_process_full_image_widths && image_width_tile_leftover == 0;
 
         // Compute kernel interleaves tilizing data coming from two readers so it needs to calculate the address in the
         // tilized CB
@@ -711,7 +711,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         std::vector<uint32_t> activation_reuse_args = {
             act_cb_num_tiles_split,
             act_block_w_ntiles,
-            static_cast<uint32_t>(output_image_starts_from_row_beginning),
+            static_cast<uint32_t>(readers_process_full_image_widths),
             image_width_tiles,
             output_image_width,
             reuse_window_offset,
@@ -814,7 +814,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 filter_h,
                 act_cb_num_tiles_split_last,
                 act_block_w_ntiles,
-                static_cast<uint32_t>(output_image_starts_from_row_beginning),
+                static_cast<uint32_t>(readers_process_full_image_widths),
                 image_width_tiles,
                 output_image_width,
                 reuse_window_offset,
