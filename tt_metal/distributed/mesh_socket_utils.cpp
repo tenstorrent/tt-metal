@@ -8,6 +8,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "impl/context/metal_context.hpp"
+#include <cstring>
 
 #include "tt_metal/hw/inc/socket.h"
 
@@ -28,6 +29,23 @@ std::unordered_map<MeshCoordinate, std::vector<std::pair<uint32_t, SocketConnect
         connection_index++;
     }
     return grouped_connections;
+}
+
+std::unordered_map<MeshCoreCoord, uint32_t> get_num_downstreams_per_core(const SocketConfig& config) {
+    std::unordered_map<MeshCoreCoord, uint32_t> num_downstreams_per_core;
+    for (const auto& connection : config.socket_connection_config) {
+        num_downstreams_per_core[connection.sender_core]++;
+    }
+    return num_downstreams_per_core;
+}
+
+uint32_t get_max_num_downstreams_per_core(const SocketConfig& config) {
+    const auto num_downstreams_per_core = get_num_downstreams_per_core(config);
+    return std::max_element(
+               num_downstreams_per_core.begin(),
+               num_downstreams_per_core.end(),
+               [](const auto& a, const auto& b) { return a.second < b.second; })
+        ->second;
 }
 
 void validate_fabric_config_for_sockets(
@@ -144,8 +162,18 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     const auto& socket_connections = config.socket_connection_config;
     const auto& socket_mem_config = config.socket_mem_config;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
-
-    uint32_t config_buffer_size = is_sender ? sizeof(sender_socket_md) : sizeof(receiver_socket_md);
+    const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    auto align_up = [l1_alignment](uint32_t v) { return ((v + l1_alignment - 1) / l1_alignment) * l1_alignment; };
+    uint32_t config_buffer_size = 0;
+    if (is_sender) {
+        const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
+        const uint32_t md_size_aligned = align_up(sizeof(sender_socket_md));
+        const uint32_t ack_stride = align_up(sizeof(uint32_t));
+        const uint32_t enc_stride = align_up(sizeof(sender_downstream_encoding));
+        config_buffer_size = md_size_aligned + max_num_downstreams * ack_stride + max_num_downstreams * enc_stride;
+    } else {
+        config_buffer_size = sizeof(receiver_socket_md);
+    }
     std::set<CoreRange> all_cores_set;
     std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
     for (const auto& connection : socket_connections) {
@@ -238,7 +266,16 @@ void write_socket_configs(
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     if (is_sender) {
-        std::vector<sender_socket_md> config_data(config_buffer->size() / sizeof(sender_socket_md), sender_socket_md());
+        auto align_up = [l1_alignment](uint32_t v) { return ((v + l1_alignment - 1) / l1_alignment) * l1_alignment; };
+        const auto num_downstreams_per_core = get_num_downstreams_per_core(config);
+        const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        const auto num_downstreams = get_max_num_downstreams_per_core(config);
+        uint32_t md_size_bytes = align_up(sizeof(sender_socket_md));
+        uint32_t ack_size_bytes = align_up(sizeof(uint32_t)) * num_downstreams;
+        uint32_t enc_size_bytes = align_up(sizeof(sender_downstream_encoding)) * num_downstreams;
+        uint32_t sender_total_size_bytes = md_size_bytes + ack_size_bytes + enc_size_bytes;
+        std::vector<uint32_t> config_data(sender_total_size_bytes / sizeof(uint32_t), 0);
+        uint32_t connection_index = 0;
         for (const auto& [device_coord, indexed_connections] : grouped_connections) {
             for (const auto& [conn_idx, connection] : indexed_connections) {
                 const auto& [sender_core, recv_core] = connection;
@@ -252,18 +289,31 @@ void write_socket_configs(
                 auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
 
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
-                auto& md = config_data[idx];
-                md.bytes_acked = 0;
+                sender_socket_md md;
+                md.num_downstreams = num_downstreams_per_core.at(sender_core);
                 md.write_ptr = peer_descriptor.data_buffer_address;
                 md.bytes_sent = 0;
                 md.downstream_fifo_addr = peer_descriptor.data_buffer_address;
                 md.downstream_fifo_total_size = config.socket_mem_config.fifo_size;
-                md.downstream_mesh_id = *downstream_mesh_id;
-                md.downstream_chip_id = downstream_chip_id;
-                md.downstream_noc_y = recv_virtual_core.y;
-                md.downstream_noc_x = recv_virtual_core.x;
                 md.downstream_bytes_sent_addr = peer_config_buf_addr;
                 md.is_sender = is_sender;
+
+                // copy static metadata
+                std::memcpy(config_data.data() + connection_index * sender_total_size_bytes, &md, sizeof(md));
+
+                // copy each reciever; acks are already 0
+                for (uint32_t i = 0; i < num_downstreams_per_core.at(sender_core); ++i) {
+                    sender_downstream_encoding enc;
+                    enc.downstream_mesh_id = *downstream_mesh_id;
+                    enc.downstream_chip_id = downstream_chip_id;
+                    enc.downstream_noc_y = recv_virtual_core.y;
+                    enc.downstream_noc_x = recv_virtual_core.x;
+                    std::memcpy(
+                        config_data.data() + connection_index * sender_total_size_bytes + md_size_bytes +
+                            ack_size_bytes + i * (sizeof(sender_downstream_encoding)),
+                        &enc,
+                        sizeof(enc));
+                }
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
