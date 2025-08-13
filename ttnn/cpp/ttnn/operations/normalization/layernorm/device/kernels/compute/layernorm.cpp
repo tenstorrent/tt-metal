@@ -128,8 +128,7 @@ void MAIN {
          */
         ACQ();
         cb_reserve_back(cb_ex, onetile);
-        // TODO RM: How to initialize welford's?
-        reduce_init(cb_x, cb_scaler, cb_ex);
+        welford_init();
         uint32_t start_N = 1;
         // Welford's needs transposed input tile
         constexpr uint32_t tranpose = 1;
@@ -146,8 +145,6 @@ void MAIN {
         }
         pack_tile(dst1, cb_ex);
         pack_tile(dst2, cb_ex2);
-        // TODO RM: How to uninitialize welford's?
-        reduce_uninit();
         REL();
 
         cb_push_back(cb_ex, 1);
