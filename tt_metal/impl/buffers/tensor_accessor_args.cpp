@@ -84,12 +84,26 @@ void append_sharded_args(
 
 TensorAccessorArgs::TensorAccessorArgs(const Buffer& buffer, tensor_accessor::ArgsConfig args_config) :
     buffer_(&buffer), args_config_(args_config) {
-    if (is_sharded(buffer.buffer_layout())) {
+    update_args_config();
+}
+
+TensorAccessorArgs::TensorAccessorArgs(const Buffer* buffer, tensor_accessor::ArgsConfig args_config) :
+    buffer_(buffer), args_config_(args_config) {
+    update_args_config();
+}
+
+void TensorAccessorArgs::update_args_config() {
+    if (!buffer_) {
+        args_config_ = tensor_accessor::ArgConfig::None;
+        return;
+    }
+
+    if (is_sharded(buffer_->buffer_layout())) {
         args_config_.set(tensor_accessor::ArgConfig::Sharded);
     } else {
         args_config_ = tensor_accessor::ArgConfig::None;
     }
-    args_config_.set(tensor_accessor::ArgConfig::IsDram, buffer.is_dram());
+    args_config_.set(tensor_accessor::ArgConfig::IsDram, buffer_->is_dram());
 
     if (args_config_.test(tensor_accessor::ArgConfig::RuntimeRank)) {
         TT_FATAL(
@@ -124,10 +138,6 @@ void TensorAccessorArgs::append_to(std::vector<uint32_t>& compile_time_args) con
     } else {
         compile_time_args.push_back(args_config_.raw());
     }
-}
-
-void TensorAccessorArgs::append_placeholder_to(std::vector<uint32_t>& compile_time_args) {
-    compile_time_args.push_back(0);
 }
 
 std::vector<uint32_t> TensorAccessorArgs::get_compile_time_args() const {
