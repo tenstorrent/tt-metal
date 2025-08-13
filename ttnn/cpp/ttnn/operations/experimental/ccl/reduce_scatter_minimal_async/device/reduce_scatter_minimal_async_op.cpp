@@ -424,6 +424,7 @@ std::vector<Tensor> reduce_scatter_minimal_async(
     std::optional<uint32_t> num_buffers_per_channel) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
+    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensors);
     for (uint32_t i = 0; i < input_tensors.size(); i++) {
         const auto& input_tensor = input_tensors.at(i);
         std::vector<GlobalSemaphore> global_sems;
@@ -432,7 +433,6 @@ std::vector<Tensor> reduce_scatter_minimal_async(
         for (uint32_t j = 0; j < multi_device_global_semaphore.size(); j++) {
             global_sems.push_back(multi_device_global_semaphore.at(j).global_semaphores.at(i));
         }
-        std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
         output_tensors.push_back(reduce_scatter_minimal_async_impl(
             input_tensor,
             std::nullopt,
