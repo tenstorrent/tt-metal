@@ -256,6 +256,77 @@ void set_or_update_runtime_arguments(
 
             // TODO: value_false_tensor needs to be handled separately (maybe through a different CB or as scalar)
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
+        } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
+            // TTT with row broadcast: binary_ng style 21 args for predicate and true tensor
+
+            // Calculate binary_ng style arguments using predicate and true tensor shapes
+            const auto pred_shape = predicate_tensor.padded_shape();
+            const auto true_shape = value_true_tensor.value().padded_shape();
+            const auto output_shape = output.padded_shape();
+            const auto& tile = output.tensor_spec().tile();
+
+            // Get shape dims for predicate (a) and true tensor (b) like binary_ng
+            uint32_t aD = pred_shape.rank() >= 5 ? pred_shape[-5] : 1;
+            uint32_t aN = pred_shape[-4];
+            uint32_t aC = pred_shape[-3];
+            uint32_t aHt = pred_shape[-2] / tile.get_height();
+            uint32_t aWt = pred_shape[-1] / tile.get_width();
+            uint32_t aND = 1;
+
+            uint32_t bD = true_shape.rank() >= 5 ? true_shape[-5] : 1;
+            uint32_t bN = true_shape[-4];
+            uint32_t bC = true_shape[-3];
+            uint32_t bHt = true_shape[-2] / tile.get_height();
+            uint32_t bWt = true_shape[-1] / tile.get_width();
+            uint32_t bND = 1;
+
+            uint32_t cD = output_shape.rank() >= 5 ? output_shape[-5] : 1;
+            uint32_t cN = output_shape[-4];
+            uint32_t cC = output_shape[-3];
+            uint32_t cHt = output_shape[-2] / tile.get_height();
+            uint32_t cWt = output_shape[-1] / tile.get_width();
+            uint32_t cND = 1;
+
+            uint32_t a_num_tiles = 0;
+            uint32_t b_num_tiles = 0;
+            uint32_t c_current_shard_width = 0;
+
+            // Handle sharding like binary_ng (simplified for now)
+            bool has_sharding = predicate_tensor.memory_config().is_sharded() ||
+                                value_true_tensor.value().memory_config().is_sharded() ||
+                                output.memory_config().is_sharded();
+
+            if (has_sharding) {
+                a_num_tiles = aHt * aWt;
+                b_num_tiles = bHt * bWt;
+                c_current_shard_width = cWt;
+            }
+
+            // Binary_ng style 21-argument structure
+            std::array<uint32_t, 21> reader_runtime_args = {
+                predicate_tensor.buffer()->address(),           // 0: a.buffer()->address()
+                start_tile_id,                                  // 1: c_start_id
+                a_num_tiles,                                    // 2: a_num_tiles
+                num_tiles_per_core,                             // 3: c_num_tiles
+                c_current_shard_width,                          // 4: c_current_shard_width
+                aHt * aWt * aC * aN * aD * (aND > 1),           // 5: a nD_stride
+                aHt * aWt * aC * aN * (aD > 1),                 // 6: a d_stride
+                aHt * aWt * aC * (aN > 1),                      // 7: a n_stride
+                aHt * aWt * (aC > 1),                           // 8: a c_stride
+                cD,                                             // 9: D
+                cN,                                             // 10: N
+                cC,                                             // 11: C
+                cHt,                                            // 12: Ht
+                cWt,                                            // 13: Wt
+                cND,                                            // 14: cND
+                value_true_tensor.value().buffer()->address(),  // 15: b.buffer()->address()
+                bHt * bWt * bC * bN * bD * (bND > 1),           // 16: b nD_stride
+                bHt * bWt * bC * bN * (bD > 1),                 // 17: b d_stride
+                bHt * bWt * bC * (bN > 1),                      // 18: b n_stride
+                bHt * bWt * (bC > 1),                           // 19: b c_stride
+                b_num_tiles,                                    // 20: b_num_tiles
+            };
+            handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else {
             // TTT (non-broadcast): predicate (arg 0) + value_true (arg 1) + value_false (arg 2) - only 5 args needed
             std::array<uint32_t, 5> reader_runtime_args = {
@@ -391,14 +462,12 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     // Number of tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
 
-    // Input buffers - Create predicate CB (always c_0)
-    auto [predicate_tensor_cb, predicate_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_0,
-        program,
-        all_device_cores,
-        predicate_single_tile_size,
-        num_tiles_per_cb,
-        predicate_data_format);  // predicate_tensor
+    // Input buffers - Create CB0 (always predicate for all cases)
+    uint32_t cb0_tile_size = predicate_single_tile_size;
+    DataFormat cb0_data_format = predicate_data_format;
+
+    auto [predicate_tensor_cb, predicate_tensor_cb_handle] =
+        create_cb(tt::CBIndex::c_0, program, all_device_cores, cb0_tile_size, num_tiles_per_cb, cb0_data_format);
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
@@ -450,8 +519,34 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             value_false_data_format);  // Using actual false tensor format
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
+    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // TTT with row broadcast: use row broadcast reader with pred→CB0, true→CB1, true→CB2
+        // Row broadcast reader reads predicate and true tensor, CB2 uses true tensor for compute compatibility
+
+        // CB1 = value_true tensor
+        auto [cb1, cb1_handle] = create_cb(
+            tt::CBIndex::c_1,
+            program,
+            all_device_cores,
+            value_true_single_tile_size,
+            num_tiles_per_cb,
+            value_true_data_format);
+        value_true_tensor_cb = cb1;
+        value_true_tensor_cb_handle = cb1_handle;
+
+        // CB2 = true tensor (for compute kernel compatibility - using true tensor data)
+        auto [cb2, cb2_handle] = create_cb(
+            tt::CBIndex::c_2,
+            program,
+            all_device_cores,
+            value_true_single_tile_size,
+            num_tiles_per_cb,
+            value_true_data_format);
+        value_false_tensor_cb = cb2;
+        value_false_tensor_cb_handle = cb2_handle;
     } else {
-        // TTT: c_1 = value_true tensor, c_2 = value_false tensor
+        // TTT (non-broadcast and row-broadcast): c_1 = value_true tensor, c_2 = value_false tensor
+        // CB layout: pred→CB0, true→CB1, false→CB2 (desired layout for ROW_BCAST)
         auto [cb1, cb1_handle] = create_cb(
             tt::CBIndex::c_1,
             program,
@@ -518,6 +613,16 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
         true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
         false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
+    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // Row broadcast detection based on height dimension (second-to-last)
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto true_shape = value_true_tensor.value().logical_shape();
+
+        auto pred_h = pred_shape[pred_shape.rank() - 2];  // height dim
+        auto true_h = true_shape[true_shape.rank() - 2];
+
+        pred_is_bcast = (pred_h == 1 && true_h > 1);
+        true_is_bcast = (true_h == 1 && pred_h > 1);
     }
 
     // READER KERNEL - Use kernel path from utils
@@ -531,6 +636,22 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             value_false_tensor.value().dtype());  // For predicate (a) and value_true (b)
 
         // Add binary_ng style sharding defines
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
+        bool value_false_sharded = value_true_sharded;  // Using same as value_true for now
+        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_FALSE"] = value_false_sharded ? "1" : "0";
+
+        // Set broadcast defines based on actual detection
+        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+
+        // Add BCAST_LLK define (set to 0 for now, can be optimized later)
+        reader_defines["BCAST_LLK"] = "0";
+    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // ROW_BCAST defines for reader kernel compatibility
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
         bool value_false_sharded = value_true_sharded;  // Using same as value_true for now
@@ -574,8 +695,25 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
+    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // TTT with row broadcast: use row broadcast reader (binary-style, 2 tensors only)
+        // Row broadcast reader only populates CB0 (predicate) and CB1 (true tensor)
+        // CB2 (false tensor) is still created for compute kernel compatibility but not used by reader
+
+        // Calculate has_sharding for ROW_BCAST case
+        bool has_sharding = predicate_tensor.memory_config().is_sharded() ||
+                            value_true_tensor.value().memory_config().is_sharded() ||
+                            output.memory_config().is_sharded();
+
+        std::vector<uint32_t> reader_compile_time_args;
+        // Two TensorAccessorArgs like binary_ng: predicate and true tensor
+        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);  // First tensor (predicate)
+        TensorAccessorArgs(*value_true_tensor.value().buffer())
+            .append_to(reader_compile_time_args);                                 // Second tensor (true)
+        reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));  // Sharding flag
+        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     } else {
-        // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
+        // TTT (non-broadcast): c_0 = predicate, c_1 = value_true, c_2 = value_false
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb,
             (std::uint32_t)value_true_tensor_cb,
@@ -656,6 +794,9 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
         kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
         kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // ROW_BCAST: Use CB1 (true tensor) for all 3 inputs as requested
+        kernel_defines["ROW_BCAST_USE_CB1_FOR_ALL"] = "1";
     }
 
     kernel_defines["WHERE_LLK"] = "where_tile";

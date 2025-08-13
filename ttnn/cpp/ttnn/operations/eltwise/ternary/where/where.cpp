@@ -94,7 +94,11 @@ Tensor WhereOperation::invoke(
                 predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
-                log_info(tt::LogOp, "Where LLK - TTT");
+                if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::ROW_BCAST) {
+                    log_info(tt::LogOp, "Where LLK - TTT ROW_BCAST (using no-broadcast kernels)");
+                } else {
+                    log_info(tt::LogOp, "Where LLK - TTT");
+                }
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
                 return ttnn::prim::where(
