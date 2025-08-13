@@ -1436,6 +1436,11 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         eth_chan_directions::EAST};
 }
 
+// connect_to_downstream_edm  need to also accept input of FabriTensixDatamoverBuilder
+// it will also call build_connection_to_fabric_channel and return a SenderWorkerAdapterSpec, but this is in
+// FabricTensixDatamoverBuilder class. perhaps the below function can accpet a vairant for FabriTensixDatamoverBuilder
+//
+
 void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm) {
     TT_FATAL(
         !this->build_in_worker_connection_mode, "Tried to connect two EDMs to each other in worker connection mode");
