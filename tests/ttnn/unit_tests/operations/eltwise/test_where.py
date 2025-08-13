@@ -65,7 +65,7 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape",
     [
-        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1024, 1024)),  # A, Brow, C
+        ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # A, Brow, C
         # ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
         # ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
         # ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # A, B , Ccol
