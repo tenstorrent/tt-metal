@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "llk_math_eltwise_binary_sfpu_rsub_int32.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -53,6 +54,10 @@ ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::RSUB>(idst0, idst1)));
 }
 
+ALWI void rsub_int32_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_rsub_int32<APPROX>(idst0, idst1)));
+}
+
 ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::POW, DST_ACCUM_MODE>(idst0, idst1)));
 }
@@ -71,6 +76,8 @@ ALWI void div_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init
 ALWI void rsub_binary_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::RSUB>()));
 }
+
+ALWI void rsub_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_rsub_int32_init<APPROX>())); }
 
 ALWI void power_binary_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::POW>()));
