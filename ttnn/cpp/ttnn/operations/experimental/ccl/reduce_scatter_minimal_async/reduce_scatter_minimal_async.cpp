@@ -104,6 +104,7 @@ ttnn::Tensor composite_reduce_scatter(
     ttnn::Tensor all_reduced_tensor = broadcasted_tensors[0];
     for (uint32_t i = 1; i < broadcasted_tensors.size(); ++i) {
         all_reduced_tensor = ttnn::add(all_reduced_tensor, broadcasted_tensors[i]);
+        broadcasted_tensors[i].deallocate();
     }
 
     // Partition the reduced tensor (scatter)
