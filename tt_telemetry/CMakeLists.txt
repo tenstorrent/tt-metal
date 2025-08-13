@@ -42,6 +42,7 @@ target_sources(
         telemetry/ethernet/ethernet_link.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/print_helpers.cpp
+        telemetry/ethernet/ethernet_metrics.cpp
 )
 target_include_directories(
     tt_telemetry_server
