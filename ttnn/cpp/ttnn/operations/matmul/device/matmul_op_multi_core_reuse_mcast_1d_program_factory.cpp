@@ -346,6 +346,7 @@ process_mcast_in0_program_and_create_override_variables(
             (std::uint32_t)0,      // batchB
             (std::uint32_t)false,  // sparsity_is_dram
             (std::uint32_t)0,      // sparsity_log2_of_pagesize
+            (std::uint32_t)true    // bcast_A
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
@@ -1118,6 +1119,7 @@ process_mcast_in1_program_and_create_override_variables(
         (std::uint32_t)0,      // batchB
         (std::uint32_t)false,  // sparsity_is_dram
         (std::uint32_t)0,      // sparsity_log2_of_pagesize
+        (std::uint32_t)true    // bcast_A
     };
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
 
@@ -2969,7 +2971,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const auto B_A = get_batch_size(ashape);
+    const auto B_A = batched_input_a ? 1 : get_batch_size(ashape);
     const auto B_B = get_batch_size(bshape);
     const uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     const uint32_t Kt = ashape[-1] / in0_tile_shape[1];
@@ -3131,6 +3133,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)B_B,  // batchB
         (std::uint32_t)sparsity_is_dram,
         (std::uint32_t)std::log2(B_B * (uint32_t)sizeof(uint32_t)),  // log2 of page size
+        (std::uint32_t)!batched_input_a,                             // bcast_A
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };

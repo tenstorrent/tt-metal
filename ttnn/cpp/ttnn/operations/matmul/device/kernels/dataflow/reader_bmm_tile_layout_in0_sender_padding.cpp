@@ -60,8 +60,9 @@ void kernel_main() {
     constexpr uint32_t batchB = get_compile_time_arg_val(21);
     constexpr bool sparsity_is_dram = (bool)get_compile_time_arg_val(22);
     constexpr uint32_t sparsity_log2_of_pagesize = get_compile_time_arg_val(23);
+    constexpr bool bcast_A = (bool)get_compile_time_arg_val(24);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(24);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(25);
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
@@ -146,6 +147,9 @@ void kernel_main() {
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
             if constexpr (batchB > 0) {
                 if (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_sparsity)[bB] == 0) {
+                    if constexpr (!bcast_A) {
+                        in0_tensor_start_tile_id += MtKt;
+                    }
                     continue;
                 }
             }
@@ -270,8 +274,15 @@ void kernel_main() {
 #endif
                 in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
             }
+
+            if constexpr (!bcast_A) {
+                in0_tensor_start_tile_id += MtKt;
+            }
         }
-        in0_tensor_start_tile_id += MtKt;
+
+        if constexpr (bcast_A) {
+            in0_tensor_start_tile_id += MtKt;
+        }
     }
     noc_async_write_barrier();
 }
