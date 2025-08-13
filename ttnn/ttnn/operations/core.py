@@ -521,13 +521,17 @@ ttnn.register_python_operation(name="ttnn.reallocate", golden_function=_golden_f
 ttnn.attach_golden_function(ttnn.reallocate, golden_function=_golden_function)
 
 
+# TODO: #16067 - Remove `enable_multihost_format`, when we remove the legacy format.
 @ttnn.register_python_operation(name="ttnn.load_tensor")
-def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice = None) -> ttnn.Tensor:
+def load_tensor(
+    file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice = None, enable_multihost_format: bool = False
+) -> ttnn.Tensor:
     """
     Load tensor from a file.
 
     Args:
         file_name (str | pathlib.Path): the file name.
+        enable_multihost_format (bool, optional): Whether to load the tensor from the multi-host format. Defaults to `False`.
 
     Keyword Args:
         device (ttnn.MeshDevice, optional): the device. Defaults to `None`.
@@ -544,17 +548,25 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
     if not file_name.is_file():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
-    return ttnn._ttnn.tensor.load_tensor(str(file_name), device)
+
+    if enable_multihost_format:
+        return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(file_name), device)
+    else:
+        return ttnn._ttnn.tensor.load_tensor(str(file_name), device)
 
 
+# TODO: #16067 - Remove `enable_multihost_format`, when we remove the legacy format.
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
-def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> None:
+def dump_tensor(
+    file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, enable_multihost_format: bool = False
+) -> None:
     """
     Dump tensor to a file.
 
     Args:
         file_name (str | pathlib.Path): The file name.
         tensor (ttnn.Tensor): the tensor to be dumped.
+        enable_multihost_format (bool, optional): Whether to dump the tensor to the multi-host format. Defaults to `False`.
 
     Returns:
         `None`: tensor saved to a specified file.
@@ -564,7 +576,10 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
         >>> dump_tensor(file_name=str(tensor.bin), tensor=tensor)
     """
     file_name = pathlib.Path(file_name)
-    ttnn._ttnn.tensor.dump_tensor(str(file_name), tensor)
+    if enable_multihost_format:
+        ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor)
+    else:
+        ttnn._ttnn.tensor.dump_tensor(str(file_name), tensor)
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")
@@ -579,6 +594,7 @@ def as_tensor(
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     use_device_tilizer: bool = False,
+    enable_multihost_format: bool = False,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -595,6 +611,7 @@ def as_tensor(
         preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
         mesh_mapper (ttnn.CppTensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
         use_device_tilizer (bool, optional): The flag that toggles whether to use host vs. device tilizer. Defaults to `False`.
+        enable_multihost_format (bool, optional): Whether to use the multi-host format for the cache file. Defaults to `False`.
 
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
@@ -663,16 +680,24 @@ def as_tensor(
             layout: Optional[ttnn.Layout],
             cache_file_name: str,
             mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper],
+            enable_multihost_format: bool,
         ):
             tensor = torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
             logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
             pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-            ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor)
+            if enable_multihost_format:
+                ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+            else:
+                ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor)
             return tensor
 
-        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper):
+        if enable_multihost_format:
+            # Don't embed the number of devices / storage type in the cache file name.
+            # This is not needed, as tensor multi-device vs single-device is generalized.
+            storage_type = ""
+        elif isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper):
             storage_type = f"_multi_device" if mesh_mapper else ""
         elif mesh_mapper:
             storage_type = f"_multi_device_{device.get_num_devices()}"
@@ -688,19 +713,24 @@ def as_tensor(
         cache_file_name = str(cache_path)
 
         if not cache_path.exists() or not cache_path.is_file():
-            return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
+            return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper, enable_multihost_format)
 
         try:
-            tensor = ttnn._ttnn.tensor.load_tensor(cache_file_name, device=device)
+            if enable_multihost_format:
+                tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
+            else:
+                tensor = ttnn._ttnn.tensor.load_tensor(cache_file_name, device=device)
             if tuple(tensor.shape) != tuple(tensor.shape):
                 logger.warning(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
                 )
-                tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
+                tensor = from_torch_and_dump(
+                    tensor, dtype, layout, cache_file_name, mesh_mapper, enable_multihost_format
+                )
             logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
         except RuntimeError as e:
             logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
-            tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
+            tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper, enable_multihost_format)
         return tensor
 
 
