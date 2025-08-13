@@ -51,58 +51,20 @@ endif()
 # Our current fork of tracy does not have CMake support for these subdirectories
 # Once we update, we can change this
 
-# Tracy tools use Makefiles that depend on pkg-config
-find_program(PKG_CONFIG_EXECUTABLE NAMES pkg-config)
-if(NOT PKG_CONFIG_EXECUTABLE)
-    message(FATAL_ERROR "pkg-config not found. It is required for building Tracy tools.")
-endif()
+# Build Tracy tools (csvexport and capture) using CMake
+add_subdirectory(${TRACY_HOME}/csvexport)
+add_subdirectory(${TRACY_HOME}/capture)
 
-include(ProcessorCount)
-processorcount(numProcs)
-if(numProcs EQUAL 0)
-    set(numProcs 1)
-endif()
-include(ExternalProject)
-ExternalProject_Add(
-    tracy_csv_tools
-    PREFIX ${TRACY_HOME}/csvexport/build/unix
-    SOURCE_DIR ${TRACY_HOME}/csvexport/build/unix
-    BINARY_DIR ${PROJECT_BINARY_DIR}/tools/profiler/bin
-    INSTALL_DIR ${PROJECT_BINARY_DIR}/tools/profiler/bin
-    STAMP_DIR "${PROJECT_BINARY_DIR}/tmp/tracy_stamp"
-    TMP_DIR "${PROJECT_BINARY_DIR}/tmp/tracy_tmp"
-    DOWNLOAD_COMMAND
-        ""
-    CONFIGURE_COMMAND
-        ""
-    INSTALL_COMMAND
-        cp ${TRACY_HOME}/csvexport/build/unix/csvexport-release .
-    BUILD_COMMAND
-        cd ${TRACY_HOME}/csvexport/build/unix && CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} TRACY_NO_LTO=1 make -j
-        ${numProcs} -f ${TRACY_HOME}/csvexport/build/unix/Makefile
-)
-ExternalProject_Add(
-    tracy_capture_tools
-    PREFIX ${TRACY_HOME}/capture/build/unix
-    SOURCE_DIR ${TRACY_HOME}/capture/build/unix
-    BINARY_DIR ${PROJECT_BINARY_DIR}/tools/profiler/bin
-    INSTALL_DIR ${PROJECT_BINARY_DIR}/tools/profiler/bin
-    STAMP_DIR "${PROJECT_BINARY_DIR}/tmp/tracy_stamp"
-    TMP_DIR "${PROJECT_BINARY_DIR}/tmp/tracy_tmp"
-    DOWNLOAD_COMMAND
-        ""
-    CONFIGURE_COMMAND
-        ""
-    INSTALL_COMMAND
-        cp ${TRACY_HOME}/capture/build/unix/capture-release .
-    BUILD_COMMAND
-        cd ${TRACY_HOME}/capture/build/unix && CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} TRACY_NO_LTO=1 make -j
-        ${numProcs} -f ${TRACY_HOME}/capture/build/unix/Makefile
-)
+# Build Tracy profiler WASM project using Emscripten
 add_custom_target(
-    tracy_tools
+    tracy_profiler_wasm
     ALL
-    DEPENDS
-        tracy_csv_tools
-        tracy_capture_tools
+    COMMAND
+        ${CMAKE_COMMAND} -E echo "Building Tracy profiler WASM..."
+    COMMAND
+        emcmake cmake -DEMSCRIPTEN=ON -B ${CMAKE_BINARY_DIR}/profiler/build_wasm -S ${TRACY_HOME}/profiler
+    COMMAND
+        cmake --build ${CMAKE_BINARY_DIR}/profiler/build_wasm
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Building Tracy profiler WASM with Emscripten"
 )
