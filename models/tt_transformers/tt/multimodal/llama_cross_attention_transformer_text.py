@@ -347,7 +347,8 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 # TODO: 26411
                 # Remove this blackhole condition once fabric CCLs are working on blackhole
                 if is_blackhole():
-                    output = ttnn.all_gather(output, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                    # output = ttnn.all_gather(output, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                    assert False, "Legacy CCL call removed"
                 else:
                     output = ttnn.experimental.all_gather_async(
                         output,

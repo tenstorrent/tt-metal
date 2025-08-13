@@ -166,13 +166,14 @@ class RMSNorm(LightweightModule):
                 num_buffers_per_channel=2,
             )
         else:
-            tt_stats = ttnn.all_gather(
-                tt_stats,
-                dim=3,
-                num_links=1,
-                topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # tt_stats = ttnn.all_gather(
+            #     tt_stats,
+            #     dim=3,
+            #     num_links=1,
+            #     topology=self.ccl_topology,
+            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # )
+            assert False, "Legacy CCL call removed"
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
             inp,

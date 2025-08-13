@@ -224,7 +224,8 @@ class TtLlamaImageAttention(LightweightModule):
             # TODO: 26411
             # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
-                dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+                # dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+                assert False, "Legacy CCL call removed"
             else:
                 dense_out_gathered = ttnn.experimental.all_gather_async(
                     output_11SH,

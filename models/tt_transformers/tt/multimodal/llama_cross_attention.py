@@ -291,14 +291,15 @@ class TtLlamaCrossAttention(LightweightModule):
             # TODO: 26411
             # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
-                output = ttnn.reduce_scatter(
-                    output,
-                    dim=3,
-                    math_op=ttnn.ReduceType.Sum,
-                    num_links=1,
-                    topology=self.configuration.ccl_topology(),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+                # output = ttnn.reduce_scatter(
+                #     output,
+                #     dim=3,
+                #     math_op=ttnn.ReduceType.Sum,
+                #     num_links=1,
+                #     topology=self.configuration.ccl_topology(),
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # )
+                assert False, "Legacy CCL call removed"
             else:
                 output = ttnn.experimental.reduce_scatter_minimal_async(
                     output,
@@ -400,14 +401,15 @@ class TtLlamaCrossAttention(LightweightModule):
             # TODO: 26411
             # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
-                dense_out_reduced = ttnn.reduce_scatter(
-                    output,
-                    dim=3,
-                    math_op=ttnn.ReduceType.Sum,
-                    num_links=1,
-                    topology=self.configuration.ccl_topology(),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+                # dense_out_reduced = ttnn.reduce_scatter(
+                #     output,
+                #     dim=3,
+                #     math_op=ttnn.ReduceType.Sum,
+                #     num_links=1,
+                #     topology=self.configuration.ccl_topology(),
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # )
+                assert False, "Legacy CCL call removed"
             else:
                 dense_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
                     output,

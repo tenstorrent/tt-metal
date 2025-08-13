@@ -110,7 +110,8 @@ class TtLlamaImageFeedForward(LightweightModule):
             # TODO: 26411
             # Remove this blackhole condition once fabric CCLs are working on blackhole
             if is_blackhole():
-                w2_out_gathered = ttnn.all_gather(c_proj_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+                # w2_out_gathered = ttnn.all_gather(c_proj_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+                assert False, "Legacy CCL call removed"
             else:
                 w2_out_gathered = ttnn.experimental.all_gather_async(
                     c_proj_out,

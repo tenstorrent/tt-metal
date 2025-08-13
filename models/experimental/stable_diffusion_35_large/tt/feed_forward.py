@@ -59,13 +59,14 @@ class TtFeedForward:
         result = self.out_proj(x, core_grid=core_grid)
 
         if self._distributed:
-            result = ttnn.reduce_scatter(
-                result,
-                dim=-1,
-                math_op=ttnn.ReduceType.Sum,
-                num_links=1,
-                memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-                topology=ttnn.Topology.Ring,
-            )
+            # result = ttnn.reduce_scatter(
+            #     result,
+            #     dim=-1,
+            #     math_op=ttnn.ReduceType.Sum,
+            #     num_links=1,
+            #     memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            #     topology=ttnn.Topology.Ring,
+            # )
+            assert False, "Legacy CCL call removed"
 
         return result
