@@ -18,8 +18,7 @@
 #include "impl/context/metal_context.hpp"
 
 #include <server/telemetry_provider.hpp>
-#include <telemetry/ethernet/ethernet_endpoint.hpp>
-#include <telemetry/ethernet/ethernet_helpers.hpp>
+#include <telemetry/ethernet/ethernet_metrics.hpp>
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
 
@@ -28,35 +27,7 @@ static std::queue<TelemetrySnapshot *> available_buffers_;
 
 static std::atomic<bool> stopped_{false};
 
-struct Metric {
-    EthernetEndpoint ethernet_endpoint;
-    bool is_up = false;
-    bool dirty = false;
-
-    // Construct full telemetry path identifier
-    std::string telemetry_path() const {
-        // Get hostname to prepend
-        constexpr size_t hostname_buffer_size = 256; 
-        std::vector<char> hostname_buffer(hostname_buffer_size);
-        int hostname_size = gethostname(hostname_buffer.data(), hostname_buffer_size);
-
-        // hostname + ethernet endpoint path
-        std::vector<std::string> path_components{hostname_buffer.data()};
-        auto ethernet_endpoint_path = ethernet_endpoint.telemetry_path();
-        path_components.insert(path_components.end(), ethernet_endpoint_path.begin(), ethernet_endpoint_path.end());
-
-        // Join with '_'
-        std::string path;
-        for (auto it = path_components.begin(); it != path_components.end(); ) {
-            path += *it;
-            ++it;
-            if (it != path_components.end()) {
-                path += '_';
-            }
-        }
-        return path;
-    }
-};
+static char hostname_[256];
 
 void return_buffer_to_pool(TelemetrySnapshot *buffer) {
     if (stopped_.load()) {
@@ -104,23 +75,39 @@ std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
     return create_new_handoff_buffer(buffer);
 }
 
-static void sample(std::vector<Metric> &metrics, const tt::Cluster &cluster) {
-    for (auto &metric: metrics) {
-        bool is_up_now = is_ethernet_endpoint_up(cluster, metric.ethernet_endpoint);
-        bool is_up_old = metric.is_up;
-        metric.dirty = is_up_now != is_up_old;
-        metric.is_up = is_up_now;
+static void update(std::vector<std::unique_ptr<BoolMetric>> &bool_metrics, const tt::Cluster &cluster) {
+    for (auto &metric: bool_metrics) {
+        metric->update(cluster);
     }
 }
 
-static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers, const std::vector<Metric> &metrics) {
+static std::string get_cluster_wide_telemetry_path(const Metric &metric) {
+    // Cluster-wide path is: hostname + metric path
+    std::vector<std::string> path_components{static_cast<const char *>(hostname_)};
+    auto local_path = metric.telemetry_path();
+    path_components.insert(path_components.end(), local_path.begin(), local_path.end());
+
+    // Join with '_'
+    std::string path;
+    for (auto it = path_components.begin(); it != path_components.end(); ) {
+        path += *it;
+        ++it;
+        if (it != path_components.end()) {
+            path += '_';
+        }
+    }
+    return path;
+}
+
+static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers, const std::vector<std::unique_ptr<BoolMetric>> &bool_metrics) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
     snapshot->is_absolute = true;
     
-    for (size_t i = 0; i < metrics.size(); i++) {
+    for (size_t i = 0; i < bool_metrics.size(); i++) {
+        std::string path = get_cluster_wide_telemetry_path(*bool_metrics[i]);
         snapshot->metric_indices.push_back(i);
-        snapshot->metric_names.push_back(metrics[i].telemetry_path());
-        snapshot->metric_values.push_back(metrics[i].is_up);
+        snapshot->metric_names.push_back(path);
+        snapshot->metric_values.push_back(bool_metrics[i]->value());
     }
 
     for (auto &subscriber: subscribers) {
@@ -128,17 +115,17 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
     }
 }
 
-static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers, std::vector<Metric> &metrics) {
+static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers, std::vector<std::unique_ptr<BoolMetric>> &bool_metrics) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
     snapshot->is_absolute = false;
 
-    for (size_t i = 0; i < metrics.size(); i++) {
-        if (!metrics[i].dirty) {
+    for (size_t i = 0; i < bool_metrics.size(); i++) {
+        if (!bool_metrics[i]->changed_since_transmission()) {
             continue;
         }
         snapshot->metric_indices.push_back(i);
-        snapshot->metric_values.push_back(metrics[i].is_up);
-        metrics[i].dirty = false;
+        snapshot->metric_values.push_back(bool_metrics[i]->value());
+        bool_metrics[i]->mark_transmitted();
     }
 
     for (auto &subscriber: subscribers) {
@@ -150,25 +137,29 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
     const tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
     const tt::Cluster &cluster = instance.get_cluster();
 
-    // Create a single vector of metrics we will monitor
-    std::vector<Metric> metrics;
+    // Create vectors of all metrics we will monitor by value type
+    std::vector<std::unique_ptr<BoolMetric>> bool_metrics;
     for (const auto &[chip_id, endpoints]: get_ethernet_endpoints_by_chip(cluster)) {
         for (const auto &endpoint: endpoints) {
-            metrics.push_back(Metric{ .ethernet_endpoint = endpoint });
+            bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(endpoint));
         }
     }
 
     // Continuously monitor on a loop
-    sample(metrics, cluster);
-    send_initial_snapshot(subscribers, metrics);
+    update(bool_metrics, cluster);
+    send_initial_snapshot(subscribers, bool_metrics);
     while (!stopped_.load()) {
         std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
-        sample(metrics, cluster);
-        send_delta(subscribers, metrics);
+        update(bool_metrics, cluster);
+        send_delta(subscribers, bool_metrics);
     }
 }
 
 void run_telemetry_provider(std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers) {
+    // Prefill hostname
+    gethostname(hostname_, sizeof(hostname_));
+
+    // Run telemetry thread
     auto t = std::async(std::launch::async, telemetry_thread, subscribers);
     t.wait();
 }
