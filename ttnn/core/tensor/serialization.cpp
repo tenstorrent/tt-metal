@@ -4,6 +4,7 @@
 
 #include "ttnn/tensor/serialization.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -417,6 +418,10 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
 
     std::vector<HostBuffer> buffers;
     flatbuffers::FlatBufferBuilder builder;
+    // To be able to read flatbuffer data with `mmap` safely, make sure the serialized flatbuffer is aligned to at least
+    // 8 bytes, just like `header_size`. Individual `buffers` are aligned according to their element size, which is
+    // already what we need for `mmap` to work.
+    builder.Align(alignof(uint64_t));
     auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
     builder.Finish(tensor_offset);
 
