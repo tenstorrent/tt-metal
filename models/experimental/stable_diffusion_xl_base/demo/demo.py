@@ -111,6 +111,10 @@ def my_encode_prompt(
     device = device or pipeline._execution_device
     prompt = [prompt] if isinstance(prompt, str) else prompt
 
+    # Todo fix negative prompt
+    num_devices = ttnn_device.get_num_devices()
+    assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
+
     if prompt is not None:
         batch_size = len(prompt)
     else:
@@ -151,7 +155,7 @@ def my_encode_prompt(
             if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
                 text_input_ids, untruncated_ids
             ):
-                print("Truncated ids path")  # ovo treba
+                print("Truncated ids path")
                 removed_text = tokenizer.batch_decode(untruncated_ids[:, tokenizer.model_max_length - 1 : -1])
                 logger.warning(
                     "The following part of your input was truncated because CLIP can only handle sequences up to"
@@ -166,7 +170,7 @@ def my_encode_prompt(
                 dtype=ttnn.uint32,
                 layout=ttnn.TILE_LAYOUT,
                 device=ttnn_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),  # fix this
+                mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
             )
 
             tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
@@ -362,6 +366,8 @@ def run_demo_inference(
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     prompts = prompts + [""] * needed_padding
 
+    print("prompts length = ", len(prompts))
+
     guidance_scale = 5.0
 
     # 0. Set up default height and width for unet
@@ -471,44 +477,27 @@ def run_demo_inference(
     # assumes prompt_embeds is None
 
     embed_start_time = time.time()
-    all_embeds = [
-        # pipeline.encode_prompt(
-        #     prompt=prompt,
-        #     prompt_2=None,
-        #     device=cpu_device,
-        #     num_images_per_prompt=1,
-        #     do_classifier_free_guidance=True,
-        #     negative_prompt=None,
-        #     negative_prompt_2=None,
-        #     prompt_embeds=None,
-        #     negative_prompt_embeds=None,
-        #     pooled_prompt_embeds=None,
-        #     negative_pooled_prompt_embeds=None,
-        #     lora_scale=None,
-        #     clip_skip=None,
-        # )
-        my_encode_prompt(
-            pipeline,
-            tt_text_encoder,
-            tt_text_encoder_2,
-            ttnn_device,
-            prompt=prompt,
-            prompt_2=None,
-            device=cpu_device,
-            num_images_per_prompt=1,
-            do_classifier_free_guidance=True,
-            negative_prompt=None,
-            negative_prompt_2=None,
-            prompt_embeds=None,
-            negative_prompt_embeds=None,
-            pooled_prompt_embeds=None,
-            negative_pooled_prompt_embeds=None,
-            lora_scale=None,
-            clip_skip=None,
-        )
-        for prompt in prompts
-    ]
+    # original impl
+    # all_embeds = [
+    #     pipeline.encode_prompt(
+    #         prompt=prompt,
+    #         prompt_2=None,
+    #         device=cpu_device,
+    #         num_images_per_prompt=1,
+    #         do_classifier_free_guidance=True,
+    #         negative_prompt=None,
+    #         negative_prompt_2=None,
+    #         prompt_embeds=None,
+    #         negative_prompt_embeds=None,
+    #         pooled_prompt_embeds=None,
+    #         negative_pooled_prompt_embeds=None,
+    #         lora_scale=None,
+    #         clip_skip=None,
+    #     )
+    #     for prompt in prompts
+    # ]
 
+    # batched impl of host
     # all_embeds = pipeline.encode_prompt(
     #     prompt=prompts,  # Pass the entire list at once
     #     prompt_2=None,
@@ -538,6 +527,46 @@ def run_demo_inference(
     #         torch.split(negative_pooled_prompt_embeds_batch, 1, dim=0),
     #     )
     # )
+
+    # Process prompts in batches
+    all_embeds = []
+    for i in range(0, len(prompts), batch_size):
+        batch_prompts = prompts[i : i + batch_size]
+
+        batch_embeds = my_encode_prompt(
+            pipeline,
+            tt_text_encoder,
+            tt_text_encoder_2,
+            ttnn_device,
+            prompt=batch_prompts,  # Pass the entire batch
+            prompt_2=None,
+            device=cpu_device,
+            num_images_per_prompt=1,
+            do_classifier_free_guidance=True,
+            negative_prompt=None,
+            negative_prompt_2=None,
+            prompt_embeds=None,
+            negative_prompt_embeds=None,
+            pooled_prompt_embeds=None,
+            negative_pooled_prompt_embeds=None,
+            lora_scale=None,
+            clip_skip=None,
+        )
+        # my_encode_prompt returns a single tuple of 4 tensors,
+        # but we need individual tuples for each prompt
+        prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = batch_embeds
+
+        # Split the tensors by batch dimension and create individual tuples
+        for j in range(len(batch_prompts)):
+            all_embeds.append(
+                (
+                    prompt_embeds[j : j + 1],  # Keep batch dimension
+                    negative_prompt_embeds[j : j + 1] if negative_prompt_embeds is not None else None,
+                    pooled_prompt_embeds[j : j + 1],
+                    negative_pooled_prompt_embeds[j : j + 1] if negative_pooled_prompt_embeds is not None else None,
+                )
+            )
+
     embed_end_time = time.time()
     print("embed time = ", embed_end_time - embed_start_time)
 
@@ -764,7 +793,8 @@ def run_demo_inference(
 )
 @pytest.mark.parametrize(
     "prompt",
-    (("An astronaut riding a green horse"),),
+    # ((["An astronaut riding a green horse", "A plate of food served on a wooden table"]),),
+    (("A plate of food served on a wooden table"),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
