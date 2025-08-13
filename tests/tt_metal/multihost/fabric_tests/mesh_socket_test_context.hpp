@@ -35,6 +35,7 @@ public:
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_mesh_device() const;
     const tt::tt_fabric::MeshGraph& get_mesh_graph() const;
     const std::unordered_map<Rank, tt::tt_fabric::MeshId>& get_rank_to_mesh_mapping() const;
+    std::mt19937 get_rng() const { return gen_; }
 
 private:
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config);

@@ -29,7 +29,8 @@ enum class RoutingType : uint32_t {
 };
 
 enum class PatternType : uint32_t {
-    AllToAll = 0,
+    AllToAllDevices = 0,
+    AllHostsRandomSockets = 1,
 };
 
 // Data structures for parsed YAML configuration
@@ -77,8 +78,9 @@ struct TestSocketConfig {
 };
 
 struct PatternExpansionConfig {
-    PatternType type;  // "all_to_all" or "random_pairing"
+    PatternType type;      // "all_to_all_devices" or "all_hosts_random_sockets"
     CoreCoord core_coord;  // Core coordinate to use for connections
+    std::optional<uint32_t> num_sockets;  // Optional number of random sockets to generate
 };
 
 struct TestConfig {
@@ -149,13 +151,11 @@ private:
     static std::vector<ParsedTestConfig> expand_test_config(
         const TestConfig& test_config, const MeshSocketTestContext& test_context);
     static std::vector<TestSocketConfig> expand_pattern(
-        const PatternExpansionConfig& pattern,
-        const TestConfig& test_config,
-        const MeshSocketTestContext& test_context);
-    static std::vector<TestSocketConfig> expand_all_to_all_pattern(
-        const PatternExpansionConfig& pattern,
-        const TestConfig& test_config,
-        const MeshSocketTestContext& test_context);
+        const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context);
+    static std::vector<TestSocketConfig> expand_all_to_all_devices_pattern(
+        const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context);
+    static std::vector<TestSocketConfig> expand_all_hosts_random_sockets_pattern(
+        const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context);
 
     // Memory config expansion methods
     static std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);

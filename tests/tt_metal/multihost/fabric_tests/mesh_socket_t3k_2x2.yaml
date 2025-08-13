@@ -21,5 +21,5 @@ tests:
       data_size: [4096, 8192]
       num_transactions: 15
     pattern_expansions:
-      - type: "all_to_all"
+      - type: "all_to_all_devices"
         core_coord: [0, 0]

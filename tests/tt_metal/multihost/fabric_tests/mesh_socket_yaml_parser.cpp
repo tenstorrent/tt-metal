@@ -151,7 +151,7 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
         } else if (test_config.pattern_expansions.has_value()) {
             for (size_t i = 0; i < test_config.pattern_expansions.value().size(); ++i) {
                 const auto& pattern = test_config.pattern_expansions.value()[i];
-                auto expanded_sockets = expand_pattern(pattern, test_config, test_context);
+                auto expanded_sockets = expand_pattern(pattern, test_context);
                 test_name += "_pattern_" + std::to_string(i);
                 parsed_configs.emplace_back(ParsedTestConfig{
                     .name = test_name,
@@ -173,18 +173,18 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
 std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(
     // TODO: Add support for other patterns
     const PatternExpansionConfig& pattern,
-    const TestConfig& test_config,
     const MeshSocketTestContext& test_context) {
     switch (pattern.type) {
-        case PatternType::AllToAll: return expand_all_to_all_pattern(pattern, test_config, test_context);
+        case PatternType::AllToAllDevices: return expand_all_to_all_devices_pattern(pattern, test_context);
+        case PatternType::AllHostsRandomSockets: return expand_all_hosts_random_sockets_pattern(pattern, test_context);
         default: TT_THROW("Unknown pattern type");
     }
 }
 
 // Parametrize on fifo size, page size, and data size
 
-std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(
-    const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestContext& test_context) {
+std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_devices_pattern(
+    const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context) {
     std::vector<TestSocketConfig> sockets;
 
     const auto& mesh_graph = test_context.get_mesh_graph();
@@ -216,7 +216,54 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(
         }
     }
 
-    log_info(tt::LogTest, "Generated {} sockets for all-to-all pattern", sockets.size());
+    log_info(tt::LogTest, "Generated {} sockets for all_to_all_devices pattern", sockets.size());
+    return sockets;
+}
+
+/* Create num_sockets between each rank pair, with random sender and receiver devices
+ *  The purpose of this pattern is to reduce the number of sockets compared to all-to-all,
+ *  while still ensuring that all ranks are connected to each other.
+ */
+std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_hosts_random_sockets_pattern(
+    const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context) {
+    std::vector<TestSocketConfig> sockets;
+
+    const auto& mesh_graph = test_context.get_mesh_graph();
+    const auto& rank_to_mesh_id = test_context.get_rank_to_mesh_mapping();
+    const CoreCoord& core_coord = pattern.core_coord;
+
+    uint32_t num_sockets = pattern.num_sockets.value();
+
+    auto rng = test_context.get_rng();
+
+    for (const auto& [sender_rank, sender_mesh_id] : rank_to_mesh_id) {
+        for (const auto& [receiver_rank, recv_mesh_id] : rank_to_mesh_id) {
+            if (sender_rank == receiver_rank) {
+                continue;  // Skip self-connections
+            }
+            auto num_sender_devices = mesh_graph.get_mesh_shape(sender_mesh_id).mesh_size();
+            auto num_recv_devices = mesh_graph.get_mesh_shape(recv_mesh_id).mesh_size();
+            for (uint32_t i = 0; i < num_sockets; ++i) {
+                auto sender_idx = rng() % num_sender_devices;
+                auto recv_idx = rng() % num_recv_devices;
+                std::vector<SocketConnectionConfig> connections;
+                connections.push_back(SocketConnectionConfig{
+                    .sender = EndpointConfig(mesh_graph.chip_to_coordinate(sender_mesh_id, sender_idx), core_coord),
+                    .receiver = EndpointConfig(mesh_graph.chip_to_coordinate(recv_mesh_id, recv_idx), core_coord)});
+                sockets.push_back(TestSocketConfig{
+                    .connections = connections, .sender_rank = sender_rank, .receiver_rank = receiver_rank});
+                log_info(
+                    tt::LogTest,
+                    "Generated socket: {} {} -> {} {}",
+                    *sender_rank,
+                    mesh_graph.chip_to_coordinate(sender_mesh_id, sender_idx),
+                    *receiver_rank,
+                    mesh_graph.chip_to_coordinate(recv_mesh_id, recv_idx));
+            }
+        }
+    }
+
+    log_info(tt::LogTest, "Generated {} sockets for all_hosts_random_sockets pattern", sockets.size());
     return sockets;
 }
 
@@ -402,6 +449,15 @@ PatternExpansionConfig MeshSocketYamlParser::parse_pattern_expansion(const YAML:
     TT_FATAL(node["core_coord"].IsDefined(), "Pattern expansion missing required 'core_coord' field");
     pattern.core_coord = parse_core_coordinate(node["core_coord"]);
 
+    // Optional num_sockets
+    if (node["num_sockets"].IsDefined()) {
+        pattern.num_sockets = node["num_sockets"].as<uint32_t>();
+    }
+
+    TT_FATAL(
+        pattern.type == PatternType::AllHostsRandomSockets ? pattern.num_sockets.has_value() : true,
+        "num_sockets must be defined for all_hosts_random_sockets pattern expansions");
+
     return pattern;
 }
 
@@ -424,10 +480,14 @@ CoreCoord MeshSocketYamlParser::parse_core_coordinate(const YAML::Node& node) {
 }
 
 PatternType MeshSocketYamlParser::parse_pattern_type(const std::string& pattern_string) {
-    if (pattern_string == "all_to_all") {
-        return PatternType::AllToAll;
+    if (pattern_string == "all_to_all_devices") {
+        return PatternType::AllToAllDevices;
+    } else if (pattern_string == "all_hosts_random_sockets") {
+        return PatternType::AllHostsRandomSockets;
     } else {
-        TT_THROW("Invalid pattern type: '{}'. Valid types are: all_to_all", pattern_string);
+        TT_THROW(
+            "Invalid pattern type: '{}'. Valid types are: all_to_all_devices, all_hosts_random_sockets",
+            pattern_string);
     }
 }
 
@@ -651,16 +711,28 @@ void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfigur
 
                 // switch if we add more patterns
                 switch (pattern.type) {
-                    case PatternType::AllToAll: pattern_type = "all_to_all"; break;
+                    case PatternType::AllToAllDevices: pattern_type = "all_to_all_devices"; break;
+                    case PatternType::AllHostsRandomSockets: pattern_type = "all_hosts_random_sockets"; break;
                     default: TT_THROW("Invalid pattern type: {}", static_cast<int>(pattern.type));
                 }
-                log_info(
-                    tt::LogTest,
-                    "    Pattern {}: type={}, core_coord=({}, {})",
-                    pattern_idx + 1,
-                    pattern_type,
-                    pattern.core_coord.x,
-                    pattern.core_coord.y);
+                if (pattern.num_sockets.has_value()) {
+                    log_info(
+                        tt::LogTest,
+                        "    Pattern {}: type={}, core_coord=({}, {}), num_sockets={}",
+                        pattern_idx + 1,
+                        pattern_type,
+                        pattern.core_coord.x,
+                        pattern.core_coord.y,
+                        pattern.num_sockets.value());
+                } else {
+                    log_info(
+                        tt::LogTest,
+                        "    Pattern {}: type={}, core_coord=({}, {})",
+                        pattern_idx + 1,
+                        pattern_type,
+                        pattern.core_coord.x,
+                        pattern.core_coord.y);
+                }
             }
         }
     }
