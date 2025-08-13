@@ -356,6 +356,17 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
+  # Multi-card post-commit tests
+  blackhole-multi-card-post-commit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-multi-card-post-commit-tests-impl.yaml
+    with:
+      arch: blackhole
+      runner-label: BH-LLMBox
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow

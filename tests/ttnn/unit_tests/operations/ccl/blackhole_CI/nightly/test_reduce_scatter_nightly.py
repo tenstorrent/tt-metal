@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,16 +9,28 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
-    "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
+    "num_devices, rs_input_shape, dim, layout",
     [
-        (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (4, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (4, [1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (2, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (2, [1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (2, [1, 1, 32, 768], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
+        (4, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
+        (2, [1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT),
+        (2, [1, 1, 32, 768], 3, ttnn.TILE_LAYOUT),
+    ],
+    ids=["4_device_128_2048", "4_device_32_4096", "2_device_32_1024", "2_device_32_768"],
+)
+@pytest.mark.parametrize(
+    "rs_input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.uint32, #Bad PCC
+        ttnn.bfloat8_b,
+    ],
+    ids=[
+        "float_16",
+        # "uint_32", #Bad PCC
+        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
@@ -36,14 +48,21 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
     ],
+    ids=["dram_only", "l1_to_dram", "dram_to_l1", "l1_only"],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
+        (True, 10),
         (False, 10),
     ],
     ids=[
+        "trace",
         "non-trace",
     ],
 )
@@ -62,7 +81,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize("chunks_per_sync", [2])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [8])
-def test_rs_nightly(
+def test_rs_row_nightly(
     p150_mesh_device,
     num_devices,
     num_links,
@@ -79,6 +98,10 @@ def test_rs_nightly(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    if (2 == num_devices) and (rs_topology == ttnn.Topology.Ring):
+        pytest.skip("Ring configuration requires more than 2 devices")
+    if (p150_mesh_device.shape[0] != num_devices) and (rs_topology == ttnn.Topology.Ring):
+        pytest.skip("Ring configuration requires the entire row or column so it loops around")
     if ttnn.get_num_devices() < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
     submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
