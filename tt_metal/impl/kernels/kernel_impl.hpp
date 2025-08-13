@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <umd/device/tt_core_coordinates.h>
 #include <string>
 
 #include "api/tt-metalium/kernel.hpp"
+#include "core_coord.hpp"
+#include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include <enchantum/enchantum.hpp>
@@ -45,11 +48,12 @@ public:
 
 protected:
     KernelImpl(
+        HalProgrammableCoreType programmable_core_type,
         const KernelSource& kernel_src,
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines) :
-        Kernel(kernel_src, core_range_set, compile_args, defines) {}
+        Kernel(programmable_core_type, kernel_src, core_range_set, compile_args, defines) {}
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
@@ -63,7 +67,8 @@ protected:
 class DataMovementKernel : public KernelImpl {
 public:
     DataMovementKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DataMovementConfig& config) :
-        KernelImpl(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
+        KernelImpl(HalProgrammableCoreType::TENSIX, kernel_src, cr_set, config.compile_args, config.defines),
+        config_(config) {
         this->dispatch_class_ =
             enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(config.processor);
     }
@@ -100,7 +105,13 @@ private:
 class EthernetKernel : public KernelImpl {
 public:
     EthernetKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const EthernetConfig& config) :
-        KernelImpl(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
+        KernelImpl(
+            config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines),
+        config_(config) {
         this->dispatch_class_ =
             enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(config.processor);
     }
@@ -136,7 +147,8 @@ private:
 class ComputeKernel : public KernelImpl {
 public:
     ComputeKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const ComputeConfig& config) :
-        KernelImpl(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
+        KernelImpl(HalProgrammableCoreType::TENSIX, kernel_src, cr_set, config.compile_args, config.defines),
+        config_(config) {
         this->dispatch_class_ = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     }
 
