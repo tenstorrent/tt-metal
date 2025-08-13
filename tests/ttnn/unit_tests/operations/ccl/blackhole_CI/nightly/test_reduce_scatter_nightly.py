@@ -24,12 +24,12 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
     "rs_input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.uint32, //Bad PCC
+        # ttnn.uint32, #Bad PCC
         ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        # "uint_32", //Bad PCC
+        # "uint_32", #Bad PCC
         "bfloat_8",
     ],
 )
