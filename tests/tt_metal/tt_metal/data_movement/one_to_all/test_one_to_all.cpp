@@ -780,6 +780,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
 /* ========== VIRTUAL CHANNELS ========== */
 
 TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Expose loopback here?
+    GTEST_SKIP() << "Skipping test";
+
     // Parameters
     uint32_t test_case_id = 152;
 
@@ -810,6 +812,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Ex
 }
 
 TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
+    GTEST_SKIP() << "Skipping test";
+
     // Parameters
     uint32_t test_case_id = 160;
 

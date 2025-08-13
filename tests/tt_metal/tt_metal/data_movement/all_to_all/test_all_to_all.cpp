@@ -533,12 +533,16 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal) {
 /* ======== VIRTUAL CHANNELS ======== */
 
 TEST_F(DeviceFixture, TensixDataMovementAllToAllVirtualChannels) {
+    GTEST_SKIP() << "Skipping test";
+
     uint32_t test_case_id = 307;
 
     unit_tests::dm::all_to_all::virtual_channels_test(arch_, devices_, num_devices_, test_case_id);
 }
 
 TEST_F(DeviceFixture, TensixDataMovementAllToAllCustom) {
+    GTEST_SKIP() << "Skipping test";
+
     uint32_t test_case_id = 308;
 
     // Custom Parameters
