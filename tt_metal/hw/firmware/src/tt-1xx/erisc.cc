@@ -106,6 +106,7 @@ void __attribute__((noinline)) Application(void) {
     WAYPOINT("RED");
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+    DeviceProfilerInit();
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
         uint8_t go_message_signal = mailboxes->go_messages[0].signal;
