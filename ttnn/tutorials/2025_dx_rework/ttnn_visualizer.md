@@ -1,6 +1,6 @@
-# TTNN Visualizer
+# TT-NN Visualizer
 
-In this tutorial, we’ll explore the **TTNN Visualizer** – a powerful tool designed to help developers understand and optimize models running on Tenstorrent hardware. This tool offers intuitive, in-depth insights into your neural network’s execution flow, memory usage, and performance characteristics.
+In this tutorial, we’ll explore the **TT-NN Visualizer** – a powerful tool designed to help developers understand and optimize models running on Tenstorrent hardware. This tool offers intuitive, in-depth insights into your neural network’s execution flow, memory usage, and performance characteristics.
 
 **Main features include:**
 
@@ -16,7 +16,7 @@ In this tutorial, we’ll explore the **TTNN Visualizer** – a powerful tool de
 * Ability to load reports from local files or remote servers via SSH
 * Support for running multiple instances of the tool simultaneously
 
-TTNN Visualizer gives you a comprehensive overview of how your model utilizes hardware resources. It helps identify optimization opportunities, debug bottlenecks, and better understand your model’s execution at the system level.
+TT-NN Visualizer gives you a comprehensive overview of how your model utilizes hardware resources. It helps identify optimization opportunities, debug bottlenecks, and better understand your model’s execution at the system level.
 
 For more details, visit the official [ttnn-visualizer GitHub repository](https://github.com/tenstorrent/ttnn-visualizer). You can also watch the full walkthrough video [here](https://youtu.be/lHtcD8cHoes?feature=shared).
 
@@ -27,7 +27,7 @@ For more details, visit the official [ttnn-visualizer GitHub repository](https:/
 The visualization workflow is divided into two stages:
 
 1. **Model profiling and data collection**
-2. **Visualization and analysis using TTNN Visualizer**
+2. **Visualization and analysis using TT-NN Visualizer**
 
 To collect profiling data, you’ll need the [tt-metal](https://github.com/tenstorrent/tt-metal) project. The visualizer expects two sets of files:
 
@@ -80,7 +80,7 @@ In this tutorial, we’ll profile the YOLOv4 model (320x320 input) trained on th
 
 ### Generating the Memory Report
 
-TTNN uses configuration options for profiling. These can be set either through:
+TT-NN uses configuration options for profiling. These can be set either through:
 
 * A configuration file (`TTNN_CONFIG_PATH`)
 * Inline overrides (`TTNN_CONFIG_OVERRIDES`)
@@ -331,4 +331,4 @@ To summarize:
    * **Graph**: Visualize the model’s structure
    * **Performance**: Find and fix performance bottlenecks
 
-TTNN Visualizer gives you everything you need to deeply understand your model’s interaction with the hardware — and where it can be improved.
+TT-NN Visualizer gives you everything you need to deeply understand your model’s interaction with the hardware — and where it can be improved.
