@@ -583,7 +583,6 @@ class OpTest1(BaseModel):
     )
     initiated_by: Optional[str] = Field(None, description="User or CI pipeline that initiated the run.")
     host: Optional[str] = Field(None, description="Hostname of the machine executing the run.")
-    device: Optional[str] = Field(None, description="Target device/architecture identifier, if available.")
     run_type: Optional[str] = Field(None, description="Type of op test run (e.g., sweeps, unit_test).")
     run_contents: Optional[str] = Field(
         None, description="Human-readable description of run contents (e.g., module/suite selection)."
