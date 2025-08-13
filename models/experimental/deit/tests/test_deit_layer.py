@@ -6,8 +6,8 @@ import torch
 from loguru import logger
 from transformers import DeiTModel
 
-from models.common.utility_functions import (
-    torch_to_tt_tensor_rm,
+from models.utility_functions import (
+    torch_to_tt_tensor_tile,
     tt_to_torch_tensor,
     comp_pcc,
     comp_allclose_and_pcc,
@@ -20,7 +20,7 @@ from models.experimental.deit.tt.deit_layer import TtDeiTLayer
 
 def test_deit_layer_inference(device, pcc=0.99):
     # setup pytorch model
-    model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    model = DeiTModel.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1",local_files_only=True)
     model.eval()
     state_dict = model.state_dict()
 
@@ -37,7 +37,7 @@ def test_deit_layer_inference(device, pcc=0.99):
     # setup tt model
     tt_layer = TtDeiTLayer(DeiTConfig(), device, state_dict, base_address)
 
-    tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
+    tt_input = torch_to_tt_tensor_tile(hidden_state, device)
     tt_out = tt_layer(tt_input, head_mask, output_attentions)[0]
     tt_output = tt_to_torch_tensor(tt_out).squeeze(0)
 
