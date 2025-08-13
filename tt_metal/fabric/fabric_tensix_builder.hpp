@@ -64,6 +64,7 @@ public:
     size_t get_connection_semaphore_address(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
     size_t get_worker_conn_info_base_address(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
     size_t get_buffer_index_semaphore_address(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
+    size_t get_channel_credits_stream_id(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
 
 private:
     // Logical fabric tensix cores (will get from device-specific core descriptor when needed)

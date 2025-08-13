@@ -121,7 +121,7 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
-class Fabric1DMuxFixture : public BaseFabricFixture {
+class Fabric1DTensixFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         BaseFabricFixture::DoSetUpTestSuite(

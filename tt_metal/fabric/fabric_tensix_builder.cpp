@@ -314,6 +314,14 @@ size_t FabricTensixDatamoverConfig::get_buffer_index_semaphore_address(
     return mux_config->get_buffer_index_address(channel_type, channel_id);
 }
 
+size_t FabricTensixDatamoverConfig::get_channel_credits_stream_id(
+    chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
+    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
+    auto mux_config = get_mux_config(risc_id);
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    return mux_config->get_channel_credits_stream_id(channel_type, channel_id);
+}
+
 // FabricTensixDatamoverBuilder implementation
 
 FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
@@ -442,45 +450,45 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_runtime_args(tt::tt_meta
     auto args = fabric_mux_config_->get_fabric_mux_run_time_args(
         local_fabric_node_id_, remote_fabric_node_id_, link_idx_, program, {my_core_logical_});
 
-    log_info(tt::LogTest, "Runtime args breakdown:");
+    // log_info(tt::LogTest, "Runtime args breakdown:");
 
-    if (args.size() > 0) {
-        size_t idx = 0;
+    // if (args.size() > 0) {
+    //     size_t idx = 0;
 
-        // First arg is num_regions_to_clear
-        log_info(tt::LogTest, "  num_regions_to_clear: {}", args[idx++]);
-        uint32_t num_regions = args[0];
+    //     // First arg is num_regions_to_clear
+    //     log_info(tt::LogTest, "  num_regions_to_clear: {}", args[idx++]);
+    //     uint32_t num_regions = args[0];
 
-        // Next are address/size pairs for regions to clear
-        for (uint32_t i = 0; i < num_regions && idx + 1 < args.size(); ++i) {
-            log_info(tt::LogTest, "  region[{}]_address: {}", i, args[idx++]);
-            log_info(tt::LogTest, "  region[{}]_size: {}", i, args[idx++]);
-        }
+    //     // Next are address/size pairs for regions to clear
+    //     for (uint32_t i = 0; i < num_regions && idx + 1 < args.size(); ++i) {
+    //         log_info(tt::LogTest, "  region[{}]_address: {}", i, args[idx++]);
+    //         log_info(tt::LogTest, "  region[{}]_size: {}", i, args[idx++]);
+    //     }
 
-        // Remaining args are from append_fabric_connection_rt_args
-        if (idx < args.size()) {
-            log_info(tt::LogTest, "  fabric_connection_args starting at index {}", idx);
+    //     // Remaining args are from append_fabric_connection_rt_args
+    //     if (idx < args.size()) {
+    //         log_info(tt::LogTest, "  fabric_connection_args starting at index {}", idx);
 
-            // Based on append_worker_to_fabric_edm_sender_rt_args, these should be:
-            if (idx < args.size()) {
-                log_info(tt::LogTest, "  eth_channel: {}", args[idx++]);
-            }
-            if (idx < args.size()) {
-                log_info(tt::LogTest, "  sender_worker_terminate_semaphore_id: {}", args[idx++]);
-            }
-            if (idx < args.size()) {
-                log_info(tt::LogTest, "  sender_worker_buffer_index_semaphore_id: {}", args[idx++]);
-            }
+    //         // Based on append_worker_to_fabric_edm_sender_rt_args, these should be:
+    //         if (idx < args.size()) {
+    //             log_info(tt::LogTest, "  eth_channel: {}", args[idx++]);
+    //         }
+    //         if (idx < args.size()) {
+    //             log_info(tt::LogTest, "  sender_worker_terminate_semaphore_id: {}", args[idx++]);
+    //         }
+    //         if (idx < args.size()) {
+    //             log_info(tt::LogTest, "  sender_worker_buffer_index_semaphore_id: {}", args[idx++]);
+    //         }
 
-            // Log any remaining args
-            while (idx < args.size()) {
-                log_info(tt::LogTest, "  additional_arg[{}]: {}", idx, args[idx]);
-                idx++;
-            }
-        }
-    }
+    //         // Log any remaining args
+    //         while (idx < args.size()) {
+    //             log_info(tt::LogTest, "  additional_arg[{}]: {}", idx, args[idx]);
+    //             idx++;
+    //         }
+    //     }
+    // }
 
-    log_info(tt::LogTest, "Total runtime args count: {}", args.size());
+    // log_info(tt::LogTest, "Total runtime args count: {}", args.size());
 
     return args;
 }

@@ -2211,6 +2211,8 @@ void ControlPlane::populate_fabric_connection_info(
     connection_info.buffer_size_bytes = edm_config.channel_buffer_size_bytes;
     connection_info.buffer_index_semaphore_id =
         edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
+    // TODO: remove hardcoding, and have a common file between host and device for constants
+    connection_info.worker_free_slots_stream_id = 17;  // sender_channel_0_free_slots_stream_id
 
     // Check if fabric tensix config is enabled, if so populate tensix mux config as well
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
@@ -2246,6 +2248,8 @@ void ControlPlane::populate_fabric_connection_info(
             tensix_config.get_worker_conn_info_base_address(physical_chip_id, eth_channel_id, sender_channel);
         tensix_connection_info.buffer_index_semaphore_id =
             tensix_config.get_buffer_index_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
+        tensix_connection_info.worker_free_slots_stream_id =
+            tensix_config.get_channel_credits_stream_id(physical_chip_id, eth_channel_id, sender_channel);
     }
 }
 

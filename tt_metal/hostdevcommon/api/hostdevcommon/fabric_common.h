@@ -133,9 +133,10 @@ struct fabric_connection_info_t {
     uint32_t edm_worker_location_info_addr;
     uint16_t buffer_size_bytes;
     uint32_t buffer_index_semaphore_id;
+    uint32_t worker_free_slots_stream_id;
 } __attribute__((packed));
 
-static_assert(sizeof(fabric_connection_info_t) == 26, "Struct size mismatch!");
+static_assert(sizeof(fabric_connection_info_t) == 30, "Struct size mismatch!");
 
 struct fabric_aligned_connection_info_t {
     // 16-byte aligned semaphore address for flow control

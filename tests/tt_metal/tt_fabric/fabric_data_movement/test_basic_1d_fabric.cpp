@@ -2189,20 +2189,20 @@ TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) {
     FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
 }
 
-// Test cases using the new Fabric1DMuxFixture to test tensix config with mux
-TEST_F(Fabric1DMuxFixture, TestLinearFabricUnicastNocUnicastWrite1DMux) {
+// Test cases using the new Fabric1DTensixFixture to test tensix config with mux
+TEST_F(Fabric1DTensixFixture, TestLinearFabricUnicastNocUnicastWrite1DMux) {
     FabricUnicastCommon(this, NOC_UNICAST_WRITE);
 }
 
-TEST_F(Fabric1DMuxFixture, TestLinearFabricUnicastNocAtomicInc1DMux) {
+TEST_F(Fabric1DTensixFixture, TestLinearFabricUnicastNocAtomicInc1DMux) {
     FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC);
 }
 
-TEST_F(Fabric1DMuxFixture, TestLinearFabricMulticastNocUnicastWrite1DMux) {
+TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocUnicastWrite1DMux) {
     FabricMulticastCommon(this, NOC_UNICAST_WRITE);
 }
 
-TEST_F(Fabric1DMuxFixture, TestLinearFabricMulticastNocAtomicInc1DMux) {
+TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocAtomicInc1DMux) {
     FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC);
 }
 
