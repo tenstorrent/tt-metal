@@ -13,7 +13,15 @@ padding = [0, 0]
 dilation = [1, 1]
 shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 tensor_shape = (in_n, in_c, in_h, in_w)  # NCHW format
-torch_input = torch.ones(tensor_shape, dtype=torch.bfloat16)
+
+# Create tensor filled with height and width coordinates
+torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+for n in range(in_n):
+    for c in range(in_c):
+        for h in range(in_h):
+            for w in range(in_w):
+                # Fill with height*10 + width to distinguish coordinates
+                torch_input[n, c, h, w] = h * in_w + w
 
 ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
 torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
@@ -50,7 +58,23 @@ ttnn_output, indices = ttnn.max_pool2d(
     return_indices=True,
 )
 
-print("\nOutput with indices:")
-print(ttnn.to_torch(ttnn_output))
-print("Indices:")
-print(ttnn.to_torch(indices))
+print("\nTTNN max pool results:")
+print("Output shape:", ttnn.to_torch(ttnn_output).shape)
+print("Output:\n", ttnn.to_torch(ttnn_output))
+print("Indices shape:", ttnn.to_torch(indices).shape)
+print("Indices:\n", ttnn.to_torch(indices))
+
+# Run PyTorch max pool for reference
+torch_output, torch_indices = torch.nn.functional.max_pool2d(
+    torch_input, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=True
+)
+
+# Reshape torch output to match TTNN format (NCHW -> NHWC)
+torch_output_reshaped = torch_output.permute(0, 2, 3, 1)  # N, H, W, C
+torch_indices_reshaped = torch_indices.permute(0, 2, 3, 1)  # N, H, W, C
+
+print("PyTorch max pool results:")
+print("Output shape:", torch_output_reshaped.shape)
+print("Output:\n", torch_output_reshaped)
+print("Indices shape:", torch_indices_reshaped.shape)
+print("Indices:\n", torch_indices_reshaped)
