@@ -11,9 +11,9 @@ import ttnn
 
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_model import TtDeiTModel
-from models.common.helper_funcs import Linear as TtLinear
-from models.common.utility_functions import (
-    torch_to_tt_tensor_rm,
+from models.helper_funcs import Linear as TtLinear
+from models.utility_functions import (
+    torch_to_tt_tensor_tile,
     tt_to_torch_tensor,
 )
 
@@ -33,11 +33,11 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
             use_mask_token=False,
         )
 
-        cls_c_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}cls_classifier.weight"], device)
-        cls_c_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}cls_classifier.bias"], device)
+        cls_c_weight = torch_to_tt_tensor_tile(state_dict[f"{base_address}cls_classifier.weight"], device)
+        cls_c_bias = torch_to_tt_tensor_tile(state_dict[f"{base_address}cls_classifier.bias"], device)
 
-        dc_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}distillation_classifier.weight"], device)
-        dc_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}distillation_classifier.bias"], device)
+        dc_weight = torch_to_tt_tensor_tile(state_dict[f"{base_address}distillation_classifier.weight"], device)
+        dc_bias = torch_to_tt_tensor_tile(state_dict[f"{base_address}distillation_classifier.bias"], device)
 
         # Classifier heads
         self.cls_classifier = TtLinear(config.hidden_size, config.num_labels, cls_c_weight, cls_c_bias)
@@ -45,7 +45,7 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[ttnnr.Tensor] = None,
+        pixel_values: Optional[ttnn.Tensor] = None,
         head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -66,15 +66,15 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
 
         # move to cpu (no slicing fallbacks yet)
         sequence_output = tt_to_torch_tensor(sequence_output)
-        cls_classifier_input = torch_to_tt_tensor_rm(sequence_output[:, :, 0, :], self.device)
-        distillation_classifier_input = torch_to_tt_tensor_rm(sequence_output[:, :, 1, :], self.device)
+        cls_classifier_input = torch_to_tt_tensor_tile(sequence_output[:, :, 0, :], self.device)
+        distillation_classifier_input = torch_to_tt_tensor_tile(sequence_output[:, :, 1, :], self.device)
 
         cls_logits = self.cls_classifier(cls_classifier_input)
         distillation_logits = self.distillation_classifier(distillation_classifier_input)
 
         # during inference, return the average of both classifier predictions
         logits = ttnn.add(cls_logits, distillation_logits)
-        half = ttnn.full(logits.padded_shape, 0.5)
+        half = ttnn.full(logits.shape, 0.5, device=self.device, layout=ttnn.TILE_LAYOUT)
         logits = ttnn.mul(logits, half)
 
         # if not return_dict:
@@ -94,7 +94,7 @@ def _deit_for_image_classification_with_teacher(
 def deit_for_image_classification_with_teacher(
     device,
 ) -> TtDeiTForImageClassificationWithTeacher:
-    torch_model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    torch_model = DeiTForImageClassificationWithTeacher.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1")
     config = torch_model.config
     state_dict = torch_model.state_dict()
     tt_model = _deit_for_image_classification_with_teacher(device=device, config=config, state_dict=state_dict)

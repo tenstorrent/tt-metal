@@ -29,11 +29,11 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
 
     image = hf_cat_image_sample_input
 
-    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
-    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    image_processor = AutoImageProcessor.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1")
+    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1")
     inputs = image_processor(image, return_tensors="pt")
 
-    tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
+    tt_inputs = torch_to_tt_tensor_tile(inputs["pixel_values"], device)
     tt_model = deit_for_image_classification_with_teacher(device)
 
     with torch.no_grad():

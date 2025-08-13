@@ -12,7 +12,7 @@ from models.experimental.deit.tt.deit_embeddings import DeiTEmbeddings
 from models.experimental.deit.tt.deit_encoder import TtDeiTEncoder
 from models.experimental.deit.tt.deit_pooler import TtDeiTPooler
 from tt_lib.fallback_ops import fallback_ops
-from models.common.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_tile
 
 
 class TtDeiTModel(nn.Module):
@@ -81,7 +81,7 @@ class TtDeiTModel(nn.Module):
             pixel_values = pixel_values.to(expected_dtype)
 
         embedding_output = self.embeddings(pixel_values, bool_masked_pos=bool_masked_pos)
-        embedding_output = torch_to_tt_tensor_rm(embedding_output, self.device)
+        embedding_output = torch_to_tt_tensor_tile(embedding_output, self.device)
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -92,6 +92,7 @@ class TtDeiTModel(nn.Module):
         )
         sequence_output = encoder_outputs[0]
         sequence_output = self.layernorm(sequence_output)
+        sequence_output = ttnn.to_layout(sequence_output,ttnn.TILE_LAYOUT)
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         head_outputs = (sequence_output, pooled_output) if pooled_output is not None else (sequence_output,)
