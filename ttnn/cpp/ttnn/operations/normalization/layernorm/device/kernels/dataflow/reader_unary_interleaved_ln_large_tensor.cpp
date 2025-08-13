@@ -8,7 +8,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 template <bool DRAM, uint32_t tile_hw = 1024>
-void read_row_to_cb(
+void read_block_to_cb(
     const uint32_t cb_id,
     const InterleavedAddrGenFast<DRAM, tile_hw>& addr,
     const uint32_t tile_bytes,
@@ -45,6 +45,7 @@ void kernel_main() {
     constexpr bool gamma_is_dram = get_compile_time_arg_val(2) == 1;
     constexpr bool beta_is_dram = get_compile_time_arg_val(3) == 1;
     constexpr uint32_t blk = get_compile_time_arg_val(4);  // needed for correctness of softmax/LN kernels
+    constexpr bool fuse_pre_add = static_cast<bool>(get_compile_time_arg_val(5));
 
     const InterleavedAddrGenFast<src0_is_dram> src_a = {
         .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
@@ -80,42 +81,33 @@ void kernel_main() {
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-#ifndef RMSNORM
-        // Data for Calculating E[X] and Var[X] using Welford's algorithm
+        // First pass
+        // Layernorm: Calculate E[x] and Var[x]
+        // RMS norm: Calculate (∑x^2)/n
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
-        }  // wt loop
-#ifdef FUSE_PRE_ADD
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
-        }
-#endif
-#endif
-
-        // Data for x - E[x] (or (∑x^2)/n for RMS norm)
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
-#ifdef FUSE_PRE_ADD
-            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
-#endif
+            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            if constexpr (fuse_pre_add) {
+                read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            }
         }  // wt loop
 
-        // Data for calculating the final value
+        // Second pass
+        // Calculate final output
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
-#ifdef FUSE_PRE_ADD
-            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
-#endif
+            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            if constexpr (fuse_pre_add) {
+                read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            }
 #ifdef FUSE_GAMMA
-                {
-                    read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
-                }
+            {
+                read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
+            }
 #endif
 
 #ifdef FUSE_BETA
-                {
-                    read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
-                }
+            {
+                read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
+            }
 #endif
         }  // wt loop
         offs += Wt;
