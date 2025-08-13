@@ -16,6 +16,8 @@ from models.demos.t3000.llama2_70b.demo.demo import build_generator, construct_a
 from models.demos.t3000.llama2_70b.demo.eval import calculate_perplexity, wikitext_detokenizer
 from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
 
+LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+
 
 @dataclass
 class EvalDataArgs:
@@ -167,6 +169,9 @@ def test_LlamaModel_demo(
     llama_version,
 ):
     logger.info("Running LlamaModel perplexity test")
+
+    if implementation == "tt" and n_devices > 1:
+        pytest.skip(LEGACY_SKIP)
     ## Get model config
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
