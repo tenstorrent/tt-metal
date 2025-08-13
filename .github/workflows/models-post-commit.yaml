@@ -32,7 +32,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: model},
+          {name: model, cmd: "run_python_model_tests_${{ inputs.arch }} run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}"},
+          {name: development model, cmd: "run_python_development_model_tests_${{ inputs.arch }}"}
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
@@ -68,8 +69,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           source tests/scripts/run_python_model_tests.sh
-          run_python_model_tests_${{ inputs.arch }}
-          run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
