@@ -253,6 +253,7 @@ void DevicePool::initialize(
     _inst->using_fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
 
     std::vector<chip_id_t> device_ids_to_open = device_ids;
+    _inst->add_devices_to_pool(device_ids_to_open);
     // Never skip for TG Cluster
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     bool skip = !is_galaxy;
@@ -330,7 +331,6 @@ void DevicePool::initialize(
 
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
-    _inst->add_devices_to_pool(device_ids_to_open);
     _inst->init_firmware_on_active_devices();
 }
 
@@ -770,6 +770,8 @@ bool DevicePool::close_device(chip_id_t device_id) {
 bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     ZoneScoped;
 
+    log_info(tt::LogTest, "close_devices ");
+
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
@@ -797,6 +799,8 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         mmio_devices_to_close.insert(mmio_device_id);
     }
 
+    log_info(tt::LogTest, "Synchronize ");
+
     // Global Sync across all devices that are being closed
     // We need to ensure that commands sent to each device have been completed
     // before closing any device + modifying routing info.
@@ -813,6 +817,8 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
             Synchronize(dev);    // Synchronize device
         }
     }
+
+    log_info(tt::LogTest, "ReadDeviceProfilerResults ");
 
     // TODO(MO): Remove when legacy non-mesh device is removed
     for (const chip_id_t device_id : devices_to_close) {
@@ -846,6 +852,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(dev_id);
     }
 
+    log_info(tt::LogTest, "Terminate fabric routers ");
     // Terminate fabric routers
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
@@ -853,6 +860,47 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         const auto& fabric_context = control_plane.get_fabric_context();
         auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();
         std::vector<uint32_t> termination_signal(1, signal);
+
+        // Terminate fabric tensix configs (mux cores) if enabled
+        bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                     tt::tt_fabric::FabricTensixConfig::DISABLED;
+        if (tensix_config_enabled) {
+            const auto& tensix_config = fabric_context.get_fabric_tensix_config();
+
+            for (const auto& dev : this->get_all_active_devices()) {
+                if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                    continue;
+                }
+
+                // Get fabric node ID to access active ethernet channels
+                const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+                const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
+                const auto& active_fabric_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+                // Loop through all active eth channels and send termination signals to mux cores
+                for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                    auto risc_id = tensix_config.get_risc_id_for_channel(dev->id(), eth_chan_id);
+
+                    auto [tensix_termination_address, tensix_signal] =
+                        fabric_context.get_fabric_tensix_termination_address_and_signal(risc_id);
+                    std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
+                    auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
+
+                    log_info(
+                        tt::LogTest,
+                        "terminate mux on dev {}, eth_chan {}, with address {}",
+                        dev->id(),
+                        eth_chan_id,
+                        tensix_termination_address);
+
+                    tt_metal::detail::WriteToDeviceL1(
+                        dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
+                }
+
+                // L1 barrier to ensure all termination signals are delivered
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(dev->id());
+            }
+        }
 
         for (const auto& dev : this->get_all_active_devices()) {
             if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
