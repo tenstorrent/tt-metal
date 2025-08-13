@@ -40,9 +40,8 @@ void MAIN {
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; ++tile_row_id) {
                     tile_regs_acquire();
                     for (uint32_t kt = 0; kt < Kt; ++kt) {
-                        if (tile_row_id == 0) {
-                            cb_wait_front(cb_in0, kt + 1);
-                        }
+                        cb_wait_front(cb_in0, kt + 1);
+
                         cb_wait_front(cb_in1, onetile);
 
                         matmul_tiles(cb_in0, cb_in1, kt, 0, 0, transpose_hw);
@@ -63,10 +62,11 @@ void MAIN {
                     untilize_init(cb_intermed0);
                     cb_reserve_back(cb_intermed1, onetile);
                     untilize_block(cb_intermed0, onetile, cb_intermed1);
+                    untilize_uninit(cb_intermed0);
+
                     cb_push_back(cb_intermed1, onetile);
 
                     cb_pop_front(cb_intermed0, onetile);
-                    untilize_uninit(cb_intermed0);
 
                     reconfig_data_format_srca(cb_intermed0, cb_in1);
                     mm_init_short(cb_in0, cb_in1, transpose_hw);
@@ -74,9 +74,10 @@ void MAIN {
                 cb_pop_front(cb_in0, Kt);
 
                 // cb_intermed2 comes from reader; untilized row-major tile
-                pack_reconfig_data_format(cb_intermed1, out_cb_id);
                 cb_wait_front(cb_intermed2, onetile);
                 cb_reserve_back(out_cb_id, onetile);
+
+                pack_reconfig_data_format(cb_intermed1, out_cb_id);
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
                 tilize_init_short_with_dt(cb_in1, cb_intermed2, onetile, out_cb_id);
