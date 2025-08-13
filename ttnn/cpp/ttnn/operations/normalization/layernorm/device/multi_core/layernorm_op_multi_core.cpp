@@ -346,10 +346,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-#ifdef LAYERNORM_WELFORD
-    std::vector<uint32_t> compute_args = {
-        Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en, W, ttnn::types::TILE_SIZE};
-#else
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
     if (use_welford) {
         compute_args.push_back(W);
