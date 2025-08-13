@@ -3,16 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
-import os
-
-import torch
-from datasets import load_dataset
-from PIL import Image
-from tqdm import tqdm
-
-from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
-
-
 import math
 import os
 import time
@@ -24,9 +14,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision
+from datasets import load_dataset
 from loguru import logger
+from PIL import Image
+from torchvision import transforms
+from tqdm import tqdm
 
 import ttnn
+from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
 
 
 def load_coco_class_names():
@@ -447,6 +442,8 @@ def attempt_load(weights, map_location=None):
         for k in ["names", "stride"]:
             setattr(model, k, getattr(model[-1], k))
         return model
+
+
 class InputExample(object):
     def __init__(self, image, label=None):
         self.image = image
@@ -466,7 +463,7 @@ def get_label(image_path):
     return label
 
 
-def get_batch(data_loader, image_processor):
+def get_batch(data_loader, resolution=224):
     loaded_images = next(data_loader)
     images = None
     labels = []
@@ -475,8 +472,21 @@ def get_batch(data_loader, image_processor):
         labels.append(image.label)
         if img.mode == "L":
             img = img.convert(mode="RGB")
-        img = image_processor(img, return_tensors="pt")
-        img = img["pixel_values"]
+
+        transform = transforms.Compose(
+            [
+                transforms.Resize(resolution),
+                transforms.CenterCrop(resolution),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),  # Normalize with ImageNet mean and std
+            ]
+        )
+        img = transform(img)
+        img = torch.unsqueeze(img, 0)
+        # img = image_processor(img, return_tensors="pt")
+        # img = img["pixel_values"]
 
         if images is None:
             images = img
