@@ -71,7 +71,7 @@ void kernel_main() {
         .bank_base_address = l1_read_addr, .page_size = page_size, .data_format = DataFormat::Float16_b};
 
     for (uint32_t i = 0; i < iteration; i ++) {
-        uint32_t noc = (i % 2) == 0 ? noc_index : 1-noc_index;
+        constexpr uint32_t noc = (i % 2) == 0 ? noc_index : 1 - noc_index;
 
         // uint32_t noc = noc_index;
         uint64_t noc_addr = get_noc_addr(noc_x, noc_y, l1_read_addr, noc);
@@ -84,31 +84,29 @@ void kernel_main() {
 
         // Test semaphore
         noc_semaphore_inc(noc_addr, 1, noc);
-        noc_semaphore_set_remote(l1_read_addr, noc_addr, noc);
+        noc_semaphore_set_remote<noc>(l1_read_addr, noc_addr);
 
         // Test write
-        noc_async_write(l1_read_addr, noc_addr, page_size, noc);
-        noc_async_write_one_packet(l1_read_addr, noc_addr, page_size, noc);
+        noc_async_write<noc>(l1_read_addr, noc_addr, page_size);
+        noc_async_write_one_packet<noc>(l1_read_addr, noc_addr, page_size);
         // interleaved write
         noc_async_write_tile(i % 1024, s0, l1_read_addr, noc);
 
         // Test mcast
         if (mcast) {
             // write mcast
-            noc_async_write_multicast_one_packet(
+            noc_async_write_multicast_one_packet<noc>(
                 l1_read_addr,
                 noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
                 page_size,
                 num_dests - 1,
-                false,
-                noc);
-            noc_async_write_multicast(
+                false);
+            noc_async_write_multicast<noc>(
                 l1_read_addr,
                 noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
                 page_size,
                 num_dests - 1,
-                false,
-                noc);
+                false);
             noc_async_write_multicast_loopback_src(
                 l1_read_addr,
                 noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
@@ -117,8 +115,8 @@ void kernel_main() {
                 false,
                 noc);
             // semaphore mcast
-            noc_semaphore_set_multicast(
-                l1_read_addr, noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc, num_dests - 1, false, noc);
+            noc_semaphore_set_multicast<noc>(
+                l1_read_addr, noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc, num_dests - 1, false);
             noc_semaphore_set_multicast_loopback_src(
                 l1_read_addr, noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc, num_dests, false, noc);
         }

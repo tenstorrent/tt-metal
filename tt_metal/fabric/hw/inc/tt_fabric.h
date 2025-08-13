@@ -587,8 +587,7 @@ struct fvc_inbound_push_state_t {
                 get_noc_addr_helper(dest_addr, remote_buffer_slot_start[remote_wrptr[remote_wrptr_direction]]);
             // Instead of sending the packet size (packet_words_remaining * PACKET_WORD_SIZE_BYTES) which
             // may be less than the full slot, send the full slot.
-            noc_async_write_one_packet(
-                get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE, noc_index);
+            noc_async_write_one_packet(get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
             advance_remote_wrptr(1, remote_wrptr_direction);
             advance_out_rdptr<fvc_mode>(1);
             uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
@@ -758,8 +757,7 @@ struct fvc_inbound_push_state_t {
             get_noc_addr_helper(dest_addr, remote_buffer_slot_start[remote_wrptr[remote_wrptr_direction]]);
         // Instead of sending the packet size (packet_words_remaining * PACKET_WORD_SIZE_BYTES) which
         // may be less than the full slot, send the full slot.
-        noc_async_write_one_packet(
-            get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE, noc_index);
+        noc_async_write_one_packet(get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
         advance_remote_wrptr(1);
         advance_out_rdptr<fvc_mode>(1);
         uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);

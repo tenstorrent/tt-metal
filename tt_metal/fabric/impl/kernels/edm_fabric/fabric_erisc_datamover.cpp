@@ -355,12 +355,8 @@ struct PacketHeaderRecorder {
 
     void record_packet_header(volatile uint32_t* packet_header_ptr) {
         uint32_t dest_l1_addr = (uint32_t)buffer_ptr + buffer_index * sizeof(PACKET_HEADER_TYPE);
-        noc_async_write(
-            (uint32_t)packet_header_ptr,
-            get_noc_addr(my_x[0], my_y[0], dest_l1_addr),
-            sizeof(PACKET_HEADER_TYPE),
-            1 - noc_index  // avoid the contention on main noc
-        );
+        noc_async_write<1 - noc_index>(
+            (uint32_t)packet_header_ptr, get_noc_addr(my_x[0], my_y[0], dest_l1_addr), sizeof(PACKET_HEADER_TYPE));
         buffer_index++;
         if (buffer_index == buffer_n_headers) {
             buffer_index = 0;

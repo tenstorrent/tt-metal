@@ -174,9 +174,8 @@ inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_f
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
+template <uint32_t noc = NOC_0, uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
-    uint32_t noc,
     uint32_t cmd_buf,
     uint32_t src_addr,
     uint64_t dest_addr,
@@ -493,9 +492,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
+template <uint32_t noc = NOC_0, uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
-    uint32_t noc,
     uint32_t cmd_buf,
     uint32_t src_addr,
     uint64_t dest_addr,
@@ -510,8 +508,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     if constexpr (!one_packet) {
         while (len_bytes > NOC_MAX_BURST_SIZE) {
             while (!noc_cmd_buf_ready(noc, cmd_buf));
-            ncrisc_noc_fast_write<noc_mode, use_trid>(
-                noc,
+            ncrisc_noc_fast_write<noc, noc_mode, use_trid>(
                 cmd_buf,
                 src_addr,
                 dest_addr,
@@ -529,19 +526,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
         }
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_write<noc_mode, use_trid>(
-        noc,
-        cmd_buf,
-        src_addr,
-        dest_addr,
-        len_bytes,
-        vc,
-        mcast,
-        linked,
-        num_dests,
-        multicast_path_reserve,
-        posted,
-        trid);
+    ncrisc_noc_fast_write<noc, noc_mode, use_trid>(
+        cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve, posted, trid);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>

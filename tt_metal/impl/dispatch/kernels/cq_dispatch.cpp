@@ -586,7 +586,7 @@ void process_write_paged(uint32_t& block_noc_writes_to_clear, uint32_t block_nex
         xfer_size = xfer_size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : xfer_size;
         uint64_t dst = addr_gen.get_noc_addr(page_id, dst_addr_offset);
 
-        noc_async_write<NOC_MAX_BURST_SIZE>(data_ptr, dst, xfer_size);
+        noc_async_write<noc_index, NOC_MAX_BURST_SIZE>(data_ptr, dst, xfer_size);
         // If paged write is not completed for a page (dispatch_cb_page_size < page_size) then add offset, otherwise
         // incr page_id.
         if (xfer_size < remaining_page_size) {

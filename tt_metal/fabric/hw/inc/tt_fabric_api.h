@@ -515,11 +515,11 @@ inline void fabric_async_write_push_data(
         (client_interface->buffer_start + (client_interface->wr_ptr * FABRIC_ROUTER_BUF_SLOT_SIZE)));
     if constexpr (data_mode == ClientDataMode::RAW_DATA) {
         // In raw mode, pick up the header from header buffer in client interface.
-        noc_async_write_one_packet((uint32_t)header, buffer_wr_addr, PACKET_HEADER_SIZE_BYTES, noc_index);
+        noc_async_write_one_packet((uint32_t)header, buffer_wr_addr, PACKET_HEADER_SIZE_BYTES);
         buffer_wr_addr += PACKET_HEADER_SIZE_BYTES;
         size -= PACKET_HEADER_SIZE_BYTES;
     }
-    noc_async_write_one_packet(src_addr, buffer_wr_addr, size, noc_index);
+    noc_async_write_one_packet(src_addr, buffer_wr_addr, size);
     noc_inline_dw_write<InlineWriteDst::DEFAULT>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
     client_interface->wr_ptr++;
     *(volatile uint32_t*)client_interface->update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;

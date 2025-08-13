@@ -26,7 +26,7 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_async_write(l1_local_write_addr, dst_noc_write_addr, bytes_per_transaction, noc_index, write_vc);
+            noc_async_write(l1_local_write_addr, dst_noc_write_addr, bytes_per_transaction, write_vc);
             noc_async_read(dst_noc_read_addr, l1_local_read_addr, bytes_per_transaction);
         }
         noc_async_write_barrier();
