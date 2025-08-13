@@ -4,7 +4,7 @@
             "prefill_pcc": 0.9174011812353029,
             "decode_pcc": 0.9558788865391203,
             "throughput": 59.87,
-            "absolute_margin": 1.0,
+            "absolute_margin": 2.0,
             "token_pos": 127
         }
     },
