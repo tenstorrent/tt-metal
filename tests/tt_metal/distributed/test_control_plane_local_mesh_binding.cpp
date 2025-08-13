@@ -107,9 +107,7 @@ protected:
 
 TEST_F(ControlPlaneLocalMeshBinding, NoEnvironmentVariables) {
     auto chip_mapping = get_dual_host_chip_mapping();
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
-    EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
-    EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
+    EXPECT_ANY_THROW(std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping));
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, WithEnvironmentVariables) {
@@ -158,6 +156,7 @@ TEST_F(ControlPlaneLocalMeshBinding, PartialEnvironmentVariables) {
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, GetPhysicalMeshShapeWithScopeDualHost) {
+    ScopedMeshBinding env_guard(/*mesh_id*/ 0u, /*host_rank*/ 0u);
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
     auto global_shape = control_plane->get_physical_mesh_shape(MeshId{0}, MeshScope::GLOBAL);
@@ -174,6 +173,7 @@ TEST_F(ControlPlaneLocalMeshBinding, GetPhysicalMeshShapeWithScopeDualHost) {
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, GetCoordRangeWithScopeDualHost) {
+    ScopedMeshBinding env_guard(/*mesh_id*/ 0u, /*host_rank*/ 0u);
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
 
@@ -195,6 +195,7 @@ TEST_F(ControlPlaneLocalMeshBinding, GetCoordRangeWithScopeDualHost) {
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, InvalidMeshId) {
+    ScopedMeshBinding env_guard(/*mesh_id*/ 0u, /*host_rank*/ 0u);
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
@@ -203,6 +204,7 @@ TEST_F(ControlPlaneLocalMeshBinding, InvalidMeshId) {
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, LocalMeshScopeQueryWithoutExplicitBinding) {
+    ScopedMeshBinding env_guard(/*mesh_id*/ 0u, /*host_rank*/ 0u);
     auto chip_mapping = get_dual_host_chip_mapping();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
     EXPECT_EQ(control_plane->get_local_mesh_id_bindings()[0], MeshId{0});
@@ -281,62 +283,6 @@ INSTANTIATE_TEST_SUITE_P(
             MeshCoordinate(1, 3),  // End at (1,3)
             "HostRank1"}),
     [](const testing::TestParamInfo<MeshScopeTestParams>& info) { return info.param.test_name; });
-
-// Test case to verify LocalMeshBinding is inferred from MPI rank when env vars are not set
-TEST_F(ControlPlaneLocalMeshBinding, InferLocalBindingFromMPIRank) {
-    // Create a multi-mesh configuration with different host ranks
-    std::string mesh_desc = R"yaml(ChipSpec: {
-  arch: wormhole_b0,
-  ethernet_ports: {
-    N: 2,
-    E: 2,
-    S: 2,
-    W: 2,
-  }
-}
-
-Board: [
-  { name: SingleChip,
-    type: Mesh,
-    topology: [1, 1]}
-]
-
-Mesh: [
-{
-  id: 0,
-  board: SingleChip,
-  device_topology: [1, 1],
-  host_topology: [1, 1],
-  host_ranks: [[0]]},
-{
-  id: 1,
-  board: SingleChip,
-  device_topology: [1, 1],
-  host_topology: [1, 1],
-  host_ranks: [[1]]}
-]
-
-Graph: []
-)yaml";
-
-    // Create control plane without environment variables
-    auto chip_mapping = get_dual_host_chip_mapping();
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
-
-    // The control plane should have a valid binding inferred from MPI rank
-    auto mesh_binding = control_plane->get_local_mesh_id_bindings()[0];
-    auto host_binding = control_plane->get_local_host_rank_id_binding();
-
-    // We can't predict which mesh/host will be assigned (depends on MPI rank),
-    // but we can verify that a valid binding was established
-    auto mesh_ids = control_plane->get_user_physical_mesh_ids();
-    EXPECT_TRUE(std::find(mesh_ids.begin(), mesh_ids.end(), mesh_binding) != mesh_ids.end())
-        << "Inferred mesh binding should be one of the configured meshes";
-
-    // Verify that mesh operations work with the inferred binding
-    EXPECT_NO_THROW(control_plane->get_physical_mesh_shape(mesh_binding, MeshScope::LOCAL));
-    EXPECT_NO_THROW(control_plane->get_coord_range(mesh_binding, MeshScope::LOCAL));
-}
 
 }  // namespace
 }  // namespace tt::tt_fabric

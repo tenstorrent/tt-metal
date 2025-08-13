@@ -7,7 +7,7 @@ rank_bindings:
 
   - rank: 1
     mesh_id: 1
-    mesh_host_rank: 1
+    mesh_host_rank: 0
     env_overrides:
       TT_METAL_VISIBLE_DEVICES: "3,2"
 

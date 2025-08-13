@@ -435,6 +435,7 @@ void ControlPlane::initialize_distributed_contexts() {
                 mesh_host_ranks->second.end(),
                 std::back_inserter(mpi_neighbors),
                 [](const auto& p) { return p.second.get(); });
+            std::sort(mpi_neighbors.begin(), mpi_neighbors.end());
             distributed_contexts_.emplace(local_mesh_id, global_context->create_sub_context(mpi_neighbors));
         }
     }
