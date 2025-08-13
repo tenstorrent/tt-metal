@@ -489,6 +489,12 @@ tt_fabric::FabricConfig MetalContext::get_fabric_config() const {
     return fabric_config_;
 }
 
+void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
+    fabric_tensix_config_ = fabric_tensix_config;
+}
+
+tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
+
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");

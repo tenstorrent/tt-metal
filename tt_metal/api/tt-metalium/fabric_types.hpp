@@ -15,7 +15,12 @@ enum class FabricConfig : uint32_t {
     FABRIC_2D = 3,          // Instatiates fabric with 2D routing
     FABRIC_2D_TORUS = 4,    // Instatiates fabric with 2D routing and with deadlock avoidance using datelines
     FABRIC_2D_DYNAMIC = 5,  // Instatiates fabric with 2D routing with dynamic routing
-    CUSTOM = 6
+    CUSTOM = 6,
+};
+
+enum class FabricTensixConfig : uint32_t {
+    DISABLED = 0,
+    MUX = 1,
 };
 
 enum class FabricReliabilityMode : uint32_t {

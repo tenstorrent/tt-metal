@@ -86,6 +86,10 @@ public:
     void initialize_fabric_config();
     tt_fabric::FabricConfig get_fabric_config() const;
 
+    // Fabric tensix configuration
+    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
+    tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
+
     distributed::multihost::DistributedContext& get_distributed_context();
 
 private:
@@ -146,6 +150,7 @@ private:
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
