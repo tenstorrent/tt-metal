@@ -142,7 +142,7 @@ void MAIN {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
                 copy_tile(cb_x, j, dst0);
-                welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
+                welford(dst0, dst1, dst2, start_N, W, wt + j + 1 == Wt);
                 start_N += tile_width;
             }
             // we don't pop cb_x until we compute Ex
