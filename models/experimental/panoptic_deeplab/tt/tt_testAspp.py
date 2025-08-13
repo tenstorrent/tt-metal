@@ -13,15 +13,7 @@ from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
 @pytest.mark.parametrize(
     "batch_size, in_channels, out_channels, input_height, input_width, dilations, norm, activation, dropout, pool_kernel_size",
     [
-        # Basic test cases
         (1, 2048, 256, 32, 64, [6, 12, 18], "ln", "relu", 0.0, (32, 64)),
-        # (1, 512, 256, 16, 16, [6, 12, 18], "ln", "relu", 0.0),
-        # (2, 256, 128, 64, 64, [3, 6, 9], "", "relu", 0.0),  # No norm case
-        # # Different dilation patterns
-        # (1, 128, 128, 32, 32, [2, 4, 8], "ln", "relu", 0.0),
-        # (1, 256, 256, 48, 48, [1, 2, 4], "ln", "relu", 0.0),
-        # # Larger input sizes
-        # (1, 256, 256, 128, 128, [6, 12, 18], "ln", "relu", 0.0),
     ],
 )
 def test_ttnn_aspp(
@@ -38,40 +30,32 @@ def test_ttnn_aspp(
     pool_kernel_size,
 ):
     torch.manual_seed(0)
-
-    # My previous weights initialization:
-    # "weight": torch.randn(out_channels, in_channels, kernel_size, kernel_size, dtype=torch.bfloat16),
-
     shared_weight_tensor_kernel1 = torch.randn(out_channels, in_channels, 1, 1, dtype=torch.bfloat16)
     shared_weight_tensor_kernel3 = torch.randn(out_channels, in_channels, 3, 3, dtype=torch.bfloat16)
     shared_weight_tensor_kernel1_output5 = torch.randn(out_channels, 5 * out_channels, 1, 1, dtype=torch.bfloat16)
 
-    # Create input tensor
-    torch_input = torch.randn(batch_size, in_channels, input_height, input_width, dtype=torch.bfloat16)  # NCHW format
+    torch_input = torch.randn(batch_size, in_channels, input_height, input_width, dtype=torch.bfloat16)
 
-    # PyTorch reference model (your PyTorch ASPP implementation)
     torch_model = ASPP(
         in_channels=in_channels,
         out_channels=out_channels,
         dilations=dilations,
         norm="LN" if norm == "ln" else "",
         activation=torch.nn.ReLU() if activation == "relu" else torch.nn.SiLU(),
-        pool_kernel_size=pool_kernel_size,  # Using global pooling
+        pool_kernel_size=pool_kernel_size,
         dropout=dropout,
         shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
         shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
         shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
     )
     torch_model = torch_model.to(dtype=torch.bfloat16)
-    torch_model.eval()  # Set to evaluation mode
+    torch_model.eval()
     torch_output = torch_model(torch_input)
 
-    # Convert to TTNN format (NHWC)
     ttnn_input = ttnn.from_torch(
         torch_input.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    # Create TTNN model
     ttnn_model = TtASPP(
         in_channels=in_channels,
         out_channels=out_channels,
@@ -86,20 +70,15 @@ def test_ttnn_aspp(
         shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
     )
 
-    # Run TTNN model
     ttnn_output = ttnn_model(ttnn_input)
 
-    # Convert back to PyTorch format (NCHW)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
 
-    # Compare outputs
     pcc_passed, pcc_message = assert_with_pcc(torch_output, ttnn_output, pcc=0.95)
+
     print(f"PCC: {pcc_message}")
-
     assert pcc_passed, f"PCC check failed: {pcc_message}"
-
-    # Basic shape check
     assert torch_output.shape == ttnn_output.shape, f"Shape mismatch: {torch_output.shape} vs {ttnn_output.shape}"
 
 
