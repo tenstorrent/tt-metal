@@ -272,11 +272,11 @@ void MAIN {
         REL();
         cb_pop_front(cb_ex2, onetile);
 
-        /* ln(x) * gamma + beta (gamma and beta are optional)
-         * now xmm = (x-E[x])
-         * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
-         * just need to bcast_mul xmm with cb_ex2pe
-         */
+        // Remainder of the layer/RMS norm operation
+        // norm(x) * gamma + beta,
+        // where norm(x) is either:
+        // (x - E[x]) / sqrt(E[(x-E[x])^2] + eps) for layernorm or
+        // x / sqrt((∑x^2)/n + eps)) for rms norm
         cb_wait_front(cb_ex2pe, onetile);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
