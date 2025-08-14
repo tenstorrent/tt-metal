@@ -61,12 +61,14 @@ void kernel_main() {
     const InterleavedAddrGenFast<beta_is_dram> addrb = {
         .bank_base_address = beta_addr, .page_size = beta_tile_bytes, .data_format = beta_data_format};
 #endif
-#ifdef FUSE_PRE_ADD
-    const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const DataFormat src1_data_format = get_dataformat(cb_id_in1);
-    const InterleavedAddrGenFast<src1_is_dram> src_b = {
-        .bank_base_address = b_addr, .page_size = src1_tile_bytes, .data_format = src1_data_format};
-#endif
+
+    uint32_t src1_tile_bytes = fuse_pre_add ? get_tile_size(cb_id_in1) : 0;
+    DataFormat src1_data_format = fuse_pre_add ? get_dataformat(cb_id_in1) : DataFormat::Invalid;
+    InterleavedAddrGenFast<src1_is_dram> src_b =
+        fuse_pre_add
+            ? InterleavedAddrGenFast<
+                  src1_is_dram>{.bank_base_address = b_addr, .page_size = src1_tile_bytes, .data_format = src1_data_format}
+            : InterleavedAddrGenFast<src1_is_dram>{};
 
     // Generate constant tiles for layernorm compute
     {
