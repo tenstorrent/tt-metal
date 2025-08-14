@@ -691,9 +691,10 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
             data = {}
             if ioField == "shape":
                 for field in ["W", "Z", "Y", "X"]:
-                    headers.append(field)
+                    padded_logical_field = field + "_PAD[LOGICAL]"
+                    headers.append(padded_logical_field)
                     assert field in ioData, "Wrong io tensor shape data format"
-                    data[field] = ioData[field]
+                    data[padded_logical_field] = ioData[field]
             elif ioField == "dtype":
                 headers = ["DATATYPE"]
                 data["DATATYPE"] = ioData
