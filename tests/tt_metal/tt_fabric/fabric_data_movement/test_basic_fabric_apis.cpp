@@ -358,6 +358,21 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N6S1E1W) { RunTest2DMCastConn
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_5N1S2E1W) { RunTest2DMCastConnAPI(this, 5, 1, 2, 1); }
 
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N1S0E0W) { RunTest2DMCastConnAPI(this, 0, 1, 0, 0); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N0S0E0W) { RunTest2DMCastConnAPI(this, 1, 0, 0, 0); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N0S1E0W) { RunTest2DMCastConnAPI(this, 0, 0, 1, 0); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N0S0E1W) { RunTest2DMCastConnAPI(this, 0, 0, 0, 1); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N0S1E1W) { RunTest2DMCastConnAPI(this, 0, 0, 1, 1); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N1S0E0W) { RunTest2DMCastConnAPI(this, 1, 1, 0, 0); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N4S0E0W) { RunTest2DMCastConnAPI(this, 0, 4, 0, 0); }
+
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N3W0E0W) { RunTest2DMCastConnAPI(this, 0, 3, 0, 0); }
 // 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
 

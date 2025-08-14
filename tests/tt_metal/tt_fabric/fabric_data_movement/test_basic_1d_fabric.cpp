@@ -1073,10 +1073,6 @@ void RunTest2DMCastConnAPI(
     uint32_t north_branch_west_hops = west_hops;
     uint32_t south_branch_east_hops = east_hops;
     uint32_t south_branch_west_hops = west_hops;
-    if (north_hops > 0 && north_branch_east_hops == 0 && north_branch_west_hops == 0 ||
-        south_hops > 0 && south_branch_east_hops == 0 && south_branch_west_hops == 0) {
-        GTEST_SKIP() << "Need branch hops in atleast one direction from trunk for this test.";
-    }
 
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
@@ -1106,10 +1102,18 @@ void RunTest2DMCastConnAPI(
     chip_id_t src_phys_chip_id;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
 
-    fabric_hops[RoutingDirection::N] = north_hops;
-    fabric_hops[RoutingDirection::S] = south_hops;
-    fabric_hops[RoutingDirection::E] = std::max({north_branch_east_hops, south_branch_east_hops, east_hops});
-    fabric_hops[RoutingDirection::W] = std::max({north_branch_west_hops, south_branch_west_hops, west_hops});
+    if (north_hops > 0) {
+        fabric_hops[RoutingDirection::N] = north_hops;
+    }
+    if (south_hops > 0) {
+        fabric_hops[RoutingDirection::S] = south_hops;
+    }
+    if (east_hops > 0) {
+        fabric_hops[RoutingDirection::E] = std::max({north_branch_east_hops, south_branch_east_hops, east_hops});
+    }
+    if (west_hops > 0) {
+        fabric_hops[RoutingDirection::W] = std::max({north_branch_west_hops, south_branch_west_hops, west_hops});
+    }
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
@@ -1146,8 +1150,12 @@ void RunTest2DMCastConnAPI(
     uint32_t ew_dim = mesh_shape[1];
     auto north_offset = -1;
     auto south_offset = 1;
+    auto north_fabric_node_id = src_fabric_node_id;
+    auto south_fabric_node_id = src_fabric_node_id;
     auto north_east_fabric_node_id = src_fabric_node_id;
     auto north_west_fabric_node_id = src_fabric_node_id;
+    auto north_recv_phys_chip_id = src_phys_chip_id;
+    auto south_recv_phys_chip_id = src_phys_chip_id;
     auto right_recv_phys_chip_id = src_phys_chip_id;
     auto left_recv_phys_chip_id = src_phys_chip_id;
     auto south_east_fabric_node_id = src_fabric_node_id;
@@ -1156,6 +1164,8 @@ void RunTest2DMCastConnAPI(
     auto left_fabric_node_id = src_fabric_node_id;
 
     if(south_hops > 0){
+        south_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::S][south_hops - 1];
+        south_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(south_fabric_node_id);
         if(south_branch_east_hops > 0){
             south_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][south_branch_east_hops - 1];
             south_east_fabric_node_id.chip_id += south_offset * ew_dim;
@@ -1168,6 +1178,8 @@ void RunTest2DMCastConnAPI(
         }
     }
     if(north_hops > 0){
+        north_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::N].at(0);
+        north_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_fabric_node_id);
         if(north_branch_east_hops > 0){
             north_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][north_branch_east_hops - 1];
             north_east_fabric_node_id.chip_id += north_offset * ew_dim;
@@ -1182,9 +1194,11 @@ void RunTest2DMCastConnAPI(
 
     if (east_hops > 0) {
         right_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][east_hops - 1];
+        right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(right_fabric_node_id);
     }
     if (west_hops > 0) {
         left_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][west_hops - 1];
+        left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(left_fabric_node_id);
     }
 
     std::vector<uint32_t> rx_physical_device_ids;
@@ -1286,22 +1300,34 @@ void RunTest2DMCastConnAPI(
         left_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Left Direct Dst Device is {} hops in direction : RoutingDirection::W", west_hops);
 
+    auto dst_recv_phys_chip_id = left_recv_phys_chip_id;
+    if (dst_recv_phys_chip_id == src_phys_chip_id) {
+        dst_recv_phys_chip_id = right_recv_phys_chip_id;
+    }
+    if (dst_recv_phys_chip_id == src_phys_chip_id) {
+        dst_recv_phys_chip_id = north_recv_phys_chip_id;
+    }
+    if (dst_recv_phys_chip_id == src_phys_chip_id) {
+        dst_recv_phys_chip_id = south_recv_phys_chip_id;
+    }
+    if (dst_recv_phys_chip_id == src_phys_chip_id) {
+        GTEST_SKIP() << "No dst chip id found";
+    }
+
     auto* sender_device = DevicePool::instance().get_active_device(src_phys_chip_id);
-    auto* left_recv_device = DevicePool::instance().get_active_device(left_recv_phys_chip_id);
+    auto* dst_recv_device = DevicePool::instance().get_active_device(dst_recv_phys_chip_id);
 
     CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
+    CoreCoord receiver_virtual_core = dst_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
     // test parameters
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-
     uint32_t mcast_mode;
     auto arbitrary_fabric_node_id = src_fabric_node_id;
     if(north_hops > 0 && south_hops > 0){
@@ -1317,18 +1343,26 @@ void RunTest2DMCastConnAPI(
         mcast_mode = 2;
         if(south_branch_west_hops > 0){
             arbitrary_fabric_node_id = south_west_fabric_node_id;
-        }
-        else{
+        } else if (south_branch_east_hops > 0) {
             arbitrary_fabric_node_id = south_east_fabric_node_id;
+        } else {
+            arbitrary_fabric_node_id = south_fabric_node_id;
         }
-    }
-    else{
+    } else if (north_hops > 0) {
         mcast_mode = 1;
         if(north_branch_east_hops > 0){
             arbitrary_fabric_node_id = north_east_fabric_node_id;
-        }
-        else{
+        } else if (north_branch_west_hops > 0) {
             arbitrary_fabric_node_id = north_west_fabric_node_id;
+        } else {
+            arbitrary_fabric_node_id = north_fabric_node_id;
+        }
+    } else {
+        mcast_mode = 0;
+        if (east_hops > 0) {
+            arbitrary_fabric_node_id = right_fabric_node_id;
+        } else {
+            arbitrary_fabric_node_id = left_fabric_node_id;
         }
     }
     // common compile time args for sender and receiver
@@ -1377,11 +1411,19 @@ void RunTest2DMCastConnAPI(
             link_idx = get_forwarding_link_indices(src_fabric_node_id, north_east_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, north_east_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-        }
-        else{
+        } else if (north_branch_west_hops) {
             link_idx = get_forwarding_link_indices(src_fabric_node_id, north_west_fabric_node_id)[0];
             append_fabric_connection_rt_args(
                 src_fabric_node_id, north_west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        } else {
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_fabric_node_id)[0];
+            append_fabric_connection_rt_args(
+                src_fabric_node_id,
+                north_fabric_node_id,
+                link_idx,
+                sender_program,
+                {sender_logical_core},
+                sender_runtime_args);
         }
     }
     else{
@@ -1397,11 +1439,19 @@ void RunTest2DMCastConnAPI(
             link_idx = get_forwarding_link_indices(src_fabric_node_id, south_west_fabric_node_id)[0];
         append_fabric_connection_rt_args(
             src_fabric_node_id, south_west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-        }
-        else{
+        } else if (south_branch_east_hops > 0) {
             link_idx = get_forwarding_link_indices(src_fabric_node_id, south_east_fabric_node_id)[0];
             append_fabric_connection_rt_args(
                 src_fabric_node_id, south_east_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        } else {
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_fabric_node_id)[0];
+            append_fabric_connection_rt_args(
+                src_fabric_node_id,
+                south_fabric_node_id,
+                link_idx,
+                sender_program,
+                {sender_logical_core},
+                sender_runtime_args);
         }
     }
     else{
@@ -1430,7 +1480,6 @@ void RunTest2DMCastConnAPI(
         append_fabric_connection_rt_args(
         src_fabric_node_id, arbitrary_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
     }
-
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
@@ -1454,7 +1503,6 @@ void RunTest2DMCastConnAPI(
         receiver_programs.push_back(std::move(receiver_program));
         log_info(tt::LogTest, "Rx Launched on physical device {}", physical_end_device_id);
     }
-
     // Launch sender program and wait for sender to finish
     fixture->RunProgramNonblocking(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
