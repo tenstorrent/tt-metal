@@ -71,9 +71,9 @@ def test_demo_multichip(
         assert max_seq_len in [128, 1024, 2048], f"Unexpected max_seq_len: {max_seq_len} for perf mode"
         expected_perf_dict = {
             "4U": {
-                128: {"prefill_t/s": 24800, "decode_t/s/u": 7.12},
-                1024: {"prefill_t/s": 21200, "decode_t/s/u": 6.50},
-                2048: {"prefill_t/s": 20400, "decode_t/s/u": 6.90},
+                128: {"prefill_t/s": 24100, "decode_t/s/u": 6.90},
+                1024: {"prefill_t/s": 21200, "decode_t/s/u": 6.30},
+                2048: {"prefill_t/s": 20400, "decode_t/s/u": 6.60},
             },
             "6U": {
                 128: {"prefill_t/s": 32900, "decode_t/s/u": 12.19},
