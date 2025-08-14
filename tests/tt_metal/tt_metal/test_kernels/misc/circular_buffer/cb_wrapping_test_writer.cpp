@@ -16,82 +16,82 @@ using namespace tt;
  * The CB holds 64 pages (2 steps).
  */
 
-static constexpr auto cb_id = tt::CBIndex::c_0;
-static constexpr auto cb_step_size = 32;
+static constexpr auto CB_ID = tt::CBIndex::c_0;
+static constexpr std::size_t CB_STEP_SIZE = 32;
 
-static constexpr uint32_t page_size_bytes = 16;
-static constexpr uint32_t page_size = page_size_bytes / sizeof(std::uint32_t);
+using DataT = std::uint32_t;
+static constexpr std::size_t PAGE_SIZE_BYTES = 16;
+static constexpr std::size_t PAGE_SIZE = PAGE_SIZE_BYTES / sizeof(DataT);
 
-static constexpr uint32_t CHURN_TARGET = (0x10000 - 2 * cb_step_size);
-static constexpr uint32_t CHURN_LOOP_COUNT = CHURN_TARGET / cb_step_size;
+static constexpr std::size_t CHURN_TARGET = (0x10000 - 2 * CB_STEP_SIZE);
+static constexpr std::size_t CHURN_LOOP_COUNT = CHURN_TARGET / CB_STEP_SIZE;
 
 // Values we write to the churn pages.
-static constexpr uint32_t CHURN_LOOP_VALUE = 0xFFFF;
+static constexpr DataT CHURN_LOOP_VALUE = 0xFFFF;
 // Values we write to the areas that could be overwritten by incorrect reserve calls.
-static constexpr uint32_t WRAP_WRITE_VALUE = 0xAAAA;
+static constexpr DataT WRAP_WRITE_VALUE = 0xAAAA;
 // Values used to overwrite the buffer in the last few pages.
-static constexpr uint32_t WRITE_OVER_VALUE = 0xBBBB;
+static constexpr DataT WRITE_OVER_VALUE = 0xBBBB;
 
-void fill_page(uint32_t value) {
-    static constexpr uint32_t wr_ptr_page_shift = 4;
+void fill_page(DataT value) {
+    static constexpr auto wr_ptr_page_shift = 4;
 
-    auto ptr = (get_local_cb_interface(cb_id).fifo_wr_ptr) << wr_ptr_page_shift;
-    auto page_start = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(ptr);
-    std::fill(page_start, page_start + page_size, value);
+    auto ptr = (get_local_cb_interface(CB_ID).fifo_wr_ptr) << wr_ptr_page_shift;
+    auto page_start = reinterpret_cast<volatile tt_l1_ptr DataT*>(ptr);
+    std::fill(page_start, page_start + PAGE_SIZE, value);
 }
 
-void fill_step(uint32_t value) {
-    for (std::size_t i = 0; i < cb_step_size; i++) {
+void fill_step(DataT value) {
+    for (auto i = 0ul; i < CB_STEP_SIZE; i++) {
         fill_page(value);
     }
 }
 
 namespace NAMESPACE {
 void MAIN {
-    for (uint32_t i = 0; i < CHURN_LOOP_COUNT; i++) {
-        cb_reserve_back(cb_id, cb_step_size);
+    for (auto i = 0ul; i < CHURN_LOOP_COUNT; i++) {
+        cb_reserve_back(CB_ID, CB_STEP_SIZE);
         fill_step(CHURN_LOOP_VALUE);
-        cb_push_back(cb_id, cb_step_size);
+        cb_push_back(CB_ID, CB_STEP_SIZE);
     }
 
     // Synchronize with the reader
-    while (*get_cb_tiles_acked_ptr(cb_id) != *get_cb_tiles_received_ptr(cb_id)) {
+    while (*get_cb_tiles_acked_ptr(CB_ID) != *get_cb_tiles_received_ptr(CB_ID)) {
     }
 
-    if (*get_cb_tiles_received_ptr(cb_id) != CHURN_TARGET) {
-        DPRINT << "Not stopping at " << HEX() << CHURN_TARGET << " as expected! Exiting" << ENDL();
+    if (*get_cb_tiles_received_ptr(CB_ID) != CHURN_TARGET) {
+        DPRINT << "Not stopping at churn target as expected! Got: " << HEX() << *get_cb_tiles_received_ptr(CB_ID)
+               << ". Expected: " << (std::uint32_t)CHURN_TARGET << ". Exiting" << ENDL();
         return;
     }
 
     // We fill the buffer 1/2
     // This buffer would be overwritten if reserve returns prematurely.
-    cb_reserve_back(cb_id, cb_step_size);
+    cb_reserve_back(CB_ID, CB_STEP_SIZE);
     fill_step(WRAP_WRITE_VALUE);
-    cb_push_back(cb_id, cb_step_size);
+    cb_push_back(CB_ID, CB_STEP_SIZE);
 
     // Buffer should be full, also overflow the received count.
-    cb_reserve_back(cb_id, cb_step_size);
+    cb_reserve_back(CB_ID, CB_STEP_SIZE);
     fill_step(WRAP_WRITE_VALUE);
-    cb_push_back(cb_id, cb_step_size);
+    cb_push_back(CB_ID, CB_STEP_SIZE);
 
     // Note: Reader is not pulling any more data out of the buffer,
     // buffer stays full.
 
-    // // Should be: Received: 0x0000, Acked: 0xFFC0
-    // DPRINT << "Before cb_reserve_back" << ENDL();
-    // DPRINT << "Expected: Received: 0x0000, Acked: 0xFFC0" << ENDL();
-    // DPRINT << "Got: Received: " << HEX() << *get_cb_tiles_received_ptr(cb_id)
-    //        << " Acked: " << *get_cb_tiles_acked_ptr(cb_id) << ENDL();
+    // Wrapped around, so it would be 0x0000.
+    auto expected_acked = CHURN_TARGET;
+    if (*get_cb_tiles_acked_ptr(CB_ID) != expected_acked) {
+        DPRINT << "Got: Acked: " << HEX() << *get_cb_tiles_acked_ptr(CB_ID)
+               << ". Expected: " << (std::uint32_t)expected_acked << ENDL();
+        return;
+    }
 
     // This reserve should not return
-    cb_reserve_back(cb_id, cb_step_size);
+    cb_reserve_back(CB_ID, CB_STEP_SIZE);
     // This would be overwrite previous value if reserve returns prematurely.
     fill_step(WRITE_OVER_VALUE);
-    cb_push_back(cb_id, cb_step_size);
-
-    // DPRINT << "Should be unreachable" << ENDL();
-    // DPRINT << "After: Received: " << HEX() << *get_cb_tiles_received_ptr(cb_id)
-    //        << " Acked: " << *get_cb_tiles_acked_ptr(cb_id) << ENDL();
+    cb_push_back(CB_ID, CB_STEP_SIZE);
 }
 }  // namespace NAMESPACE
 #else

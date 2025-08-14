@@ -10,34 +10,36 @@
 
 using namespace tt;
 
-static constexpr auto cb_id = tt::CBIndex::c_0;
-static constexpr auto cb_step_size = 32;
+static constexpr auto CB_ID = tt::CBIndex::c_0;
+static constexpr std::size_t CB_STEP_SIZE = 32;
 
-static constexpr uint32_t page_size_bytes = 16;
-static constexpr uint32_t page_size = page_size_bytes / sizeof(std::uint32_t);
+using DataT = std::uint32_t;
+
+static constexpr std::size_t PAGE_SIZE_BYTES = 16;
+static constexpr std::size_t PAGE_SIZE = PAGE_SIZE_BYTES / sizeof(DataT);
 
 // A span would be more appropriate here, but we are currently in C++17 land.
-using page_t = std::array<std::uint32_t, page_size>;
+using page_t = std::array<DataT, PAGE_SIZE>;
 
-static constexpr uint32_t CHURN_TARGET = (0x10000 - 2 * cb_step_size);
-static constexpr uint32_t CHURN_LOOP_COUNT = CHURN_TARGET / cb_step_size;
+static constexpr std::size_t CHURN_TARGET = (0x10000 - 2 * CB_STEP_SIZE);
+static constexpr std::size_t CHURN_LOOP_COUNT = CHURN_TARGET / CB_STEP_SIZE;
 
 // This should be enough spining time for the writer to fill the CB with 2 steps of data.
-static constexpr uint32_t NUM_WAIT_CYCLES = 1024 * 1024 * 1024;
+static constexpr std::size_t NUM_WAIT_CYCLES = 1024 * 1024;
 
 page_t read_page() {
-    std::uint32_t* read_ptr = (std::uint32_t*)get_read_ptr(cb_id);
+    auto read_ptr = reinterpret_cast<DataT*>(get_read_ptr(CB_ID));
     page_t result;
-    std::copy(read_ptr, read_ptr + page_size, result.begin());
+    std::copy(read_ptr, read_ptr + PAGE_SIZE, result.begin());
     return result;
 }
 
 void kernel_main() {
-    auto result_ptr = get_arg_val<std::uint32_t*>(0);
+    auto result_ptr = get_arg_val<DataT*>(0);
 
-    for (std::uint32_t i = 0; i < CHURN_LOOP_COUNT; i++) {
-        cb_wait_front(cb_id, cb_step_size);
-        cb_pop_front(cb_id, cb_step_size);
+    for (auto i = 0ul; i < CHURN_LOOP_COUNT; i++) {
+        cb_wait_front(CB_ID, CB_STEP_SIZE);
+        cb_pop_front(CB_ID, CB_STEP_SIZE);
     }
 
     DPRINT << "Reader Wait" << ENDL();
@@ -45,8 +47,8 @@ void kernel_main() {
     DPRINT << "Reader Wait Done" << ENDL();
 
     for (auto i = 0ul; i < 3; i++) {
-        cb_wait_front(cb_id, cb_step_size);
+        cb_wait_front(CB_ID, CB_STEP_SIZE);
         result_ptr[i] = read_page()[0];
-        cb_pop_front(cb_id, cb_step_size);
+        cb_pop_front(CB_ID, CB_STEP_SIZE);
     }
 }
