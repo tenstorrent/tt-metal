@@ -20,6 +20,181 @@ MeshDevice.core_grid = property(get_mesh_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 
 
+def _compute_axis_part_representatives(mesh_device, mesh_rank):
+    mapping = {axis: {} for axis in range(mesh_rank)}
+    rows, cols = mesh_device.shape
+    for r in range(rows):
+        for c in range(cols):
+            coord = ttnn.MeshCoordinate(r, c)
+            device_id = mesh_device.get_device_id(coord)
+            for axis in range(mesh_rank):
+                part_index = int(coord[axis])
+                if part_index not in mapping[axis]:
+                    mapping[axis][part_index] = device_id
+    return mapping
+
+
+def _compute_axis_offsets_and_sizes(shards, placements, mesh_shape, axis_part_to_rep_device):
+    axis_to_offsets = {}
+    axis_to_sizes = {}
+    axis_to_parts = {}
+    for axis in range(len(mesh_shape)):
+        placement = placements[axis]
+        if isinstance(placement, ttnn.PlacementShard):
+            tensor_dim = placement.dim
+            parts = int(mesh_shape[axis])
+            sizes = []
+            for p in range(parts):
+                rep_device_id = axis_part_to_rep_device[axis].get(p)
+                if rep_device_id is None:
+                    sizes.append(0)
+                else:
+                    sizes.append(int(list(shards[rep_device_id].shape)[tensor_dim]))
+            offsets = []
+            cumulative = 0
+            for size in sizes:
+                offsets.append(cumulative)
+                cumulative += size
+            axis_to_offsets[axis] = offsets
+            axis_to_sizes[axis] = sizes
+            axis_to_parts[axis] = parts
+    return axis_to_offsets, axis_to_sizes, axis_to_parts
+
+
+def _map_tensor_dim_to_mesh_axis(placements):
+    dim_to_axis = {}
+    for axis, placement in enumerate(placements):
+        if isinstance(placement, ttnn.PlacementShard):
+            tensor_dim = placement.dim
+            if tensor_dim not in dim_to_axis:
+                dim_to_axis[tensor_dim] = axis
+    return dim_to_axis
+
+
+def _format_inclusive_slices_for_device(
+    device_id,
+    device_coord,
+    tensor,
+    shards,
+    mesh_shape,
+    dim_to_axis,
+    axis_to_offsets,
+    axis_to_sizes,
+):
+    if device_id >= len(shards):
+        return ""
+    shard = shards[device_id]
+    shape_str = str(list(shard.shape))
+    dtype_str = str(shard.dtype).split(".")[-1]
+    layout_str = str(shard.layout).split(".")[-1]
+
+    dist_coord = device_coord
+    tensor_global_shape = list(tensor.shape)
+    slice_tokens = []
+    for tensor_dim, dim_size in enumerate(tensor_global_shape):
+        if tensor_dim in dim_to_axis:
+            axis = dim_to_axis[tensor_dim]
+            part_index = int(dist_coord[axis])
+            start = axis_to_offsets[axis][part_index]
+            size = axis_to_sizes[axis][part_index]
+            end_inclusive = start + size - 1
+            slice_tokens.append(f"{start}:{end_inclusive}")
+        else:
+            end_inclusive = int(dim_size) - 1
+            slice_tokens.append(f"0:{end_inclusive}")
+    header = ", ".join(slice_tokens)
+    return f"[{header}]\nShape: {shape_str}\nDtype: {dtype_str}\nLayout: {layout_str}"
+
+
+def _compute_device_slice_key(
+    device_coord,
+    tensor,
+    mesh_shape,
+    dim_to_axis,
+    axis_to_offsets,
+    axis_to_sizes,
+):
+    dist_coord = device_coord
+    tensor_global_shape = list(tensor.shape)
+    key = []
+    for tensor_dim, dim_size in enumerate(tensor_global_shape):
+        if tensor_dim in dim_to_axis:
+            axis = dim_to_axis[tensor_dim]
+            part_index = int(dist_coord[axis])
+            start = axis_to_offsets[axis][part_index]
+            size = axis_to_sizes[axis][part_index]
+            end_inclusive = start + size - 1
+            key.append((int(start), int(end_inclusive)))
+        else:
+            end_inclusive = int(dim_size) - 1
+            key.append((0, int(end_inclusive)))
+    return tuple(key)
+
+
+def _build_replication_color_map(
+    mesh_device,
+    tensor,
+    mesh_shape,
+    dim_to_axis,
+    axis_to_offsets,
+    axis_to_sizes,
+):
+    # Distinguish groups by identical slice keys across all tensor dims
+    key_to_group = {}
+    device_to_group = {}
+    group_index = 0
+    rows, cols = mesh_device.shape
+    for r in range(rows):
+        for c in range(cols):
+            coord = ttnn.MeshCoordinate(r, c)
+            device_id = mesh_device.get_device_id(coord)
+            key = _compute_device_slice_key(coord, tensor, mesh_shape, dim_to_axis, axis_to_offsets, axis_to_sizes)
+            if key not in key_to_group:
+                key_to_group[key] = group_index
+                group_index += 1
+            device_to_group[device_id] = key_to_group[key]
+
+    # Generate a distinct color palette sized to number of unique groups
+    num_groups = len(key_to_group)
+
+    def _hsv_to_hex(h: float, s: float, v: float) -> str:
+        i = int(h * 6.0)
+        f = (h * 6.0) - i
+        p = v * (1.0 - s)
+        q = v * (1.0 - f * s)
+        t = v * (1.0 - (1.0 - f) * s)
+        i = i % 6
+        if i == 0:
+            r, g, b = v, t, p
+        elif i == 1:
+            r, g, b = q, v, p
+        elif i == 2:
+            r, g, b = p, v, t
+        elif i == 3:
+            r, g, b = p, q, v
+        elif i == 4:
+            r, g, b = t, p, v
+        else:
+            r, g, b = v, p, q
+        return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+    def _generate_distinct_colors(n: int) -> list:
+        if n <= 0:
+            return []
+        # Muted palette (lower saturation/value to dim colors)
+        s = 0.48
+        v = 0.80
+        return [_hsv_to_hex((i / float(n)) % 1.0, s, v) for i in range(n)]
+
+    palette = _generate_distinct_colors(num_groups)
+    # Fallback to a neutral color if something goes wrong
+    if not palette:
+        palette = ["#9e9e9e"]
+
+    device_to_style = {did: f"on {palette[grp % len(palette)]}" for did, grp in device_to_group.items()}
+    return device_to_style
+
+
 def _get_rich_table(
     mesh_device: "ttnn.MeshDevice",
     tensor: "ttnn.Tensor" = None,
@@ -88,7 +263,7 @@ def _get_rich_table(
 
                 locality = "" if fully_local else locality
                 coords = f"({row_idx}, {col_idx})\n"
-                annotation = annotate_cell(device_id) if annotate_cell and device_id is not None else ""
+                annotation = annotate_cell(device_id, coord) if annotate_cell and device_id is not None else ""
 
                 cell_content = Text(f"{locality}{device_id_str}{coords}{annotation}", justify="center")
                 cell_content.truncate(CELL_SIZE * 4, overflow="ellipsis")  # 4 lines max
@@ -115,88 +290,64 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice"):
     Console().print(mesh_table)
 
 
-def get_placement_info(tensor_topology):
-    """Extract placement patterns from topology"""
-    placements = tensor_topology.placements()
-    placement_info = []
-    for i, placement in enumerate(placements):
-        placement_type = type(placement).__name__
-        if "Replicate" in placement_type:
-            placement_info.append(f"Tensor shards REPLICATED across mesh dim {i}")
-        elif "Shard" in placement_type:
-            placement_info.append(f"Tensor dim {placement.dim} SHARDED across mesh dim {i}")
-
-    return placement_info
-
-
-def calculate_shard_number(device_id, topology):
-    """Calculate the actual shard number based on sharding pattern, not device ID"""
-    mesh_shape = topology.mesh_shape()
-    placements = topology.placements()
-
-    # Convert device_id to mesh coordinates
-    if hasattr(mesh_shape, "__len__") and len(mesh_shape) >= 2:
-        mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
-        row = device_id // mesh_cols
-        col = device_id % mesh_cols
-        coord = [row, col]
-    else:
-        # Handle 1D or other cases
-        coord = [device_id]
-
-    # Calculate shard number by only considering sharded dimensions
-    shard_num = 0
-    shard_multiplier = 1
-
-    for i, placement in enumerate(placements):
-        placement_type = type(placement).__name__
-        if "Shard" in placement_type and i < len(coord):
-            # This dimension is sharded, so coordinate matters for shard number
-            shard_num += coord[i] * shard_multiplier
-            if hasattr(mesh_shape, "__len__") and i < len(mesh_shape):
-                shard_multiplier *= mesh_shape[i]
-        # If replicated, this dimension doesn't affect shard number
-
-    return shard_num
-
-
 def visualize_tensor(tensor: "ttnn.Tensor"):
     """
     Visualize tensor distribution across the mesh.
     """
     from rich.console import Console
     from rich.panel import Panel
-    from rich.columns import Columns
     from loguru import logger
+
+    if tensor.storage_type() == ttnn.StorageType.HOST:
+        visualize_tensor_host(tensor)
+        return
 
     console = Console()
 
     try:
         shards = ttnn.get_device_tensors(tensor)
         topology = tensor.tensor_topology()
-        placement_info = get_placement_info(topology)
+        placements = topology.placements()
+        mesh_shape = list(topology.mesh_shape())
+        mesh_coords = topology.mesh_coords()
 
-        placement_panel = Panel("\n".join(placement_info), title="Placement Configuration", border_style="blue")
+        mesh_rank = len(mesh_shape)
+        axis_part_to_rep_device = _compute_axis_part_representatives(tensor.device(), mesh_rank)
+        axis_to_offsets, axis_to_sizes, axis_to_parts = _compute_axis_offsets_and_sizes(
+            shards, placements, mesh_shape, axis_part_to_rep_device
+        )
+        dim_to_axis = _map_tensor_dim_to_mesh_axis(placements)
 
-        def annotate_with_shard_info(device_id):
-            """Add shard information to device cells"""
-            if device_id < len(shards):
-                shard = shards[device_id]
-                shape_str = str(list(shard.shape))
-                dtype_str = str(shard.dtype).split(".")[-1]
-                layout_str = str(shard.layout).split(".")[-1]
+        placement_panel = Panel(str(placements), title="Placement Configuration", border_style="blue")
 
-                # Calculate actual shard number based on topology
-                shard_num = calculate_shard_number(device_id, topology)
+        # Build color map so devices owning identical global slices share the same background color
+        device_to_style = _build_replication_color_map(
+            mesh_device=tensor.device(),
+            tensor=tensor,
+            mesh_shape=mesh_shape,
+            dim_to_axis=dim_to_axis,
+            axis_to_offsets=axis_to_offsets,
+            axis_to_sizes=axis_to_sizes,
+        )
 
-                return f"Shard {shard_num}\nShape: {shape_str}\nDtype: {dtype_str}\nLayout: {layout_str}"
-            return ""
+        def annotate_with_shard_info(device_id, device_coord):
+            return _format_inclusive_slices_for_device(
+                device_id,
+                device_coord,
+                tensor,
+                shards,
+                mesh_shape,
+                dim_to_axis,
+                axis_to_offsets,
+                axis_to_sizes,
+            )
 
         # Generate the mesh table with shard annotations
         mesh_table = _get_rich_table(
             tensor.device(),
             tensor,
             annotate_cell=annotate_with_shard_info,
+            style_cell=lambda device_id: device_to_style.get(device_id),
             storage_type=tensor.storage_type(),
         )
 
@@ -205,6 +356,148 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
 
     except Exception as e:
         logger.error(f"Error visualizing tensor: {e}")
+
+
+def visualize_tensor_host(tensor: "ttnn.Tensor"):
+    """
+    Visualize tensor distribution when tensor is on HOST storage.
+    This function is fully decoupled from device visualization and does not dereference mesh_device.
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from loguru import logger
+
+    console = Console()
+    try:
+        # Topology and shards
+        shards = ttnn.get_device_tensors(tensor)
+        topology = tensor.tensor_topology()
+        placements = topology.placements()
+        mesh_shape = list(topology.mesh_shape())
+        mesh_coords = topology.mesh_coords()
+
+        # Host grid shape
+        try:
+            host_buffer = tensor.host_buffer()
+            rows, cols = host_buffer.shape()
+            rows, cols = int(rows), int(cols)
+        except Exception:
+            rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+
+        # Representatives derived from logical coords (no device deref)
+        mesh_rank = len(mesh_shape)
+        axis_part_to_rep_device = {}
+        for axis in range(mesh_rank):
+            part_map = {}
+            for did, mc in enumerate(mesh_coords):
+                part_index = int(mc[axis])
+                if part_index not in part_map:
+                    part_map[part_index] = did
+            axis_part_to_rep_device[axis] = part_map
+
+        axis_to_offsets, axis_to_sizes, axis_to_parts = _compute_axis_offsets_and_sizes(
+            shards, placements, mesh_shape, axis_part_to_rep_device
+        )
+        dim_to_axis = _map_tensor_dim_to_mesh_axis(placements)
+
+        placement_panel = Panel(str(placements), title="Placement Configuration", border_style="blue")
+
+        # Map logical coord -> device_id
+        coord_to_device_id = {(int(mc[0]), int(mc[1])): did for did, mc in enumerate(mesh_coords)}
+
+        # Group devices by identical global slice keys using logical coords
+        key_to_group = {}
+        device_to_group = {}
+        group_index = 0
+        for did, logical_coord in enumerate(mesh_coords):
+            key = _compute_device_slice_key(
+                logical_coord, tensor, mesh_shape, dim_to_axis, axis_to_offsets, axis_to_sizes
+            )
+            if key not in key_to_group:
+                key_to_group[key] = group_index
+                group_index += 1
+            device_to_group[did] = key_to_group[key]
+
+        # Muted HSV palette sized to number of groups
+        num_groups = len(key_to_group)
+
+        def _hsv_to_hex(h: float, s: float, v: float) -> str:
+            i = int(h * 6.0)
+            f = (h * 6.0) - i
+            p = v * (1.0 - s)
+            q = v * (1.0 - f * s)
+            t = v * (1.0 - (1.0 - f) * s)
+            i = i % 6
+            if i == 0:
+                r, g, b = v, t, p
+            elif i == 1:
+                r, g, b = q, v, p
+            elif i == 2:
+                r, g, b = p, v, t
+            elif i == 3:
+                r, g, b = p, q, v
+            elif i == 4:
+                r, g, b = t, p, v
+            else:
+                r, g, b = v, p, q
+            return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+        def _generate_distinct_colors(n: int) -> list:
+            if n <= 0:
+                return []
+            s = 0.48
+            v = 0.80
+            return [_hsv_to_hex((i / float(n)) % 1.0, s, v) for i in range(n)]
+
+        palette = _generate_distinct_colors(num_groups) or ["#9e9e9e"]
+        device_to_style = {did: f"on {palette[grp % len(palette)]}" for did, grp in device_to_group.items()}
+
+        # Style mapping for host cells (row-major linear ids)
+        def style_cell(host_linear_id, _cols=cols, _map=coord_to_device_id, _styles=device_to_style):
+            try:
+                r = int(host_linear_id // _cols)
+                c = int(host_linear_id % _cols)
+                did = _map.get((r, c))
+                return _styles.get(did) if did is not None else None
+            except Exception:
+                return None
+
+        # Annotation per host cell using logical coords
+        def annotate_cell(host_linear_id, host_coord):
+            try:
+                r = int(host_coord[0])
+                c = int(host_coord[1])
+                did = coord_to_device_id.get((r, c))
+                if did is None:
+                    return ""
+                logical_coord = ttnn.MeshCoordinate(r, c)
+                return _format_inclusive_slices_for_device(
+                    did,
+                    logical_coord,
+                    tensor,
+                    shards,
+                    mesh_shape,
+                    dim_to_axis,
+                    axis_to_offsets,
+                    axis_to_sizes,
+                )
+            except Exception:
+                return ""
+
+        # Render using host storage path in _get_rich_table (no device IDs printed)
+        mesh_table = _get_rich_table(
+            tensor.device(),
+            tensor,
+            annotate_cell=annotate_cell,
+            style_cell=style_cell,
+            storage_type=tensor.storage_type(),
+        )
+
+        console.print(placement_panel)
+        console.print(mesh_table)
+
+    except Exception as e:
+        logger.error(f"Error visualizing host tensor: {e}")
 
 
 def visualize_system_mesh():
