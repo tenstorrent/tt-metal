@@ -18,11 +18,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
         (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
         (2, [1, 1, 2048, 2048], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
-    ids=[
-        # "4 device line",
-        # "4_device_ring",
-        "2_device_line"
-    ],
+    ids=["4 device line", "4_device_ring", "2_device_line"],
 )
 @pytest.mark.parametrize(
     "ag_input_dtype",
