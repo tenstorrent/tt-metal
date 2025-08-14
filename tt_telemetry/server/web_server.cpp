@@ -31,6 +31,8 @@ private:
     // Telemetry data
     std::unordered_map<size_t, std::string> bool_metric_name_by_index_;
     std::unordered_map<size_t, bool> bool_metric_value_by_index_;
+    std::unordered_map<size_t, std::string> int_metric_name_by_index_;
+    std::unordered_map<size_t, int> int_metric_value_by_index_;
     std::mutex snapshot_mutex_;
     std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
@@ -49,6 +51,11 @@ private:
             full_snapshot.bool_metric_indices.push_back(index);
             full_snapshot.bool_metric_names.push_back(name);
             full_snapshot.bool_metric_values.push_back(bool_metric_value_by_index_[index]);
+        }
+        for (const auto &[index, name]: int_metric_name_by_index_) {
+            full_snapshot.int_metric_indices.push_back(index);
+            full_snapshot.int_metric_names.push_back(name);
+            full_snapshot.int_metric_values.push_back(int_metric_value_by_index_[index]);
         }
         json j = full_snapshot;
         std::string message = "data: " + j.dump() + "\n\n";
@@ -86,6 +93,8 @@ private:
             // Absolute snapshot -- replace everything with new data
             bool_metric_name_by_index_.clear();
             bool_metric_value_by_index_.clear();
+            int_metric_name_by_index_.clear();
+            int_metric_value_by_index_.clear();
         }
 
         for (size_t i = 0; i < snapshot->bool_metric_indices.size(); i++) {
@@ -95,6 +104,15 @@ private:
                 bool_metric_name_by_index_[idx] = snapshot->bool_metric_names[i];
             }
             bool_metric_value_by_index_[idx] = snapshot->bool_metric_values[i];
+        }
+
+        for (size_t i = 0; i < snapshot->int_metric_indices.size(); i++) {
+            size_t idx = snapshot->int_metric_indices[i];
+            if (snapshot->int_metric_names.size() > 0) {
+                // Names were included, which indicates new metrics added!
+                int_metric_name_by_index_[idx] = snapshot->int_metric_names[i];
+            }
+            int_metric_value_by_index_[idx] = snapshot->int_metric_values[i];
         }
     }
 

@@ -28,7 +28,7 @@
 
     <script type="module">
          import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
-         import { HierarchicalTelemetryStore } from './js/hierarchical_telemetry_store.js';
+         import { HierarchicalTelemetryStore, isBool } from './js/hierarchical_telemetry_store.js';
 
         // 1. STATUS BOX COMPONENT - Individual clickable status boxes
         class StatusBox extends LitElement {
@@ -68,6 +68,25 @@
                     background: linear-gradient(135deg, #f87171, #ef4444);
                     color: white;
                     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+                }
+
+                .status-box.valued {
+                    background: linear-gradient(135deg, #e5e7eb, #d1d5db);
+                    color: #374151;
+                    text-shadow: none;
+                    flex-direction: column;
+                    gap: 8px;
+                }
+
+                .valued-name {
+                    font-weight: bold;
+                    font-size: 1em;
+                }
+
+                .valued-value {
+                    font-weight: normal;
+                    font-size: 0.9em;
+                    opacity: 0.8;
                 }
 
                 .status-box.level-1 {
@@ -114,16 +133,18 @@
 
             static properties = {
                 name: { type: String },
-                status: { type: Boolean },
                 level: { type: Number },
-                clickable: { type: Boolean }
+                clickable: { type: Boolean },
+                type: { type: String },
+                value: { type: Object }
             };
 
             constructor() {
                 super();
                 this.name = '';
-                this.status = true;
                 this.clickable = true;
+                this.type = 'health';
+                this.value = null;
             }
 
             _handleClick() {
@@ -136,15 +157,32 @@
             }
 
             render() {
-                const statusClass = this.status ? 'good' : 'bad';
+                let statusClass;
+                let content;
+                
+                if (this.type === 'valued') {
+                    statusClass = 'valued';
+                    content = html`
+                        <div class="valued-name">${this.name}</div>
+                        <div class="valued-value">${this.value !== null ? this.value : 'N/A'}</div>
+                    `;
+                } else {
+                    // Default to health type - treat value as boolean for health status
+                    const isHealthy = typeof this.value === 'boolean' ? this.value : true;
+                    statusClass = isHealthy ? 'good' : 'bad';
+                    content = html`
+                        <div class="status-indicator"></div>
+                        ${this.name}
+                    `;
+                }
+                
                 const levelClass = `level-any`;
                 const clickableClass = this.clickable ? '' : 'not-clickable';
 
                 return html`
                     <div class="status-box ${statusClass} ${levelClass} ${clickableClass}" 
                          @click="${this._handleClick}">
-                        <div class="status-indicator"></div>
-                        ${this.name}
+                        ${content}
                     </div>
                 `;
             }
@@ -171,12 +209,12 @@
             `;
 
             static properties = {
-                items: { type: Array },
+                metrics: { type: Array },
             };
 
             constructor() {
                 super();
-                this.items = [];
+                this.metrics = [];
             }
 
             _handleBoxClick(event) {
@@ -192,11 +230,12 @@
 
                 return html`
                     <div class="${gridClass}" @box-click="${this._handleBoxClick}">
-                        ${this.items.map(item => html`
+                        ${this.metrics.map(metric => html`
                             <status-box 
-                                name="${item.name}"
-                                .status="${item.status}"
-                                .clickable="true">
+                                name="${metric.name}"
+                                .value="${metric.value}"
+                                .clickable="true"
+                                type="${isBool(metric.value) ? "health" : "valued"}">
                             </status-box>
                         `)}
                     </div>
@@ -313,7 +352,7 @@
                                     const path = bool_metric_names[i];
                                     const id = bool_metric_indices[i];
                                     const value = bool_metric_values[i];
-                                    this._telemetryStore.addPath(path, id, value);
+                                    this._telemetryStore.addPath(path, id, value, true);
                                     did_update = true;
                                 }
                             } else {
@@ -322,6 +361,39 @@
                                     const id = bool_metric_indices[i];
                                     const value = bool_metric_values[i];
                                     this._telemetryStore.updateBoolValue(id, value);
+                                    did_update = true;
+                                }
+                            }
+
+                            const int_metric_indices = data["int_metric_indices"];
+                            const int_metric_names = data["int_metric_names"];    // optional, and indicates new telemetry metrics if present
+                            const int_metric_values = data["int_metric_values"];
+
+                            if (int_metric_indices.length != int_metric_values.length) {
+                                console.log(`SSE error: Received differing index and value counts (${int_metric_indices.length} vs. ${int_metric_values.length})`);
+                                return;
+                            }
+
+                            if (int_metric_names.length > 0 && int_metric_names.length != int_metric_indices.length) {
+                                console.log(`SSE error: Received differing name and index counts (${int_metric_names.length} vs. ${int_metric_indices.length})`);
+                                return;
+                            }
+
+                            if (int_metric_names.length > 0) {
+                                // Adding new
+                                for (let i = 0; i < int_metric_indices.length; i++) {
+                                    const path = int_metric_names[i];
+                                    const id = 1000000 + int_metric_indices[i];
+                                    const value = int_metric_values[i];
+                                    this._telemetryStore.addPath(path, id, value, false);
+                                    did_update = true;
+                                }
+                            } else {
+                                // Delta updates
+                                for (let i = 0; i < int_metric_indices.length; i++) {
+                                    const id = 1000000 + int_metric_indices[i];
+                                    const value = int_metric_values[i];
+                                    this._telemetryStore.updateIntValue(id, value);
                                     did_update = true;
                                 }
                             }
@@ -349,16 +421,16 @@
 
             _handleGridBoxClick(event) {
                 // Append the thing we clicked on to the path
-                const itemName = event.detail.name;
-                const new_path = [ ...this.currentPath, itemName ].join("_");
+                const metricName = event.detail.name;
+                const newPath = [ ...this.currentPath, metricName ].join("_");
 
-                console.log(`Clicked ${itemName}: new_path=${new_path}`);
+                console.log(`Clicked ${metricName}: new_path=${newPath}`);
                 
                 // Get children, if any, to drill in deeper
-                const child_names = this._telemetryStore.getChildNames(new_path);
+                const child_names = this._telemetryStore.getChildNames(newPath);
                 console.log(child_names);
                 if (child_names.length > 0) {
-                    this.currentPath = [...this.currentPath, itemName]; // descend one level deeper (don't use push, we need to mutate array to trigger state update)
+                    this.currentPath = [...this.currentPath, metricName]; // descend one level deeper (don't use push, we need to mutate array to trigger state update)
                 }
             }
 
@@ -376,29 +448,29 @@
                 }
             }
 
-            _getCurrentItems() {
+            _getCurrentMetrics() {
                 // Get children of currently displayed path
                 const current_path = this.currentPath.join("_");
-                const item_names = this._telemetryStore.getChildNames(current_path);
+                const metric_names = this._telemetryStore.getChildNames(current_path);
 
-                // Create item boxes
-                const items = [];
-                for (const item_name of item_names) {
-                    const item_path = [...this.currentPath, item_name].join("_");
-                    items.push({
-                        name: item_name,
-                        status: this._telemetryStore.getValue(item_path)
+                // Create metric boxes
+                const metrics = [];
+                for (const metric_name of metric_names) {
+                    const metric_path = [...this.currentPath, metric_name].join("_");
+                    metrics.push({
+                        name: metric_name,
+                        value: this._telemetryStore.getValue(metric_path)
                     });
                 }
 
                 // Sort by name
-                items.sort((item1, item2) => item1.name.localeCompare(item2.name));
+                metrics.sort((metric1, metric2) => metric1.name.localeCompare(metric2.name));
 
-                return items;
+                return metrics;
             }
 
             render() {
-                console.log("Render", this._getCurrentItems());
+                console.log("Render", this._getCurrentMetrics());
                 return html`
                     <!--
                     <div class="controls">
@@ -421,7 +493,7 @@
                     </div>
 
                     <status-grid 
-                        .items="${this._getCurrentItems()}"
+                        .metrics="${this._getCurrentMetrics()}"
                         @grid-box-click="${this._handleGridBoxClick}">
                     </status-grid>
                 `;
