@@ -170,6 +170,20 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     uint32_t NC = Bt * Ht;
     uint32_t total_rows_to_process = NC * Ht_;
 
+    /*
+     * Split embedding dim into heads and groups
+     * Two cases:
+     * 1) H_q == H_k == H_v == G: each head has its own K and V:
+     *    For this case we read and process data by heads: Edim/H
+     * 2) H_q == n * G, n > 1: each group of K and V is shared across n heads
+     *    For this case we read and process data by groups: Edim/G
+     */
+
+    auto [Bq, Hq, Sq, Eq] = query.logical_shape().to_array_4D();
+    auto [Bk, Gk, Sk, Ek] = key.logical_shape().to_array_4D();
+    // [Debug] could I assume that Wt%(heads*TILE_WIDTH) == 0 ?
+    uint32_t heads_per_group = Hq / Gk;
+
     // TODO[improve]: add memory usage estimation and compare it against available memory. Based on this check,
     // determine the appropriate chunk size for Q, K, and V tensors
     // for now we assume that we can fit at least one row of Q, K, V in memory
@@ -177,9 +191,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // since we read K and V row-wise in this SDPA kernel, the sequence length directly defines how many chunks we’ll
     // process for each
     const uint32_t kv_chunks_number = Ht_;
-    const uint32_t q_chunk_size = Wt;
-    const uint32_t k_chunk_size = Wt;
-    const uint32_t v_chunk_size = Wt;
 
     uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(Et)));  // calculate scale factor
     uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
@@ -202,7 +213,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     //[DEBUG]:
     fmt::print(
-        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, total_rows_to_process = {}, num_cores={} ({}x{}), group1 cores={} rows/core={}, group2 "
+        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, total_rows_to_process = {}, num_cores={} ({}x{}), "
+        "group1 cores={} rows/core={}, group2 "
         "cores={} "
         "rows/core={}\n",
         NC,
@@ -266,17 +278,17 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto cb_cur_exp_sum = create_circular_buffer(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
-    auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
+    auto cb_prev_mm_out =
+        create_circular_buffer(program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
 
-    auto cb_cur_mm_out = create_circular_buffer(
-        program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
+    auto cb_cur_mm_out =
+        create_circular_buffer(program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
 
-    auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
+    auto cb_output =
+        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
 
-    auto cb_mm_result_holder = create_circular_buffer(
-        program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, Wt);
+    auto cb_mm_result_holder =
+        create_circular_buffer(program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, Wt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

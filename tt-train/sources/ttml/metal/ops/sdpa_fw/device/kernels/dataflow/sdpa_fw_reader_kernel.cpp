@@ -39,6 +39,10 @@ void kernel_main() {
     constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;  // used to store previous max value
     constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;   // used to store current max value
 
+    // [Debug]: we should split reader data be heads
+    // split K by groups
+    // match heads and groups
+
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);  // (d / TILE_W)
     constexpr uint32_t Ht = get_compile_time_arg_val(2);  // (S / TILE_H)

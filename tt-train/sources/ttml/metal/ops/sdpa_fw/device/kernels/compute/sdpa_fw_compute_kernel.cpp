@@ -151,7 +151,9 @@ void MAIN {
                 cb_pop_front(alias_cb_prev_sum_exp, onetile);
 
                 // update previous matmul output with exp_max_diff and add it to current matmul output
-                update_cur_mm_out<Wt>(alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff, cb_mm_result_holder);
+                update_cur_mm_out<Wt, block_size>(alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
+                // update_cur_mm_out<Wt>(alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff,
+                // cb_mm_result_holder);
                 cb_pop_front(cb_exp_max_diff, onetile);
                 cb_pop_front(alias_cb_prev_mm_out, Wt);
             }
