@@ -8,6 +8,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "tt-metalium/constants.hpp"
 #include "compute_kernel_api/tilize.h"
+#include "compute_kernel_api/common.h"
 
 #define DEBUG_PRINT 1
 
@@ -128,11 +129,12 @@ void MAIN {
                 // cb_reserve_back(tmp_cb_id, partial_iter_output_tiles);
                 // }
                 if (counter == 0) {
-                    cb_reserve_back(tmp_cb_id, partial_iter_output_tiles);
+                    cb_reserve_back(tmp_cb_id, 1);
                 }
                 if (counter < TILE_HEIGHT) {
                     pack_untilize_dest<partial_iter_output_tiles>(
                         tmp_cb_id, 1 /*out_subblock_h: one row*/, counter, num_out_sticks, num_faces_in_output_tile);
+                    // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
                     PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
                     tile_regs_release();
                     counter++;
@@ -141,31 +143,40 @@ void MAIN {
                 // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
 
                 if (counter == TILE_HEIGHT) {
-                    // tile_regs_release();
-                    // We finished accumulating 32 rows in tmp_cb_id for this group of tiles across C.
-                    // Convert RM rows in tmp_cb_id into tilized tiles in out_cb_id.
-                    // Close the reserved pages in tmp_cb (now each holds a full tilized tile in RM layout)
-                    PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
-                    cb_push_back(tmp_cb_id, partial_iter_output_tiles);
-
-                    // UNPACK((llk_unpack_tilize_uninit(in_cb_id_0)));
+                    // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+                    // PACK(tt::compute::common::print_full_tile(out_cb_id, 1));
+                    cb_push_back(tmp_cb_id, 1);
 
                     PACK((pack_untilize_uninit(tmp_cb_id)));  // stop RM packer on tmp_cb_id
-                    PACK(llk_pack_init(out_cb_id));           // needed on WH to set tile pack
+                    // PACK(llk_pack_init(out_cb_id));           // needed on WH to set tile pack
                     tilize_init(tmp_cb_id, partial_iter_output_tiles, out_cb_id);
 
-                    cb_wait_front(tmp_cb_id, partial_iter_output_tiles);
-                    cb_reserve_back(out_cb_id, partial_iter_output_tiles);
+                    cb_wait_front(tmp_cb_id, 1);
+                    // cb_reserve_back(out_cb_id, partial_iter_output_tiles);
 
                     tilize_block(tmp_cb_id, partial_iter_output_tiles, out_cb_id);
-                    PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
-                    tilize_block(tmp_cb_id, partial_iter_output_tiles, out_cb_id);
-                    PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
+                    // PACK(tt::compute::common::print_full_tile(out_cb_id, 0));
+                    // PACK(tt::compute::common::print_full_tile(out_cb_id, 1));
+
                     // Print while reserved (before push). Data is tilized now.
 
                     cb_push_back(out_cb_id, partial_iter_output_tiles);
-                    cb_pop_front(tmp_cb_id, partial_iter_output_tiles);
+                    cb_pop_front(tmp_cb_id, 1);
                     tilize_uninit(tmp_cb_id, out_cb_id);
+                    // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                        in_cb_id_0,
+                        curr_scalar_cb_id,
+                        partial_iter_output_tiles,
+                        num_faces_in_output_tile,
+                        face_r_dim,
+                        1)));
+                    PACK((llk_pack_untilize_init<
+                          partial_iter_output_tiles,
+                          partial_iter_output_tiles,
+                          false,
+                          false,
+                          TILE_C_DIM>(tmp_cb_id, 1, num_faces_in_output_tile)));
                     counter = 0;
                 }
             } else {

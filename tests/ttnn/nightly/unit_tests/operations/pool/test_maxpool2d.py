@@ -128,14 +128,14 @@ def run_max_pool(
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
-    torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
-    count = 0
-    for n in range(input_shape[0]):
-        for c in range(input_shape[1]):
-            for h in range(input_shape[2]):
-                for w in range(input_shape[3]):
-                    torch_input[n, c, h, w] = count
-                    count += 1
+    # torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
+    # count = 0
+    # for n in range(input_shape[0]):
+    #     for c in range(input_shape[1]):
+    #         for h in range(input_shape[2]):
+    #             for w in range(input_shape[3]):
+    #                 torch_input[n, c, h, w] = count
+    #                 count += 1
 
     print(torch_input)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
@@ -246,7 +246,7 @@ def run_max_pool(
     "input_shape",  ## NCHW
     (
         (  # resnet shapes
-            [1, 32, 16, 16],
+            [1, 32, 64, 64],
             # [16, 64, 112, 112],
             # # hpr shapes
             # [8, 32, 132, 20],
