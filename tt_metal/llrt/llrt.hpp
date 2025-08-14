@@ -57,6 +57,13 @@ using NUM_REPETITIONS = std::uint32_t;
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
+enum class HostWriteType : uint8_t {
+    // Write combining is possible. But not guaranteed.
+    COMBINED = 0,
+    // Immediate write.
+    IMMEDIATE = 1,
+};
+
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name only.
 const ll_api::memory& get_risc_binary(
@@ -71,15 +78,25 @@ const ll_api::memory& get_risc_binary(
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 template <typename DType>
 void write_hex_vec_to_core(
-    chip_id_t chip, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr, bool bypass_wc = false) {
+    chip_id_t chip,
+    const CoreCoord& core,
+    const std::vector<DType>& hex_vec,
+    uint64_t addr,
+    HostWriteType type = HostWriteType::COMBINED) {
+    bool bypass_wc = type == HostWriteType::IMMEDIATE;
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, bypass_wc);
 }
 template <typename DType>
 void write_hex_vec_to_core(
-    chip_id_t chip, const CoreCoord& core, tt::stl::Span<const DType> hex_vec, uint64_t addr, bool bypass_wc = false) {
+    chip_id_t chip,
+    const CoreCoord& core,
+    tt::stl::Span<const DType> hex_vec,
+    uint64_t addr,
+    HostWriteType type = HostWriteType::COMBINED) {
+    bool bypass_wc = type == HostWriteType::IMMEDIATE;
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
+        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, bypass_wc);
 }
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size);
