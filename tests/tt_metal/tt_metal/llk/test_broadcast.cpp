@@ -230,7 +230,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         tt_metal::CircularBufferConfig(single_tile_size, {{0, tt::DataFormat::Float16_b}})
             .set_page_size(0, single_tile_size)
             .set_tile_dims(0, tile_dims);
-    auto l1_src_a_cb = tt_metal::CreateCircularBuffer(program, core, l1_src_a_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_src_a_cb_config);
 
     auto src_b_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
@@ -238,7 +238,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         tt_metal::CircularBufferConfig(single_tile_size, {{1, tt::DataFormat::Float16_b}})
             .set_page_size(1, single_tile_size)
             .set_tile_dims(1, tile_dims);
-    auto l1_src_b_cb = tt_metal::CreateCircularBuffer(program, core, l1_src_b_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_src_b_cb_config);
 
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
@@ -246,7 +246,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         tt_metal::CircularBufferConfig(single_tile_size, {{16, tt::DataFormat::Float16_b}})
             .set_page_size(16, single_tile_size)
             .set_tile_dims(16, tile_dims);
-    auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
     std::map<std::string, std::string> defines = {
         {"BCAST_LLKOP", eltwise_op_to_type.at(test_config.eltwise_op)},
@@ -295,7 +295,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    auto binary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
         core,

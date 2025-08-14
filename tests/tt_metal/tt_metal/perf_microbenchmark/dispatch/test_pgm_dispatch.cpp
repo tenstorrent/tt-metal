@@ -308,7 +308,7 @@ bool initialize_program(
         for (int j = 0; j < info.n_cbs; j++) {
             tt_metal::CircularBufferConfig cb_config =
                 tt_metal::CircularBufferConfig(16, {{j, tt::DataFormat::Float16_b}}).set_page_size(j, 16);
-            auto cb = tt_metal::CreateCircularBuffer(program, cbg, cb_config);
+            tt_metal::CreateCircularBuffer(program, cbg, cb_config);
         }
         cbg.start_coord = {cbg.end_coord.x + 1, cbg.end_coord.y};
         cbg.end_coord = cbg.start_coord;
@@ -501,7 +501,7 @@ void run_benchmark_timing_loop(
     std::shared_ptr<MeshDevice> mesh_device) {
     constexpr std::size_t cq_id = 0;
     auto execute_func = executor.execute_programs;
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
             ReplayTrace(mesh_device.get(), cq_id, tid, false);

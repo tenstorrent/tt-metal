@@ -26,9 +26,7 @@ int main(int argc, char** argv) {
     bool pass = true;
 
     try {
-        uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
         uint32_t num_tiles = 1;
-        uint32_t size_in_bytes = num_tiles * single_bfp8_tile_size;
 
         int num_float_in_tile = 1024;
         int float_data_size = num_tiles * num_float_in_tile;

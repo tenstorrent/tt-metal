@@ -104,14 +104,12 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
     CoreCoord core = {0, 0};
 
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
-    uint32_t HW = H * W;
     TT_FATAL(W % 32 == 0 && H % 32 == 0, "Error");
     TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
     uint32_t Wt = W / 32;
     // size of DST register, with unary r/w this currently only works if the entire Wt fits into DST for reduce
     TT_FATAL(Wt <= 16, "Error");
     uint32_t Ht = H / 32;
-    float scaler = 1.0f / W;
     uint32_t num_tensor_tiles = NC * H * W / (32 * 32);
 
     uint32_t dram_buffer_size = test_config.single_tile_size * num_tensor_tiles;
@@ -134,7 +132,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
         tt_metal::CircularBufferConfig(
             num_buffer_tiles * test_config.single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, test_config.single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_buffer_tiles = 32;
@@ -142,7 +140,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
         tt_metal::CircularBufferConfig(
             num_output_buffer_tiles * test_config.single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, test_config.single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateKernel(
         program,
@@ -166,11 +164,10 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
         defines["SHORT_INIT"] = "1";
     }
 
-    auto transpose_compute_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
-        test_config.transpose_dest
-            ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
-            : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
+        test_config.transpose_dest ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
+                                   : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
 
@@ -198,7 +195,6 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
          (uint32_t)0,  // unused to maintain compat
          num_tensor_tiles});
 
-    auto seed = std::chrono::system_clock::now().time_since_epoch().count();
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 

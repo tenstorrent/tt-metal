@@ -45,14 +45,11 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
 
     // Buffer Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
-    const size_t total_size_bytes = bytes_per_transaction * test_config.num_of_transactions;
 
     // Obtain L1 Address for Storing Data
 
     L1AddressInfo master_l1_info =
         tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.master_core_coord);
-    L1AddressInfo subordinate_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.subordinate_core_coord);
 
     // Check if the L1 size is sufficient for the test configuration
     if (master_l1_info.size / 2 < bytes_per_transaction) {
@@ -88,7 +85,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
             (uint32_t)packed_subordinate_core_coordinates,
             (uint32_t)test_config.write_vc};
 
-        auto sender_and_requestor_kernel = CreateKernel(
+        CreateKernel(
             program,
             sender_and_requestor_kernel_path,
             test_config.master_core_coord,
@@ -111,7 +108,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
             (uint32_t)packed_subordinate_core_coordinates,
             (uint32_t)test_config.write_vc};
 
-        auto sender_kernel = CreateKernel(
+        CreateKernel(
             program,
             sender_kernel_path,
             test_config.master_core_coord,
@@ -132,7 +129,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
             (uint32_t)bytes_per_transaction,
             (uint32_t)packed_subordinate_core_coordinates};
 
-        auto requestor_kernel = CreateKernel(
+        CreateKernel(
             program,
             requestor_kernel_path,
             test_config.master_core_coord,

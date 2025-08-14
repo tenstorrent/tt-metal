@@ -58,8 +58,8 @@ void build_and_run_program(
 
     CircularBufferConfig cb_config =
         CircularBufferConfig(page_size, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, page_size);
-    auto cb1 = CreateCircularBuffer(program1, cr_set, cb_config);
-    auto cb2 = CreateCircularBuffer(program2, cr_set, cb_config);
+    CreateCircularBuffer(program1, cr_set, cb_config);
+    CreateCircularBuffer(program2, cr_set, cb_config);
 
     vector<uint32_t> compile_args = {MAX_LOOP, page_size};
 

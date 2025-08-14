@@ -45,12 +45,11 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
 
     // Run a kernel that just waits on a signal that never comes (BRISC only).
     constexpr CoreCoord core = {0, 0}; // Print on first core only
-    KernelHandle brisc_print_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_hang.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Run the program, we expect it to throw on waiting for CQ to finish
 try {

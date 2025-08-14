@@ -44,13 +44,13 @@ TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationDataflow) {
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
         EXPECT_THROW(
             {
-                auto test_kernel1 = tt_metal::CreateKernel(
+                tt_metal::CreateKernel(
                     program_,
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                     CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
                     DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-                auto test_kernel2 = tt_metal::CreateKernel(
+                tt_metal::CreateKernel(
                     program_,
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                     CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
@@ -75,7 +75,7 @@ TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
         std::vector<uint32_t> compute_kernel_args = {};
         EXPECT_THROW(
             {
-                auto test_kernel1 = tt_metal::CreateKernel(
+                tt_metal::CreateKernel(
                     program_,
                     "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
                     CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
@@ -85,7 +85,7 @@ TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
                         .math_approx_mode = false,
                         .compile_args = compute_kernel_args,
                         .opt_level = KernelBuildOptLevel::O3});
-                auto test_kernel2 = tt_metal::CreateKernel(
+                tt_metal::CreateKernel(
                     program_,
                     "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
                     CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
@@ -109,10 +109,9 @@ TEST_F(MeshDispatchFixture, TensixPassOnNormalKernelCreation) {
         tt_metal::Program program = CreateProgram();
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         auto& program_ = workload.get_programs().at(device_range);
-        CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
         std::vector<uint32_t> compute_kernel_args = {};
         EXPECT_NO_THROW({
-            auto test_kernel1 = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program_,
                 "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
                 CoreCoord(1, 0),
@@ -122,7 +121,7 @@ TEST_F(MeshDispatchFixture, TensixPassOnNormalKernelCreation) {
                     .math_approx_mode = false,
                     .compile_args = compute_kernel_args,
                     .opt_level = KernelBuildOptLevel::O3});
-            auto test_kernel2 = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program_,
                 "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
                 CoreCoord(0, 0),
@@ -148,13 +147,13 @@ TEST_F(MeshDispatchFixture, TensixPassOnMixedOverlapKernelCreation) {
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
         std::vector<uint32_t> compute_kernel_args = {};
         EXPECT_NO_THROW({
-            auto test_kernel1 = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program_,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                 CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
                 DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-            auto test_kernel2 = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program_,
                 "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
                 CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),

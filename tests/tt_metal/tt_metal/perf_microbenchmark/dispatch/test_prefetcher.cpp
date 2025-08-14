@@ -61,7 +61,6 @@ constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
 
 constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_BASE_ADDR = 0x1f400000;  // magic, half of dram
 constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE = 10;
-constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_PAGE_SIZE = 1 << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE;
 
 constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
@@ -1754,11 +1753,9 @@ void write_prefetcher_cmds(
         for (uint32_t j = 0; j < cmd_sizes.size(); j++) {
             uint32_t cmd_size_words =
                 ((uint32_t)cmd_sizes[j] << DispatchSettings::PREFETCH_Q_LOG_MINSIZE) / sizeof(uint32_t);
-            uint32_t space_at_end_for_wrap_words = CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(uint32_t);
             if ((void*)(host_mem_ptr + cmd_size_words) >
                 (void*)((uint8_t*)host_hugepage_base + hugepage_issue_buffer_size_g)) {
                 // Wrap huge page
-                uint32_t offset = 0;
                 host_mem_ptr = (uint32_t*)host_hugepage_base;
             }
 
@@ -1934,8 +1931,7 @@ void configure_for_single_chip(
     const uint32_t prefetch_d_upstream_cb_sem = prefetch_d_core_sem_1_id;
     const uint32_t prefetch_d_downstream_cb_sem = prefetch_d_core_sem_2_id;
 
-    const uint32_t dispatch_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-    const uint32_t dispatch_sync_sem = dispatch_core_sem_0_id;
+    tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
 
     const uint32_t dispatch_core_sem_1_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);  // 1
     const uint32_t dispatch_cb_sem = dispatch_core_sem_1_id;
@@ -2263,8 +2259,6 @@ int main(int argc, char** argv) {
                 LogTest, "Device {} is not valid. Highest valid device id = {}.", test_device_id_g, num_devices - 1);
             throw std::runtime_error("Invalid Device Id.");
         }
-        int device_id_l = test_device_id_g;
-        int device_id_r = -1;
 
         tt_metal::IDevice* device = tt_metal::CreateDevice(test_device_id_g);
         tt_metal::IDevice* device_r = device;
