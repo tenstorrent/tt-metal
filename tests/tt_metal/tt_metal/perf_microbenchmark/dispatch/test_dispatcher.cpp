@@ -383,8 +383,6 @@ void gen_cmds(
     CoreRange worker_cores,
     DeviceData& device_data,
     uint32_t page_size) {
-    uint32_t total_size_bytes = 0;
-    uint32_t buffer_size = prefetcher_buffer_size_g - page_size;  // for terminate
     uint32_t cmd_count = 0;
 
     switch (test_type_g) {

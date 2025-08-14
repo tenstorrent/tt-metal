@@ -148,19 +148,19 @@ KernelHandle create_kernel(
 }
 
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
-    auto dummy_reader_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    auto dummy_writer_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
 void initialize_dummy_semaphores(
@@ -562,7 +562,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     vector<uint32_t> dummy_cr0_args;
     vector<uint32_t> dummy_cr1_args;
     vector<uint32_t> dummy_common_args;
-    bool terminate = false;
 
     auto it = program_config.cr_set.ranges().begin();
     CoreRange core_range_0 = *it;
@@ -1020,8 +1019,7 @@ void test_my_coordinates(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt::tt_metal::CreateProgram();
-    KernelHandle kernel =
-        create_kernel(processor_class, program, CoreRangeSet{cr}, compile_args, k_kernel_path, idle_eth);
+    create_kernel(processor_class, program, CoreRangeSet{cr}, compile_args, k_kernel_path, idle_eth);
 
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(cq_id), workload, false);
@@ -1112,7 +1110,7 @@ TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
         CoreRangeSet cr_set({cr});
         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
         // added separately
-        auto dummy_reader_kernel = CreateKernel(
+        CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
             cr_set,
@@ -1203,7 +1201,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
                                              .set_page_size(intermediate_cb, single_tile_size)
                                              .set_page_size(out_cb, single_tile_size);
-        auto cb = CreateCircularBuffer(program_, cr_set, cb_config);
+        CreateCircularBuffer(program_, cr_set, cb_config);
 
         local_test_functions::initialize_dummy_kernels(program_, cr_set);
 
@@ -1273,7 +1271,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatch
         CoreRangeSet cr_set({cr});
         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
         // added separately
-        auto dummy_reader_kernel = CreateKernel(
+        CreateKernel(
             program_,
             "tt_metal/kernels/dataflow/blank.cpp",
             cr_set,
@@ -1834,7 +1832,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         for (uint32_t j = 0; j < NUM_CBS; j++) {
             CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
                                                  .set_page_size(j, page_size * (j + 1));
-            auto cb = CreateCircularBuffer(program_, cr_set, cb_config);
+            CreateCircularBuffer(program_, cr_set, cb_config);
         }
 
         for (uint32_t j = 0; j < NUM_SEMS; j++) {
@@ -2115,7 +2113,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
         for (uint32_t j = 0; j < NUM_CBS; j++) {
             CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
                                                  .set_page_size(j, page_size * (j + 1));
-            auto cb = CreateCircularBuffer(program_, cr_set, cb_config);
+            CreateCircularBuffer(program_, cr_set, cb_config);
         }
 
         for (uint32_t j = 0; j < NUM_SEMS; j++) {

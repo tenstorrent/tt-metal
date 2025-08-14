@@ -70,7 +70,7 @@ tt::tt_metal::Program initialize_program_data_movement(
     tt::tt_metal::IDevice* device, const CoreRangeSet& core_range_set) {
     tt::tt_metal::Program program = tt_metal::CreateProgram();
 
-    auto add_two_ints_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core_range_set,
@@ -98,7 +98,7 @@ tt::tt_metal::Program initialize_program_data_movement_rta(
         dm_defines["COMMON_RUNTIME_ARGS"] = "1";
     }
 
-    auto kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         core_range_set,
@@ -217,9 +217,7 @@ void verify_results(
             auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_EQ(rt_args, expected_rt_args) << "(unique rta)";
 
-            verify_core_rt_args(
-                device, false, logical_core, rt_args_base_addr, expected_rt_args, unique_arg_incr_val);
-            auto rt_args_size_bytes = rt_args.size() * sizeof(uint32_t);
+            verify_core_rt_args(device, false, logical_core, rt_args_base_addr, expected_rt_args, unique_arg_incr_val);
         }
 
         // Verify common RT Args (same for all cores) if they exist.

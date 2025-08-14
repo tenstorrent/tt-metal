@@ -56,7 +56,6 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
     size_t total_subordinate_cores = subordinate_core_set.num_cores();
 
     const size_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
-    const size_t total_size_bytes = test_config.num_of_transactions * transaction_size_bytes * total_subordinate_cores;
 
     // Obtain L1 Address for Storing Data
     // NOTE: We don't know if the whole block of memory is actually available.
@@ -81,8 +80,6 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
     }
     // Assigns a "safe" L1 local address for the master and subordinate cores
     uint32_t l1_base_address = master_l1_info.base_address;
-
-    const size_t subordinate_size_bytes = test_config.num_of_transactions * transaction_size_bytes;
 
     // Compile-time arguments for kernels
     vector<uint32_t> gatherer_compile_args = {

@@ -29,7 +29,6 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     CoreRangeSet receiver_cores(CoreRange({1, 1}, {2, 2}));
-    uint32_t global_cb_size = 3200;
     uint32_t cb_page_size = 32;
     tt::DataFormat tile_format = tt::DataFormat::Float16_b;
     auto all_cores = sender_cores.merge(receiver_cores);
@@ -51,7 +50,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
     tt::tt_metal::CircularBufferConfig global_cb_config = tt::tt_metal::CircularBufferConfig(cb_page_size);
     global_cb_config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
     global_cb_config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
-    auto remote_cb = tt::tt_metal::experimental::CreateCircularBuffer(program_, all_cores, global_cb_config, global_cb);
+    tt::tt_metal::experimental::CreateCircularBuffer(program_, all_cores, global_cb_config, global_cb);
 
     std::vector<uint32_t> compile_args = {remote_cb_index};
     tt::tt_metal::KernelHandle dm0_sender_kernel = tt::tt_metal::CreateKernel(
