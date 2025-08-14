@@ -260,7 +260,7 @@ def run_avg_pool2d(
         )
 
     # test for equivalence
-    pcc_thresh = 0.98
+    pcc_thresh = 0.985
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     # TTNN only supports scalars in Bfloat16, so we cannot support rtol lower than 0.01
     # for instance, a 3x3 kernel uses scalar 1/9 = 0.111, which in Bfloat16 is 0.11084
@@ -270,7 +270,7 @@ def run_avg_pool2d(
     # since the atol default is 0.016 we don't see this issue for low magnitude values, but
     # when using small divisor overrides with large kernels we see much large values which
     # overwhelm the atol and the rtol becomes significant
-    rtol = 0.02
+    rtol = 0.01
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
