@@ -35,9 +35,6 @@ HOSTS=(
 # One MESH_ID per *global* MPI rank (workers..., aggregator, optimizer)
 # If fewer entries than total ranks, ranks beyond the end will default to their rank id.
 MESH_IDS=(0 0 0 0 0)
-if grep -q "socket_type: fabric" "${CFG_DIR}/${CONFIG}"; then
-  MESH_IDS=(1 4 3 0 2)
-fi
 
 print_usage() {
   cat <<EOF
@@ -203,24 +200,6 @@ copy_to_remote_hosts() {
 
 copy_to_remote_hosts
 
-# --- Per-rank TT_MESH_ID wiring ---
-
-# Serialize MESH_IDS to pass via env
-MESH_IDS_STR="$(IFS=,; echo "${MESH_IDS[*]:-}")"
-echo "DEBUG: MESH_IDS_STR='${MESH_IDS_STR}'"
-
-# Count entries without awk (robust, no external deps)
-MESH_COUNT=0
-if [[ -n "${MESH_IDS_STR}" ]]; then
-  IFS=, read -r -a __mids_tmp <<< "${MESH_IDS_STR}"
-  MESH_COUNT=${#__mids_tmp[@]}
-fi
-
-if (( MESH_COUNT < TOTAL_RANKS )); then
-  echo "WARN: MESH_IDS has $MESH_COUNT entries but TOTAL_RANKS is $TOTAL_RANKS."
-  echo "      Ranks >= $MESH_COUNT will default to TT_MESH_ID=\$OMPI_COMM_WORLD_RANK."
-fi
-
 # Snippet evaluated on *each* rank to set TT_MESH_ID (built with a safe heredoc)
 mesh_id_snippet="$(cat <<'EOSNIP'
   IDX=${OMPI_COMM_WORLD_RANK:-0}
@@ -280,9 +259,30 @@ build_mpi_command() {
 USE_FABRIC=false
 if grep -q "socket_type: fabric" "${CFG_DIR}/${CONFIG}"; then
   USE_FABRIC=true
+  MESH_IDS=(1 4 3 0 2)  # Override mesh IDs for fabric configuration
   echo "Fabric configuration detected - using mesh graph descriptor"
+  echo "Updated MESH_IDS to: ${MESH_IDS[*]}"
 else
   echo "Standard configuration detected - fabric disabled"
+  echo "Using default MESH_IDS: ${MESH_IDS[*]}"
+fi
+
+# --- Per-rank TT_MESH_ID wiring ---
+
+# Serialize MESH_IDS to pass via env
+MESH_IDS_STR="$(IFS=,; echo "${MESH_IDS[*]:-}")"
+echo "DEBUG: MESH_IDS_STR='${MESH_IDS_STR}'"
+
+# Count entries without awk (robust, no external deps)
+MESH_COUNT=0
+if [[ -n "${MESH_IDS_STR}" ]]; then
+  IFS=, read -r -a __mids_tmp <<< "${MESH_IDS_STR}"
+  MESH_COUNT=${#__mids_tmp[@]}
+fi
+
+if (( MESH_COUNT < TOTAL_RANKS )); then
+  echo "WARN: MESH_IDS has $MESH_COUNT entries but TOTAL_RANKS is $TOTAL_RANKS."
+  echo "      Ranks >= $MESH_COUNT will default to TT_MESH_ID=\$OMPI_COMM_WORLD_RANK."
 fi
 
 # Build environment setup
@@ -333,8 +333,6 @@ if [[ "$DRY_RUN" == "true" ]]; then
   exit 0
 fi
 
-eval "$MPI_COMMAND"
-
 # cleanup
 cleanup() {
   rm -f "${HOSTFILE}"
@@ -346,6 +344,9 @@ trap cleanup EXIT
 
 # Launch with error handling
 echo "Executing MPI command..."
+echo "=== MPI Command Being Executed ==="
+echo "$MPI_COMMAND"
+echo "=================================="
 if ! eval "$MPI_COMMAND"; then
   echo "ERROR: MPI job failed!" >&2
   exit 1
