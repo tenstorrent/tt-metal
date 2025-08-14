@@ -20,6 +20,7 @@ allowed_modes = [
     "yolov8s_world",
     "yolov11",
     "yolov12n",
+    "yolov12x",
     "rtdetr",
     "resnet50",
     "mobilenetv2",
@@ -95,6 +96,11 @@ def main(args_dict):
         from ultralytics import YOLO
 
         torch_model = YOLO("yolo12n.pt").model
+
+    elif args.model == "yolov12x":
+        from ultralytics import YOLO
+
+        torch_model = YOLO("yolo12x.pt").model
 
     elif args.model == "yolov8s_world":
         from models.demos.yolov8s_world.reference.yolov8s_world import YOLOWorld
