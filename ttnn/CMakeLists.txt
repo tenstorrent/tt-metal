@@ -510,6 +510,7 @@ target_link_libraries(
         TTNN::Ops::SlidingWindow
         TTNN::Ops::Transformer
         TTNN::Ops::Uniform
+        TTNN::Ops::Debug
         TTNN::Ops::PointToPoint
         TTNN::Ops::Pool
         TTNN::Ops::Normalization
@@ -666,6 +667,7 @@ add_subdirectory(cpp/ttnn/operations/pool)
 add_subdirectory(cpp/ttnn/operations/point_to_point)
 add_subdirectory(cpp/ttnn/operations/normalization)
 add_subdirectory(cpp/ttnn/operations/rand)
+add_subdirectory(cpp/ttnn/operations/debug)
 add_subdirectory(cpp/ttnn/deprecated)
 
 add_subdirectory(examples)
