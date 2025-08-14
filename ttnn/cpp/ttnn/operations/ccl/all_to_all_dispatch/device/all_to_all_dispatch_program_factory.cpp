@@ -414,13 +414,14 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             output_tensor.buffer()->address(),
             metadata_tensor.buffer()->address(),
             (uint32_t)operation_attributes.cross_device_semaphore->address(),
+            (uint32_t)operation_attributes.init_semaphore->address(),
             0,
             0,
         };
         reader_runtime_args[6] = tokens_per_core_start;
         reader_runtime_args[7] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
-        writer_runtime_args[6] = tokens_per_core_start;
-        writer_runtime_args[7] = reader_runtime_args[7];
+        writer_runtime_args[7] = tokens_per_core_start;
+        writer_runtime_args[8] = reader_runtime_args[7];
         tokens_per_core_start = reader_runtime_args[7];
         for (auto& neighbor_coordinate : neighbors) {
             log_debug(
@@ -486,6 +487,7 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
             writer_runtime_args.at(3) = output_tensor.buffer()->address();
             writer_runtime_args.at(4) = metadata_tensor.buffer()->address();
             writer_runtime_args.at(5) = (uint32_t)operation_attributes.cross_device_semaphore->address();
+            writer_runtime_args.at(6) = (uint32_t)operation_attributes.init_semaphore->address();
         }
     }
 }

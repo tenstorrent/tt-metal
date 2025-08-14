@@ -69,9 +69,21 @@ void kernel_main() {
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
     constexpr uint8_t replicate_group_devices =
         num_devices / (replicate_axis == ReplicateGroup::COLS ? mesh_cols : mesh_rows);
+    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
+    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
+
+    constexpr uint32_t device_begin_idx = REPLICATE_GROUP_AXIS == 0 ? col : row * mesh_cols;
+    constexpr uint32_t device_end_idx =
+        (REPLICATE_GROUP_AXIS == 0)
+            ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
+            : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
+    constexpr uint32_t device_stride = REPLICATE_GROUP_AXIS == 0 ? mesh_cols : 1;
 #else
     constexpr ReplicateGroup replicate_axis = ReplicateGroup::NONE;
     constexpr uint8_t replicate_group_devices = num_devices;
+    constexpr uint32_t device_begin_idx = 0;
+    constexpr uint32_t device_end_idx = num_devices;
+    constexpr uint32_t device_stride = 1;
 #endif
 
     constexpr uint32_t Replicate_Group = (replicate_axis == ReplicateGroup::NONE)   ? mesh_rows * mesh_cols
@@ -86,14 +98,15 @@ void kernel_main() {
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
     const std::array<bool, Num_Directions> directions = DIRECTIONS;
 
-    uint32_t rt_arg_count = 0;
+    size_t rt_arg_count = 0;
     const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
+    const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const uint32_t token_start_idx = get_arg_val<uint32_t>(rt_arg_count++);
     const uint32_t token_end_idx = get_arg_val<uint32_t>(rt_arg_count++);
 
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
-    open_direction_connections(directions, fabric_connections, rt_arg_count);
+    open_direction_connections_async(directions, fabric_connections, rt_arg_count);
 
     InterleavedAddrGen<output_is_dram> output_addrgen{
         .bank_base_address = output_base_addr, .page_size = data_size_bytes};
@@ -105,9 +118,23 @@ void kernel_main() {
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
         cb_push_back(packet_header_cb_id,1);
     }
+    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
+
+    open_direction_connections_barrier(directions, fabric_connections);
+    send_init_semaphore_to_configured_targets<
+        linearized_mesh_coord,
+        topology,
+        src_chip_id,
+        mesh_rows,
+        mesh_cols,
+        replicate_axis,
+        num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
+    bool needs_barrier = false;
+    noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
+    noc_semaphore_set((uint32_t*)init_semaphore_addr, 0);
 
     for (uint32_t t = token_start_idx; t < token_end_idx; ++t) {
         cb_wait_front(metadata_cb_id, 1);
@@ -137,7 +164,8 @@ void kernel_main() {
 
                 if (dest_device_idx == linearized_mesh_coord) {
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
-                    noc_async_write_barrier();
+                    needs_barrier = true;
+                    noc_async_writes_flushed();
                 } else {
                     if constexpr (is_1d_topology<topology>()) {
                         fabric_send_chip_unicast_noc_unicast_1d<
@@ -177,21 +205,22 @@ void kernel_main() {
                 }
             }
         }
+
         cb_pop_front(metadata_cb_id, 1);
     }
     cb_pop_front(local_experts_cb_id, 1);
-
+    if (needs_barrier) {
+        noc_async_write_barrier();
+    }
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
     // "multicast" semaphore increment to let other devices know we are done
-    for(uint32_t device_idx=0;device_idx < num_devices;++device_idx){
+    for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
         const auto & dest_chip_id = dest_chip_ids[device_idx];
 
         if (device_idx == linearized_mesh_coord) {
             noc_semaphore_inc(global_noc_semaphore_addr, 1);
             noc_async_atomic_barrier();
         } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
-            const auto& dest_mesh_id = dest_mesh_ids[device_idx];
-
             if constexpr (is_1d_topology<topology>()) {
                 fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
                     linearized_mesh_coord,
@@ -199,6 +228,7 @@ void kernel_main() {
                     mesh_rows,
                     mesh_cols>(fabric_connections, packet_headers[1], device_idx, global_noc_semaphore_addr, 1, true);
             } else {
+                const auto& dest_mesh_id = dest_mesh_ids[device_idx];
                 const auto& dest_chip_id = dest_chip_ids[device_idx];
                 fabric_send_chip_unicast_noc_unicast_semaphore_only<src_chip_id, mesh_rows, mesh_cols>(
                     fabric_connections,
