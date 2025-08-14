@@ -140,7 +140,8 @@ struct CopyParams {
 };
 
 template <typename T>
-static void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+static void test_multi_core_copy(
+    const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, const std::string& kernel_path) {
     MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, params.input_shard_spec);
     TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
 
@@ -167,7 +168,7 @@ static void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distrib
 
     KernelHandle kernel_id = CreateKernel(
         program,
-        "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local.cpp",
+        kernel_path,
         core_groups.cores_with_data,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -437,9 +438,21 @@ class ShardedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocal) {
     const auto& params = GetParam();
 
+    const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local.cpp";
     switch (params.dtype) {
-        case DataType::UINT8: test_multi_core_copy<uint8_t>(params, mesh_device_.get()); break;
-        case DataType::UINT16: test_multi_core_copy<uint16_t>(params, mesh_device_.get()); break;
+        case DataType::UINT8: test_multi_core_copy<uint8_t>(params, mesh_device_.get(), kernel_path); break;
+        case DataType::UINT16: test_multi_core_copy<uint16_t>(params, mesh_device_.get(), kernel_path); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIterator) {
+    const auto& params = GetParam();
+
+    const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_shard_iterator.cpp";
+    switch (params.dtype) {
+        case DataType::UINT8: test_multi_core_copy<uint8_t>(params, mesh_device_.get(), kernel_path); break;
+        case DataType::UINT16: test_multi_core_copy<uint16_t>(params, mesh_device_.get(), kernel_path); break;
         default: TT_THROW("Unsupported data type");
     }
 }

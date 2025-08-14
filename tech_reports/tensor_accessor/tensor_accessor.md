@@ -172,6 +172,44 @@ bool is_local = tensor_accessor.is_local_shard(shard_id);
 
 Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwide `Span<uint32_t>`
 
+**Shard pages iterator**
+
+You can use the shard pages iterator to iterate over page addresses and page IDs in a shard with a step >=1.
+- Since it has a state, address calculation is more efficient than calling `accessor.get_noc_addr` at each step.
+- It handles cases when the input shape is not divisible by the shard shape along some dimension(s) (i.e., it skips padding pages)
+- Note: works only for sharded tensors
+
+Example of a sharded tensor copy
+```c++
+for (uint32_t i = 0; i < num_shards; ++i) {
+    uint32_t shard_id = first_shard_id + i * num_cores;
+    auto shard_pages = accessor_src.shard_pages(shard_id);
+    for (const auto& page: shard_pages) {
+        noc_async_write_page(
+            /*id = */ shard_page.page_id(),
+            /*addrgen = */tensor_accessor_dst,
+            /*src_local_l1_addr = */shard_page.get_noc_addr()
+        );
+        noc_async_writes_flushed();
+    }
+}
+```
+
+Or this sharded tensor copy, which should be more efficient, since it uses an iterator to calculate the address for both the src and the dst:
+```c++
+for (uint32_t i = 0; i < num_shards; ++i) {
+    uint32_t shard_id = first_shard_id + i * num_cores;
+    auto shard_pages_src = tensor_accessor_src.shard_pages(shard_id);
+    auto shard_pages_dst = tensor_accessor_dst.shard_pages(shard_id);
+    auto page_dst = shard_pages_dst.begin();
+    for (const auto& page_src : shard_pages_src) {
+        noc_async_read(page_src.get_noc_addr(), page_dst->get_noc_addr(), page_size);
+        noc_async_writes_flushed();
+        ++page_dst;
+    }
+}
+
+```
 
 ## Performance Considerations
 - If rank is static, then construction of TensorAccessor is 0-cost, meaning that everything is precomputed in compile time.
