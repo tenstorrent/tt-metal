@@ -269,7 +269,7 @@ def create_tt_model(
         (  # evals-long-prompts run (Throughput) - 1 user, smaller prompts, batch repeat 12
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_very_long.json",  # input_prompts
             True,  # instruct mode
-            12,  # repeat_batches
+            10,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
             1024,  # max_generated_tokens
