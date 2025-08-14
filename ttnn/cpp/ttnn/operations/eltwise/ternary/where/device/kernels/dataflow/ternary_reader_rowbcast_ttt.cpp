@@ -43,6 +43,7 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto src_c_args = TensorAccessorArgs<src_b_args.next_compile_time_args_offset()>();
 #if SRC_SHARDED
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);
@@ -62,11 +63,11 @@ void kernel_main() {
     cb_push_back(cb_id_src_c, src_num_tiles_c);
 #else
     const uint32_t src_tile_bytes_c = get_tile_size(cb_id_src_c);
-    const auto src_c = TensorAccessor(src_b_args, src_addr_c, src_tile_bytes_c);
+    const auto src_c = TensorAccessor(src_c_args, src_addr_c, src_tile_bytes_c);
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B || !SRC_SHARDED_C
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = get_compile_time_arg_val(src_c_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

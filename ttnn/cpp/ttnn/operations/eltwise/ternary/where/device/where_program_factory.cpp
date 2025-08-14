@@ -740,14 +740,16 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
         // TTT with row broadcast:
-        bool has_sharding = predicate_tensor.memory_config().is_sharded() ||
-                            value_true_tensor.value().memory_config().is_sharded() ||
-                            output.memory_config().is_sharded();
+        bool has_sharding =
+            predicate_tensor.memory_config().is_sharded() || value_true_tensor.value().memory_config().is_sharded() ||
+            value_false_tensor.value().memory_config().is_sharded() || output.memory_config().is_sharded();
 
         std::vector<uint32_t> reader_compile_time_args;
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);  // First tensor (predicate)
         TensorAccessorArgs(*value_true_tensor.value().buffer())
             .append_to(reader_compile_time_args);                                 // Second tensor (true)
+        TensorAccessorArgs(*value_false_tensor.value().buffer())
+            .append_to(reader_compile_time_args);                                 // Third tensor (false)
         reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));  // Sharding flag
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     } else {
