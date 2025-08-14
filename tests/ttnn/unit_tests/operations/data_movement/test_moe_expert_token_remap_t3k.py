@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from math import prod
+from math import prod, ceil
 import random
 
 import pytest
@@ -15,7 +15,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import 
     get_expert_indices,
     get_metadata_tensor,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+
+REDUCTION_SIZE = 16
 
 
 def gen_topk(experts, indices_tensor, devices):
@@ -71,16 +73,35 @@ def gen_output_expert_token_activation(devices, topk_tensor, indices_tensor, exp
     return expert_token_activation_tensor
 
 
-def gen_tensors(devices, experts, batch, seq, selected_experts_k, mesh_shape, scheme):
+def gen_reduced_expert_token_activation(expert_token_activation_tensor, reduction_size):
+    devices, batch, seq, experts_per_device = expert_token_activation_tensor.shape
+
+    batch_seq = batch * seq
+    reduced_batch_seq = ceil(batch_seq / reduction_size)
+
+    rs_expert_token_activation_tensor = expert_token_activation_tensor.reshape((devices, batch_seq, experts_per_device))
+
+    reduced_tensor = torch.zeros((devices, 1, reduced_batch_seq, experts_per_device), dtype=torch.int16)
+    for d in range(devices):
+        for rbs in range(reduced_batch_seq):
+            ridx_start, ridx_end = rbs * reduction_size, (rbs + 1) * reduction_size
+            for e in range(experts_per_device):
+                reduced_tensor[d, 0, rbs, e] = rs_expert_token_activation_tensor[d, ridx_start:ridx_end, e].any().item()
+
+    return reduced_tensor
+
+
+def gen_tensors(devices, experts, batch, seq, selected_experts_k, mesh_shape, reduction_size, scheme):
     expert_mapping = gen_expert_mapping(experts, devices, scheme)
     expert_indices = get_expert_indices(batch, experts, selected_experts_k, seq, mesh_shape, scheme)
     topk_tensor = gen_topk(experts, expert_indices, prod(mesh_shape))
 
     output = gen_output_expert_token_activation(devices, topk_tensor, expert_indices, expert_mapping)
+    reduced_output = gen_reduced_expert_token_activation(output, reduction_size)
 
     metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping, mesh_shape)
 
-    return expert_mapping, metadata_tensor, topk_tensor, output
+    return expert_mapping, metadata_tensor, topk_tensor, output, reduced_output
 
 
 @pytest.mark.parametrize(
@@ -114,11 +135,11 @@ def test_moe_expert_token_remaps(
     output_tensor_goldens_list = []
 
     for _ in range(num_iters):
-        expert_mapping, metadata_tensor, topk_tensor, output = gen_tensors(
-            devices, experts, batch, seq, selected_experts_k, mesh_shape, scheme
+        expert_mapping, metadata_tensor, topk_tensor, output_mapping, output_reduced = gen_tensors(
+            devices, experts, batch, seq, selected_experts_k, mesh_shape, REDUCTION_SIZE, scheme
         )
 
-        output_tensor_goldens_list.append(output)
+        output_tensor_goldens_list.append((output_mapping, output_reduced))
 
         tt_topk = ttnn.from_torch(
             topk_tensor,
@@ -162,9 +183,12 @@ def test_moe_expert_token_remaps(
         tt_op_out = ttnn.moe_expert_token_remap(topk, mapping, metadata)
         out_tensor_list.append(tt_op_out)
 
-    for ref, test in zip(output_tensor_goldens_list, out_tensor_list):
-        test_torch = ttnn.to_torch(test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-        assert_with_pcc(test_torch, ref)
+    for (mapping_ref, reduced_ref), (mapping_test, reduced_test) in zip(output_tensor_goldens_list, out_tensor_list):
+        mapping_test_torch = ttnn.to_torch(mapping_test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        assert_with_pcc(mapping_test_torch, mapping_ref)
+
+        reduced_test_torch = ttnn.to_torch(reduced_test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        assert_equal(reduced_test_torch, reduced_ref)
 
 
 @pytest.mark.parametrize(
@@ -180,11 +204,12 @@ def test_gen_tensors(mesh_device, mesh_shape, experts_per_device, batches_per_de
     batch = batches_per_device * devices
     experts = experts_per_device * devices
 
-    expert_mapping, metadata_tensor, topk_tensor, output = gen_tensors(
-        devices, experts, batch, seq, select_experts_k, mesh_shape, scheme
+    expert_mapping, metadata_tensor, topk_tensor, output, reduced_output = gen_tensors(
+        devices, experts, batch, seq, select_experts_k, mesh_shape, REDUCTION_SIZE, scheme
     )
 
     assert expert_mapping.shape == (1, 1, experts, devices)
     assert metadata_tensor.shape == (devices, batch, seq, select_experts_k)
     assert topk_tensor.shape == (devices, batch, seq, experts)
     assert output.shape == (devices, batch, seq, experts_per_device)
+    assert reduced_output.shape == (devices, 1, ceil(batch * seq / REDUCTION_SIZE), experts_per_device)
