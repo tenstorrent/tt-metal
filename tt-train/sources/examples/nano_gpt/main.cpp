@@ -492,6 +492,17 @@ const std::unordered_map<
     schedulers = {{"identity", create_idendity_scheduler}, {"warmup_linear", create_warmup_with_linear_scheduler}};
 
 int main(int argc, char **argv) {
+    // print args and argv
+    fmt::print("Arguments:\n");
+    for (int i = 0; i < argc; ++i) {
+        fmt::print("  argv[{}]: {}\n", i, argv[i]);
+    }
+
+    fmt::println("Environments:");
+    fmt::println("  TT_MESH_GRAPH_DESC_PATH: {}", std::getenv("TT_MESH_GRAPH_DESC_PATH"));
+    fmt::println("  TT_LOGGER_LEVEL: {}", std::getenv("TT_LOGGER_LEVEL"));
+    fmt::println("  TT_MESH_ID: {}", std::getenv("TT_MESH_ID"));
+
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
@@ -517,15 +528,7 @@ int main(int argc, char **argv) {
     EvalConfig eval_config = parse_eval_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
 
-    if (config.socket_type == SocketType::FABRIC) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
-            throw std::runtime_error(fmt::format(
-                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
-                device_config.mesh_shape));
-        }
-    }
-
+    fmt::println("[WORKER] ENABLE MPI CHECK");
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
         ctx.initialize_distributed_context(argc, argv);
@@ -536,6 +539,7 @@ int main(int argc, char **argv) {
         // disable wandb for now in case of mpi example
         enable_wandb = false;
     }
+    fmt::println("[WORKER] AFTER ENABLE MPI CHECK");
 
     if (device_config.enable_ddp || device_config.enable_tp) {
         fmt::println("Device config:");
@@ -683,7 +687,18 @@ int main(int argc, char **argv) {
     fmt::println("BEFORE DEVICE INITIALIZATION");
 
     fmt::println("MESH SHAPE: {}, device ids {}", device_config.mesh_shape, device_config.device_ids);
-    // initialize_device(device_config.mesh_shape, device_config.device_ids);
+    fmt::println("[WORKER] BEFORE FABRIC CONFIG SET");
+    if (config.socket_type == SocketType::FABRIC) {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
+            throw std::runtime_error(fmt::format(
+                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
+                device_config.mesh_shape));
+        }
+    }
+    fmt::println("[WORKER] AFTER FABRIC CONFIG SET");
+
+    initialize_device(device_config.mesh_shape, device_config.device_ids);
     fmt::println("AFTER DEVICE INITIALIZATION");
 
     fmt::println("TEST 1");

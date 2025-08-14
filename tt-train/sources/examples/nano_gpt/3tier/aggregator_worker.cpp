@@ -69,13 +69,11 @@ int main(int argc, char **argv) {
     auto distributed_ctx = ctx.get_distributed_context();
 
     CLI::App app{"Multihost Example"};
-    fmt::print("Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank().get());
+    fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
     argv = app.ensure_utf8(argv);
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt_3tier.yaml";
-
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
-
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(config_name);
@@ -86,7 +84,6 @@ int main(int argc, char **argv) {
         throw std::runtime_error("Tensor parallel is not supported in the aggregator worker.");
     }
 
-    three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
     if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
         if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
@@ -95,6 +92,10 @@ int main(int argc, char **argv) {
                 device_config.mesh_shape));
         }
     }
+    fmt::println("Aggregator before initialize device");
+    fmt::println("Aggregator mesh device: {}", device_config.mesh_shape);
+    three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
+    fmt::println("Aggregator after device creation");
 
     auto socket_manager = SocketManager(config.socket_type);
 

@@ -2157,6 +2157,11 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
          inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
         num_links_requested_on_node += edge.connected_chip_ids.size();
     }
+
+    fmt::println(
+        "DEBUG: NUM DIRECTIONS ASSIGNED {} NUM LINKS REQUESTED ON NODE {}",
+        num_directions_assigned,
+        num_links_requested_on_node);
     TT_FATAL(
         num_directions_assigned == num_links_requested_on_node,
         "Could not bind all edges in the Mesh Graph to an intermesh link.");

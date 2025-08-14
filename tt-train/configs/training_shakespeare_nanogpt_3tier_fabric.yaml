@@ -36,4 +36,4 @@ eval_config:
   top_p: 1.0
 
 device_config:
-    mesh_shape: [1, 8]
+  mesh_shape: [1, 8]
