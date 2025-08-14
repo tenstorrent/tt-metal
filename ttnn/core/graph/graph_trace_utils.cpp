@@ -284,14 +284,11 @@ uint32_t extract_l1_buffer_allocation_peak_size_per_core(
             auto alloc_size = detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
             current_size_per_core += alloc_size;
             peak_size_per_core = std::max(peak_size_per_core, current_size_per_core);
-            std::cout << "--- Alloc: " << alloc_size << ", current_size_per_core: " << current_size_per_core
-                      << ", peak_size_per_core: " << peak_size_per_core << "\n";
         } else  // kNodeBufferDeallocate
         {
             auto total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
             auto alloc_size = detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
             current_size_per_core -= alloc_size;
-            std::cout << "--- Dealloc: " << total_size << ", current_size_per_core: " << current_size_per_core << "\n";
         }
     }
 
@@ -322,12 +319,8 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
             if (!is_globally_allocated) {
                 current_size_per_core += std::stoi(node.at(kParams).at(kSize).get<std::string>());
                 peak_size_per_core = std::max(peak_size_per_core, current_size_per_core);
-                std::cerr << "--- CB Alloc: " << std::stoi(node.at(kParams).at(kSize).get<std::string>())
-                          << ", current_size: " << current_size_per_core << ", peak_size: " << peak_size_per_core
-                          << "\n";
             }
         } else {  // kNodeCBDeallocateAll
-            std::cerr << "--- CB Deallocall\n";
             current_size_per_core = 0;
         }
     }
@@ -349,13 +342,10 @@ uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleav
                 current_size += alloc_size;
                 cb_size += alloc_size;
                 peak_size = std::max(peak_size, current_size);
-                std::cerr << "=== CB Alloc: " << alloc_size << ", current_size: " << current_size
-                          << ", peak_size: " << peak_size << "\n";
             }
         } else if (node.at(kNodeType) == kNodeCBDeallocateAll) {
             current_size -= cb_size;
             cb_size = 0;
-            std::cerr << "=== CB Dealloc: " << cb_size << ", current_size: " << current_size << "\n";
         } else if (node.at(kNodeType) == kNodeBufferAllocate) {
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
@@ -370,8 +360,6 @@ uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleav
             uint32_t alloc_size = detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
             current_size += alloc_size;
             peak_size = std::max(peak_size, current_size);
-            std::cerr << "=== L1 Alloc: " << alloc_size << ", current_size: " << current_size
-                      << ", peak_size: " << peak_size << "\n";
         } else if (node.at(kNodeType) == kNodeBufferDeallocate) {
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
@@ -385,7 +373,6 @@ uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleav
             uint32_t total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
             uint32_t dealloc_size = detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
             current_size -= dealloc_size;
-            std::cerr << "=== L1 Dealloc: " << dealloc_size << ", current_size: " << current_size << "\n";
         }
     }
 
