@@ -169,8 +169,9 @@ std::map<std::string, std::string> make_dataflow_defines(
 
 WhereBroadcastType get_broadcast_type(
     const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape, const ttnn::Shape& value_false_shape) {
-    // Check for column broadcast pattern: shapes like (1,1,32,32), (1,1,32,1), (1,1,32,32)
-    // Column broadcast means one tensor has last dimension = 1 while others have full width
+    // Check for column broadcast pattern:
+    // Examples: (1,1,32,32), (1,1,32,1), (1,1,32,32) or (1,1,32,1), (1,1,32,1), (1,1,32,32)
+    // Column broadcast means one or more tensors have last dimension = 1 while at least one has full width
 
     auto pred_shape = predicate_shape;
     auto true_shape = value_true_shape;
