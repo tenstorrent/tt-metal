@@ -68,7 +68,6 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         int num_sticks = 256;
         int num_elements_in_stick = 1024;
         int stick_size = num_elements_in_stick * 2;
-        int num_elements_in_stick_as_packed_uint32 = num_elements_in_stick / 2;
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
@@ -81,7 +80,6 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
             .buffer_type = tt_metal::BufferType::DRAM};
 
         auto sticks_buffer = CreateBuffer(sticks_config);
-        uint32_t dram_buffer_src_addr = sticks_buffer->address();
 
         tt_metal::detail::WriteToBuffer(sticks_buffer, src_vec);
 
@@ -123,7 +121,6 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         int num_sticks = 256;
         int num_elements_in_stick = 1024;
         int stick_size = num_elements_in_stick * 2;
-        int num_elements_in_stick_as_packed_uint32 = num_elements_in_stick / 2;
 
         int num_tiles_c = stick_size / 64;
 
@@ -160,13 +157,13 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
@@ -186,7 +183,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
 
         vector<uint32_t> compute_kernel_args = {uint(num_output_tiles)};
 
-        auto eltwise_unary_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,
@@ -217,7 +214,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             (uint32_t) 0,
             (uint32_t) num_output_tiles});
 
-        CoreCoord debug_core = {1, 1};
+        [[maybe_unused]] CoreCoord debug_core = {1, 1};
 
         tt_metal::detail::LaunchProgram(device, program);
 
@@ -293,7 +290,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         int num_sticks = 256;
         int num_elements_in_stick = 1024;
         int stick_size = num_elements_in_stick * 2;
-        int num_elements_in_stick_as_packed_uint32 = num_elements_in_stick / 2;
 
         int num_tiles_c = stick_size / 64;
 
@@ -324,14 +320,14 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
@@ -351,7 +347,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 
         vector<uint32_t> compute_kernel_args = {uint(num_output_tiles)};
 
-        auto eltwise_unary_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,
@@ -415,8 +411,6 @@ template <bool src_is_in_l1, bool dst_is_in_l1>
 bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     uint num_pages = 256;
     uint num_bytes_per_page = 2048;
-    uint num_entries_per_page = 512;
-    uint num_bytes_per_entry = 4;
     uint buffer_size = num_pages * num_bytes_per_page;
 
     uint num_l1_banks = 128;
@@ -433,12 +427,12 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{0, tt::DataFormat::Float16_b}})
             .set_page_size(0, num_bytes_per_page);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{16, tt::DataFormat::Float16_b}})
             .set_page_size(16, num_bytes_per_page);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateKernel(
         program,
@@ -459,7 +453,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             .compile_args = {not dst_is_in_l1}});
 
     vector<uint32_t> compute_kernel_args = {num_pages};
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,

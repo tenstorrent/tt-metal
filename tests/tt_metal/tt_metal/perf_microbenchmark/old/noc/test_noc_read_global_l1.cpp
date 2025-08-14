@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
         tt_metal::CircularBufferConfig cb_dst_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{dst_cb_index, data_format}})
                 .set_page_size(dst_cb_index, single_tile_size);
-        auto cb_dst = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
         uint32_t activations_addr = dst_cb_addr + (cb_tiles * single_tile_size);
 

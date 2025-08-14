@@ -77,7 +77,6 @@ std::vector<std::uint32_t> transpose_tiles(
 
 void print_faces(std::vector<bfloat16> data, const std::string& name) {
     std::cout << name << ": " << std::endl;
-    int index = 0;
 
     int tile_index = 0;
     int face_index = 0;
@@ -162,14 +161,14 @@ int main(int argc, char** argv) {
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t src1_cb_index = 1;
         uint32_t cb1_tiles = N * in0_block_w * 2;
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src1_cb_index, single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         uint32_t interm0_cb_index = 24;
@@ -181,7 +180,7 @@ int main(int argc, char** argv) {
             tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, data_format_spec)
                 .set_page_size(ouput_cb_index, single_tile_size)
                 .set_page_size(interm0_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         // create source addresses
         uint32_t face_width = 16;
@@ -201,7 +200,6 @@ int main(int argc, char** argv) {
         }
         int num_blocks = K / in0_block_w;
         uint32_t src0_num_reads_per_block = src0_num_tiles_per_block * num_addresses_per_tile;
-        uint32_t src0_num_bytes_per_block = src0_num_tiles_per_block * single_tile_size;
         uint32_t src1_num_bytes_per_block = src1_num_tiles_per_block * single_tile_size;
         TT_FATAL(source_addresses.size() == num_blocks * src0_num_reads_per_block, "Error");
 
@@ -279,7 +277,7 @@ int main(int argc, char** argv) {
             uint(out_subblock_w),
             uint(out_subblock_num_tiles)};
 
-        auto mm_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
             core,

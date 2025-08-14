@@ -404,7 +404,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::CircularBufferConfig cb_config =
         tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_index, tile_format}})
             .set_page_size(cb_index, single_tile_size);
-    auto cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,

@@ -186,7 +186,7 @@ create_programs(
     tt_metal::CircularBufferConfig in1_reader_cb_config =
         tt_metal::CircularBufferConfig(in1_reader_cb_size, {{in1_reader_cb_index, tile_format}})
             .set_page_size(in1_reader_cb_index, single_tile_size);
-    auto in1_reader_cb = tt_metal::CreateCircularBuffer(sender_program, dram_reader_core, in1_reader_cb_config);
+    tt_metal::CreateCircularBuffer(sender_program, dram_reader_core, in1_reader_cb_config);
 
     uint32_t in1_receiver_cb_size = in1_block_h * in1_block_w * single_tile_size * cb_num_blocks / num_receivers;
     uint32_t padded_global_cb_size = in1_receiver_cb_size + cb_padding;
@@ -197,18 +197,17 @@ create_programs(
     uint32_t in1_writer_cb_index = 31;
     tt_metal::CircularBufferConfig in1_writer_cb_config = tt_metal::CircularBufferConfig(in1_receiver_cb_size);
     in1_writer_cb_config.remote_index(in1_writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto writer_cb = tt_metal::experimental::CreateCircularBuffer(
+    tt_metal::experimental::CreateCircularBuffer(
         sender_program, dram_reader_core, in1_writer_cb_config, global_cb);
 
     // in0 reader CB
     uint32_t in0_reader_cb_index = 0;
     uint32_t in0_reader_cb_size = in0_block_h * in0_block_w * single_tile_size * num_blocks;
-    uint32_t in0_reader_cb_addr = in0_buffer->address();
     tt_metal::CircularBufferConfig in0_reader_cb_config =
         tt_metal::CircularBufferConfig(in0_reader_cb_size, {{in0_reader_cb_index, tile_format}})
             .set_page_size(in0_reader_cb_index, single_tile_size)
             .set_globally_allocated_address(*in0_buffer);
-    auto in0_reader_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
+    tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
 
     // in1 receiver CB
     uint32_t in1_receiver_cb_index = 31;
@@ -218,18 +217,17 @@ create_programs(
         .set_page_size(single_tile_size)
         .set_data_format(tile_format);
     in1_receiver_cb_config.index(in1_pusher_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto in1_receiver_cb = tt_metal::experimental::CreateCircularBuffer(
+    tt_metal::experimental::CreateCircularBuffer(
         receiver_program, l1_receiver_cores, in1_receiver_cb_config, global_cb);
 
     // output CB
     uint32_t output_cb_index = 16;
     uint32_t output_cb_size = in0_block_h * in1_block_w * single_tile_size / num_receivers;
-    uint32_t output_cb_addr = output_buffer->address();
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, tile_format}})
             .set_page_size(output_cb_index, single_tile_size)
             .set_globally_allocated_address(*output_buffer);
-    auto output_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
+    tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
 
     // sync CB
     uint32_t sync_cb_index = 2;
@@ -237,7 +235,7 @@ create_programs(
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size, {{sync_cb_index, tile_format}})
             .set_page_size(sync_cb_index, sync_cb_size);
-    auto sync_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, sync_cb_config);
+    tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, sync_cb_config);
 
     log_info(tt::LogTest, "in1_reader_cb_size: {}", in1_reader_cb_size);
     log_info(tt::LogTest, "in1_receiver_cb_size: {}", in1_receiver_cb_size);
@@ -316,7 +314,7 @@ create_programs(
         out_block_num_tiles,                  // out_block_num_tiles
         num_layers};
 
-    auto compute_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         receiver_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/kernels/"
         "bmm_large_block_zm_fused_bias_activation_copy.cpp",
@@ -702,14 +700,9 @@ int main(int argc, char** argv) {
         uint32_t mt = m / 32;
         uint32_t kt = k / 32;
         uint32_t nt = n / 32;
-        uint32_t block_ht = kt / num_blocks;
-        uint32_t block_wt = nt;
-        uint32_t num_datums_per_tile = 32 * 32;
 
         uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
 
-        uint32_t extra_cb_size = (cb_num_blocks - num_blocks) * (block_ht * block_wt) * single_tile_size;
-        uint32_t extra_kt = (cb_num_blocks - num_blocks) * block_ht;
 
         TT_FATAL(in1_size % single_tile_size == 0, "input size is not aligned to tile size");
         ////////////////////////////////////////////////////////////////////////////
@@ -718,9 +711,8 @@ int main(int argc, char** argv) {
         int device_id = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
-        CoreCoord dram_bank_coord = CoreCoord{0, 0};
+        [[maybe_unused]] CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
-        CoreRange dram_reader_core_coord_range = CoreRange(dram_reader_core_coord);
         CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord}}};
         CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
         if (device->arch() == tt::ARCH::GRAYSKULL) {
@@ -909,7 +901,7 @@ int main(int argc, char** argv) {
                 }
             }
             Finish(device->command_queue());
-            for (auto& program : programs) {
+            for ([[maybe_unused]] auto& program : programs) {
                 tt_metal::detail::ReadDeviceProfilerResults(device);
             }
         }

@@ -126,7 +126,6 @@ bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
 Program create_simple_datamovement_program(
     const Buffer& input, const Buffer& output, const Buffer& l1_buffer, bool rt_arg_per_core_vec = false) {
     Program program = Program();  // Verify Program constructor can be used.
-    IDevice* device = input.device();
     constexpr CoreCoord core = {0, 0};
 
     std::vector<uint32_t> compile_time_args;
@@ -142,8 +141,6 @@ Program create_simple_datamovement_program(
             .compile_args = compile_time_args});
 
     // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
-    const uint32_t input_bank_id = 0;
-    const uint32_t output_bank_id = 0;
 
     // Handle Runtime Args
     const std::vector<uint32_t> runtime_args = {
@@ -179,7 +176,7 @@ Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_in
         worker,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto sfpu_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         worker,

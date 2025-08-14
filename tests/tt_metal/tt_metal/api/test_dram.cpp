@@ -354,7 +354,6 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
     CoreCoord core = {0, 0};
 
     const uint32_t l1_address = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint32_t dram_size = mesh_device->dram_size_per_channel();
     const uint32_t num_drams = mesh_device->num_dram_channels();
 
     constexpr uint32_t page_size = 2048;

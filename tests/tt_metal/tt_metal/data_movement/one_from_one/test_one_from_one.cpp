@@ -41,7 +41,6 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     Program program = CreateProgram();
 
     const size_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
-    const size_t total_size_bytes = transaction_size_bytes * test_config.num_of_transactions;
 
     // (Logical) Core Coordinates and ranges
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});

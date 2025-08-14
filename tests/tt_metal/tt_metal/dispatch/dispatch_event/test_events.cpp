@@ -248,7 +248,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEventsQueryBasic) {
         EnqueueRecordEvent(this->device_->command_queue(), event);
 
         if (i > 0 && ((i % num_events_between_query) == 0)) {
-            auto status = EventQuery(event);
+            [[maybe_unused]] auto status = EventQuery(event);
             log_trace(tt::LogTest, "EventQuery for i: {} - status: {}", i, status);
         }
     }
@@ -293,7 +293,6 @@ TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
-    constexpr uint32_t completion_queue_event_alignment = 32;
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
         auto event = std::make_shared<Event>();  // type is std::shared_ptr<Event>
