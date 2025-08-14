@@ -58,12 +58,6 @@ Tensor optimized_conv_new(
             .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
     }
 
-    if (enable_activation_reuse && enable_act_double_buffer) {
-        enable_act_double_buffer = false;
-        log_warning(
-            tt::LogOp, "Activation data reuse and double buffer cannot be enabled together, disabling double buffer");
-    }
-
     auto optimized_conv_op = OptimizedConvNew(
         sliding_window_config,
         output_channels,

@@ -373,6 +373,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_w_div,
     uint32_t window_h,
     uint32_t window_w,
+    uint32_t output_width,
     bool fp32_accum,
     bool full_inner_dim,
     bool enable_activation_reuse) {
@@ -404,6 +405,16 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
                     act_block_h_ntiles);
             }
         }
+    }
+
+    if (enable_activation_reuse) {
+        const uint32_t output_image_width_ntiles = div_up(output_width, tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            act_block_h_ntiles > output_image_width_ntiles,
+            "Activation reuse needs act block h ({}) to be bigger than output image width in tiles ({}) for the "
+            "optimization to give boost",
+            act_block_h_ntiles,
+            output_image_width_ntiles);
     }
 
     uint32_t act_c_num_blocks = get_num_cores_channels_from_parallel_config(parallel_config);
@@ -851,9 +862,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
                                          const Conv2dConfig& conv_config_in) -> core_count_and_size {
         Conv2dConfig conv_config = conv_config_in;
         conv_config.shard_layout = shard_layout;
-        if (conv_config.act_block_h_override == 0) {
-            // Set act_block_h_override to min value to
-            // be conservative with L1 memory usage.
+        // Set act_block_h_override to min value to be conservative with L1 memory usage;
+        // With activation reuse, the CB usage is constant regardless of the act block h, so we can keep override to 0
+        if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
             conv_config.act_block_h_override = constants::TILE_HEIGHT;
             // Split reader is currently only supported for height sharded convs that are not 1d deptwise.
             if (conv_config.enable_split_reader && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
@@ -1029,6 +1040,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse);

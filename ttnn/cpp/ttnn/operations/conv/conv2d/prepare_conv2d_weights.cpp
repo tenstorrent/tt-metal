@@ -862,6 +862,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse);

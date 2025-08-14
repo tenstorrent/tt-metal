@@ -116,6 +116,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_w_div,
     uint32_t window_h,
     uint32_t window_w,
+    uint32_t output_width,
     bool fp32_accum,
     bool full_inner_dim,
     bool enable_activation_reuse = false);
