@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtSiglipMLP:
+class TtSiglipMLP(LightweightModule):
     def __init__(self, mesh_device, hidden_size, intermediate_size, state_dict, state_dict_prefix, dtype):
+        super().__init__()
+
         self.mesh_device = mesh_device
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
@@ -40,7 +43,7 @@ class TtSiglipMLP:
         based on https://github.com/google/gemma_pytorch/blob/main/gemma/siglip_vision/siglip_vision_model.py#L93
         """
 
-        sqrt_2_over_pi = 0.7978845608  
+        sqrt_2_over_pi = 0.7978845608
         coeff = 0.044715
 
         x_cubed = ttnn.pow(x, 3.0)
