@@ -8,10 +8,8 @@ FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN useradd -m -s /bin/bash container_app_user
-USER container_app_user
-ENV RUSTUP_HOME=/home/container_app_user/.rustup
-ENV CARGO_HOME=/home/container_app_user/.cargo
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
 ENV PATH="$CARGO_HOME/bin:$PATH"
 
 # Install runtime deps
