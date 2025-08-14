@@ -5,7 +5,7 @@
 
 <h1>
 
-[Install](./INSTALLING.md) | [Buy Hardware](https://tenstorrent.com/hardware/blackhole) | [Bounty $](https://github.com/tenstorrent/tt-metal/issues?q=is%3Aissue%20state%3Aopen%20label%3Abounty) | [Join Us](https://boards.greenhouse.io/tenstorrent/jobs/4155609007) | [Discord](https://discord.gg/tvhGzHQwaj)
+[Hardware](https://tenstorrent.com/hardware/blackhole) | [Install](./INSTALLING.md) |  [Discord](https://discord.gg/tvhGzHQwaj) | [Join Us](https://boards.greenhouse.io/tenstorrent/jobs/4155609007) | [Bounty $](https://github.com/tenstorrent/tt-metal/issues?q=is%3Aissue%20state%3Aopen%20label%3Abounty)
 
 </h1>
 
@@ -33,6 +33,16 @@
 | [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
 | [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  |
 
+## Quick Links
+
+- [TT-Forge](https://github.com/tenstorrent/tt-forge/tree/main)
+- [TT-Forge-FE](https://github.com/tenstorrent/tt-forge-fe)
+- [TT-Torch](https://github.com/tenstorrent/tt-torch)
+- [TT-XLA](https://github.com/tenstorrent/tt-xla)
+- [TT-MLIR](https://github.com/tenstorrent/tt-mlir)
+- [TT-TVM](https://github.com/tenstorrent/tt-tvm)
+- [Releases](https://github.com/tenstorrent/tt-metal/releases)
+
 ## Featured Models
 
 The Models team is focused on developing the following models to a customer-ready state. Ongoing work includes optimizations for performance, accuracy, and compatibility. Follow each model link for more details.
@@ -58,13 +68,7 @@ The Models team is focused on developing the following models to a customer-read
 | Batch | Hardware                                                       | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
 |-------|----------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
 | 32    | [p100 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 87*       | 26.5* |                 | 848.0* | [v0.59.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc3) | [739dcaa](https://github.com/tenstorrent/vllm/tree/739dcaa2915fa29d757c25a02c17aadce0c58055/tt_metal) |
-### [Llama 3.1 8B](./models/tt_transformers)
-| Batch | Hardware                                                       | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
-|-------|----------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
 | 32    | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 69*       | 29.1* |                 | 931.2* | [v0.59.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc3) | [739dcaa](https://github.com/tenstorrent/vllm/tree/739dcaa2915fa29d757c25a02c17aadce0c58055/tt_metal) |
-### [Llama 3.1 8B](./models/tt_transformers)
-| Batch | Hardware                                                     | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                       | vLLM Tenstorrent Repo Release                                                                         |
-|-------|--------------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
 | 32    | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 104       | 24.8  | 23              | 793.6  | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal) |
 ### [Llama 3.2 11B Vision (TP=2)](./models/tt_transformers)
 | Batch | Hardware                                                     | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
@@ -183,10 +187,15 @@ Install via pip or build from source:
 ```bash
 pip install ttnn-visualizer
 ```
+## Related Tenstorrent Projects
+- [TT-Forge](https://github.com/tenstorrent/tt-forge/tree/main)
+- [TT-Forge-FE](https://github.com/tenstorrent/tt-forge-fe)
+- [TT-Torch](https://github.com/tenstorrent/tt-torch)
+- [TT-XLA](https://github.com/tenstorrent/tt-xla)
+- [TT-MLIR](https://github.com/tenstorrent/tt-mlir)
+- [TT-TVM](https://github.com/tenstorrent/tt-tvm)
 
-
-
-### Tenstorrent Bounty Program Terms and Conditions
+## Tenstorrent Bounty Program Terms and Conditions
 This repo is a part of Tenstorrent’s bounty program. If you are interested in helping to improve tt-metal, please make sure to read the [Tenstorrent Bounty Program Terms and Conditions](https://docs.tenstorrent.com/bounty_terms.html) before heading to the issues tab. Look for the issues that are tagged with both “bounty” and difficulty level!
 
 ## License
