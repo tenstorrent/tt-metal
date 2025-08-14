@@ -75,8 +75,16 @@ std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
     return create_new_handoff_buffer(buffer);
 }
 
-static void update(std::vector<std::unique_ptr<BoolMetric>> &bool_metrics, const tt::Cluster &cluster) {
+static void update(
+    std::vector<std::unique_ptr<BoolMetric>> &bool_metrics,
+    std::vector<std::unique_ptr<IntMetric>> &int_metrics,
+    const tt::Cluster &cluster
+) {
     for (auto &metric: bool_metrics) {
+        metric->update(cluster);
+    }
+
+    for (auto &metric: int_metrics) {
         metric->update(cluster);
     }
 }
@@ -99,7 +107,11 @@ static std::string get_cluster_wide_telemetry_path(const Metric &metric) {
     return path;
 }
 
-static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers, const std::vector<std::unique_ptr<BoolMetric>> &bool_metrics) {
+static void send_initial_snapshot(
+    const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers,
+    const std::vector<std::unique_ptr<BoolMetric>> &bool_metrics,
+    const std::vector<std::unique_ptr<IntMetric>> &int_metrics
+) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
     snapshot->is_absolute = true;
     
@@ -111,12 +123,24 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
         snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
     }
 
+    for (size_t i = 0; i < int_metrics.size(); i++) {
+        std::string path = get_cluster_wide_telemetry_path(*int_metrics[i]);
+        size_t id = int_metrics[i]->id;
+        snapshot->int_metric_ids.push_back(id);
+        snapshot->int_metric_names.push_back(path);
+        snapshot->int_metric_values.push_back(int_metrics[i]->value());
+    }
+
     for (auto &subscriber: subscribers) {
         subscriber->on_telemetry_ready(snapshot);
     }
 }
 
-static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers, std::vector<std::unique_ptr<BoolMetric>> &bool_metrics) {
+static void send_delta(
+    const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers,
+    std::vector<std::unique_ptr<BoolMetric>> &bool_metrics,
+    std::vector<std::unique_ptr<IntMetric>> &int_metrics
+) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
     snapshot->is_absolute = false;
 
@@ -127,6 +151,15 @@ static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>> &
         snapshot->bool_metric_ids.push_back(bool_metrics[i]->id);
         snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
         bool_metrics[i]->mark_transmitted();
+    }
+
+    for (size_t i = 0; i < int_metrics.size(); i++) {
+        if (!int_metrics[i]->changed_since_transmission()) {
+            continue;
+        }
+        snapshot->int_metric_ids.push_back(int_metrics[i]->id);
+        snapshot->int_metric_values.push_back(int_metrics[i]->value());
+        int_metrics[i]->mark_transmitted();
     }
 
     for (auto &subscriber: subscribers) {
@@ -141,19 +174,21 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
     // Create vectors of all metrics we will monitor by value type
     size_t id = 1;
     std::vector<std::unique_ptr<BoolMetric>> bool_metrics;
+    std::vector<std::unique_ptr<IntMetric>> int_metrics;
     for (const auto &[chip_id, endpoints]: get_ethernet_endpoints_by_chip(cluster)) {
         for (const auto &endpoint: endpoints) {
             bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(id++, endpoint));
+            int_metrics.push_back(std::make_unique<EthernetCRCErrorCountMetric>(id++, endpoint, cluster));
         }
     }
 
     // Continuously monitor on a loop
-    update(bool_metrics, cluster);
-    send_initial_snapshot(subscribers, bool_metrics);
+    update(bool_metrics, int_metrics, cluster);
+    send_initial_snapshot(subscribers, bool_metrics, int_metrics);
     while (!stopped_.load()) {
         std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
-        update(bool_metrics, cluster);
-        send_delta(subscribers, bool_metrics);
+        update(bool_metrics, int_metrics,cluster);
+        send_delta(subscribers, bool_metrics, int_metrics);
     }
 }
 
