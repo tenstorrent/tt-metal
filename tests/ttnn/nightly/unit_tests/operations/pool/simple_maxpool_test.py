@@ -66,9 +66,9 @@ ttnn_output, indices = ttnn.max_pool2d(
 
 print("\nTTNN max pool results:")
 print("Output shape:", ttnn.to_torch(ttnn_output).shape)
-print("Output:\n", ttnn.to_torch(ttnn_output))
+# print("Output:\n", ttnn.to_torch(ttnn_output))
 print("Indices shape:", ttnn.to_torch(indices).shape)
-print("Indices:\n", ttnn.to_torch(indices))
+# print("Indices:\n", ttnn.to_torch(indices))
 
 # Run PyTorch max pool for reference
 torch_output, torch_indices = torch.nn.functional.max_pool2d(
@@ -81,9 +81,9 @@ torch_indices_reshaped = torch_indices.permute(0, 2, 3, 1)  # N, H, W, C
 
 print("PyTorch max pool results:")
 print("Output shape:", torch_output_reshaped.shape)
-print("Output:\n", torch_output_reshaped)
+# print("Output:\n", torch_output_reshaped)
 print("Indices shape:", torch_indices_reshaped.shape)
-print("Indices:\n", torch_indices_reshaped)
+# print("Indices:\n", torch_indices_reshaped)
 
 # Compare outputs using allclose
 ttnn_output_torch = ttnn.to_torch(ttnn_output)
