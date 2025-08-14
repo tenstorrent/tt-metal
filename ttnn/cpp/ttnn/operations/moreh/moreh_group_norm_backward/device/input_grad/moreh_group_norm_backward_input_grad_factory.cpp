@@ -293,11 +293,11 @@ void MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFa
         {
             auto& runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
             runtime_args[0] = output_grad_buffer->address();
-            runtime_args[2] = input_buffer->address();
-            runtime_args[4] = mean_buffer->address();
-            runtime_args[6] = rstd_buffer->address();
+            runtime_args[1] = input_buffer->address();
+            runtime_args[2] = mean_buffer->address();
+            runtime_args[3] = rstd_buffer->address();
             if (gamma_buffer != nullptr) {
-                runtime_args[8] = gamma_buffer->address();
+                runtime_args[4] = gamma_buffer->address();
             }
         }
 

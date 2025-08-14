@@ -330,10 +330,10 @@ void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
             auto& runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
             runtime_args[0] = input_buffer->address();
             if (gamma_buffer != nullptr) {
-                runtime_args[2] = gamma_buffer->address();
+                runtime_args[1] = gamma_buffer->address();
             }
             if (beta_buffer != nullptr) {
-                runtime_args[5] = beta_buffer->address();
+                runtime_args[2] = beta_buffer->address();
             }
         }
 
@@ -341,10 +341,10 @@ void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
             auto& runtime_args = GetRuntimeArgs(cached_program.program, writer_kernels_id, core);
             runtime_args[0] = ouput_buffer->address();
             if (mean_buffer != nullptr) {
-                runtime_args[2] = mean_buffer->address();
+                runtime_args[1] = mean_buffer->address();
             }
             if (rstd_buffer != nullptr) {
-                runtime_args[5] = rstd_buffer->address();
+                runtime_args[2] = rstd_buffer->address();
             }
         }
     }
