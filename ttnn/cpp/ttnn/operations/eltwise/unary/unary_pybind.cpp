@@ -1739,7 +1739,7 @@ void py_module(py::module& module) {
         ttnn::eqz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
     bind_unary_operation(
         module,
         ttnn::ceil,
@@ -1862,7 +1862,7 @@ void py_module(py::module& module) {
         ttnn::nez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     bind_unary_operation_overload_complex_return_complex(
         module,
