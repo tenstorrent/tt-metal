@@ -27,6 +27,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
     }
 
@@ -56,8 +57,8 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim0) {
     EXPECT_EQ(tensor_0.shape()[0], size / 2);
     EXPECT_EQ(tensor_1.shape()[0], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(i, 0, 0, 0), i);
-        EXPECT_EQ(tensor_1(i, 0, 0, 0), i + size / 2);
+        EXPECT_EQ(tensor_0(i, 0, 0, 0), 2 * i);
+        EXPECT_EQ(tensor_1(i, 0, 0, 0), 2 * (i + size / 2));
     }
 }
 
@@ -80,8 +81,8 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim1) {
     EXPECT_EQ(tensor_0.shape()[1], size / 2);
     EXPECT_EQ(tensor_1.shape()[1], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(0, i, 0, 0), i);
-        EXPECT_EQ(tensor_1(0, i, 0, 0), i + size / 2);
+        EXPECT_EQ(tensor_0(0, i, 0, 0), 2 * i);
+        EXPECT_EQ(tensor_1(0, i, 0, 0), 2 * (i + size / 2));
     }
 }
 
@@ -104,8 +105,8 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim2) {
     EXPECT_EQ(tensor_0.shape()[2], size / 2);
     EXPECT_EQ(tensor_1.shape()[2], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(0, 0, i, 0), i);
-        EXPECT_EQ(tensor_1(0, 0, i, 0), i + size / 2);
+        EXPECT_EQ(tensor_0(0, 0, i, 0), 2 * i);
+        EXPECT_EQ(tensor_1(0, 0, i, 0), 2 * (i + size / 2));
     }
 }
 
@@ -128,7 +129,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim3) {
     EXPECT_EQ(tensor_0.shape()[3], size / 2);
     EXPECT_EQ(tensor_1.shape()[3], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(0, 0, 0, i), i);
-        EXPECT_EQ(tensor_1(0, 0, 0, i), i + size / 2);
+        EXPECT_EQ(tensor_0(0, 0, 0, i), 2 * i);
+        EXPECT_EQ(tensor_1(0, 0, 0, i), 2 * (i + size / 2));
     }
 }

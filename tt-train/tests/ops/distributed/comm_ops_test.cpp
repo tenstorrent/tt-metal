@@ -28,6 +28,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().set_seed(42);
     }
@@ -334,7 +335,7 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
     auto tt_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
-    auto scattered_tensor = ttml::ops::distributed::scatter(tensor, 3);
+    auto scattered_tensor = ttml::ops::distributed::reduce_scatter(tensor, 3);
 
     // check forward
     auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), ttml::core::IdentityComposer{});
@@ -395,7 +396,7 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     EXPECT_TRUE(xt::allclose(xtensor, xtensor_after_replication[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
-    auto scattered_tensor = ttml::ops::distributed::scatter(tensor, 3);
+    auto scattered_tensor = ttml::ops::distributed::reduce_scatter(tensor, 3);
 
     // check forward
     auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), ttml::core::IdentityComposer{});

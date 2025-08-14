@@ -13,7 +13,7 @@
 
 namespace ttml::ops::distributed {
 
-autograd::TensorPtr scatter(const autograd::TensorPtr& tensor, int dim) {
+autograd::TensorPtr reduce_scatter(const autograd::TensorPtr& tensor, int dim) {
     auto out = autograd::create_tensor(ttnn_fixed::distributed::reduce_scatter(tensor->get_value(), dim));
     autograd::GradFunction grad = [tensor, out, dim]() {
         tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim));

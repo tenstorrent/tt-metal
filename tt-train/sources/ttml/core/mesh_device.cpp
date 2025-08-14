@@ -9,7 +9,6 @@
 namespace ttml::core {
 
 MeshDevice::MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const std::vector<int>& device_ids) {
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     m_mesh_device = ttnn::distributed::open_mesh_device(
         shape,
         DEFAULT_L1_SMALL_SIZE,

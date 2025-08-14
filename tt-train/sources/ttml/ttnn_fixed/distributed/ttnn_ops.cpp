@@ -20,14 +20,17 @@ tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim) {
         throw std::logic_error("All gather should not be called for a single device case");
     }
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-    std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores{ccl_resources.get_all_gather_semaphore()};
+
     return ttnn::experimental::all_gather_async(
         tensor,
         dim,
-        global_semaphores,
+        ccl_resources.get_all_gather_semaphore(),
         /* num_links */ 1,
         /* memory_config */ std::nullopt,
-        ttnn::ccl::Topology::Linear);
+        ttnn::ccl::Topology::Linear,
+        /* subdevice_id */ std::nullopt,
+        /* use_optimal_ccl_for_llama */ false,
+        /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
 }
 
 tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
@@ -56,8 +59,17 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
 }
 
 tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim) {
-    throw std::runtime_error(
-        "Reduce scatter is not implemented! Will be added once ttnn::experimental::reduce_scatter is available.");
+    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    return ttnn::experimental::reduce_scatter_minimal_async(
+        tensor,
+        /* persistent_output_buffers */ std::nullopt,
+        dim,
+        ccl_resources.get_reduce_scatter_semaphores(),
+        ccl_resources.get_barrier_semaphore(),
+        /* num_links */ 1U,
+        /* memory_config */ std::nullopt,
+        /* intermediate_memory_config */ std::nullopt,
+        ttnn::ccl::Topology::Linear);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed
