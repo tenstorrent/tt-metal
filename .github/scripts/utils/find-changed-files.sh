@@ -53,8 +53,10 @@ while IFS= read -r FILE; do
             ;;
         docs/**|**/*.rst|**/*.md)
             DOCS_CHANGED=true
+            echo "DEBUG: Docs/MD file changed: $FILE"
             if [[ "$FILE" == "README.md" || "$FILE" == "models/README.md" ]]; then
                 MODEL_CHARTS_CHANGED=true
+                echo "DEBUG: Model charts file changed: $FILE"
             fi
             ;;
     esac
