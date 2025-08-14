@@ -454,7 +454,7 @@ void bind_from_buffer_operation(py::module& module, const creation_operation_t& 
         Example:
             >>> tensor = ttnn.{0}(buffer=[1, 2, 3, 4, 5, 6], shape=[2, 3], dtype=ttnn.int32, device=device)
             >>> print(tensor)
-            ttnn.Tensor([[1, 2, 3, 4, 5, 6]], shape=Shape([2, 3]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
+            ttnn.Tensor([[1, 2, 3], [4, 5, 6]], shape=Shape([2, 3]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
