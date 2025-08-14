@@ -24,6 +24,7 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(
     const ttnn::Tensor& output_tensor, size_t interleaved_storage_cores);
 uint32_t extract_l1_buffer_allocation_peak_size_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores);
 uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace);
+uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleaved_storage_cores);
 
 // Returns count of intermediate and output tensors
 std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohmann::json& trace);
