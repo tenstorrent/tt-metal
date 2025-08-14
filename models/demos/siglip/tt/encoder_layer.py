@@ -3,9 +3,9 @@ from typing import Dict, Optional
 import torch
 
 import ttnn
-from models.demos.siglip.reference.functional import siglip_mlp
 from models.demos.siglip.tt.attention import siglip_attention_ttnn
 from models.demos.siglip.tt.layer_norm import siglip_layer_norm_ttnn
+from models.demos.siglip.tt.mlp import siglip_mlp_ttnn
 
 
 def siglip_encoder_layer_ttnn(
@@ -22,21 +22,10 @@ def siglip_encoder_layer_ttnn(
     hidden_act: str = "gelu",
     attention_dropout: float = 0.0,
 ) -> torch.Tensor:
-    # Convert torch to TT here so we can test the whole encoder layer with TT tensors
-    if isinstance(hidden_states, torch.Tensor):
-        hidden_states = ttnn.from_torch(
-            hidden_states,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
     # Self-attention block
     residual = hidden_states
 
     # Pre-attention layer norm
-    # hidden_states = siglip_layer_norm(hidden_states, state_dict["layer_norm1"], layer_norm_eps)
     hidden_states = siglip_layer_norm_ttnn(
         mesh_device, hidden_states, state_dict["layer_norm1"], hidden_states.shape[-1], layer_norm_eps
     )
@@ -62,30 +51,12 @@ def siglip_encoder_layer_ttnn(
     residual = hidden_states
 
     # Pre-MLP layer norm
-    # hidden_states = siglip_layer_norm(hidden_states, state_dict["layer_norm2"], layer_norm_eps)
     hidden_states = siglip_layer_norm_ttnn(
         mesh_device, hidden_states, state_dict["layer_norm2"], hidden_states.shape[-1], layer_norm_eps
     )
 
     # MLP
-    # Use torch here until we have TT MLP
-    if isinstance(hidden_states, ttnn.Tensor):
-        hidden_states = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(
-            state_dict["mlp"]["fc1"]["weight"].dtype
-        )[0]
-
-    hidden_states = siglip_mlp(hidden_states, state_dict["mlp"], hidden_act)
-
-    # Convert back to TT so we can add the residual connection
-    if isinstance(hidden_states, torch.Tensor):
-        hidden_states = ttnn.from_torch(
-            hidden_states,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+    hidden_states = siglip_mlp_ttnn(mesh_device, hidden_states, state_dict["mlp"])
 
     # Add residual connection
     hidden_states = residual + hidden_states

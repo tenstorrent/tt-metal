@@ -95,7 +95,6 @@ def test_ttnn_mlp(mesh_device):
     )  # Random inputs scaled to range of first MLP inputs
 
     reference_output = reference_mlp(random_inputs)
-
     try:
         # Instantiate the TtSiglipMLP class
         ttnn_mlp = TtSiglipMLP(

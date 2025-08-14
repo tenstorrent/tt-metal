@@ -20,8 +20,26 @@ from models.demos.siglip.tt.layer_norm import siglip_layer_norm_ttnn
 global mesh_device
 
 
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize("layer_norm_func", [siglip_layer_norm, siglip_layer_norm_ttnn])
-def test_layer_norm(layer_norm_func):
+def test_layer_norm(mesh_device, layer_norm_func):
     config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
     assert hasattr(
         config, "vision_config"
@@ -46,8 +64,6 @@ def test_layer_norm(layer_norm_func):
         random_inputs,
     )
     state_dict = convert_state_dict(reference_layer_norm.state_dict())
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_device = ttnn.open_mesh_device()
     result = layer_norm_func(
         mesh_device=mesh_device,
         hidden_states=random_inputs,
@@ -57,7 +73,6 @@ def test_layer_norm(layer_norm_func):
         state_dict_prefix="",
         weight_cache_path=None,
     )
-    ttnn.close_mesh_device(mesh_device)
     result, pcc = comp_pcc(reference_output, result)
 
     if result:
