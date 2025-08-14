@@ -92,7 +92,7 @@ struct MoeExpertTokenRemapDeviceOperation {
         const std::optional<ttnn::MemoryConfig>& output_mem_config,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
         const std::optional<ttnn::Tensor>& optional_reduced_tensor,
-        const uint32_t reduction_size = REDUCTION_SIZE);
+        uint32_t reduction_size = REDUCTION_SIZE);
 };
 }  // namespace ttnn::operations::data_movement
 
