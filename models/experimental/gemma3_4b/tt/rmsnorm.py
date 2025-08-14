@@ -61,11 +61,14 @@ class RMSNorm(LightweightModule):
         sharded_output_config=None,
         output_mem_config=None,
         ccl_topology=ttnn.Topology.Ring,
+        tt_ccl=None,
     ):
         super().__init__()
+        self.device = device
         self.eps = eps
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
+        self.tt_ccl = tt_ccl
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -78,9 +81,11 @@ class RMSNorm(LightweightModule):
         torch_weight = (
             state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
         )
+
+        # Add offset before caching
         if add_unit_offset:
             torch_weight = torch_weight + 1.0
-        # # Add offset before caching
+
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
         # Compatibility with models that don't use mesh devices (e.g. single-chip Mistral-7b)

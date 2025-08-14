@@ -167,7 +167,8 @@ class Gemma3Generator:
 
                 (
                     chunk_prefill_input,
-                    chunk_rot_mats_prefill,
+                    chunk_rot_mats_global_prefill,
+                    chunk_rot_mats_local_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
                 ) = self.model[model_id].prepare_inputs_prefill(
@@ -179,7 +180,8 @@ class Gemma3Generator:
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats=chunk_rot_mats_prefill,
+                    rot_mats_global=chunk_rot_mats_global_prefill,
+                    rot_mats_local=chunk_rot_mats_local_prefill,
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -193,7 +195,9 @@ class Gemma3Generator:
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
+            (prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, _) = self.model[
+                model_id
+            ].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
                 **kwargs,
@@ -201,7 +205,8 @@ class Gemma3Generator:
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
-                rot_mats=rot_mats_prefill,
+                rot_mats_global=rot_mats_global_prefill,
+                rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
