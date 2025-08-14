@@ -131,6 +131,7 @@ class MeshSocketTestContext;
 // Main YAML parser class
 class MeshSocketYamlParser {
 public:
+    MeshSocketYamlParser() = delete;
     // Main parsing method
     static MeshSocketTestConfiguration parse_file(const std::string& yaml_file_path);
 
@@ -143,7 +144,6 @@ public:
     static void print_test_configuration(const MeshSocketTestConfiguration& config);
 
 private:
-    MeshSocketYamlParser() = delete;
     // Parsing helper methods
     static PhysicalMeshConfig parse_physical_mesh(const YAML::Node& node);
     static FabricConfig parse_fabric_config(const YAML::Node& node);
