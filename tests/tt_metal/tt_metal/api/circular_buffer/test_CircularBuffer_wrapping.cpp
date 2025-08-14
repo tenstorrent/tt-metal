@@ -15,8 +15,20 @@ using namespace tt::tt_metal;
 
 /**
  *
- * This test checks that the cb_reserve_back will wait correctly when the received and acked counter overflows.
- * Because we cannot directly test the overflow, we test for data corruption instead.
+ * This test checks that the cb_reserve_back and cb_wait_front will wait correctly when the internal counters of CB
+ * overflows at the PACKER core.
+ *
+ * To dive into a bit more detail, CB is implemented with 2 counters, received and acked, where received counter
+ * indicates the amount of pages pushed into CB, and acked counter indicates the amount of pages popped from CB. The
+ * caluclation of received and acked counter is done in 16 bits. Naturally, the received counter will be bigger than the
+ * acked counter, which would be reverted when received counter overflows. Prior to #26536, the calculation for the
+ * amount of free pages left in the system does not handle the overflow correctly, resulting in cb_reserve_back
+ * prematurely.
+ *
+ * Because we cannot directly test if functions are hanging correctly, we test for data corruption instead. If
+ * cb_reserve_back or cb_wait_front does not handle overflow correctly when calculating the amount of free pages left/
+ * amount of pages pending, they will return prematurely, resulting in writing data to non-freed pages, which would
+ * cause data corruption. If no data corruption is detected, it means that the overflow is handled correctly.
  *
  * The test is setup with:
  * A writer kernel at PACK core, and a reader kernel at NOC1 core;
@@ -37,7 +49,7 @@ using namespace tt::tt_metal;
  * 5. Writer exits spin, reads all pending data (3 steps worth of data)
  *    If cb_reserve_back handles the overflow correctly, it should hang writer till reader exits spin, resulting in BBA.
  *    If cb_reserve_back handles the overflow incorrectly, premature write will happen before reader exists spin,
- *    resulting in ABA (first page is overwritten with A).
+ *    resulting in ABA (first step of pages is overwritten with A).
  *
  */
 
