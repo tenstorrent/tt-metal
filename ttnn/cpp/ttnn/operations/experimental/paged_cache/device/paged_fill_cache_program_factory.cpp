@@ -34,12 +34,8 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
     const uint32_t num_heads = input_tensor.padded_shape()[1];
     const uint32_t input_seq_len = input_tensor.padded_shape()[2];
 
-    const uint32_t max_num_blocks = cache_tensor.padded_shape()[0];
     const uint32_t block_size = cache_tensor.padded_shape()[2];
     const uint32_t head_dim = cache_tensor.padded_shape()[3];
-
-    const uint32_t batch = page_table_tensor.padded_shape()[0];
-    const uint32_t max_num_blocks_per_seq = page_table_tensor.padded_shape()[1];
 
     const uint32_t input_seq_len_t = input_seq_len / TILE_HEIGHT;
     const uint32_t Wt = head_dim / TILE_WIDTH;
