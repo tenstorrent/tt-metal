@@ -405,8 +405,7 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_all_chip_ethernet_coordi
 }
 
 chip_id_t Cluster::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const {
-    for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) {
-        if (coord == eth_coord) {
+    for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) { if (coord == eth_coord) {
             return physical_chip_id;
         }
     }

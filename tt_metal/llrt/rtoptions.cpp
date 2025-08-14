@@ -40,6 +40,7 @@ static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
 static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES";
 
 RunTimeOptions::RunTimeOptions() {
+    
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->is_root_dir_env_var_set = true;

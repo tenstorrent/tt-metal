@@ -69,97 +69,229 @@ enum class EthRouterMode : uint32_t {
     FABRIC_ROUTER = 1,
 };
 
-class Cluster {
+class ClusterBase {
+public:
+    ClusterBase& operator=(const ClusterBase&) = delete;
+    ClusterBase& operator=(ClusterBase&& other) noexcept = delete;
+    ClusterBase(const ClusterBase&) = delete;
+    ClusterBase(ClusterBase&& other) noexcept = delete;
+
+    ClusterBase() = default;
+    virtual ~ClusterBase() = default;
+
+    virtual size_t number_of_devices() const = 0;
+
+    virtual std::set<chip_id_t> all_chip_ids() const = 0;
+
+    virtual std::set<chip_id_t> mmio_chip_ids() const = 0;
+
+    virtual size_t number_of_pci_devices() const = 0;
+
+    virtual std::set<chip_id_t> all_pci_chip_ids() const = 0;
+
+    virtual tt_ClusterDescriptor* get_cluster_desc() const = 0;
+
+    // API moved from Cluster: pure virtuals to be implemented by concrete clusters
+    // Device/user exposure
+    virtual std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const = 0;
+    virtual size_t number_of_user_devices() const = 0;
+    virtual std::set<chip_id_t> user_exposed_chip_ids() const = 0;
+
+    // Chip identification and coordinates
+    virtual const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const = 0;
+    virtual std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const = 0;
+    virtual chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const = 0;
+
+    // Architecture and SoC descriptors
+    virtual ARCH arch() const = 0;
+    virtual const metal_SocDescriptor& get_soc_desc(chip_id_t chip) const = 0;
+
+    // Coordinate translations
+    virtual CoreCoord get_virtual_coordinate_from_logical_coordinates(
+        chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const = 0;
+    virtual CoreCoord get_virtual_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord) const = 0;
+    virtual tt_cxy_pair get_virtual_coordinate_from_logical_coordinates(
+        tt_cxy_pair logical_coordinate, const CoreType& core_type) const = 0;
+    virtual CoreCoord get_physical_coordinate_from_logical_coordinates(
+        chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type, bool no_warn) const = 0;
+    virtual const std::unordered_set<CoreCoord>& get_virtual_worker_cores(chip_id_t chip_id) const = 0;
+    virtual const std::unordered_set<CoreCoord>& get_virtual_eth_cores(chip_id_t chip_id) const = 0;
+
+    // Harvesting and PCIe info
+    virtual uint32_t get_harvesting_mask(chip_id_t chip) const = 0;
+    virtual uint16_t get_bus_id(chip_id_t chip) const = 0;
+
+    // Driver and misc APIs
+    virtual void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const = 0;
+    virtual void deassert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const = 0;
+    virtual void assert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const = 0;
+
+    virtual void write_dram_vec(
+        const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const = 0;
+    virtual void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const = 0;
+
+    // Accepts physical noc coordinates
+    virtual void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const = 0;
+    virtual void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const = 0;
+    virtual void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const = 0;
+
+    virtual std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const = 0;
+    virtual std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const = 0;
+    virtual tt::Writer get_static_tlb_writer(tt_cxy_pair target) const = 0;
+
+    virtual std::uint32_t get_numa_node_for_device(uint32_t device_id) const = 0;
+
+    virtual void write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const = 0;
+    virtual void read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const = 0;
+
+    virtual void write_sysmem(
+        const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const = 0;
+    virtual void read_sysmem(
+        void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const = 0;
+
+    virtual int get_device_aiclk(const chip_id_t& chip_id) const = 0;
+
+    virtual void dram_barrier(chip_id_t chip_id) const = 0;
+    virtual void l1_barrier(chip_id_t chip_id) const = 0;
+
+    virtual uint32_t get_num_host_channels(chip_id_t device_id) const = 0;
+    virtual uint32_t get_host_channel_size(chip_id_t device_id, uint32_t channel) const = 0;
+    virtual void* host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16_t channel) const = 0;
+    virtual uint64_t get_pcie_base_addr_from_device(chip_id_t chip_id) const = 0;
+
+    // Ethernet cluster API
+    virtual std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(chip_id_t chip_id) const = 0;
+    virtual bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const = 0;
+    virtual std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const = 0;
+    virtual std::tuple<uint64_t, CoreCoord> get_connected_ethernet_core_to_remote_mmio_device(
+        std::tuple<chip_id_t, CoreCoord> eth_core) const = 0;
+    virtual std::vector<CoreCoord> get_ethernet_sockets(chip_id_t local_chip, chip_id_t remote_chip) const = 0;
+    virtual CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord& logical_core) const = 0;
+    virtual CoreCoord get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const = 0;
+    virtual void set_internal_routing_info_for_ethernet_cores(
+        bool enable_internal_routing, const std::vector<chip_id_t>& target_mmio_devices = {}) const = 0;
+    virtual const std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>&
+        get_ethernet_connections() const = 0;
+    virtual const std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>&
+        get_ethernet_connections_to_remote_devices() const = 0;
+    virtual chip_id_t get_associated_mmio_device(chip_id_t device_id) const = 0;
+    virtual uint16_t get_assigned_channel_for_device(chip_id_t device_id) const = 0;
+    virtual const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const = 0;
+    virtual std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
+        chip_id_t chip_id) const = 0;
+    virtual std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const = 0;
+
+    // Fabric routers
+    virtual void configure_ethernet_cores_for_fabric_routers(
+        tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes=std::nullopt) = 0;
+    virtual bool is_galaxy_cluster() const = 0;
+    virtual BoardType get_board_type(chip_id_t chip_id) const = 0;
+    virtual tt::tt_metal::ClusterType get_cluster_type() const = 0;
+    virtual bool is_base_routing_fw_enabled() const = 0;
+    virtual std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const = 0;
+    virtual std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(chip_id_t src_id, chip_id_t dst_id) const = 0;
+    virtual bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const = 0;
+    virtual bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const = 0;
+    virtual CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const = 0;
+    virtual std::unordered_map<int, int> get_worker_logical_to_virtual_x(chip_id_t chip_id) const = 0;
+    virtual std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const = 0;
+    virtual const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const = 0;
+    virtual std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) const = 0;
+    virtual bool is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const = 0;
+    virtual const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(chip_id_t chip_id) const = 0;
+    virtual const std::unordered_map<CoreCoord, EthRouterMode>& get_eth_routing_info(chip_id_t chip_id) const = 0;
+};
+class Cluster : public ClusterBase {
 public:
     // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
     static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
         const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
-    Cluster& operator=(const Cluster&) = delete;
-    Cluster& operator=(Cluster&& other) noexcept = delete;
-    Cluster(const Cluster&) = delete;
-    Cluster(Cluster&& other) noexcept = delete;
 
     Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
-    ~Cluster();
+    ~Cluster() override;
 
-    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
-    // for user facing host apis
-    std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const;
-    size_t number_of_user_devices() const;
-    std::set<chip_id_t> user_exposed_chip_ids() const;
+    size_t number_of_devices() const override { return this->driver_->get_target_device_ids().size(); }
 
-    size_t number_of_devices() const { return this->driver_->get_target_device_ids().size(); }
+    std::set<chip_id_t> all_chip_ids() const override { return this->driver_->get_target_device_ids(); };
 
-    std::set<chip_id_t> all_chip_ids() const { return this->driver_->get_target_device_ids(); };
+    std::set<chip_id_t> mmio_chip_ids() const override { return this->driver_->get_target_mmio_device_ids(); }
 
-    std::set<chip_id_t> mmio_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
+    size_t number_of_pci_devices() const override { return this->driver_->get_target_mmio_device_ids().size(); }
 
-    size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
+    std::set<chip_id_t> all_pci_chip_ids() const override { return this->driver_->get_target_mmio_device_ids(); }
 
-    std::set<chip_id_t> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
-
-    tt_ClusterDescriptor* get_cluster_desc() const {
+    tt_ClusterDescriptor* get_cluster_desc() const override {
         TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
         return this->cluster_desc_;
     }
 
+    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
+    // for user facing host apis
+    std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const override;
+    size_t number_of_user_devices() const override;
+    std::set<chip_id_t> user_exposed_chip_ids() const override;
+
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
-    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
+    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const override {
         return this->cluster_desc_->get_chip_unique_ids();
     }
-    std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
+    std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const override;
 
-    chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
+    chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const override;
 
-    ARCH arch() const { return this->arch_; }
+    ARCH arch() const override { return this->arch_; }
 
-    const metal_SocDescriptor& get_soc_desc(chip_id_t chip) const;
+    const metal_SocDescriptor& get_soc_desc(chip_id_t chip) const override;
     CoreCoord get_virtual_coordinate_from_logical_coordinates(
-        chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const;
-    CoreCoord get_virtual_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord) const;
+        chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const override;
+    CoreCoord get_virtual_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord) const override;
     tt_cxy_pair get_virtual_coordinate_from_logical_coordinates(
-        tt_cxy_pair logical_coordinate, const CoreType& core_type) const;
+        tt_cxy_pair logical_coordinate, const CoreType& core_type) const override;
     CoreCoord get_physical_coordinate_from_logical_coordinates(
-        chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type, bool no_warn = false) const;
-    const std::unordered_set<CoreCoord>& get_virtual_worker_cores(chip_id_t chip_id) const;
-    const std::unordered_set<CoreCoord>& get_virtual_eth_cores(chip_id_t chip_id) const;
+        chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type, bool no_warn = false) const override;
+    const std::unordered_set<CoreCoord>& get_virtual_worker_cores(chip_id_t chip_id) const override;
+    const std::unordered_set<CoreCoord>& get_virtual_eth_cores(chip_id_t chip_id) const override;
 
-    uint32_t get_harvesting_mask(chip_id_t chip) const {
+    uint32_t get_harvesting_mask(chip_id_t chip) const override {
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
     }
 
-    uint16_t get_bus_id(chip_id_t chip) const {
+    uint16_t get_bus_id(chip_id_t chip) const override {
         return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
     }
 
     //! device driver and misc apis
-    void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
+    void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const override;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
+        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const override;
     void assert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
+        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const override;
 
     void write_dram_vec(
-        const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
-    void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
+        const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const override;
+    void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const override;
 
     // Accepts physical noc coordinates
-    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
-    void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
-    void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const override;
+    void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const override;
+    void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const override;
 
-    std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
+    std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const override {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
         auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
-    std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
+    std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const override {
         chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
         return driver_->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
@@ -167,59 +299,59 @@ public:
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
     // traversals
-    tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
+    tt::Writer get_static_tlb_writer(tt_cxy_pair target) const override {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
         return driver_->get_static_tlb_writer(target.chip, target_coord);
     }
 
-    std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
+    std::uint32_t get_numa_node_for_device(uint32_t device_id) const override {
         uint32_t mmio_device_id = this->get_associated_mmio_device(device_id);
         return driver_->get_numa_node_for_pcie_device(mmio_device_id);
     }
 
-    void write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const;
-    void read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const;
+    void write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const override;
+    void read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const override;
 
     void write_sysmem(
-        const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
+        const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const override;
     void read_sysmem(
-        void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
+        void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const override;
 
-    int get_device_aiclk(const chip_id_t& chip_id) const;
+    int get_device_aiclk(const chip_id_t& chip_id) const override;
 
-    void dram_barrier(chip_id_t chip_id) const;
-    void l1_barrier(chip_id_t chip_id) const;
+    void dram_barrier(chip_id_t chip_id) const override;
+    void l1_barrier(chip_id_t chip_id) const override;
 
-    uint32_t get_num_host_channels(chip_id_t device_id) const;
-    uint32_t get_host_channel_size(chip_id_t device_id, uint32_t channel) const;
+    uint32_t get_num_host_channels(chip_id_t device_id) const override;
+    uint32_t get_host_channel_size(chip_id_t device_id, uint32_t channel) const override;
     // Returns address in host space
-    void* host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16_t channel) const;
-    uint64_t get_pcie_base_addr_from_device(chip_id_t chip_id) const;
+    void* host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16_t channel) const override;
+    uint64_t get_pcie_base_addr_from_device(chip_id_t chip_id) const override;
 
     // Ethernet cluster api
     // Returns set of device ids connected via ethernet
-    std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(chip_id_t chip_id) const;
+    std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(chip_id_t chip_id) const override;
 
     // Returns whether `logical_core` has an eth link to a core on a connected chip
     // Cores that connect to another cluster will show up as connected
-    bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const;
+    bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const override;
 
     // Returns connected ethernet core on the other chip
     // If the core is connected to a device not accessible through this Cluster, it will assert
-    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
+    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const override;
 
     // Returns connected ethernet core on the other chip that is not managed by this Cluster
     std::tuple<uint64_t, CoreCoord> get_connected_ethernet_core_to_remote_mmio_device(
-        std::tuple<chip_id_t, CoreCoord> eth_core) const;
+        std::tuple<chip_id_t, CoreCoord> eth_core) const override;
 
     // Returns a ethernet sockets between local chip and remote chip
     // get_ethernet_sockets(a, b)[0] is connected to get_ethernet_sockets(b, a)[0]
-    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t local_chip, chip_id_t remote_chip) const;
+    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t local_chip, chip_id_t remote_chip) const override;
     // Converts logical ethernet core coord to physical ethernet core coord
-    CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord& logical_core) const;
+    CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord& logical_core) const override;
 
     // Returns virtual eth coord from channel
-    CoreCoord get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const;
+    CoreCoord get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const override;
 
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
@@ -230,32 +362,32 @@ public:
     //       CloseDevice(0)
     //       CloseDevice(1)
     void set_internal_routing_info_for_ethernet_cores(
-        bool enable_internal_routing, const std::vector<chip_id_t>& target_mmio_devices = {}) const;
+        bool enable_internal_routing, const std::vector<chip_id_t>& target_mmio_devices = {}) const override;
 
     const std::
         unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>&
-        get_ethernet_connections() const {
+        get_ethernet_connections() const override {
         return this->cluster_desc_->get_ethernet_connections();
     }
 
     // TODO: unify uint64_t with ChipUID
     const std::
         unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>&
-        get_ethernet_connections_to_remote_devices() const {
+        get_ethernet_connections_to_remote_devices() const override {
         return this->cluster_desc_->get_ethernet_connections_to_remote_devices();
     }
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
-    chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
+    chip_id_t get_associated_mmio_device(chip_id_t device_id) const override {
         return this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
     }
 
-    uint16_t get_assigned_channel_for_device(chip_id_t device_id) const {
+    uint16_t get_assigned_channel_for_device(chip_id_t device_id) const override {
         return this->device_to_host_mem_channel_.at(device_id);
     }
 
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
-    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
+    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const override {
         TT_ASSERT(
             this->cluster_desc_->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
             "Expected device {} to be an MMIO device!",
@@ -265,58 +397,55 @@ public:
 
     // Returns map of connected chip ids to active ethernet cores
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
-        chip_id_t chip_id) const;
+        chip_id_t chip_id) const override;
 
     // Returns vector of unique tunnels originating from mmio device.
     // Each vector entry is another vector of remote devices on that tunnel.
-    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const {
+    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const override {
         return this->tunnels_from_mmio_device.at(mmio_chip_id);
     }
 
     // Configures ethernet cores for fabric routers depending on whether fabric is enabled
     void configure_ethernet_cores_for_fabric_routers(
-        tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
-
-    void initialize_fabric_config(
-        tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
+        tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) override;
 
     // Returns whether we are running on Galaxy.
-    bool is_galaxy_cluster() const;
+    bool is_galaxy_cluster() const override;
 
     // Returns Wormhole chip board type.
-    BoardType get_board_type(chip_id_t chip_id) const;
+    BoardType get_board_type(chip_id_t chip_id) const override;
 
-    tt::tt_metal::ClusterType get_cluster_type() const;
+    tt::tt_metal::ClusterType get_cluster_type() const override;
 
-    bool is_base_routing_fw_enabled() const;
+    bool is_base_routing_fw_enabled() const override;
 
     // Get all fabric ethernet cores
-    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
+    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const override;
 
     // Get fabric ethernet cores connecting src to dst
-    std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(chip_id_t src_id, chip_id_t dst_id) const;
+    std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(chip_id_t src_id, chip_id_t dst_id) const override;
 
-    bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const;
-    bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const;
-    CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
+    bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const override;
+    bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const override;
+    CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const override;
 
     // These two functions should be removed in favor of direct translation.
-    std::unordered_map<int, int> get_worker_logical_to_virtual_x(chip_id_t chip_id) const;
-    std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
+    std::unordered_map<int, int> get_worker_logical_to_virtual_x(chip_id_t chip_id) const override;
+    std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const override;
 
-    const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
+    const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const override;
 
-    std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) const;
+    std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) const override;
 
     // TODO: move to separate system descriptor class
     // return enum for connection type, Internal, QSFP, Other, Unknown
-    bool is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const;
+    bool is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const override;
 
-    const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(chip_id_t chip_id) const {
+    const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(chip_id_t chip_id) const override {
         return this->frequent_retrain_cores_.at(chip_id);
     }
 
-    const std::unordered_map<CoreCoord, EthRouterMode>& get_eth_routing_info(chip_id_t chip_id) const {
+    const std::unordered_map<CoreCoord, EthRouterMode>& get_eth_routing_info(chip_id_t chip_id) const override {
         return this->device_eth_routing_info_.at(chip_id);
     }
 
@@ -352,18 +481,18 @@ private:
     ARCH arch_;
     TargetDevice target_type_;
 
-    // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
-    std::unique_ptr<tt::umd::Cluster> driver_;
-
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    tt_ClusterDescriptor* cluster_desc_ = nullptr;
     // In case of mock cluster descriptor, the tt_cluster holds the ownership of the created object;
     // This is obviously a design issue. This should go away once the design is fixed.
     std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc_ptr_;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
+
+    // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
+    std::unique_ptr<tt::umd::Cluster> driver_;
+    tt_ClusterDescriptor* cluster_desc_ = nullptr;
 
     // Data Structures Tracking Virtual Coordinates
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
@@ -413,3 +542,7 @@ private:
 }  // namespace tt
 
 std::ostream& operator<<(std::ostream& os, const tt_target_dram& dram);
+
+
+
+
