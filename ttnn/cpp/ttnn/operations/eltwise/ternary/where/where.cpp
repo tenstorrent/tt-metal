@@ -68,7 +68,8 @@ Tensor WhereOperation::invoke(
     const std::variant<float, Tensor>& value_true,
     const std::variant<float, Tensor>& value_false,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> output) {
+    std::optional<Tensor> output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     bool is_value_true_Tensor = std::holds_alternative<Tensor>(value_true);
     bool is_value_false_Tensor = std::holds_alternative<Tensor>(value_false);
 
@@ -97,7 +98,8 @@ Tensor WhereOperation::invoke(
                     t_false,
                     output_dtype,
                     memory_config.value_or(predicate.memory_config()),
-                    output);
+                    output,
+                    sub_core_grids);
             }
         } else if (is_value_true_Tensor && !is_value_false_Tensor) {
             // TTS case: tensor-tensor-scalar
@@ -114,7 +116,8 @@ Tensor WhereOperation::invoke(
                     scalar_false,
                     output_dtype,
                     memory_config.value_or(predicate.memory_config()),
-                    output);
+                    output,
+                    sub_core_grids);
             }
         } else if (!is_value_true_Tensor && is_value_false_Tensor) {
             // TST case: tensor-scalar-tensor
@@ -131,7 +134,8 @@ Tensor WhereOperation::invoke(
                     t_false,
                     output_dtype,
                     memory_config.value_or(predicate.memory_config()),
-                    output);
+                    output,
+                    sub_core_grids);
             }
         } else if (!is_value_true_Tensor && !is_value_false_Tensor && !has_shard_spec) {
             // TSS case: tensor-scalar-scalar

@@ -27,6 +27,7 @@ struct WhereDeviceOperation {
         DataType input_dtype;
         std::optional<DataType> dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 
         // Scalar values for TTS/TST variants
         std::optional<float> value_true_scalar;
@@ -66,7 +67,29 @@ struct WhereDeviceOperation {
             tensor_return_value_t& output);
     };
 
-    using program_factory_t = std::variant<WhereProgramFactory>;
+    struct WhereSubgridProgramFactory {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
+            std::vector<CoreCoord> cores_with_rtargs;
+        };
+
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<WhereProgramFactory, WhereSubgridProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -83,7 +106,8 @@ struct WhereDeviceOperation {
         const Tensor& value_false,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& optional_output_tensor);
+        const std::optional<Tensor>& optional_output_tensor,
+        const std::optional<CoreRangeSet>& sub_core_grids);
 
     // tensor-tensor-scalar invocation (TTS)
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -92,7 +116,8 @@ struct WhereDeviceOperation {
         float value_false_scalar,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& optional_output_tensor);
+        const std::optional<Tensor>& optional_output_tensor,
+        const std::optional<CoreRangeSet>& sub_core_grids);
 
     // tensor-scalar-tensor invocation (TST)
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -101,7 +126,8 @@ struct WhereDeviceOperation {
         const Tensor& value_false,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& optional_output_tensor);
+        const std::optional<Tensor>& optional_output_tensor,
+        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::ternary

@@ -14,6 +14,10 @@ DataType WhereDeviceOperation::operation_attributes_t::get_dtype() const { retur
 WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(!tensor_args.predicate.is_sharded(), "WhereDeviceOperation is not implemented for sharded tensors");
+    if (args.sub_core_grids.has_value()) {
+        log_info(tt::LogOp, " ****** WhereSubgridProgramFactory");
+        return WhereSubgridProgramFactory{};
+    }
     return WhereProgramFactory{};
 }
 
@@ -208,13 +212,15 @@ WhereDeviceOperation::invoke(
     const Tensor& value_false,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTT,
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
         .compute_kernel_config = std::nullopt,
+        .sub_core_grids = sub_core_grids,
     };
 
     tensor_args_t args{
@@ -233,13 +239,15 @@ WhereDeviceOperation::invoke(
     float value_false_scalar,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTS,
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
         .compute_kernel_config = std::nullopt,
+        .sub_core_grids = sub_core_grids,
         .value_false_scalar = value_false_scalar,
     };
 
@@ -259,13 +267,15 @@ WhereDeviceOperation::invoke(
     const Tensor& value_false,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TST,
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_false.dtype()),
         .compute_kernel_config = std::nullopt,
+        .sub_core_grids = sub_core_grids,
         .value_true_scalar = value_true_scalar,
     };
 

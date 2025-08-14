@@ -23,7 +23,8 @@ struct WhereOperation {
         const std::variant<float, Tensor>& value_true,
         const std::variant<float, Tensor>& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> output_tensor = std::nullopt);
+        std::optional<Tensor> output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace ternary
