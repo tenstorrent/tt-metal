@@ -193,7 +193,6 @@ void ScaledDotProductAttention::validate(
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
-        const auto Sq = q_shape[2];
         const auto DH = q_shape[3];
         const auto k_page_size = k_shape[2];
         const uint32_t num_pages_per_user = page_table.logical_shape()[1];
