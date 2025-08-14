@@ -5,11 +5,13 @@
 rank_bindings:
   - rank: 0
     mesh_id: 0
+    mesh_host_rank: 0
     env_overrides:
       TT_METAL_VISIBLE_DEVICES: "0,1"
 
   - rank: 1
     mesh_id: 0
+    mesh_host_rank: 1
     env_overrides:
       TT_METAL_VISIBLE_DEVICES: "2,3"
 
