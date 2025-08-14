@@ -41,7 +41,8 @@ void kernel_main() {
     for (uint32_t shard_id = first_shard_id; shard_id < num_shards; shard_id += shard_id_stride) {
         if constexpr (is_reader) {
                 auto shard_pages = accessor_src.shard_pages(shard_id);
-                for (const auto& src_page_size : shard_pages) {
+                for (const auto& src_page : shard_pages) {
+                    auto src_page_id = src_page.page_id();
                     const uint32_t transfers_per_page = src_page_size / transfer_size;
                     for (uint32_t i = 0; i < transfers_per_page; i++) {
                         const uint32_t src_offset = i * transfer_size;
