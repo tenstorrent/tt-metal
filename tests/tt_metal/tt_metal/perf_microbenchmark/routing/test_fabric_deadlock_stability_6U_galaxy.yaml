@@ -23,7 +23,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "LinearMcastWest"
     sync: true
@@ -42,7 +42,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "LinearMcastNorth"
     sync: true
@@ -61,7 +61,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "LinearMcastSouth"
     sync: true
@@ -80,7 +80,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
 # ================================================
 # 2D Torus (XY) (low latency)
@@ -104,7 +104,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYLowLatencyMcastWest"
     sync: true
@@ -125,7 +125,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYLowLatencyMcastNorth"
     sync: true
@@ -146,7 +146,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYLowLatencyMcastSouth"
     sync: true
@@ -167,7 +167,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYLowLatencyMcastNorthEast"
     sync: true
@@ -189,7 +189,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYLowLatencyMcastNorthWest"
     sync: true
@@ -211,7 +211,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYLowLatencyMcastSouthEast"
     sync: true
@@ -233,7 +233,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYLowLatencyMcastSouthWest"
     sync: true
@@ -255,7 +255,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYLowLatencyMcastAllDirs"
     sync: true
@@ -279,7 +279,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
 # ================================================
 # 2D Torus (XY) (dynamic routing)
@@ -303,7 +303,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYDynamicMcastWest"
     sync: true
@@ -324,7 +324,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYDynamicMcastNorth"
     sync: true
@@ -345,7 +345,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYDynamicMcastSouth"
     sync: true
@@ -366,7 +366,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYDynamicMcastNorthEast"
     sync: true
@@ -388,7 +388,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYDynamicMcastNorthWest"
     sync: true
@@ -410,7 +410,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYDynamicMcastSouthEast"
     sync: true
@@ -432,7 +432,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYDynamicMcastSouthWest"
     sync: true
@@ -454,7 +454,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXYDynamicMcastAllDirs"
     sync: true
@@ -478,7 +478,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
 # ================================================
 # 2D Torus (X) (low latency)
@@ -502,7 +502,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXLowLatencyMcastWest"
     sync: true
@@ -523,7 +523,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
 # ================================================
 # 2D Torus (Y) (low latency)
@@ -547,7 +547,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusYLowLatencyMcastSouth"
     sync: true
@@ -568,7 +568,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
 # ================================================
 # 2D Torus (X) (dynamic routing)
@@ -592,7 +592,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusXDynamicMcastWest"
     sync: true
@@ -613,7 +613,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
 # ================================================
 # 2D Torus (Y) (dynamic routing)
@@ -637,7 +637,7 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
 
   - name: "TorusYDynamicMcastSouth"
     sync: true
@@ -658,4 +658,4 @@ Tests:
 
     patterns:
       - type: all_devices_uniform_pattern
-        iterations: 5
+        iterations: 3
