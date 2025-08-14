@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include "debug/dprint.h"
-
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
