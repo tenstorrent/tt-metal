@@ -80,6 +80,9 @@ ttnn::Tensor composite_reduce_scatter(
     bool convert_to_bfloat16_for_composite = input_dtype == DataType::BFLOAT8_B;
     bool is_tiled = input_tensor.layout() == Layout::TILE;
 
+    int32_t rank = input_tensor.logical_shape().rank();
+    int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+
     // Convert to row major
     if (is_tiled) {
         // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast_async + concat
@@ -109,7 +112,7 @@ ttnn::Tensor composite_reduce_scatter(
 
     // Partition the reduced tensor (scatter)
     ttnn::Tensor reduce_scatter_output_tensor = ttnn::prim::mesh_partition(
-        all_reduced_tensor, 3, cluster_axis, memory_config.value_or(all_reduced_tensor.memory_config()));
+        all_reduced_tensor, scatter_dim, cluster_axis, memory_config.value_or(all_reduced_tensor.memory_config()));
 
     // Convert back to tiled
     if (is_tiled) {
