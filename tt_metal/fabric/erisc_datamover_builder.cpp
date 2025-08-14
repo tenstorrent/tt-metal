@@ -690,8 +690,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     log_trace(
         tt::LogOp,
-        "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {} "
-        "{}",
+        "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}",
         is_dateline,
         is_dateline_upstream,
         is_dateline_upstream_adj_dev);
