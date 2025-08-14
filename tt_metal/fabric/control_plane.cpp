@@ -1534,8 +1534,6 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
             connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
             connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
             connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
-            connection_info.edm_l1_sem_addr =
-                edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel];
             connection_info.edm_connection_handshake_addr =
                 edm_config.sender_channels_connection_semaphore_address[sender_channel];
             connection_info.edm_worker_location_info_addr =

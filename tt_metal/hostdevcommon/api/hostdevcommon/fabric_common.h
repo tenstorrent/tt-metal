@@ -128,14 +128,13 @@ struct fabric_connection_info_t {
     uint8_t edm_noc_y;
     uint32_t edm_buffer_base_addr;
     uint8_t num_buffers_per_channel;
-    uint32_t edm_l1_sem_addr;
     uint32_t edm_connection_handshake_addr;
     uint32_t edm_worker_location_info_addr;
     uint16_t buffer_size_bytes;
     uint32_t buffer_index_semaphore_id;
 } __attribute__((packed));
 
-static_assert(sizeof(fabric_connection_info_t) == 26, "Struct size mismatch!");
+static_assert(sizeof(fabric_connection_info_t) == 22, "Struct size mismatch!");
 
 struct fabric_aligned_connection_info_t {
     // 16-byte aligned semaphore address for flow control
@@ -152,6 +151,11 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
+// uint8_t get_router_direction(uint32_t eth_channel) {
+//     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+//             reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+//     return connection_info->read_only[eth_channel].edm_direction;
+//}
 }  // namespace tt::tt_fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)

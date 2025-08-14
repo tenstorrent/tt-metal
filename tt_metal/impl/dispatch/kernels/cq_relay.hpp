@@ -64,7 +64,6 @@ public:
 #if defined(FABRIC_RELAY)
         edm.template init<fd_core_type>(
             true /*connected_to_persistent_fabric*/,
-            router_direction,
             mux_x,
             mux_y,
             mux_channel_base_address,
@@ -87,7 +86,7 @@ public:
 #if (FABRIC_2D_DYNAMIC == 1)
             tt::tt_fabric::fabric_set_unicast_route(
                 (tt::tt_fabric::MeshPacketHeader*)packet_header_addr,
-                (eth_chan_directions)edm.direction,
+                (eth_chan_directions)router_direction,
                 my_dev_id,
                 to_dev_id,
                 to_mesh_id,
@@ -96,7 +95,7 @@ public:
 #if defined(GALAXY_CLUSTER)
             tt::tt_fabric::fabric_set_route(
                 (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
-                (eth_chan_directions)edm.direction,
+                (eth_chan_directions)router_direction,
                 0,  // branch forward
                 0,  // start hop
                 num_hops,
@@ -104,7 +103,7 @@ public:
 #else
             tt::tt_fabric::fabric_set_unicast_route(
                 (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
-                (eth_chan_directions)edm.direction,
+                (eth_chan_directions)router_direction,
                 my_dev_id,
                 to_dev_id,
                 to_mesh_id,

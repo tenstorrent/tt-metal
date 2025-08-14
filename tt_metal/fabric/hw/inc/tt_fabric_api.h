@@ -1086,4 +1086,9 @@ inline void fabric_endpoint_init(tt_l1_ptr ClientInterfaceType client_interface,
     }
 }
 
+uint8_t get_router_direction(uint32_t eth_channel) {
+    tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+    return connection_info->read_only[eth_channel].edm_direction;
+}
 }  // namespace tt::tt_fabric

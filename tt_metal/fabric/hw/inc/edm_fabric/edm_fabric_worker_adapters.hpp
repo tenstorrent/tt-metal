@@ -94,7 +94,6 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_y = conn->edm_noc_y;
             edm_buffer_base_addr = conn->edm_buffer_base_addr;
             num_buffers_per_channel = conn->num_buffers_per_channel;
-            edm_l1_sem_id = conn->edm_l1_sem_addr;
             edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
             edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
             buffer_size_bytes = conn->buffer_size_bytes;
@@ -130,7 +129,6 @@ struct WorkerToFabricEdmSenderImpl {
         const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
         return WorkerToFabricEdmSenderImpl(
             is_persistent_fabric,
-            direction,
             edm_worker_x,
             edm_worker_y,
             edm_buffer_base_addr,
@@ -151,7 +149,6 @@ struct WorkerToFabricEdmSenderImpl {
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE void init(
         bool connected_to_persistent_fabric,
-        uint8_t direction,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
         std::size_t edm_buffer_base_addr,
@@ -167,7 +164,6 @@ struct WorkerToFabricEdmSenderImpl {
         StreamId worker_credits_stream_id,
         uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
         uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
-        this->direction = direction;
         this->edm_buffer_addr = edm_buffer_base_addr;
         this->worker_credits_stream_id = worker_credits_stream_id.get();
 
@@ -213,7 +209,6 @@ struct WorkerToFabricEdmSenderImpl {
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE WorkerToFabricEdmSenderImpl(
         bool connected_to_persistent_fabric,
-        uint8_t direction,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
         std::size_t edm_buffer_base_addr,
@@ -231,7 +226,6 @@ struct WorkerToFabricEdmSenderImpl {
         uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
         this->init<my_core_type>(
             connected_to_persistent_fabric,
-            direction,
             edm_worker_x,
             edm_worker_y,
             edm_buffer_base_addr,
@@ -532,7 +526,6 @@ struct WorkerToFabricEdmSenderImpl {
     // the cmd buffer is used for edm-edm path
     uint8_t data_noc_cmd_buf;
     uint8_t sync_noc_cmd_buf;
-    uint8_t direction;
 
 private:
     template <bool stateful_api = false, bool enable_ring_support = false>
