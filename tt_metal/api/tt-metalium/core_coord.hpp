@@ -220,8 +220,22 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
 std::vector<CoreCoord> corerange_to_cores(
     const CoreRangeSet& crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false);
 
-CoreRangeSet select_from_corerange(
+// Select a CoreRangeSet of cores from a CoreRangeSet.
+// The method will traverse the given CoreRangeSet in row-wise order and return a subset of cores based on start_index
+// and end_index (inclusive), where each core is represented by it's own CoreRange in the returned CoreRangeSet. Example
+// usage: CoreRangeSet crs = {{0, 0, 2, 2}, {4, 0, 5, 2}}; CoreRangeSet selected_cores = select_from_corerangeset(crs,
+// 0, 3); selected_cores = {{0,0}, {1,0}, {2,0}, {4,0}}
+CoreRangeSet select_from_corerangeset(
     const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise = false);
+
+// Select a contiguous CoreRange of cores from a CoreRangeSet.
+// The method will select an x by y contiguous CoreRange of cores from the given CoreRangeSet. If multiple CoreRanges of
+// size x by y are found, the method will return the lower leftmost subset of cores in the first available CoreRange.
+// Example usage:
+// CoreRangeSet crs = {{0, 0, 2, 2}, {4, 0, 5, 2}};
+// CoreRange selected_core_range = select_contiguous_range_from_corerangeset(crs, 3, 1);
+// selected_core_range = {{0,0}, {2,1}}
+std::optional<CoreRange> select_contiguous_range_from_corerangeset(const CoreRangeSet& crs, uint32_t x, uint32_t y);
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
 
