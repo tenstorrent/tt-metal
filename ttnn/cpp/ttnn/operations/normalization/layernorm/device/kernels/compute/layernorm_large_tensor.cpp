@@ -219,6 +219,7 @@ void MAIN {
         //    x
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
+        // =====================================
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             tile_regs_wait();
