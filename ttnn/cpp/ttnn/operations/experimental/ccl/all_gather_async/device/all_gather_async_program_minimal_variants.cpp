@@ -177,10 +177,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
+    auto [unicast_forward_args, unicast_backward_args] =
+        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
-    auto [forward_args, backward_args] =
-        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
 
@@ -470,10 +472,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     sender_writer_compile_args);
                 if (dir) {
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(), backward_args.begin(), backward_args.end());
+                        sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
                 } else {
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(), forward_args.begin(), forward_args.end());
+                        sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
                 }
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
