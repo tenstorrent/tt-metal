@@ -889,7 +889,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
     // Kernel Runtime Args
     uint32_t fwd_bwd_semaphore_address = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range_set, 0);
-    bool use_barrier_sem = barrier_semaphore.has_value() && !using_persistent_buffers;
     const uint32_t l1_unreserved_base_address =
         sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
@@ -1120,8 +1119,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
-                    use_barrier_sem,               // use_barrier_sem
-                    barrier_semaphore.has_value()  // synchronize barrier semaphore
+                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
+                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
                         ? barrier_semaphore.value().address()
                         : 0};
                 append_fabric_mux_connection_rt_args(
