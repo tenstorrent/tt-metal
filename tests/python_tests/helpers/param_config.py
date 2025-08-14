@@ -9,7 +9,7 @@ import pytest
 from helpers.dimensions import generate_matmul_dimension_combinations
 from helpers.log_utils import add_to_format_log
 
-from .format_arg_mapping import DestAccumulation
+from .format_arg_mapping import DestAccumulation, DestSync
 from .format_config import (
     DataFormat,
     FormatConfig,
@@ -91,6 +91,8 @@ class TestParamsConfig(TypedDict):
     tile_count: Optional[int] = None
     reduce_dim: Optional[List[str]] = None
     pool_type: Optional[List[str]] = None
+    num_faces: Optional[List[int]] = None
+    dest_sync: Optional[DestSync] = None
 
 
 def generate_params(**kwargs: any) -> List[tuple]:

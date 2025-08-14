@@ -65,6 +65,7 @@ def collect_results(
     core_loc: str = "0,0",
     sfpu: bool = False,
     tile_dimensions=[32, 32],
+    num_faces: int = 4,
 ):
     # Calculate tile elements based on tile dimensions instead of hardcoding 1024
     tile_elements = tile_dimensions[0] * tile_dimensions[1]
@@ -75,7 +76,9 @@ def collect_results(
     )
 
     read_data = read_from_device(core_loc, address, num_bytes=read_bytes_cnt)
-    res_from_L1 = unpack_res_tiles(read_data, formats, tile_count=tile_count, sfpu=sfpu)
+    res_from_L1 = unpack_res_tiles(
+        read_data, formats, tile_count=tile_count, sfpu=sfpu, num_faces=num_faces
+    )
     return res_from_L1
 
 
@@ -128,6 +131,7 @@ def write_stimuli_to_l1(
     tile_count_A: int = 1,
     tile_count_B: int = None,
     core_loc="0,0",
+    num_faces=4,
 ):
     """
     Write matmul stimuli to L1 with different matrix sizes.
@@ -178,14 +182,22 @@ def write_stimuli_to_l1(
             f"Unsupported data formats: {stimuli_A_format.name}, {stimuli_B_format.name}"
         )
 
-    def write_matrix(buffer, tile_count, pack_function, base_address, tile_size):
+    def write_matrix(
+        buffer, tile_count, pack_function, base_address, tile_size, num_faces
+    ):
         addresses = []
         packed_data_list = []
+
+        pack_function_lambda = lambda buffer_tile: (
+            pack_function(buffer_tile, num_faces=num_faces)
+            if pack_function == pack_bfp8_b
+            else pack_function(buffer_tile)
+        )
 
         for i in range(tile_count):
             start_idx = TILE_ELEMENTS * i
             tile_data = buffer[start_idx : start_idx + TILE_ELEMENTS]
-            packed_data = pack_function(tile_data)
+            packed_data = pack_function_lambda(tile_data)
 
             addresses.append(base_address + i * tile_size)
             packed_data_list.append(packed_data)
@@ -194,10 +206,20 @@ def write_stimuli_to_l1(
             write_to_device(core_loc, addr, data)
 
     write_matrix(
-        buffer_A, tile_count_A, pack_function_A, buffer_A_address, tile_size_A_bytes
+        buffer_A,
+        tile_count_A,
+        pack_function_A,
+        buffer_A_address,
+        tile_size_A_bytes,
+        num_faces,
     )
     write_matrix(
-        buffer_B, tile_count_B, pack_function_B, buffer_B_address, tile_size_B_bytes
+        buffer_B,
+        tile_count_B,
+        pack_function_B,
+        buffer_B_address,
+        tile_size_B_bytes,
+        num_faces,
     )
 
     # Set buffer addresses in device to be defined in build header
