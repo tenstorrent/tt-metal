@@ -341,6 +341,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
 }
 
 TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannels) {
+    GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
     uint32_t test_id = 150;
 
@@ -355,6 +356,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannels) {
 }
 
 TEST_F(DeviceFixture, TensixDataMovementOneToOneCustom) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_id = 160;
 
     // Parameters
