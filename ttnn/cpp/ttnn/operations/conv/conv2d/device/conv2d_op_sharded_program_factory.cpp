@@ -959,6 +959,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 bias_ntiles);
         }
 
+        // Last core sometimes has less work to do, but we still need to push the same number of tiles
+        // to avoid blocking compute kernels
         uint32_t reader_remaining_tiles_to_push = 0;
         uint32_t writer_remaining_tiles_to_push = 0;
         if (enable_activation_reuse && core_i == total_active_num_cores - 1) {
