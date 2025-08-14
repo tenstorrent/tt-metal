@@ -10,24 +10,34 @@ from models.demos.siglip.tt.mlp import siglip_mlp_ttnn
 
 def siglip_encoder_layer_ttnn(
     mesh_device,
-    hidden_states: torch.Tensor,
+    hidden_states: ttnn.Tensor,
     state_dict: Dict,
     state_dict_prefix: str = "",
     weight_cache_path: str = None,
     dtype=ttnn.bfloat16,
-    attention_mask: Optional[torch.Tensor] = None,
+    attention_mask: Optional[ttnn.Tensor] = None,
     vision_dim: int = 1152,
     num_heads: int = 16,
     layer_norm_eps: float = 1e-5,
     hidden_act: str = "gelu",
     attention_dropout: float = 0.0,
-) -> torch.Tensor:
+) -> ttnn.Tensor:
+    if isinstance(hidden_states, torch.Tensor):
+        hidden_states = ttnn.from_torch(
+            hidden_states,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
     # Self-attention block
     residual = hidden_states
 
     # Pre-attention layer norm
     hidden_states = siglip_layer_norm_ttnn(
-        mesh_device, hidden_states, state_dict["layer_norm1"], hidden_states.shape[-1], layer_norm_eps
+        mesh_device, hidden_states, state_dict["layer_norm1"], hidden_states.shape[-1], layer_norm_eps, dtype=dtype
     )
 
     # Self-attention
@@ -52,13 +62,13 @@ def siglip_encoder_layer_ttnn(
 
     # Pre-MLP layer norm
     hidden_states = siglip_layer_norm_ttnn(
-        mesh_device, hidden_states, state_dict["layer_norm2"], hidden_states.shape[-1], layer_norm_eps
+        mesh_device, hidden_states, state_dict["layer_norm2"], hidden_states.shape[-1], layer_norm_eps, dtype=dtype
     )
 
     # MLP
-    hidden_states = siglip_mlp_ttnn(mesh_device, hidden_states, state_dict["mlp"])
+    hidden_states = siglip_mlp_ttnn(mesh_device, hidden_states, state_dict["mlp"], dtype=dtype)
 
     # Add residual connection
     hidden_states = residual + hidden_states
 
-    return ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
+    return hidden_states
