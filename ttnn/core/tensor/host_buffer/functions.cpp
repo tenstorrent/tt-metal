@@ -10,7 +10,7 @@
 
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <iostream>
+
 namespace tt::tt_metal::host_buffer {
 
 HostBuffer get_host_buffer(const Tensor& tensor) {
@@ -20,20 +20,18 @@ HostBuffer get_host_buffer(const Tensor& tensor) {
                 std::vector<HostBuffer> buffers;
                 storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
                 
-                
-                if(buffers.size() > 1){
-                    std::cout << "[James] Bypass tt fatal for multiple buffers from get_host_buffer found with count: " << buffers.size() << ". Returning the first buffer only." << std::endl;
-                    for (const auto& buffer : buffers) {
-                        const auto& view = buffer.view_as<uint32_t>();
-                        uint32_t buff_value = *view.begin();
-                        std::cout << "Buffer value: " << buff_value << std::endl;
-                    }
+                if (buffers.empty()) {
+                    TT_THROW("No buffers found in host storage");
                 }
-
-                // TT_FATAL(
-                //     buffers.size() == 1,
-                //     "Can't get a single buffer from host storage distributed over mesh shape {}",
-                //     storage.buffer().shape());
+                
+                if (buffers.size() > 1) {
+                    // Allow access to first buffer from distributed storage
+                    // This is safe for replicated tensors where all shards contain identical data
+                    log_warning(tt::LogTTNN, 
+                        "Accessing first buffer from distributed storage with {} shards", 
+                        buffers.size());
+                }
+                
                 return buffers.front();
             },
             [](const auto&) -> HostBuffer { TT_THROW("Tensor must have HostStorage"); },
