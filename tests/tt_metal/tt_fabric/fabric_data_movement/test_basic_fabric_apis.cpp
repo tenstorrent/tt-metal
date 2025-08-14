@@ -243,7 +243,8 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_3W4E) {
 TEST_F(Fabric2DFixture, TestMCastConnAPI_1N2S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 1, RoutingDirection::S, 2);
 }
-ƒ TEST_F(Fabric2DFixture, TestMCastConnAPI_2N1S) {
+
+TEST_F(Fabric2DFixture, TestMCastConnAPI_2N1S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 2, RoutingDirection::S, 1);
 }
 
