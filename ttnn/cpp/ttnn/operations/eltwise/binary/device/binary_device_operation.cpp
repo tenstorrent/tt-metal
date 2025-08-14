@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,6 @@ namespace utils {
         case BinaryOpType::MUL:
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT16 && b == DataType::UINT16));
-        case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
@@ -50,6 +49,7 @@ namespace utils {
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
+        case BinaryOpType::DIV:
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
