@@ -26,8 +26,6 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t W = get_compile_time_arg_val(5);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(6);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -44,13 +42,10 @@ void MAIN {
     uint32_t cb_xmm = tt::CBIndex::c_24;           // x minus mean
     constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
     constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
+    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
-#ifdef RMSNORM
-    constexpr auto cb_x2 = tt::CBIndex::c_20;  // x^2
-#endif
-
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
@@ -64,38 +59,31 @@ void MAIN {
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
-#ifdef RMSNORM
-    binary_op_init_common(cb_in, cb_in, cb_x2);
-#endif
+    binary_op_init_common(cb_in, cb_in, cb_xmm2);
 #endif
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
-    constexpr int onetile = 1;
-    constexpr int dst0 = 0;
-    constexpr int dst1 = 1;
-    constexpr int dst2 = 2;
-
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        constexpr int onetile = 1;
+        constexpr int dst0 = 0;
 #ifndef RMSNORM
-        // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
+        // Start of
+        //  E[x]
+        //  aka   ∑(x)
+        //      --------
+        //         n
         tile_regs_acquire();
         tile_regs_wait();
 
         reconfig_data_format(cb_in, cb_scaler);
         pack_reconfig_data_format(cb_ex);
         cb_reserve_back(cb_ex, onetile);
-        welford_init();
-        uint32_t start_N = 1;
-        // Welford's needs transposed input tile
-        constexpr uint32_t transpose = 1;
-        copy_tile_to_dst_init_short(cb_in, transpose);
+        reduce_init(cb_in, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_in, blk);
             for (uint32_t j = 0; j < blk; j++) {
-                copy_tile(cb_in, j, dst0);
-                welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
-                start_N += tile_width;
+                reduce_tile(cb_in, cb_scaler, j, scaler0, dst0);
             }
             cb_pop_front(cb_in, blk);
         }
@@ -111,17 +99,23 @@ void MAIN {
         }
 #endif
         tile_regs_commit();
-        pack_tile(dst1, cb_ex);
-        pack_tile(dst2, cb_ex2);
+        pack_tile(dst0, cb_ex);
+        reduce_uninit();
         tile_regs_release();
         cb_push_back(cb_ex, onetile);
-        cb_push_back(cb_ex2, onetile);
-        // End of E[x] and Var[x]
+        // End of
+        // E[x]
+        // aka   ∑(x)
+        //     --------
+        //        n
 
         cb_wait_front(cb_ex, onetile);
 #endif  // !RMS ifdef end
-
-        // Start of calculation x - E[x] (or sum(x^2)/n for RMS norm)
+        // Start of
+        // Var Calculation
+        // Var(X) = ∑(x-E[x])^2
+        //         -----------
+        //              n
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             tile_regs_wait();
@@ -150,7 +144,6 @@ void MAIN {
             }
             cb_pop_front(cb_inb, blk);
 #endif
-#ifdef RMSNORM
             square_tile_init();
             for (uint32_t j = 0; j < blk; j++) {
                 square_tile(j);
@@ -186,12 +179,14 @@ void MAIN {
             pack_tile(dst0, cb_ex2);
             cb_push_back(cb_ex2, onetile);
             tile_regs_release();
-#endif
         }
 
         tile_regs_acquire();
         tile_regs_wait();
-        // End of calculation x - E[x] (or sum(x^2)/n for RMS norm)
+        // End of
+        // Var Calculation
+        // Var(X) = ∑(x-E[x])^2
+        //         -----------
 
         // Start of
         // Calculation
