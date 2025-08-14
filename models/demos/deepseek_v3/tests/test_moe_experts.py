@@ -19,7 +19,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     load_state_dict,
-    pad_tensor,
+    pad_or_trim_seq_len,
     run_module_forward,
 )
 
@@ -126,7 +126,7 @@ def test_forward_pass(
     torch_input = get_reference_input(batch_size, seq_len, hf_config)
     reference_output = get_reference_output(torch_input, reference_model)
 
-    torch_input = pad_tensor(torch_input, mode, seq_len)
+    torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
     # Generate module configs and state
     weight_config = TTExperts.convert_weights(hf_config, reference_model.state_dict(), tmp_path, mesh_device)
     model_config = get_model_config(TTExperts, mode, hf_config, mesh_device)
