@@ -55,16 +55,16 @@ void kernel_main() {
     constexpr uint32_t dispatch_devices = num_devices;
     constexpr uint32_t dispatch_index = linearized_mesh_coord;
 #endif
+    uint32_t rt_ags = 0;
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_ags++);
 
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(0);
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(1);
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(2);
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(3);
-    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(4);
-
-    uint32_t global_semaphore_address = get_arg_val<uint32_t>(5);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(6);
-    uint32_t token_end_idx = get_arg_val<uint32_t>(7);
+    uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t token_start_idx = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t token_end_idx = get_arg_val<uint32_t>(rt_ags++);
 
     const auto input_addr_gen = get_interleaved_addr_gen<input_is_dram, input_page_size>(input_tensor_address);
     const auto indices_addr_gen = get_interleaved_addr_gen<indices_is_dram, indices_page_size>(indices_tensor_address);
