@@ -23,22 +23,20 @@ run_t3000_falcon40b_tests() {
   fi
 }
 
-run_t3000_llama3_70b_tests() {
+run_t3000_llama3_70b_single_test() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
+  echo "LOG_METAL: Running run_t3000_llama3_70b_single_test - only the specific demo test"
 
-  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
-
-  # Output verification demo for old llama3-70b codebase, to be removed once old codebase is deleted
+  # Run only the specific test as requested
   env pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=900 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_70b_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_llama3_70b_single_test $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -371,6 +369,25 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
+}
+
+run_t3000_llama3_70b_single_test() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_70b_single_test - only the specific demo test"
+
+  # Run only the specific test as requested
+  env pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=900 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_70b_single_test $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
 }
 
 fail=0
