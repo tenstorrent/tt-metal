@@ -163,6 +163,25 @@ run_t3000_falcon40b_tests() {
   fi
 }
 
+run_t3000_gemma3-small-tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_gemma3-small-tests"
+
+  HF_MODEL="google/gemma-3-4b-it" TT_CACHE_PATH="$HF_HOME/tt_cache/gemma-3-4b-it" pytest -n auto models/demos/siglip/tests ; fail+=$?
+  echo "LOG_METAL: $HF_MODEL tests completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gemma3-small_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_llama3-small_tests() {
   # Record the start time
   fail=0

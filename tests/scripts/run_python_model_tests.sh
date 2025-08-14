@@ -94,11 +94,6 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
     pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 }
 
-run_python_development_model_tests_wormhole_b0() {
-    # Siglip (Gemma3 Vision)
-    HF_HUB_OFFLINE=1 HF_MODEL="/mnt/MLPerf/huggingface/hub/models--google--gemma-3-4b-it/snapshots/093f9f388b31de276ce2de164bdc2081324b9767" pytest models/demos/siglip/tests ; fail+=$?
-}
-
 run_python_model_tests_blackhole() {
     pytest models/demos/blackhole/stable_diffusion/tests
 
