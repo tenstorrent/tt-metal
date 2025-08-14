@@ -1,7 +1,6 @@
 name: Multi-Host Deployment (Physical)
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches:
       - main
   workflow_dispatch:
@@ -16,7 +15,12 @@ jobs:
       version: 22.04
       build-wheel: true
   deploy:
-    runs-on: multi-host
+    runs-on:
+      # A physical, multi-host WH T3K that's in service
+      - multi-host
+      - arch-wormhole_b0
+      - bare-metal
+      - in-service
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
@@ -51,10 +55,10 @@ jobs:
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}:${{ steps.capture-home.outputs.home }}:ro
             --device /dev/tenstorrent
-            --privileged
             --pid=host
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
             tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" bash -c "tt-smi-metal -r"
+            TT_METAL_HOME=/home/ansible/actions-runner/_work/tt-metal/tt-metal PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml
             TT_METAL_HOME=/home/ansible/actions-runner/_work/tt-metal/tt-metal PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
