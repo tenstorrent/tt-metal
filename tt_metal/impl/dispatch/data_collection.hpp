@@ -19,10 +19,6 @@ class Program;
 struct KernelGroup;
 }  // namespace tt_metal
 
-namespace tt_metal {
-using ProcessorIdentifier = std::tuple<HalProgrammableCoreType, HalProcessorClassType, int>;
-}
-
 enum data_collector_t {
     DISPATCH_DATA_CB_CONFIG,
     DISPATCH_DATA_SEMAPHORE,
@@ -44,10 +40,7 @@ void RecordDispatchData(
     uint64_t program_id,
     data_collector_t type,
     uint32_t transaction_size,
-    std::optional<tt_metal::ProcessorIdentifier> processor = std::nullopt);
-
-// Compatibility layer, to be removed!!
-void RecordDispatchData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv);
+    std::optional<tt_metal::HalProcessorIdentifier> processor = std::nullopt);
 
 // Record the KernelGroups present in this program (per core type). Should only be called per program created, not
 // program enqueued.

@@ -248,17 +248,17 @@ const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_ke
 }
 
 uint32_t DataMovementKernel::get_processor_id(int index) const {
-    TT_ASSERT(index < expected_num_binaries(), "index out of bounds");
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
     return enchantum::to_underlying(this->config_.processor);
 }
 
 uint32_t EthernetKernel::get_processor_id(int index) const {
-    TT_ASSERT(index < expected_num_binaries(), "index out of bounds");
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
     return enchantum::to_underlying(this->config_.processor);
 }
 
 uint32_t ComputeKernel::get_processor_id(int index) const {
-    TT_ASSERT(index < expected_num_binaries(), "index out of bounds");
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
     return index;
 }
 

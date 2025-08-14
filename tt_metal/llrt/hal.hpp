@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <tuple>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -31,6 +32,8 @@ namespace tt {
 enum class ARCH;
 
 namespace tt_metal {
+
+using HalProcessorIdentifier = std::tuple<HalProgrammableCoreType, HalProcessorClassType, int>;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc

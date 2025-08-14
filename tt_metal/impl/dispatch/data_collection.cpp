@@ -23,7 +23,6 @@
 #include "tt-metalium/program.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "impl/context/metal_context.hpp"
-#include "tt_backend_api_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -31,7 +30,7 @@ using namespace tt::tt_metal;
 using tt::tt_metal::detail::ProgramImpl;
 namespace {
 
-std::ostream& operator<<(std::ostream& os, const ProcessorIdentifier& id) {
+std::ostream& operator<<(std::ostream& os, const HalProcessorIdentifier& id) {
     using enchantum::iostream_operators::operator<<;
     return os << std::get<0>(id) << "_" << std::get<1>(id) << "_" << std::get<2>(id);
 }
@@ -77,7 +76,7 @@ public:
     DispatchData(data_collector_t type) : type(type) {}
     DispatchData(int type_int) : DispatchData(static_cast<data_collector_t>(type_int)) {}
 
-    void Update(uint32_t transaction_size, std::optional<ProcessorIdentifier> processor) {
+    void Update(uint32_t transaction_size, std::optional<HalProcessorIdentifier> processor) {
         data[processor][transaction_size]++;
     }
 
@@ -123,7 +122,7 @@ public:
 
 private:
     // processor -> transaction size -> count
-    std::map<std::optional<ProcessorIdentifier>, std::map<uint32_t, uint32_t>> data;
+    std::map<std::optional<HalProcessorIdentifier>, std::map<uint32_t, uint32_t>> data;
     data_collector_t type;
 };
 
@@ -143,7 +142,7 @@ public:
         uint64_t program_id,
         data_collector_t type,
         uint32_t transaction_size,
-        std::optional<ProcessorIdentifier> processor);
+        std::optional<HalProcessorIdentifier> processor);
     void RecordKernelGroups(ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups);
     void RecordProgramRun(uint64_t program_id);
     void DumpData();
@@ -159,7 +158,7 @@ void DataCollector::RecordData(
     uint64_t program_id,
     data_collector_t type,
     uint32_t transaction_size,
-    std::optional<ProcessorIdentifier> processor) {
+    std::optional<HalProcessorIdentifier> processor) {
     auto& dispatch_data = program_id_to_dispatch_data[program_id];
     if (dispatch_data.empty()) {
         // If no existing data for this program, initialize starting values.
@@ -287,7 +286,7 @@ void RecordDispatchData(
     uint64_t program_id,
     data_collector_t type,
     uint32_t transaction_size,
-    std::optional<ProcessorIdentifier> processor) {
+    std::optional<HalProcessorIdentifier> processor) {
     // Do nothing if we're not enabling data collection.
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
@@ -295,53 +294,6 @@ void RecordDispatchData(
 
     InitDataCollector();
     DataCollector::inst->RecordData(program_id, type, transaction_size, processor);
-}
-
-void RecordDispatchData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
-    if (riscv == MAX) {
-        RecordDispatchData(program_id, type, transaction_size, std::nullopt);
-        return;
-    }
-    HalProgrammableCoreType core_type;
-    HalProcessorClassType proc_class;
-    int index;
-    switch (riscv) {
-        case BRISC:
-        case NCRISC:
-        case TRISC0:
-        case TRISC1:
-        case TRISC2:
-        case COMPUTE: core_type = HalProgrammableCoreType::TENSIX; break;
-        case ERISC:
-        case ERISC1:
-            // old interface could not distinguish ACTIVE_ETH from IDLE_ETH
-            core_type = HalProgrammableCoreType::ACTIVE_ETH;
-            break;
-        case MAX: TT_THROW("Unreachable");
-    }
-    switch (riscv) {
-        case BRISC:
-        case NCRISC:
-        case ERISC:
-        case ERISC1: proc_class = tt_metal::HalProcessorClassType::DM; break;
-        case TRISC0:
-        case TRISC1:
-        case TRISC2:
-        case COMPUTE: proc_class = tt_metal::HalProcessorClassType::COMPUTE; break;
-        case MAX: TT_THROW("Unreachable");
-    }
-    switch (riscv) {
-        case BRISC: index = 0; break;
-        case NCRISC: index = 1; break;
-        case TRISC0: index = 0; break;
-        case TRISC1: index = 1; break;
-        case TRISC2: index = 2; break;
-        case ERISC: index = 0; break;
-        case ERISC1: index = 1; break;
-        case COMPUTE: index = 3; break;
-        case MAX: TT_THROW("Unreachable");
-    }
-    RecordDispatchData(program_id, type, transaction_size, std::make_tuple(core_type, proc_class, index));
 }
 
 void RecordKernelGroups(ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
