@@ -61,8 +61,7 @@ enum class FabricEriscDatamoverType {
     Dateline = 1,
     DatelineUpstream = 2,
     DatelineUpstreamAdjacentDevice = 3,
-    DatelineUpstreamAdjacentDeviceUpstream = 4,
-    Invalid = 5,
+    Invalid = 4,
 };
 
 enum class FabricEriscDatamoverAxis : std::size_t {
@@ -301,8 +300,7 @@ private:
         std::array<size_t, num_sender_channels>& num_sender_buffer_slots,
         std::array<size_t, num_sender_channels>& num_remote_sender_buffer_slots,
         std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
-        std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
-        std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots);
+        std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots);
 
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };

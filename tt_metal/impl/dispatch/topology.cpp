@@ -863,8 +863,6 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
         } else if ((chip1 == 0 || chip1 == mesh_num_columns) && chip0 == chip1 + 1) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-        } else if ((chip0 == 1 || chip0 == mesh_num_columns + 1) && (chip1 == chip0 + 1)) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
         }
         // check if edm is on the longer axis
         if ((mesh_num_rows * mesh_num_columns) >=
@@ -922,14 +920,6 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
         // Row dateline upstream adjacent
         else if (is_dateline_upstream_adjacent_edm_along_row) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-        }
-        // Column dateline upstream adjacent device upstream
-        else if (is_dateline_upstream_adjacent_upstream_edm_along_column) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
-        }
-        // Row dateline upstream adjacent device upstream
-        else if (is_dateline_upstream_adjacent_upstream_edm_along_row) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
         }
 
         // check if edm is on the longer axis

@@ -289,8 +289,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_sender_channels>& num_sender_buffer_slots,
     std::array<size_t, num_sender_channels>& num_remote_sender_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
-    std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
-    std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots) {
+    std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots) {
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
         {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
 
@@ -441,7 +440,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         num_remote_sender_buffer_slots.fill(default_num_sender_buffer_slots);
         num_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
         num_remote_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
-        num_downstream_sender_buffer_slots.fill(default_num_sender_buffer_slots);
 
         auto buffer_config = options.edm_buffer_config;
         switch (options.edm_type) {
@@ -465,10 +463,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                     // set remote receiver buffer slots equal to local receiver, since remote is also dateline
                     num_remote_receiver_buffer_slots = num_receiver_buffer_slots;
                 }
-                if (buffer_config.enable_dateline_upstream_sender_extra_buffer_slots) {
-                    // set downstream_num_sender_buffer_slots, downstream is dateline-upstream-edm
-                    num_downstream_sender_buffer_slots.fill(dateline_upstream_num_sender_buffer_slots);
-                }
                 break;
             case FabricEriscDatamoverType::DatelineUpstream:
                 if (buffer_config.enable_dateline_upstream_sender_extra_buffer_slots) {
@@ -487,10 +481,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                         this->dateline_upstream_receiver_channel_skip_idx,
                         dateline_upstream_num_receiver_buffer_slots);
                     this->skip_receiver_channel_1_connection = true;
-                }
-                if (buffer_config.enable_dateline_sender_extra_buffer_slots) {
-                    // set downstream_num_sender_buffer_slots, downstream is dateline edm
-                    num_downstream_sender_buffer_slots.fill(dateline_num_sender_buffer_slots);
                 }
                 if (buffer_config.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
                     // set remote sender buffer slots equal to dateline upstream dajcent sender buffer slots
@@ -525,12 +515,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                         num_remote_receiver_buffer_slots,
                         this->dateline_upstream_receiver_channel_skip_idx,
                         dateline_upstream_num_receiver_buffer_slots);
-                }
-                break;
-            case FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
-                if (buffer_config.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
-                    // set downstream_num_sender_buffer_slots, downstream is dateline upstream adjcent edm
-                    num_downstream_sender_buffer_slots.fill(dateline_upstream_adjcent_num_sender_buffer_slots);
                 }
                 break;
             default: break;
@@ -601,7 +585,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         num_remote_sender_buffer_slots.fill(default_num_sender_buffer_slots);
         num_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
         num_remote_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
-        num_downstream_sender_buffer_slots.fill(default_num_sender_buffer_slots);
     }
 }
 
@@ -692,13 +675,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::array<size_t, num_sender_channels> num_remote_sender_buffer_slots = {0};
     std::array<size_t, num_receiver_channels> num_receiver_buffer_slots = {0};
     std::array<size_t, num_receiver_channels> num_remote_receiver_buffer_slots = {0};
-    std::array<size_t, num_downstream_sender_channels> num_downstream_sender_buffer_slots = {0};
 
     bool is_dateline = options.edm_type == FabricEriscDatamoverType::Dateline;
     bool is_dateline_upstream = options.edm_type == FabricEriscDatamoverType::DatelineUpstream;
     bool is_dateline_upstream_adj_dev = options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-    bool is_dateline_upstream_adj_dev_upstream =
-        options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
 
     configure_buffer_slots_helper(
         topology,
@@ -706,22 +686,19 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_sender_buffer_slots,
         num_remote_sender_buffer_slots,
         num_receiver_buffer_slots,
-        num_remote_receiver_buffer_slots,
-        num_downstream_sender_buffer_slots);
+        num_remote_receiver_buffer_slots);
 
     log_trace(
         tt::LogOp,
-        "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}, is_dateline_upstream_adj_dev_upstream "
+        "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {} "
         "{}",
         is_dateline,
         is_dateline_upstream,
-        is_dateline_upstream_adj_dev,
-        is_dateline_upstream_adj_dev_upstream);
+        is_dateline_upstream_adj_dev);
     log_trace(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
     log_trace(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
     log_trace(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
     log_trace(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
-    log_trace(tt::LogOp, "num_downstream_sender_buffer_slots: {}", num_downstream_sender_buffer_slots);
 
     size_t total_sender_slots = std::accumulate(
         num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + this->num_used_sender_channels, size_t{0});
@@ -757,8 +734,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         this->remote_receiver_channels_size_bytes[i] = channel_buffer_size_bytes * num_remote_receiver_buffer_slots[i];
     }
-    // set the downstream channel sizes
-    this->downstream_sender_channels_num_buffers = num_downstream_sender_buffer_slots;
 
     // set the base addresses for the local channels
     uint32_t sender_buffer_addr = buffer_region_start;
