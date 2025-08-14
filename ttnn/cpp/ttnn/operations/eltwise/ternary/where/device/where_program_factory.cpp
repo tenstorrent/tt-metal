@@ -553,8 +553,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
     } else {
-        // TTT (non-broadcast and row-broadcast): c_1 = value_true tensor, c_2 = value_false tensor
-        // CB layout: pred→CB0, true→CB1, false→CB2 (desired layout for ROW_BCAST)
+        // TTT: c_1 = value_true tensor, c_2 = value_false tensor
         auto [cb1, cb1_handle] = create_cb(
             tt::CBIndex::c_1,
             program,
@@ -709,7 +708,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
         reader_defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
 
-        // Add BCAST_LLK define (set to 0 for now, can be optimized later)
         reader_defines["BCAST_LLK"] = "0";
     }
 
@@ -747,7 +745,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
                             output.memory_config().is_sharded();
 
         std::vector<uint32_t> reader_compile_time_args;
-        // Binary_ng style: Two TensorAccessorArgs + sharding flag (total ~9 args)
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);  // First tensor (predicate)
         TensorAccessorArgs(*value_true_tensor.value().buffer())
             .append_to(reader_compile_time_args);                                 // Second tensor (true)
@@ -835,9 +832,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
         kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
         kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
-    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // ROW_BCAST: Using dedicated row broadcast compute kernel
-        // No special defines needed - the row broadcast compute kernel handles broadcast logic
     }
 
     kernel_defines["WHERE_LLK"] = "where_tile";

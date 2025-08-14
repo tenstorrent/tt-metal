@@ -18,7 +18,6 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 compute_kernel = KernelName::ComputeColBcastTTT;
                 writer_kernel = KernelName::WriterColBcastTTT;  // Use binary_ng compatible writer
             } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
-                // Row broadcast: use row broadcast reader and compute, but no-broadcast writer
                 reader_kernel = KernelName::ReaderRowBcastTTT;
                 compute_kernel = KernelName::ComputeRowBcastTTT;
                 writer_kernel = KernelName::WriterNoBcastTTT;

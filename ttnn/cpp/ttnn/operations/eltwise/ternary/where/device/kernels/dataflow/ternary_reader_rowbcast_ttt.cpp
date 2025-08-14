@@ -41,7 +41,6 @@ void kernel_main() {
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;  // true tensor CB
     constexpr auto cb_id_src_c = tt::CBIndex::c_2;  // false tensor CB
 
-    // Binary pattern: 2 TensorAccessorArgs (like binary_ng, but we manually read 3rd tensor)
     constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 #if SRC_SHARDED
@@ -63,7 +62,6 @@ void kernel_main() {
     cb_push_back(cb_id_src_c, src_num_tiles_c);
 #else
     const uint32_t src_tile_bytes_c = get_tile_size(cb_id_src_c);
-    // Create false tensor accessor using same args as true tensor but different address
     const auto src_c = TensorAccessor(src_b_args, src_addr_c, src_tile_bytes_c);
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B || !SRC_SHARDED_C
