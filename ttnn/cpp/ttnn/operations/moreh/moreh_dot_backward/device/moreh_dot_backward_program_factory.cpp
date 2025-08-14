@@ -83,21 +83,8 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
         (std::uint32_t)CBIndex::c_17,
     };
 
-    // Get TensorAccessorArgs for dst0_buffer (nullptr if not present)
-    Buffer* dst0_buffer = nullptr;
-    if (has_input_grad) {
-        const auto& input_grad_tensor = input_grad.value();
-        dst0_buffer = input_grad_tensor.buffer();
-    }
-    TensorAccessorArgs(dst0_buffer).append_to(writer_compile_time_args);
-
-    // Get TensorAccessorArgs for dst1_buffer (nullptr if not present)
-    Buffer* dst1_buffer = nullptr;
-    if (has_other_grad) {
-        const auto& other_grad_tensor = other_grad.value();
-        dst1_buffer = other_grad_tensor.buffer();
-    }
-    TensorAccessorArgs(dst1_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(has_input_grad ? input_grad.value().buffer() : nullptr).append_to(writer_compile_time_args);
+    TensorAccessorArgs(has_other_grad ? other_grad.value().buffer() : nullptr).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/reader_moreh_dot_backward.cpp";
