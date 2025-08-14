@@ -181,7 +181,7 @@ void configure_static_tlbs(
     }
     std::cout << std::endl;
 
-    for (const CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, tt::umd::CoordSystem::NOC0)) {
+    for (const tt::umd::CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, tt::umd::CoordSystem::NOC0)) {
         auto tlb_index = get_static_tlb_index({core.x, core.y});
         // TODO
         // Note: see issue #10107
