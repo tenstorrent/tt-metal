@@ -19,7 +19,7 @@ from framework.database import (
 from framework.serialize import serialize, serialize_structured
 from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
-from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus
+from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, TestVector
 
 
 class ResultDestination(ABC):
@@ -322,6 +322,23 @@ class FileResultDestination(ResultDestination):
             exception_text = raw.get("exception", None)
 
             # Build a validated record via Pydantic
+            # Prepare flattened test vector as a set[TestVector]
+            normalized_vector = _normalize_original_vector_data(raw.get("original_vector_data")) or {}
+            # Flatten entire structure, including dicts nested within lists
+            flattened_vector = _flatten_any_to_dotted(normalized_vector)
+            test_vector_set = set()
+            for k, v in flattened_vector.items():
+                # Values should now be primitives or lists of primitives; coerce if not
+                if isinstance(v, dict):
+                    # Should not occur after flatten; stringify as last resort
+                    v = json.dumps(v)
+                elif isinstance(v, list):
+                    # Convert lists to tuples so they are hashable for the set[TestVector]
+                    v = tuple(item if isinstance(item, (int, float, str)) else str(item) for item in v)
+                elif not isinstance(v, (int, float, str)):
+                    v = str(v)
+                test_vector_set.add(TestVector(param_name=k, param_value=v))
+
             record = OpTest(
                 test_name=header.get("sweep_name"),
                 suite_name=header.get("suite_name"),
@@ -338,9 +355,7 @@ class FileResultDestination(ResultDestination):
                 git_hash=curr_git_hash,
                 host=raw.get("host"),
                 user=raw.get("user"),
-                original_vector_data=_flatten_serialized(
-                    _normalize_original_vector_data(raw.get("original_vector_data")) or {}
-                ),
+                test_vector=test_vector_set,
             )
 
             # Convert to JSON-ready dict and deeply flatten any nested types
@@ -415,11 +430,21 @@ def _normalize_original_vector_data(original):
                 obj = deserialize(v)
             except Exception:
                 obj = v
-        # Re-serialize into JSON-friendly shape with enum strings parsed
-        try:
-            normalized[k] = serialize_structured(obj)
-        except Exception:
-            normalized[k] = str(obj)
+        # Keep native JSON-friendly structures so downstream flattening can work
+        if isinstance(obj, dict):
+            # Convert enum integer fields to readable strings inside dicts
+            try:
+                normalized[k] = convert_enum_values_to_strings(obj)  # type: ignore[name-defined]
+            except Exception:
+                normalized[k] = obj
+        elif isinstance(obj, (list, str, int, float, bool)) or obj is None:
+            normalized[k] = obj
+        else:
+            # For complex pybind/ttnn objects, fall back to structured serialization
+            try:
+                normalized[k] = serialize_structured(obj)
+            except Exception:
+                normalized[k] = str(obj)
     return normalized
 
 
@@ -441,6 +466,48 @@ def _flatten_serialized(value):
     except Exception:
         pass
     return value
+
+
+def _flatten_dict_to_dotted(value: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Flatten nested dictionaries to a single level with dotted keys.
+    Lists are preserved, and dicts inside lists are stringified in the caller.
+    """
+    flat: Dict[str, Any] = {}
+
+    def _recurse(prefix: str, obj: Any):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                new_key = f"{prefix}.{k}" if prefix else str(k)
+                _recurse(new_key, v)
+        else:
+            flat[prefix] = obj
+
+    _recurse("", value)
+    return flat
+
+
+def _flatten_any_to_dotted(value: Any) -> Dict[str, Any]:
+    """
+    Flatten an arbitrarily nested structure (dicts/lists/primitives) into a
+    single-level dict with dotted keys. List indices are included in the key path.
+    Example: {"a": {"b": [1, {"c": 2}]}} -> {"a.b.0": 1, "a.b.1.c": 2}
+    """
+    flat: Dict[str, Any] = {}
+
+    def _recurse(prefix: str, obj: Any):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                new_key = f"{prefix}.{k}" if prefix else str(k)
+                _recurse(new_key, v)
+        elif isinstance(obj, list):
+            # Preserve lists as-is under the current key
+            flat[prefix] = obj
+        else:
+            flat[prefix] = obj
+
+    _recurse("", value)
+    return flat
 
 
 class ResultDestinationFactory:
