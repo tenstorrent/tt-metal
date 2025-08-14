@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import pytest
 import torch
 from diffusers import DiffusionPipeline
@@ -12,14 +14,18 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DCond
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
+    batch_encode_prompt_on_device,
+    create_tt_clip_text_encoders,
     retrieve_timesteps,
     run_tt_image_gen,
     prepare_input_tensors,
     allocate_input_tensors,
     create_user_tensors,
+    warmup_tt_text_encoders,
 )
 import os
 from models.utility_functions import profiler
@@ -27,7 +33,14 @@ from models.utility_functions import profiler
 
 @torch.no_grad()
 def run_demo_inference(
-    ttnn_device, is_ci_env, prompts, num_inference_steps, vae_on_device, evaluation_range, capture_trace
+    ttnn_device,
+    is_ci_env,
+    prompts,
+    num_inference_steps,
+    vae_on_device,
+    encoders_on_device,
+    evaluation_range,
+    capture_trace,
 ):
     batch_size = ttnn_device.get_num_devices()
 
@@ -52,6 +65,11 @@ def run_demo_inference(
         torch_dtype=torch.float32,
         use_safetensors=True,
     )
+
+    assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
+    assert isinstance(
+        pipeline.text_encoder_2, CLIPTextModelWithProjection
+    ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
 
     # Have to throttle matmuls due to di/dt
     if is_galaxy():
@@ -96,9 +114,58 @@ def run_demo_inference(
 
     cpu_device = "cpu"
 
-    all_embeds = [
-        pipeline.encode_prompt(
-            prompt=prompt,
+    if encoders_on_device:
+        logger.info("Encoding prompts on device...")
+        # TT text encoder setup
+        tt_text_encoder, tt_text_encoder_2 = create_tt_clip_text_encoders(pipeline, ttnn_device)
+
+        # program cache for text encoders
+        warmup_tt_text_encoders(
+            tt_text_encoder, tt_text_encoder_2, pipeline.tokenizer, pipeline.tokenizer_2, ttnn_device, batch_size
+        )
+
+        encoding_start_time = time.time()
+        all_embeds = []
+        for i in range(0, len(prompts), batch_size):
+            batch_prompts = prompts[i : i + batch_size]
+            batch_embeds = batch_encode_prompt_on_device(
+                pipeline,
+                tt_text_encoder,
+                tt_text_encoder_2,
+                ttnn_device,
+                prompt=batch_prompts,  # Pass the entire batch
+                prompt_2=None,
+                device=cpu_device,
+                num_images_per_prompt=1,
+                do_classifier_free_guidance=True,
+                negative_prompt=None,
+                negative_prompt_2=None,
+                prompt_embeds=None,
+                negative_prompt_embeds=None,
+                pooled_prompt_embeds=None,
+                negative_pooled_prompt_embeds=None,
+                lora_scale=None,
+                clip_skip=None,
+            )
+            # batch_encode_prompt_on_device returns a single tuple of 4 tensors,
+            # but we need individual tuples for each prompt
+            prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = batch_embeds
+            # Split the tensors by batch dimension and create individual tuples
+            for j in range(len(batch_prompts)):
+                all_embeds.append(
+                    (
+                        prompt_embeds[j : j + 1],  # Keep batch dimension
+                        negative_prompt_embeds[j : j + 1] if negative_prompt_embeds is not None else None,
+                        pooled_prompt_embeds[j : j + 1],
+                        negative_pooled_prompt_embeds[j : j + 1] if negative_pooled_prompt_embeds is not None else None,
+                    )
+                )
+    else:
+        logger.info("Encoding prompts on host...")
+        encoding_start_time = time.time()
+        # batched impl of host encoding
+        all_embeds = pipeline.encode_prompt(
+            prompt=prompts,  # Pass the entire list at once
             prompt_2=None,
             device=cpu_device,
             num_images_per_prompt=1,
@@ -112,8 +179,24 @@ def run_demo_inference(
             lora_scale=None,
             clip_skip=None,
         )
-        for prompt in prompts
-    ]
+        (
+            prompt_embeds_batch,
+            negative_prompt_embeds_batch,
+            pooled_prompt_embeds_batch,
+            negative_pooled_prompt_embeds_batch,
+        ) = all_embeds
+        all_embeds = list(
+            zip(
+                torch.split(prompt_embeds_batch, 1, dim=0),
+                torch.split(negative_prompt_embeds_batch, 1, dim=0),
+                torch.split(pooled_prompt_embeds_batch, 1, dim=0),
+                torch.split(negative_pooled_prompt_embeds_batch, 1, dim=0),
+            )
+        )
+
+    encoding_end_time = time.time()
+    encoding_time = encoding_end_time - encoding_start_time
+    logger.info(f"Encoding time for {len(prompts)} prompts = {encoding_time:.2f} seconds")
 
     # Reorder all_embeds to prepare for splitting across devices
     items_per_core = len(all_embeds) // batch_size  # this will always be a multiple of batch_size because of padding
@@ -204,7 +287,7 @@ def run_demo_inference(
         tt_time_ids=[negative_add_time_ids, add_time_ids],
     )
 
-    logger.info("Performing warmup run, to make use of program caching in actual inference...")
+    logger.info("Performing warmup run on denoising, to make use of program caching in actual inference...")
     prepare_input_tensors(
         [
             tt_latents,
@@ -350,6 +433,14 @@ def run_demo_inference(
     ids=("device_vae", "host_vae"),
 )
 @pytest.mark.parametrize(
+    "encoders_on_device",
+    [
+        (True),
+        (False),
+    ],
+    ids=("device_encoders", "host_encoders"),
+)
+@pytest.mark.parametrize(
     "capture_trace",
     [
         (True),
@@ -363,9 +454,17 @@ def test_demo(
     prompt,
     num_inference_steps,
     vae_on_device,
+    encoders_on_device,
     capture_trace,
     evaluation_range,
 ):
     return run_demo_inference(
-        mesh_device, is_ci_env, prompt, num_inference_steps, vae_on_device, evaluation_range, capture_trace
+        mesh_device,
+        is_ci_env,
+        prompt,
+        num_inference_steps,
+        vae_on_device,
+        encoders_on_device,
+        evaluation_range,
+        capture_trace,
     )
