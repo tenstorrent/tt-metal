@@ -446,7 +446,7 @@ def test_tensor_creation_with_tensor_spec(tensor_spec, device):
     ],
 )
 def test_tensor_creation_from_buffer(dtype, shape, buffer, device):
-    tt_tensor = ttnn.from_buffer(buffer, shape, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_tensor = ttnn.from_buffer(buffer, shape, dtype=dtype, device=device)
     assert tt_tensor.shape == shape
     assert tt_tensor.dtype == dtype
     assert tt_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -478,7 +478,7 @@ def test_tensor_creation_from_buffer(dtype, shape, buffer, device):
 )
 def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, device):
     try:
-        tt_tensor = ttnn.from_buffer(buffer, [2, 3], dtype, ttnn.TILE_LAYOUT, device)
+        tt_tensor = ttnn.from_buffer(buffer, [2, 3], dtype, device, ttnn.TILE_LAYOUT)
     except Exception as e:
         assert "Unsupported DataType!" in str(e)
     else:
