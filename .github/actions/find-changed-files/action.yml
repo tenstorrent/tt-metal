@@ -18,10 +18,10 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.submodule-changed }}
   any-code-changed:
     value: ${{ steps.find-changed-files.outputs.any-code-changed }}
-  docs-changed:
-    value: ${{ steps.find-changed-files.outputs.docs-changed }}
   model-charts-changed:
     value: ${{ steps.find-changed-files.outputs.model-charts-changed }}
+  docs-changed:
+    value: ${{ steps.find-changed-files.outputs.docs-changed }}
 
 runs:
   using: "composite"

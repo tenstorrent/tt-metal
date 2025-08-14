@@ -91,7 +91,7 @@ jobs:
       model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files
 
   metalium-smoke-tests:
     needs: [ asan-build, find-changed-files ]
@@ -188,7 +188,7 @@ jobs:
   # and ensures that models attributes are in sync.
   models-chart-sync:
     needs: [find-changed-files]
-    if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' || true}}
+    if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repo
