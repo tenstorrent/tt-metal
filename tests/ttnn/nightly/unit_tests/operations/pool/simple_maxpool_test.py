@@ -5,8 +5,8 @@ import math
 device = ttnn.CreateDevice(0, l1_small_size=8192)
 
 in_n = 1
-in_h = 20
-in_w = 20
+in_h = 18
+in_w = 18
 in_c = 32
 kernel_size = [2, 2]
 stride = [1, 1]
@@ -181,15 +181,50 @@ if not indices_match:
             ttnn_input_val = torch_input[n, c, ttnn_h, ttnn_w] if ttnn_h < in_h and ttnn_w < in_w else float("nan")
 
             print(
-                f"  [{n}, {h}, {w}, {c}]: torch_idx={torch_idx:.0f} vs ttnn_idx={ttnn_idx:.0f} (diff: {diff_val:.0f})"
+                f"  output [{n}, {h}, {w}, {c}]: torch_idx={torch_idx:.0f} vs ttnn_idx={ttnn_idx:.0f} (diff: {diff_val:.0f})"
             )
             print(f"    Torch chose input[{n},{c},{torch_h},{torch_w}] = {torch_input_val:.6f}")
             print(f"    TTNN chose input[{n},{c},{ttnn_h},{ttnn_w}] = {ttnn_input_val:.6f}")
 
-            # Check if the values are the same (indicating a tie in max pooling)
-            if abs(torch_input_val - ttnn_input_val) < 1e-6:
-                print(f"    -> Same input values! This is a tie-breaking difference.")
+            # Check if this is a valid tie-breaking difference
+            # Two conditions must be satisfied:
+            # 1. The values must be the same
+            # 2. Both indices must be within the same kernel window
+
+            values_same = abs(torch_input_val - ttnn_input_val) < 1e-6
+
+            # Calculate the top-left corner of the kernel window for this output position
+            # Given output position (h, w), the top-left of the kernel window is:
+            kernel_top_left_h = h * stride_h - padding[0]  # padding[0] is top padding
+            kernel_top_left_w = w * stride_w - padding[1]  # padding[1] is left padding
+
+            # Check if both indices are within the same kernel window
+            kernel_bottom_right_h = kernel_top_left_h + kernel_h - 1
+            kernel_bottom_right_w = kernel_top_left_w + kernel_w - 1
+
+            torch_in_window = (
+                kernel_top_left_h <= torch_h <= kernel_bottom_right_h
+                and kernel_top_left_w <= torch_w <= kernel_bottom_right_w
+            )
+            ttnn_in_window = (
+                kernel_top_left_h <= ttnn_h <= kernel_bottom_right_h
+                and kernel_top_left_w <= ttnn_w <= kernel_bottom_right_w
+            )
+
+            same_kernel_window = torch_in_window and ttnn_in_window
+
+            print(
+                f"    Kernel window: top_left=({kernel_top_left_h},{kernel_top_left_w}), bottom_right=({kernel_bottom_right_h},{kernel_bottom_right_w})"
+            )
+            print(f"    Torch index in window: {torch_in_window}, TTNN index in window: {ttnn_in_window}")
+
+            if values_same and same_kernel_window:
+                print(f"    -> Same input values AND same kernel window! This is a valid tie-breaking difference.")
                 tie_breaking_differences += 1
+            elif values_same and not same_kernel_window:
+                print(f"    -> Same input values but DIFFERENT kernel windows! This is an error.")
+                value_differences += 1
+                has_actual_errors = True
             else:
                 print(f"    -> Different input values! Value difference: {abs(torch_input_val - ttnn_input_val):.6f}")
                 value_differences += 1
@@ -199,7 +234,7 @@ if not indices_match:
 print(f"\n=== SUMMARY ===")
 print(f"Total output elements: {total_output_elements}")
 print(f"Tie-breaking differences: {tie_breaking_differences}")
-print(f"Value differences (actual errors): {value_differences}")
+print(f"Value or window differences(actual errors): {value_differences}")
 
 # Updated test result logic - only fail if there are actual value differences or output mismatches
 test_passed = output_match and (not has_actual_errors)
