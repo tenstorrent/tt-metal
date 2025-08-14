@@ -8,6 +8,11 @@ import ttnn
 import torch
 import inspect
 from typing import List, Optional, Union
+from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
+    TtCLIPConfig,
+    TtCLIPTextTransformer,
+    TtCLIPTextTransformerParameters,
+)
 from models.utility_functions import profiler
 
 from tqdm import tqdm
@@ -18,6 +23,90 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 SDXL_L1_SMALL_SIZE = 47000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
+
+
+def create_tt_clip_text_encoders(pipeline, ttnn_device):
+    tt_parameters_text_encoder = TtCLIPTextTransformerParameters.from_torch(
+        pipeline.text_encoder.state_dict(),
+        device=ttnn_device,
+        dtype=ttnn.bfloat16,
+        parallel_manager=None,
+        has_text_projection=False,  # Text encoder 1 does not have text projection
+    )
+    tt_config_text_encoder = TtCLIPConfig(
+        vocab_size=pipeline.text_encoder.config.vocab_size,
+        d_model=pipeline.text_encoder.config.hidden_size,
+        d_ff=pipeline.text_encoder.config.intermediate_size,
+        num_heads=pipeline.text_encoder.config.num_attention_heads,
+        num_layers=pipeline.text_encoder.config.num_hidden_layers,
+        max_position_embeddings=77,
+        layer_norm_eps=pipeline.text_encoder.config.layer_norm_eps,
+        attention_dropout=pipeline.text_encoder.config.attention_dropout,
+        hidden_act=pipeline.text_encoder.config.hidden_act,
+    )
+    tt_text_encoder = TtCLIPTextTransformer(tt_parameters_text_encoder, tt_config_text_encoder)
+
+    # TT text encoder 2 setup
+    tt_parameters_text_encoder_2 = TtCLIPTextTransformerParameters.from_torch(
+        pipeline.text_encoder_2.state_dict(),
+        device=ttnn_device,
+        dtype=ttnn.bfloat16,
+        parallel_manager=None,
+        has_text_projection=True,  # Text encoder 2 has text projection
+    )
+
+    tt_config_text_encoder_2 = TtCLIPConfig(
+        vocab_size=pipeline.text_encoder_2.config.vocab_size,
+        d_model=pipeline.text_encoder_2.config.hidden_size,
+        d_ff=pipeline.text_encoder_2.config.intermediate_size,
+        num_heads=pipeline.text_encoder_2.config.num_attention_heads,
+        num_layers=pipeline.text_encoder_2.config.num_hidden_layers,
+        max_position_embeddings=77,
+        layer_norm_eps=pipeline.text_encoder_2.config.layer_norm_eps,
+        attention_dropout=pipeline.text_encoder_2.config.attention_dropout,
+        hidden_act=pipeline.text_encoder_2.config.hidden_act,
+    )
+    tt_text_encoder_2 = TtCLIPTextTransformer(tt_parameters_text_encoder_2, tt_config_text_encoder_2)
+
+    return tt_text_encoder, tt_text_encoder_2
+
+
+def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, tokenizer_2, ttnn_device, batch_size):
+    logger.info("Performing warmup run on encoding, to make use of program caching in actual inference...")
+    dummy_prompt = ["abc"] * batch_size
+    dummy_ids = tokenizer(
+        dummy_prompt,
+        padding="max_length",
+        max_length=tokenizer.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids
+    dummy_ids_2 = tokenizer(
+        dummy_prompt,
+        padding="max_length",
+        max_length=tokenizer_2.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids
+
+    tt_tokens_1 = ttnn.from_torch(
+        dummy_ids,
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=ttnn_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+    )
+    tt_tokens_2 = ttnn.from_torch(
+        dummy_ids_2,
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=ttnn_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+    )
+
+    _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, parallel_manager=None)
+    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, parallel_manager=None)
+    ttnn.synchronize_device(ttnn_device)
 
 
 # Copied from sdxl pipeline

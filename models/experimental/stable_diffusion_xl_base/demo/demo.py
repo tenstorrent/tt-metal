@@ -5,11 +5,7 @@
 from ast import List
 import time
 from typing import Optional
-from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
-    TtCLIPConfig,
-    TtCLIPTextTransformer,
-    TtCLIPTextTransformerParameters,
-)
+
 import pytest
 import torch
 from diffusers import DiffusionPipeline
@@ -25,18 +21,21 @@ from ttnn import ConcatMeshToTensor
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
+    create_tt_clip_text_encoders,
     retrieve_timesteps,
     run_tt_image_gen,
     prepare_input_tensors,
     allocate_input_tensors,
     create_user_tensors,
+    warmup_tt_text_encoders,
 )
 import os
 from models.utility_functions import profiler
 
 
-# encode prompt function from diffusers, need to modify it to work with ttnn and encoders
-def my_encode_prompt(
+# encode_prompt function, adapted from diffusers to work with on device tt text encoders
+# batch size (lenght of prompts) must be equal to number of devices
+def batch_encode_prompt_on_device(
     pipeline,
     tt_text_encoder,
     tt_text_encoder_2,
@@ -97,16 +96,21 @@ def my_encode_prompt(
             Number of layers to be skipped from CLIP while computing the prompt embeddings. A value of 1 means that
             the output of the pre-final layer will be used for computing the prompt embeddings.
     """
-    print("encode prompt from pipeline called!")
-    device = device or pipeline._execution_device
     prompt = [prompt] if isinstance(prompt, str) else prompt
 
-    print("Sent prompt to encode prompt function is: ", prompt)
-
-    # Todo fix negative prompt
     num_devices = ttnn_device.get_num_devices()
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
     assert prompt_2 is None, "Prompt 2 is not supported currently"
+    assert negative_prompt is None, "Negative prompt is not tested currently with on device text encoders"
+    assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
+    assert clip_skip is None, "Clip skip is not supported currently with on device text encoders"
+    assert prompt_embeds is None, "Prompt embeds is not supported currently with on device text encoders"
+    assert (
+        negative_prompt_embeds is None
+    ), "Negative prompt embeds is not supported currently with on device text encoders"
+    assert (
+        do_classifier_free_guidance is True
+    ), "Non - Classifier free guidance is not supported currently with on device text encoders"
 
     if prompt is not None:
         batch_size = len(prompt)
@@ -119,21 +123,15 @@ def my_encode_prompt(
     )
     text_encoders = [tt_text_encoder, tt_text_encoder_2] if tt_text_encoder is not None else [tt_text_encoder_2]
 
-    total_tokenize_and_encode_time = 0
     if prompt_embeds is None:
-        # print("Prompt tmbeds path")
         prompt_2 = prompt_2 or prompt
         prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
         # textual inversion: process multi-vector tokens if necessary
         prompt_embeds_list = []
         prompts = [prompt, prompt_2]
-        # print("Prompt2 is: ", prompt_2)
-        # print("Promptes pre loop are: ", prompts)
-        # i = 0
+
         for ind, (prompt, tokenizer, text_encoder) in enumerate(zip(prompts, tokenizers, text_encoders)):
-            # print("Prompt in loop is", prompt)
-            tokenizer_start_time = time.time()
             text_inputs = tokenizer(
                 prompt,
                 padding="max_length",
@@ -141,9 +139,6 @@ def my_encode_prompt(
                 truncation=True,
                 return_tensors="pt",
             )
-            tokenizer_end_time = time.time()
-            # print(f"tokenizer_{i} time = ", tokenizer_end_time - tokenizer_start_time)
-            total_tokenize_and_encode_time += tokenizer_end_time - tokenizer_start_time
 
             text_input_ids = text_inputs.input_ids
             untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
@@ -151,15 +146,12 @@ def my_encode_prompt(
             if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
                 text_input_ids, untruncated_ids
             ):
-                # print("Truncated ids path")
                 removed_text = tokenizer.batch_decode(untruncated_ids[:, tokenizer.model_max_length - 1 : -1])
                 logger.warning(
                     "The following part of your input was truncated because CLIP can only handle sequences up to"
                     f" {tokenizer.model_max_length} tokens: {removed_text}"
                 )
 
-            text_encoder_start_time = time.time()
-            # print("Text input ids shape = ", text_input_ids.shape)
             tt_tokens = ttnn.from_torch(
                 text_input_ids,
                 dtype=ttnn.uint32,
@@ -167,14 +159,8 @@ def my_encode_prompt(
                 device=ttnn_device,
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
-            # print("tt_tokens shape = ", tt_tokens.shape)
 
             tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
-            # ttnn.synchronize_device(ttnn_device)
-
-            # print("tt_sequence output is: ", tt_sequence_output)
-            # if ind == 0:
-            #     print("pre concat tt_sequence_output.hidden_states[-2] = ", tt_sequence_output.hidden_states[-2])
 
             tt_sequence_output_torch = ttnn.to_torch(
                 tt_sequence_output.hidden_states[-2],
@@ -184,60 +170,39 @@ def my_encode_prompt(
                 tt_pooled_output, mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0)
             ).to(torch.float32)
 
-            # print("tt_sequence_output_torch shape post concat = ", tt_sequence_output_torch.shape)
-
-            # print("TT text encoder 1 inference done")
-
-            # print("Prompt embeds ", prompt_embeds)
-            text_encoder_end_time = time.time()
-            # print(f"text_encoder_{i} time = ", text_encoder_end_time - text_encoder_start_time)
-            total_tokenize_and_encode_time += text_encoder_end_time - text_encoder_start_time
             # We are only ALWAYS interested in the pooled output of the final text encoder
-            # print("pooled prompt embeds data format is ", pooled_prompt_embeds.dtype)
-            # print("Full prompt embeds is: ", prompt_embeds)
+            # ----------- WARNING: ----------
+            # The comment above is from the reference implementation of SDXL pipeline encode prompts function.
+            # It clearly states that we are only interested in the pooled output of the final text encoder, but is in fact taking the last hidden state of the first text encoder.
+            # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)
             if ind == 0:
-                # the reference code says that pooled prompt embeds is actually the pooled prompt embeds, but is in fact last hidden state
                 tt_pooled_prompt_embeds = ttnn.to_torch(
                     tt_sequence_output.hidden_states[-1],
                     mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
-                )
-                # print("Encoder 1 path for positive prompt - pooled output that is not actually pooled")
+                ).to(torch.float32)
                 pooled_prompt_embeds = tt_pooled_prompt_embeds.to(torch.float32)
             else:
-                # print("Encoder 2 path for positive prompt - pooled output")
                 pooled_prompt_embeds = tt_pooled_output_torch
-            # print("pooled prompt embeds shape = ", pooled_prompt_embeds.shape)
-            # print("tt pooled prompt embeds shape = ", tt_pooled_prompt_embeds.shape)
-            # print("Using tt path")
 
             if clip_skip is None:
-                # print("Clip skip none path")
                 prompt_embeds = tt_sequence_output_torch
-                # print("Prompt embeds shape = ", prompt_embeds.shape)
-                # print("TT prompt embeds shape = ", tt_sequence_output_torch.shape)
-                # print("Using tt path for clip skip")
             else:
-                # "2" because SDXL always indexes from the penultimate layer.
-                # print("Clip skip not none path")
-                assert False, "Clip skip not none path not implemented"
-                # prompt_embeds = prompt_embeds.hidden_states[-(clip_skip + 2)]
-            # i += 1
+                assert False, "Clip skip not none path not tested, use at your own risk!"
+                prompt_embeds = ttnn.to_torch(
+                    tt_sequence_output.hidden_states[-(clip_skip + 2)],
+                    mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
+                ).to(torch.float32)
 
             prompt_embeds_list.append(prompt_embeds)
 
         prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
 
-    # get unconditional embeddings for classifier free guidance
     zero_out_negative_prompt = negative_prompt is None and pipeline.config.force_zeros_for_empty_prompt
-    #    print("Zero out negative prompt = ", zero_out_negative_prompt)
 
     if do_classifier_free_guidance and negative_prompt_embeds is None and zero_out_negative_prompt:
-        #       print("ABC path")
-        # ovo vrv ne treba
         negative_prompt_embeds = torch.zeros_like(prompt_embeds)
         negative_pooled_prompt_embeds = torch.zeros_like(pooled_prompt_embeds)
     elif do_classifier_free_guidance and negative_prompt_embeds is None:
-        #      print("DEF path")
         negative_prompt = negative_prompt or ""
         negative_prompt_2 = negative_prompt_2 or negative_prompt
 
@@ -263,9 +228,7 @@ def my_encode_prompt(
             uncond_tokens = [negative_prompt, negative_prompt_2]
 
         negative_prompt_embeds_list = []
-        # print("Pre negative prompt loop")
         for ind, (negative_prompt, tokenizer, text_encoder) in enumerate(zip(uncond_tokens, tokenizers, text_encoders)):
-            # print("Negative prompt path")
             max_length = prompt_embeds.shape[1]
             tokenizer_start_time = time.time()
             uncond_input = tokenizer(
@@ -275,17 +238,13 @@ def my_encode_prompt(
                 truncation=True,
                 return_tensors="pt",
             )
-            tokenizer_end_time = time.time()
-            # print(f"negative tokenizer_{i} time = ", tokenizer_end_time - tokenizer_start_time)
-            total_tokenize_and_encode_time += tokenizer_end_time - tokenizer_start_time
 
-            text_encoder_start_time = time.time()
             tt_tokens = ttnn.from_torch(
                 uncond_input.input_ids,
                 dtype=ttnn.uint32,
                 layout=ttnn.TILE_LAYOUT,
                 device=ttnn_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),  # fix this
+                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
             tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
             tt_sequence_output_neg_torch = ttnn.to_torch(
@@ -295,11 +254,12 @@ def my_encode_prompt(
             tt_pooled_output_neg_torch = ttnn.to_torch(
                 tt_pooled_output_neg, mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0)
             ).to(torch.float32)
-            ttnn.synchronize_device(ttnn_device)
-            text_encoder_end_time = time.time()
-            # print(f"negative text_encoder_{i} time = ", text_encoder_end_time - text_encoder_start_time)
-            total_tokenize_and_encode_time += text_encoder_end_time - text_encoder_start_time
+
             # We are only ALWAYS interested in the pooled output of the final text encoder
+            # ----------- WARNING: ----------
+            # The comment above is from the reference implementation of SDXL pipeline encode prompts function.
+            # It clearly states that we are only interested in the pooled output of the final text encoder, but is in fact taking the last hidden state of the first text encoder.
+            # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)            # We are only ALWAYS interested in the pooled output of the final text encoder
             if ind == 0:
                 tt_pooled_prompt_embeds = (
                     ttnn.to_torch(
@@ -308,36 +268,26 @@ def my_encode_prompt(
                     )
                 ).to(torch.float32)
                 negative_pooled_prompt_embeds = tt_pooled_prompt_embeds
-                # this is actually not used anywhere
-                # print(
-                #     "Using negative pooled prompt embeds that are not actually pooled for tt negative prompt - encoder 1"
-                # )
             else:
                 negative_pooled_prompt_embeds = tt_pooled_output_neg_torch
-                # print("Using negative pooled prompt embeds for tt negative prompt - encoder 2")
 
             negative_prompt_embeds = tt_sequence_output_neg_torch
-            # print("Using tt path for encoder in negative prompt")
 
             negative_prompt_embeds_list.append(negative_prompt_embeds)
 
         negative_prompt_embeds = torch.concat(negative_prompt_embeds_list, dim=-1)
 
     if pipeline.text_encoder_2 is not None:
-        # print("Text encoder 2 path")
         prompt_embeds = prompt_embeds.to(dtype=pipeline.text_encoder_2.dtype, device=device)
     else:
-        # print("Text encoder 2 not none path")
         prompt_embeds = prompt_embeds.to(dtype=pipeline.unet.dtype, device=device)
 
-    # print("Total tokenize and encode time = ", total_tokenize_and_encode_time)
     bs_embed, seq_len, _ = prompt_embeds.shape
     # duplicate text embeddings for each generation per prompt, using mps friendly method
     prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
     prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
 
     if do_classifier_free_guidance:
-        # print("CFG path")
         # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
         seq_len = negative_prompt_embeds.shape[1]
 
@@ -381,8 +331,6 @@ def run_demo_inference(
 
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     prompts = prompts + [""] * needed_padding
-
-    # print("prompts length = ", len(prompts))
 
     guidance_scale = 5.0
 
@@ -445,100 +393,20 @@ def run_demo_inference(
 
     cpu_device = "cpu"
 
-    # assumes lora scale is None
-    # assumes prompt_embeds is None
-
     if encoders_on_device:
-        print("Encoding prompts on device...")
-
         # TT text encoder setup
-        tt_parameters_text_encoder = TtCLIPTextTransformerParameters.from_torch(
-            pipeline.text_encoder.state_dict(),
-            device=ttnn_device,
-            dtype=ttnn.bfloat16,
-            parallel_manager=None,
-            has_text_projection=False,  # Text encoder 1 does not have text projection
+        tt_text_encoder, tt_text_encoder_2 = create_tt_clip_text_encoders(pipeline, ttnn_device)
+
+        # program cache for text encoders
+        warmup_tt_text_encoders(
+            tt_text_encoder, tt_text_encoder_2, pipeline.tokenizer, pipeline.tokenizer_2, ttnn_device, batch_size
         )
-        tt_config_text_encoder = TtCLIPConfig(
-            vocab_size=pipeline.text_encoder.config.vocab_size,
-            d_model=pipeline.text_encoder.config.hidden_size,
-            d_ff=pipeline.text_encoder.config.intermediate_size,
-            num_heads=pipeline.text_encoder.config.num_attention_heads,
-            num_layers=pipeline.text_encoder.config.num_hidden_layers,
-            max_position_embeddings=77,
-            layer_norm_eps=pipeline.text_encoder.config.layer_norm_eps,
-            attention_dropout=pipeline.text_encoder.config.attention_dropout,
-            hidden_act=pipeline.text_encoder.config.hidden_act,
-        )
-        tt_text_encoder = TtCLIPTextTransformer(tt_parameters_text_encoder, tt_config_text_encoder)
-
-        # TT text encoder 2 setup
-        tt_parameters_text_encoder_2 = TtCLIPTextTransformerParameters.from_torch(
-            pipeline.text_encoder_2.state_dict(),
-            device=ttnn_device,
-            dtype=ttnn.bfloat16,
-            parallel_manager=None,
-            has_text_projection=True,  # Text encoder 2 has text projection
-        )
-
-        tt_config_text_encoder_2 = TtCLIPConfig(
-            vocab_size=pipeline.text_encoder_2.config.vocab_size,
-            d_model=pipeline.text_encoder_2.config.hidden_size,
-            d_ff=pipeline.text_encoder_2.config.intermediate_size,
-            num_heads=pipeline.text_encoder_2.config.num_attention_heads,
-            num_layers=pipeline.text_encoder_2.config.num_hidden_layers,
-            max_position_embeddings=77,
-            layer_norm_eps=pipeline.text_encoder_2.config.layer_norm_eps,
-            attention_dropout=pipeline.text_encoder_2.config.attention_dropout,
-            hidden_act=pipeline.text_encoder_2.config.hidden_act,
-        )
-        tt_text_encoder_2 = TtCLIPTextTransformer(tt_parameters_text_encoder_2, tt_config_text_encoder_2)
-
-        logger.info("Warmup run for text encoders...")
-
-        dummy_prompt = ["abc"] * batch_size
-        dummy_ids = pipeline.tokenizer(
-            dummy_prompt,
-            padding="max_length",
-            max_length=pipeline.tokenizer.model_max_length,
-            truncation=True,
-            return_tensors="pt",
-        ).input_ids
-        dummy_ids_2 = pipeline.tokenizer(
-            dummy_prompt,
-            padding="max_length",
-            max_length=pipeline.tokenizer_2.model_max_length,
-            truncation=True,
-            return_tensors="pt",
-        ).input_ids
-
-        tt_tokens_1 = ttnn.from_torch(
-            dummy_ids,
-            dtype=ttnn.uint32,
-            layout=ttnn.TILE_LAYOUT,
-            device=ttnn_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
-        )
-        tt_tokens_2 = ttnn.from_torch(
-            dummy_ids_2,
-            dtype=ttnn.uint32,
-            layout=ttnn.TILE_LAYOUT,
-            device=ttnn_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
-        )
-
-        _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, parallel_manager=None)
-        _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, parallel_manager=None)
-
-        ttnn.synchronize_device(ttnn_device)
-
-        print("Warmup run for text encoders done")
 
         encoding_start_time = time.time()
         all_embeds = []
         for i in range(0, len(prompts), batch_size):
             batch_prompts = prompts[i : i + batch_size]
-            batch_embeds = my_encode_prompt(
+            batch_embeds = batch_encode_prompt_on_device(
                 pipeline,
                 tt_text_encoder,
                 tt_text_encoder_2,
@@ -557,8 +425,7 @@ def run_demo_inference(
                 lora_scale=None,
                 clip_skip=None,
             )
-            ttnn.synchronize_device(ttnn_device)
-            # my_encode_prompt returns a single tuple of 4 tensors,
+            # batch_encode_prompt_on_device returns a single tuple of 4 tensors,
             # but we need individual tuples for each prompt
             prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = batch_embeds
             # Split the tensors by batch dimension and create individual tuples
@@ -647,10 +514,7 @@ def run_demo_inference(
 
     encoding_end_time = time.time()
     encoding_time = encoding_end_time - encoding_start_time
-    logger.info(f"Encoding time = {encoding_time:.2f} seconds")
-
-    # print("All embeds length = ", len(all_embeds))
-    # print("all_embeds = ", all_embeds)
+    logger.info(f"Encoding time for {len(prompts)} prompts = {encoding_time:.2f} seconds")
 
     # Reorder all_embeds to prepare for splitting across devices
     items_per_core = len(all_embeds) // batch_size  # this will always be a multiple of batch_size because of padding
@@ -741,7 +605,7 @@ def run_demo_inference(
         tt_time_ids=[negative_add_time_ids, add_time_ids],
     )
 
-    logger.info("Performing warmup run, to make use of program caching in actual inference...")
+    logger.info("Performing warmup run on denoising, to make use of program caching in actual inference...")
     prepare_input_tensors(
         [
             tt_latents,
@@ -841,7 +705,6 @@ def run_demo_inference(
             tid_vae=tid_vae,
         )
 
-        logger.info(f"Encoding time for {batch_size} prompts: {encoding_time:.2f} seconds")
         logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
         logger.info(
             f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
@@ -875,7 +738,7 @@ def run_demo_inference(
     "prompt",
     ((["An astronaut riding a green horse", "A plate of food served on a wooden table"]),),
     # ((["A plate of food served on a wooden table", "An astronaut riding a green horse"]),),
-    # #(("A plate of food served on a wooden table"),),
+    # (("A plate of food served on a wooden table"),),
     # (("An astronaut riding a green horse"),),
 )
 @pytest.mark.parametrize(
@@ -906,7 +769,6 @@ def run_demo_inference(
     ],
     ids=("with_trace", "no_trace"),
 )
-# @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_demo(
     mesh_device,
     is_ci_env,
