@@ -1348,3 +1348,18 @@ def test_slice_tensor_args(input_shape, dim, start, end, step, layout, device):
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize("shape", [(2, 1, 16384, 4)])
+def test_l1_sharded_slice(device, shape):
+    noise_pred = ttnn.from_torch(torch.rand(shape), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    mem_config = ttnn.create_sharded_memory_config(
+        shape=(2, 1, 16384, 32),
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    noise_pred = ttnn.to_memory_config(noise_pred, mem_config)
+
+    print(noise_pred[0])  # this slicing fails
+    # if tensor is in DRAM, slicing works
