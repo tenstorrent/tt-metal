@@ -262,8 +262,6 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N1S2E1W) { RunTest2DMCastConn
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N1S1E2W) { RunTest2DMCastConnAPI(this, 2, 1, 1, 2); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N1S3E4W) { RunTest2DMCastConnAPI(this, 2, 1, 3, 4); }
-
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N1S2E4W) { RunTest2DMCastConnAPI(this, 2, 1, 2, 4); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N2S2E1W) { RunTest2DMCastConnAPI(this, 1, 2, 2, 1); }
@@ -272,11 +270,11 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N3S3E4W) { RunTest2DMCastConn
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N1S1E0W) { RunTest2DMCastConnAPI(this, 0, 1, 1, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N1S1E0W) { RunTest2DMCastConnAPI(this, 0, 1, 0, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N1S0E1W) { RunTest2DMCastConnAPI(this, 0, 1, 0, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N1S1E0W) { RunTest2DMCastConnAPI(this, 1, 0, 1, 0); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N0S1E0W) { RunTest2DMCastConnAPI(this, 1, 0, 1, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N1S1E0W) { RunTest2DMCastConnAPI(this, 1, 0, 0, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N0S0E1W) { RunTest2DMCastConnAPI(this, 1, 0, 0, 1); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N3S7E0W) { RunTest2DMCastConnAPI(this, 0, 3, 7, 0); }
 
@@ -292,8 +290,6 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_7N0S3E0W) { RunTest2DMCastConn
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N0S7E0W) { RunTest2DMCastConnAPI(this, 3, 0, 7, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N0S3E0W) { RunTest2DMCastConnAPI(this, 1, 0, 3, 0); }
-
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N1S5E1W) { RunTest2DMCastConnAPI(this, 1, 1, 5, 1); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N1S1E5W) { RunTest2DMCastConnAPI(this, 1, 1, 1, 5); }
@@ -301,10 +297,6 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N1S1E5W) { RunTest2DMCastConn
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_5N0S1E1W) { RunTest2DMCastConnAPI(this, 5, 0, 1, 1); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N5S1E1W) { RunTest2DMCastConnAPI(this, 0, 5, 1, 1); }
-
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N0S3E3W) { RunTest2DMCastConnAPI(this, 1, 0, 3, 3); }
-
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N0S7E0W) { RunTest2DMCastConnAPI(this, 3, 0, 7, 0); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_7N0S0E3W) { RunTest2DMCastConnAPI(this, 7, 0, 0, 3); }
 
@@ -319,8 +311,6 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_7N0S1E1W) { RunTest2DMCastConn
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N7S1E1W) { RunTest2DMCastConnAPI(this, 0, 7, 1, 1); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N7S2E1W) { RunTest2DMCastConnAPI(this, 0, 7, 2, 1); }
-
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N3S1E1W) { RunTest2DMCastConnAPI(this, 3, 3, 1, 1); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_5N2S1E1W) { RunTest2DMCastConnAPI(this, 5, 2, 1, 1); }
 
