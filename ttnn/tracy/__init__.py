@@ -25,6 +25,7 @@ from tt_metal.tools.profiler.common import (
     TRACY_OPS_DATA_FILE_NAME,
     TRACY_CAPTURE_TOOL,
     TRACY_CSVEXPROT_TOOL,
+    LD_LIBRARY_PATH,
     generate_logs_folder,
 )
 
@@ -103,7 +104,9 @@ def run_report_setup(verbose, outputFolder, port):
         if port:
             options += f"-p {port}"
 
-        captureCommand = (f"{PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL} -o {logsFolder / TRACY_FILE_NAME} -f {options}",)
+        captureCommand = (
+            f"LD_LIBRARY_PATH={LD_LIBRARY_PATH} {PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL} -o {logsFolder / TRACY_FILE_NAME} -f {options}",
+        )
         if verbose:
             logger.info(f"Capture command: {captureCommand}")
             captureProcess = subprocess.Popen(captureCommand, shell=True)
@@ -144,7 +147,7 @@ def generate_report(outputFolder, nameAppend, childCalls, collect_noc_traces=Fal
         if childCallsList:
             childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -t TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
+            f"LD_LIBRARY_PATH={LD_LIBRARY_PATH} {PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -t TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,
@@ -155,7 +158,7 @@ def generate_report(outputFolder, nameAppend, childCalls, collect_noc_traces=Fal
 
     with open(logsFolder / TRACY_OPS_DATA_FILE_NAME, "w") as csvFile:
         subprocess.run(
-            f'{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
+            f'LD_LIBRARY_PATH={LD_LIBRARY_PATH} {PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
             shell=True,
             check=True,
             stdout=csvFile,
