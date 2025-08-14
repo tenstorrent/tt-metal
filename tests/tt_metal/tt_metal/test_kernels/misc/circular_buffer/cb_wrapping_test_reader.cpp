@@ -15,24 +15,21 @@ static constexpr auto cb_step_size = 32;
 
 static constexpr uint32_t page_size_bytes = 16;
 static constexpr uint32_t page_size = page_size_bytes / sizeof(std::uint32_t);
+
+// A span would be more appropriate here, but we are currently in C++17 land.
 using page_t = std::array<std::uint32_t, page_size>;
 
-static constexpr uint32_t CHURN_LOOP_COUNT = 0xFFC0 / cb_step_size;
+static constexpr uint32_t CHURN_TARGET = (0x10000 - 2 * cb_step_size);
+static constexpr uint32_t CHURN_LOOP_COUNT = CHURN_TARGET / cb_step_size;
 
-page_t read_page(std::size_t page_offset = 0) {
-    std::uint32_t* read_ptr = (std::uint32_t*)get_read_ptr(cb_id) + (page_offset << 4);
+// This should be enough spining time for the writer to fill the CB with 2 steps of data.
+static constexpr uint32_t NUM_WAIT_CYCLES = 1024 * 1024 * 1024;
+
+page_t read_page() {
+    std::uint32_t* read_ptr = (std::uint32_t*)get_read_ptr(cb_id);
     page_t result;
     std::copy(read_ptr, read_ptr + page_size, result.begin());
     return result;
-}
-
-void print_page(std::size_t page_offset = 0) {
-    DPRINT << "Read Pointer: " << (int)page_offset << " " << HEX();
-
-    for (auto element : read_page()) {
-        DPRINT << HEX() << element << " ";
-    }
-    DPRINT << ENDL();
 }
 
 void kernel_main() {
@@ -44,7 +41,7 @@ void kernel_main() {
     }
 
     DPRINT << "Reader Wait" << ENDL();
-    riscv_wait(1024 * 1024 * 1024);
+    riscv_wait(NUM_WAIT_CYCLES);
     DPRINT << "Reader Wait Done" << ENDL();
 
     for (auto i = 0ul; i < 3; i++) {

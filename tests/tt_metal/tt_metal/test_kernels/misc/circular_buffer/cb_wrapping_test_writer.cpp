@@ -13,7 +13,7 @@
 using namespace tt;
 
 /*
- * The CB holdes 64 pages.
+ * The CB holdes 64 pages (2 steps).
  */
 
 static constexpr auto cb_id = tt::CBIndex::c_0;
@@ -32,15 +32,17 @@ static constexpr uint32_t WRAP_WRITE_VALUE = 0xAAAA;
 // Values used to overwrite the buffer in the last few pages.
 static constexpr uint32_t WRITE_OVER_VALUE = 0xBBBB;
 
-void fill_page(uint32_t value, std::size_t page_offset = 0) {
-    auto ptr = (get_local_cb_interface(cb_id).fifo_wr_ptr + page_offset) << 4;
-    volatile tt_l1_ptr std::uint32_t* page_start = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(ptr);
+void fill_page(uint32_t value) {
+    static constexpr uint32_t wr_ptr_page_shift = 4;
+
+    auto ptr = (get_local_cb_interface(cb_id).fifo_wr_ptr) << wr_ptr_page_shift;
+    auto page_start = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(ptr);
     std::fill(page_start, page_start + page_size, value);
 }
 
-void fill_step(uint32_t value, std::size_t step_offset = 0) {
+void fill_step(uint32_t value) {
     for (std::size_t i = 0; i < cb_step_size; i++) {
-        fill_page(value, step_offset * cb_step_size + i);
+        fill_page(value);
     }
 }
 

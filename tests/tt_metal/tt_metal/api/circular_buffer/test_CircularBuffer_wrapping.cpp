@@ -13,12 +13,6 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-constexpr CoreCoord worker_core = {0, 0};
-
-// CB have 64 pages.
-constexpr size_t cb_size = 1024;
-constexpr size_t cb_page_size = 16;
-
 /**
  *
  * This test checks that the cb_reserve_back will wait correctly when the received and acked counter overflows.
@@ -47,6 +41,19 @@ constexpr size_t cb_page_size = 16;
  *
  */
 
+constexpr CoreCoord worker_core = {0, 0};
+
+// CB have 64 pages.
+constexpr size_t cb_size = 1024;
+constexpr size_t cb_page_size = 16;
+
+// Values we write to the areas that could be overwritten by incorrect reserve calls.
+static constexpr uint32_t WRAP_WRITE_VALUE = 0xAAAA;
+// Values used to overwrite the buffer in the last few pages.
+static constexpr uint32_t WRITE_OVER_VALUE = 0xBBBB;
+// Expected result of the test.
+static const std::vector<uint32_t> EXPECTED_RESULT = {WRAP_WRITE_VALUE, WRITE_OVER_VALUE, WRITE_OVER_VALUE};
+
 TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
     auto device = devices_.at(0);
     Program program;
@@ -69,14 +76,13 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
 
     // We really only need to put 2 values in, but here the size is cb_page_size to ensure alignment.
     auto result_buffer = Buffer::create(device, cb_page_size, cb_page_size, BufferType::L1);
-    log_info(tt::LogTest, "Result Buffer: {:X}", result_buffer->address());
     SetRuntimeArgs(program, reader_kernel, worker_core, {result_buffer->address()});
 
     EnqueueProgram(device->command_queue(), program, true);
 
     std::vector<uint32_t> host_buffer;
-    detail::ReadFromDeviceL1(device, worker_core, result_buffer->address(), 3 * sizeof(uint32_t), host_buffer);
+    size_t expected_result_size = EXPECTED_RESULT.size() * sizeof(uint32_t);
+    detail::ReadFromDeviceL1(device, worker_core, result_buffer->address(), expected_result_size, host_buffer);
 
-    const static std::vector<uint32_t> expected_result = {0xAAAA, 0xBBBB, 0xAAAA};
-    EXPECT_EQ(host_buffer, expected_result) << "Page corruption detected.";
+    EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
 }
