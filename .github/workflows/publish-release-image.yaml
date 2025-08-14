@@ -66,6 +66,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-22.04]
+        image: [ttnn, models]
         test_group:
           [
               {
@@ -81,7 +82,7 @@ jobs:
           ]
     runs-on: ${{ matrix.test_group.runs-on }}
     container:
-      image: ${{ needs.create-docker-release-image.outputs.tag_name || 'docker-image-unresolved!' }}
+      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64:${{ inputs.version }}
       env:
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test_group.arch }}
@@ -120,6 +121,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-22.04]
+        image: [ttnn, models]
     runs-on:
       - ubuntu-latest
     steps:
@@ -139,7 +141,7 @@ jobs:
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
           echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG
