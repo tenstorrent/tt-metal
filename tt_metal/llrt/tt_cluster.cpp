@@ -657,7 +657,8 @@ bool Cluster::supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) c
            sz_in_bytes >= min_dma_size_bytes;
 }
 
-void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+void Cluster::write_core(
+    const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool bypass_wc) const {
     const chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled()) {
@@ -673,7 +674,11 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
+    if (bypass_wc) {
+        // Risk of duplicate or split writes from the host when WC Hugepage is used.
+        // write_to_device_reg does not use WC
+        this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    } else if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
         // log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
