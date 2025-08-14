@@ -11,6 +11,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations {
