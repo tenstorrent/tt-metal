@@ -29,6 +29,7 @@ class TransformerBlock(LightweightModule):
         self,
         args,
         mesh_device,
+        tt_ccl,
         dtype,
         state_dict,
         layer_num,
@@ -36,11 +37,13 @@ class TransformerBlock(LightweightModule):
         transformation_mats,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
     ):
         super().__init__()
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         self.args = args
         self.hidden_size = args.dim
@@ -57,6 +60,7 @@ class TransformerBlock(LightweightModule):
 
         self.attention = Attention(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
@@ -68,6 +72,7 @@ class TransformerBlock(LightweightModule):
         )
         self.feed_forward = MLP(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -87,11 +92,14 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
                 is_distributed=self.args.is_distributed_norm,
+                add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
+            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
 
@@ -106,11 +114,14 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="ffn_norm",
                 is_distributed=self.args.is_distributed_norm,
+                add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
+            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
 
@@ -125,11 +136,14 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="pre_feedforward_layernorm",
                 is_distributed=self.args.is_distributed_norm,
+                add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
+            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
 
@@ -144,11 +158,14 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="post_feedforward_layernorm",
                 is_distributed=self.args.is_distributed_norm,
+                add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
+            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
 
@@ -156,33 +173,35 @@ class TransformerBlock(LightweightModule):
         self,
         hidden_states: ttnn.Tensor,
         current_pos,
-        rot_mats=None,
+        rot_mats_global=None,
+        rot_mats_local=None,
         user_id=0,
         mode="decode",
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-    ):
+    ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
+        # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
         assert (
             hidden_states.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {hidden_states.memory_config()} != {skip_mem_cfg}"
+
+        # Choose the correct rotation matrices based on the mode
+        rot_mats = (
+            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
+        )
         residual = hidden_states
 
         attn_in = self.attention_norm(hidden_states, mode)
 
-        if self.attention.is_sliding:
-            position_embeddings = rot_mats[1]
-        else:
-            position_embeddings = rot_mats[0]
-
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
-            position_embeddings,
+            rot_mats,
             user_id,
             mode,
             page_table=page_table,
