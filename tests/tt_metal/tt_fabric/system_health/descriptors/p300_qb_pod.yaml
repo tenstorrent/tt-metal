@@ -1,0 +1,9 @@
+PODS:
+  P300_QB_POD:
+    BOARDS:
+      1: P300
+      2: P300
+    CONNECTIONS:
+      WARP400:
+        - [{BOARD: 1, PORT: 1}, {BOARD: 2, PORT: 1}]
+        - [{BOARD: 1, PORT: 2}, {BOARD: 2, PORT: 2}]

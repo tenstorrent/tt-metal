@@ -1,0 +1,46 @@
+SUPERPODS:
+  WH_GALAXY_Y_TORUS_SUPERPOD:
+    INCLUDE:
+      - wh_galaxy_y_torus.yaml
+    PODS:
+      1: WH_GALAXY_POD
+      2: WH_GALAXY_POD
+      3: WH_GALAXY_POD
+      4: WH_GALAXY_POD
+      5: WH_GALAXY_POD
+      6: WH_GALAXY_POD
+    CONNECTIONS:
+      QSFP:
+        - [{POD: 3, BOARD: 1, PORT: 3}, {POD: 2, BOARD: 1, PORT: 3}]
+        - [{POD: 3, BOARD: 1, PORT: 4}, {POD: 1, BOARD: 1, PORT: 4}]
+        - [{POD: 3, BOARD: 1, PORT: 5}, {POD: 6, BOARD: 1, PORT: 5}]
+        - [{POD: 3, BOARD: 1, PORT: 6}, {POD: 5, BOARD: 1, PORT: 6}]
+        - [{POD: 3, BOARD: 3, PORT: 6}, {POD: 4, BOARD: 3, PORT: 3}]
+        - [{POD: 2, BOARD: 1, PORT: 4}, {POD: 1, BOARD: 1, PORT: 3}]
+        - [{POD: 2, BOARD: 1, PORT: 5}, {POD: 6, BOARD: 1, PORT: 4}]
+        - [{POD: 2, BOARD: 1, PORT: 6}, {POD: 5, BOARD: 1, PORT: 5}]
+
+        - [{POD: 2, BOARD: 3, PORT: 6}, {POD: 4, BOARD: 3, PORT: 4}]
+        - [{POD: 2, BOARD: 2, PORT: 6}, {POD: 3, BOARD: 4, PORT: 6}]
+        - [{POD: 1, BOARD: 1, PORT: 5}, {POD: 6, BOARD: 1, PORT: 3}]
+        - [{POD: 1, BOARD: 1, PORT: 6}, {POD: 5, BOARD: 1, PORT: 4}]
+        - [{POD: 1, BOARD: 3, PORT: 6}, {POD: 4, BOARD: 3, PORT: 5}]
+        - [{POD: 1, BOARD: 2, PORT: 6}, {POD: 3, BOARD: 2, PORT: 6}]
+        - [{POD: 1, BOARD: 4, PORT: 6}, {POD: 2, BOARD: 4, PORT: 3}]
+        - [{POD: 6, BOARD: 1, PORT: 6}, {POD: 5, BOARD: 1, PORT: 3}]
+
+        - [{POD: 6, BOARD: 3, PORT: 6}, {POD: 4, BOARD: 3, PORT: 6}]
+        - [{POD: 6, BOARD: 2, PORT: 6}, {POD: 3, BOARD: 2, PORT: 5}]
+        - [{POD: 6, BOARD: 4, PORT: 6}, {POD: 2, BOARD: 4, PORT: 4}]
+        - [{POD: 6, BOARD: 4, PORT: 5}, {POD: 1, BOARD: 4, PORT: 3}]
+        - [{POD: 5, BOARD: 3, PORT: 6}, {POD: 4, BOARD: 1, PORT: 6}]
+        - [{POD: 5, BOARD: 2, PORT: 6}, {POD: 3, BOARD: 2, PORT: 4}]
+        - [{POD: 5, BOARD: 4, PORT: 6}, {POD: 2, BOARD: 4, PORT: 5}]
+        - [{POD: 5, BOARD: 4, PORT: 5}, {POD: 1, BOARD: 4, PORT: 4}]
+
+        - [{POD: 5, BOARD: 4, PORT: 4}, {POD: 6, BOARD: 4, PORT: 3}]
+        - [{POD: 4, BOARD: 2, PORT: 6}, {POD: 3, BOARD: 2, PORT: 3}]
+        - [{POD: 4, BOARD: 4, PORT: 6}, {POD: 2, BOARD: 4, PORT: 6}]
+        - [{POD: 4, BOARD: 4, PORT: 5}, {POD: 1, BOARD: 4, PORT: 5}]
+        - [{POD: 4, BOARD: 4, PORT: 4}, {POD: 6, BOARD: 4, PORT: 4}]
+        - [{POD: 4, BOARD: 4, PORT: 3}, {POD: 5, BOARD: 4, PORT: 3}]

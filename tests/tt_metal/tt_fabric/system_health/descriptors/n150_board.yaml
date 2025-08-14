@@ -1,0 +1,18 @@
+BOARD:
+  N150:
+    PORTS:
+      QSFP:
+        1:
+          - ASIC: 1
+            CHAN: [6, 7]
+        2:
+          - ASIC: 1
+            CHAN: [0, 1]
+      WARP100:
+        1:
+          - ASIC: 1
+            CHAN: [14, 15]
+        2:
+          - ASIC: 2
+            CHAN: [6, 7]
+    CONNECTIONS: ~
