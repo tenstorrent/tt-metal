@@ -24,6 +24,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_mesh_workload(
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    auto mesh_device = tensor_args.input_tensor.mesh_device();
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program =
             create_at(operation_attributes, coord, tensor_coords.coords(), tensor_args, tensor_return_value);
@@ -57,9 +58,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
-    const auto src_physical_device_id = mesh_device->get_device(mesh_coordinate)->id();
 
-    const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
+    const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
     const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
@@ -224,8 +224,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
     for (const auto& coord : all_mesh_coordinates) {
-        auto device = mesh_device->get_device(coord);
-        auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
     }
