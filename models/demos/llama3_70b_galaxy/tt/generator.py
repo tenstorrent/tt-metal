@@ -101,8 +101,7 @@ class Generator:
             prefill_seq_len = get_padded_prefill_len(seq_len)
             if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
                 enable_trace = False
-            else:
-                enable_trace = True
+
             prefill_ids = torch.cat(
                 [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
