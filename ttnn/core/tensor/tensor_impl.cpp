@@ -931,7 +931,8 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
     const auto [num_shards_height, last_shard_height, num_shards_width, last_shard_width] =
         tt::tt_metal::compute_shard_division_spec(logical_2d_shape, logical_shard_shape);
 
-    std::vector<LogicalPhysicalMapping> logical_physical_mapping(num_shards_height * num_shards_width);
+    std::vector<LogicalPhysicalMapping> logical_physical_mapping{};
+    logical_physical_mapping.reserve(num_shards_height * num_shards_width);
 
     for (size_t shard_height_idx = 0; shard_height_idx < num_shards_height; shard_height_idx++) {
         for (size_t shard_width_idx = 0; shard_width_idx < num_shards_width; shard_width_idx++) {
@@ -949,7 +950,7 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
                 indices[i] = {i * logical_stride + logical_start_idx, i * physical_stride + physical_start_idx};
             }
 
-            logical_physical_mapping.push_back((LogicalPhysicalMapping){indices, num_shard_cols});
+            logical_physical_mapping.emplace_back(indices, num_shard_cols);
         }
     }
     return logical_physical_mapping;
