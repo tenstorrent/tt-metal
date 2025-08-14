@@ -261,11 +261,12 @@ void test_single_connection_single_device_socket(
     MeshCoordinateRange devices(md0->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(send_recv_program), devices);
-
+    log_info(LogTest, "Enqueuing workload");
     EnqueueMeshWorkload(md0->mesh_command_queue(), mesh_workload, false);
-
+    log_info(LogTest, "Workload enqueued");
     std::vector<uint32_t> recv_data_readback;
     ReadShard(md0->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
+    log_info(LogTest, "Readback complete");
     EXPECT_EQ(src_vec, recv_data_readback);
 }
 

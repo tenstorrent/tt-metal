@@ -53,18 +53,14 @@ struct SocketSenderInterface {
     uint32_t config_addr;
     uint32_t write_ptr;
     uint32_t bytes_sent;
-    uint32_t bytes_acked_addr;
+    uint32_t bytes_acked_base_addr;
     uint32_t page_size;
-
-    // Downstream Socket Metadata
-    uint32_t downstream_mesh_id;
-    uint32_t downstream_chip_id;
-    uint32_t downstream_noc_y;
-    uint32_t downstream_noc_x;
+    uint32_t num_downstreams;
     uint32_t downstream_bytes_sent_addr;
     uint32_t downstream_fifo_addr;
     uint32_t downstream_fifo_total_size;
     uint32_t downstream_fifo_curr_size;
+    uint32_t downstream_enc_addr;
 };
 
 struct SocketReceiverInterface {

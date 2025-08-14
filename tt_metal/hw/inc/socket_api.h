@@ -11,7 +11,7 @@
 #include "risc_attribs.h"
 #include "socket.h"
 #include "utils/utils.h"
-
+#include "debug/deprint.h"
 #ifndef COMPILE_FOR_TRISC
 #include <type_traits>
 #include "dataflow_api.h"
@@ -19,7 +19,6 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
-static_assert(offsetof(sender_socket_md, bytes_acked) % L1_ALIGNMENT == 0);
 static_assert(offsetof(receiver_socket_md, bytes_sent) % L1_ALIGNMENT == 0);
 
 template <typename T>
@@ -28,7 +27,7 @@ constexpr bool always_false = false;
 template <typename SocketT>
 void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr, const SocketT& socket) {
 #if defined(DYNAMIC_ROUTING_ENABLED)
-    if constexpr (std::is_same_v<SocketT, SocketSenderInterface>) {
+    if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
         fabric_set_unicast_route(fabric_header_addr, 0, socket.downstream_chip_id, socket.downstream_mesh_id, 0);
     } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
         fabric_set_unicast_route(fabric_header_addr, 0, socket.upstream_chip_id, socket.upstream_mesh_id, 0);
@@ -36,7 +35,7 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
         static_assert(always_false<SocketT>, "Unsupported socket type passed to set_fabric_unicast_route");
     }
 #else
-    if constexpr (std::is_same_v<SocketT, SocketSenderInterface>) {
+    if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
         fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(socket.downstream_chip_id));
     } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
         fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(socket.upstream_chip_id));
@@ -47,20 +46,21 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
 }
 #endif
 
+uint32_t align_up(uint32_t v) { return ((v + L1_ALIGNMENT - 1) / L1_ALIGNMENT) * L1_ALIGNMENT; }
+
 SocketSenderInterface create_sender_socket_interface(uint32_t config_addr) {
     tt_l1_ptr sender_socket_md* socket_config = reinterpret_cast<tt_l1_ptr sender_socket_md*>(config_addr);
     SocketSenderInterface socket;
     socket.config_addr = config_addr;
     socket.write_ptr = socket_config->write_ptr;
+    socket.num_downstreams = socket_config->num_downstreams;
     socket.bytes_sent = socket_config->bytes_sent;
-    socket.bytes_acked_addr = config_addr + offsetof(sender_socket_md, bytes_acked);
-    socket.downstream_mesh_id = socket_config->downstream_mesh_id;
-    socket.downstream_chip_id = socket_config->downstream_chip_id;
-    socket.downstream_noc_x = socket_config->downstream_noc_x;
-    socket.downstream_noc_y = socket_config->downstream_noc_y;
+    socket.bytes_acked_base_addr = config_addr + align_up(sizeof(sender_socket_md));
     socket.downstream_fifo_addr = socket_config->downstream_fifo_addr;
     socket.downstream_bytes_sent_addr = socket_config->downstream_bytes_sent_addr;
     socket.downstream_fifo_total_size = socket_config->downstream_fifo_total_size;
+    socket.downstream_enc_addr =
+        config_addr + align_up(sizeof(sender_socket_md) + socket_config->num_downstreams * align_up(sizeof(uint32_t)));
 
     return socket;
 }
@@ -87,13 +87,18 @@ void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_si
 void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
     volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_addr);
-    uint32_t bytes_free;
-    do {
-        invalidate_l1_cache();
-        // bytes_acked will never be ahead of bytes_sent, so this is safe
-        bytes_free = socket.downstream_fifo_total_size - (socket.bytes_sent - *bytes_acked_ptr);
-    } while (bytes_free < num_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
+
+    while (reinterpret_cast<uint32_t>(bytes_acked_ptr) <
+           socket.bytes_acked_base_addr + socket.num_downstreams * align_up(sizeof(uint32_t))) {
+        uint32_t bytes_free;
+        do {
+            invalidate_l1_cache();
+            // bytes_acked will never be ahead of bytes_sent, so this is safe
+            bytes_free = socket.downstream_fifo_total_size - (socket.bytes_sent - *bytes_acked_ptr);
+        } while (bytes_free < num_bytes);
+        bytes_acked_ptr += align_up(sizeof(uint32_t));
+    }
 }
 
 void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
@@ -108,33 +113,56 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     }
 }
 
+void socket_async_write(SocketSenderInterface& socket, uint32_t data_addr, uint32_t data_size) {
+    for (uint32_t i = 0; i < socket.num_downstreams; i++) {
+        sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
+            socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
+        noc_async_write(
+            data_addr,
+            get_noc_addr(downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, 0) | socket.write_ptr,
+            data_size);
+    }
+}
+
 #ifndef COMPILE_FOR_TRISC
 void socket_notify_receiver(const SocketSenderInterface& socket) {
     // TODO: Store noc encoding in struct?
-    auto downstream_bytes_sent_noc_addr =
-        get_noc_addr(socket.downstream_noc_x, socket.downstream_noc_y, socket.downstream_bytes_sent_addr);
-    noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
+    for (uint32_t i = 0; i < socket.num_downstreams; i++) {
+        sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
+            socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
+        auto downstream_bytes_sent_noc_addr = get_noc_addr(
+            downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, socket.downstream_bytes_sent_addr);
+        noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
+    }
 }
 
 void fabric_socket_notify_receiver(
     const SocketSenderInterface& socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
-    auto downstream_bytes_sent_noc_addr =
-        get_noc_addr(socket.downstream_noc_x, socket.downstream_noc_y, socket.downstream_bytes_sent_addr);
-    fabric_set_unicast_route(fabric_header_addr, socket);
-    fabric_header_addr->to_noc_unicast_inline_write(
-        NocUnicastInlineWriteCommandHeader{downstream_bytes_sent_noc_addr, socket.bytes_sent});
-    fabric_connection.wait_for_empty_write_slot();
-    fabric_connection.send_payload_flush_blocking_from_address(
-        (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+    for (uint32_t i = 0; i < socket.num_downstreams; i++) {
+        sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
+            socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
+        auto downstream_bytes_sent_noc_addr = get_noc_addr(
+            downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, socket.downstream_bytes_sent_addr);
+        fabric_set_unicast_route(fabric_header_addr, *downstream_enc);
+        fabric_header_addr->to_noc_unicast_inline_write(
+            NocUnicastInlineWriteCommandHeader{downstream_bytes_sent_noc_addr, socket.bytes_sent});
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_flush_blocking_from_address(
+            (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+    }
 }
 #endif
 
 void socket_barrier(const SocketSenderInterface& socket) {
     volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_addr);
-    while (socket.bytes_sent != *bytes_acked_ptr);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
+    while (reinterpret_cast<uint32_t>(bytes_acked_ptr) <
+           socket.bytes_acked_base_addr + socket.num_downstreams * align_up(sizeof(uint32_t))) {
+        while (socket.bytes_sent != *bytes_acked_ptr);
+        bytes_acked_ptr += align_up(sizeof(uint32_t));
+    }
 }
 
 void update_socket_config(const SocketSenderInterface& socket) {
