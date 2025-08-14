@@ -467,26 +467,23 @@ def get_batch(data_loader, resolution=224):
     loaded_images = next(data_loader)
     images = None
     labels = []
+    transform = transforms.Compose(
+        [
+            transforms.Resize(resolution),
+            transforms.CenterCrop(resolution),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+            ),  # Normalize with ImageNet mean and std
+        ]
+    )
     for image in loaded_images:
         img = image.image
         labels.append(image.label)
         if img.mode == "L":
             img = img.convert(mode="RGB")
-
-        transform = transforms.Compose(
-            [
-                transforms.Resize(resolution),
-                transforms.CenterCrop(resolution),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                ),  # Normalize with ImageNet mean and std
-            ]
-        )
         img = transform(img)
         img = torch.unsqueeze(img, 0)
-        # img = image_processor(img, return_tensors="pt")
-        # img = img["pixel_values"]
 
         if images is None:
             images = img
