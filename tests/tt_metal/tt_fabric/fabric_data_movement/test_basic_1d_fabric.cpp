@@ -1334,9 +1334,10 @@ void RunTest2DMCastConnAPI(
         mcast_mode = 3;
         if(north_branch_east_hops > 0){
             arbitrary_fabric_node_id = north_east_fabric_node_id;
-        }
-        else{
+        } else if (north_branch_west_hops > 0) {
             arbitrary_fabric_node_id = north_west_fabric_node_id;
+        } else {
+            arbitrary_fabric_node_id = north_fabric_node_id;
         }
     }
     else if(south_hops > 0){

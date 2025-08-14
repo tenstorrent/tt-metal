@@ -74,8 +74,7 @@ std::shared_ptr<tt_metal::Buffer> PrepareBuffer(
 
 void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
     CoreCoord logical_core = {0, 0};
-
-    auto devices = DevicePool::instance().get_all_active_devices();
+    const auto& devices = DevicePool::instance().get_all_active_devices();
     const size_t NUM_DEVICES = devices.size();
     bool invalid_test_scenario = !is_multi_mesh && NUM_DEVICES < 2;
     if (invalid_test_scenario) {
@@ -244,8 +243,7 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_3W4E) {
 TEST_F(Fabric2DFixture, TestMCastConnAPI_1N2S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 1, RoutingDirection::S, 2);
 }
-
-TEST_F(Fabric2DFixture, TestMCastConnAPI_2N1S) {
+ƒ TEST_F(Fabric2DFixture, TestMCastConnAPI_2N1S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 2, RoutingDirection::S, 1);
 }
 
