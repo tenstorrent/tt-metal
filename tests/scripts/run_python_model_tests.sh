@@ -81,6 +81,7 @@ run_python_model_tests_wormhole_b0() {
     # Mistral-7B-v0.3
     mistral_weights=mistralai/Mistral-7B-Instruct-v0.3
     HF_MODEL=$mistral_weights pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {

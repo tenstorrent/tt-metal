@@ -4,6 +4,27 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.siglip.tests.common import flatten_state_dict
+
+
+def siglip_mlp_ttnn(
+    mesh_device,
+    hidden_states,
+    state_dict,
+    state_dict_prefix: str = "",
+    weight_cache_path: str = None,
+    dtype=ttnn.bfloat16,
+):
+    state_dict = flatten_state_dict(state_dict)
+    mlp = TtSiglipMLP(
+        mesh_device,
+        hidden_states.shape[-1],
+        state_dict["fc2"]["weight"].shape[-1],
+        state_dict,
+        state_dict_prefix,
+        dtype,
+    )
+    return mlp(hidden_states)
 
 
 class TtSiglipMLP(LightweightModule):

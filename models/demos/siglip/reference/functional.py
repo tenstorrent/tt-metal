@@ -94,3 +94,95 @@ class SiglipMLP(nn.Module):
         x = self.fc2(x)
         return x
         
+def siglip_layer_norm(
+    mesh_device,
+    hidden_states,
+    state_dict,
+    dim: int = None,
+    eps: float = 1e-05,
+    state_dict_prefix: str = "",
+    weight_cache_path: str = None,
+    weight_memory_config=None,
+    dtype=None,
+) -> torch.Tensor:
+    """Layer normalization."""
+    return F.layer_norm(hidden_states, hidden_states.shape[-1:], state_dict["weight"], state_dict["bias"], eps)
+
+
+def siglip_mlp(x: torch.Tensor, state_dict: Dict, hidden_act: str = "gelu") -> torch.Tensor:
+    """SigLIP MLP with configurable activation function."""
+    # First linear layer
+    hidden_states = F.linear(x, state_dict["fc1"]["weight"], state_dict["fc1"].get("bias"))
+
+    # Activation function
+    if hidden_act == "gelu":
+        hidden_states = F.gelu(hidden_states)
+    elif hidden_act == "relu":
+        hidden_states = F.relu(hidden_states)
+    elif hidden_act == "silu":
+        hidden_states = F.silu(hidden_states)
+    else:
+        # Default to GELU for SigLIP
+        hidden_states = F.gelu(hidden_states)
+
+    # Second linear layer
+    hidden_states = F.linear(hidden_states, state_dict["fc2"]["weight"], state_dict["fc2"].get("bias"))
+
+    return hidden_states
+
+
+def siglip_encoder_layer(
+    mesh_device,
+    hidden_states: torch.Tensor,
+    state_dict: Dict,
+    state_dict_prefix: str = "",
+    weight_cache_path: str = None,
+    dtype: torch.dtype = torch.bfloat16,
+    attention_mask: Optional[torch.Tensor] = None,
+    vision_dim: int = 1152,
+    num_heads: int = 16,
+    layer_norm_eps: float = 1e-5,
+    hidden_act: str = "gelu",
+    attention_dropout: float = 0.0,
+) -> torch.Tensor:
+    """SigLIP encoder layer with pre-norm architecture."""
+    # Self-attention block
+    residual = hidden_states
+
+    # Pre-attention layer norm
+    hidden_states = siglip_layer_norm(
+        mesh_device=mesh_device, hidden_states=hidden_states, state_dict=state_dict["layer_norm1"], eps=layer_norm_eps
+    )
+
+    # Self-attention
+    hidden_states, attn_weights = siglip_attention(
+        mesh_device=mesh_device,
+        hidden_states=hidden_states,
+        state_dict=state_dict["self_attn"],
+        state_dict_prefix=state_dict_prefix,
+        weight_cache_path=weight_cache_path,
+        dtype=dtype,
+        vision_dim=vision_dim,
+        num_heads=num_heads,
+        dropout=attention_dropout,
+        attention_mask=attention_mask,
+    )
+
+    # Add residual connection
+    hidden_states = residual + hidden_states
+
+    # MLP block
+    residual = hidden_states
+
+    # Pre-MLP layer norm
+    hidden_states = siglip_layer_norm(
+        mesh_device=mesh_device, hidden_states=hidden_states, state_dict=state_dict["layer_norm2"], eps=layer_norm_eps
+    )
+
+    # MLP
+    hidden_states = siglip_mlp(hidden_states, state_dict["mlp"], hidden_act)
+
+    # Add residual connection
+    hidden_states = residual + hidden_states
+
+    return hidden_states
