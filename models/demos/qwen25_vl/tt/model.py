@@ -4,7 +4,6 @@
 
 import torch
 from loguru import logger
-from typing_extensions import override
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -356,10 +355,29 @@ class Transformer(TTTransformer):
             rope_setup_class=RotarySetup,
         )
 
-    @override
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+    def _prepare_cos_sin(self, rot_mats):
+        cos_matrix = rot_mats[0]
+        sin_matrix = rot_mats[1]
+        assert cos_matrix.shape[0] == sin_matrix.shape[0], "cos_matrix and sin_matrix must have the same batch size"
+        outputs = []
+        for mat in (cos_matrix, sin_matrix):
+            outputs.append(
+                ttnn.from_torch(
+                    # [INFO] Qwen2.5 VL produces cos and sin matrices with shape [batch_size, 1, seq_len, head_dim]
+                    mat.expand(cos_matrix.shape[0], -1, -1, -1),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=self.rope_setup.datatype,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                ),
+            )
+        return outputs
+
+    def prepare_inputs_prefill(self, tokens, rot_mats, start_pos=0, page_table=None, chunk_page_table=None):
+        assert isinstance(rot_mats[0], torch.Tensor)
+        assert isinstance(rot_mats[1], torch.Tensor)
         # tokens is actually embeddings
-        assert tokens.dim() == 3, "tokens should be a 3D tensor"
+        assert tokens.dim() == 3, "tokens should be a 3D tensor"  # [batch_size = 1, seq_len, head_dim]
         S = tokens.shape[-2]
         tokens_embd = ttnn.from_torch(
             tokens.unsqueeze(1),
@@ -372,12 +390,13 @@ class Transformer(TTTransformer):
         )
 
         # Slice the rot mats to the prefill seqlen
+        cos_matrix, sin_matrix = self._prepare_cos_sin(rot_mats=rot_mats)
         assert (
-            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+            cos_matrix.shape[2] >= start_pos + S
+        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {cos_matrix.shape[2]}"
         tt_rot_mats_prefill = [
-            self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            cos_matrix[:, :, start_pos : start_pos + S, :],
+            sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
 
         if page_table is not None:
