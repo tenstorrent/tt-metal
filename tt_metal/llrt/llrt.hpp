@@ -70,12 +70,14 @@ const ll_api::memory& get_risc_binary(
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 template <typename DType>
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) {
+void write_hex_vec_to_core(
+    chip_id_t chip, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr, bool bypass_wc = false) {
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
+        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, bypass_wc);
 }
 template <typename DType>
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, tt::stl::Span<const DType> hex_vec, uint64_t addr) {
+void write_hex_vec_to_core(
+    chip_id_t chip, const CoreCoord& core, tt::stl::Span<const DType> hex_vec, uint64_t addr, bool bypass_wc = false) {
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
 }
