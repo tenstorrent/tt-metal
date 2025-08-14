@@ -62,6 +62,12 @@ void kernel_main() {
             const uint32_t output_addr = working_write_addr + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
             const uint32_t input_addr = input_base_addr + map_ptr[seg_idx].input_page_offset * element_sz_bytes;
             const uint32_t szbytes = map_ptr[seg_idx].num_elements * element_sz_bytes;
+            
+            if(map_ptr[seg_idx].num_elements>256)DPRINT<<"output page: "<<output_page_idx<<" input page: "<<map_ptr[seg_idx].input_page_index<<"\n";
+            
+            ASSERT(map_ptr[seg_idx].num_elements<256);
+
+            
             tt_memmove<false, true, false, Tile_size_bytes>(output_addr, input_addr, szbytes);
         }
         noc_async_write_barrier();

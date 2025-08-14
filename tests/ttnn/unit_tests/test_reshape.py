@@ -639,3 +639,82 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
     for tensor_shard in ttnn.get_device_tensors(tt_output_tensor):
         tt_output_tensor = ttnn.to_torch(tensor_shard)
         assert tt_output_tensor.shape == torch.Size(output_shape)
+
+
+def _ablated_sdpa(
+    n,
+    num_tokens,
+    nh,
+    dim,
+    tt_k: ttnn.Tensor,
+    #tt_v: ttnn.Tensor,
+    tt_cache,
+    device
+) -> ttnn.Tensor:
+
+    _, nkv, _ = tt_k.shape
+
+    num_tokens = num_tokens if n==0 else 1
+    # KV Cache handling
+    print(f"tt_k reshape {tt_k.shape=}, {[num_tokens, nkv, 1, dim]}")
+    tt_k = ttnn.reshape(tt_k, [num_tokens, nkv, 1, dim])  # unsqueeze
+    
+    k_shape = [8, 1, 128, 64] if n == 0 else [8, 1, 1, 64]
+    print(f"from_torch tt_k shape {k_shape=}")
+    tt_k = ttnn.from_torch(torch.randn(k_shape),device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            
+    kv_len = 129 + n #tt_k.shape[2]  # Length of keys/values in the cache
+
+    # QK + scale
+    tt_qk = ttnn.from_torch(
+        torch.randn((nkv, nh // nkv, kv_len, kv_len)),device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+
+    sink_shape = list(tt_qk.shape)[:3] + [1]
+    tt_sink = ttnn.from_torch(torch.randn(sink_shape), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    
+    print(f"Concat shapes: {tt_qk.shape=} {tt_sink.shape=}")
+    tt_qk = ttnn.concat([tt_qk, tt_sink], dim=-1)  # (nkv, nh // nkv, kv_len, kv_len + 1) # hangs here
+    
+    return tt_k
+
+
+def sdpa_inputs(n, k, device, dtype,num_tokens=128, nh=64, nkv=8, dim=64):
+    
+    cur_seq_len = num_tokens + n
+    
+    k = torch.randn(num_tokens, nkv, dim) if k is None else k
+
+    if n > 0:
+        k = torch.cat([k, torch.randn(1, nkv, dim)], dim=0)
+
+    # TT input
+    if n == 0:
+        k_in = k
+    else:
+        k_in = k[-1:, ...]
+
+    tt_k = ttnn.from_torch(k_in, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    
+    return (num_tokens, nh, dim, tt_k), k
+
+
+@pytest.mark.parametrize(
+"input_shapes, output_shapes",
+    [
+        ([[1,64,64], [1,8,64],[64,1,1],[1, 64, 64]], [[8, 8, 64], [8,1,64],[8,8,1],[1, 1, 4096]]),
+    ],
+)
+def test_reshape_gpt_oss(device, input_shapes, output_shapes):
+    dtype = ttnn.bfloat16
+    num_iters = 32
+    
+    k=None
+    for n in range(num_iters):
+        print(f"Starting iter {n}")
+        sdpa_args, _ = sdpa_inputs(n,k, device, dtype=dtype)
+        
+        out = _ablated_sdpa(n,*sdpa_args,None,device)
+        
+        
+        print(f"iter: {n} success")

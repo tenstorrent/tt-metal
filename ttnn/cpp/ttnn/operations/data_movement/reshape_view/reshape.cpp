@@ -268,6 +268,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
+    
+    std::cout<<"RESHAPE: "<<tensor.logical_shape()<<" -> "<<logical_input_shape<<std::endl;
 
     const auto [logical_shape, padded_shape] = shape_corrector(tensor, logical_input_shape, padded_input_shape);
     // First Case, No reshape Required

@@ -291,6 +291,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     const auto& input_shape = input_tensor.logical_shape();
     const auto& output_shape = output_tensor.logical_shape();
 
+    std::cout<<"PFAC input shape: "<<input_shape<< "output shape: "<<output_shape <<std::endl;
+
+
     TT_FATAL(input_shape.volume() == output_shape.volume(), "Requested shapes are not of equal volume");
 
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
@@ -315,11 +318,13 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
                                 num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
-                                .to_device(device);
+                                .to_device(device);//, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1));
 
     tt::tt_metal::Buffer* mapping_buffer = mapping_tensor.buffer();
     const auto grid = device->compute_with_storage_grid_size();
-
+    
+    std::cout<<"PFAC mapping buffer addr: "<<mapping_buffer->address()<<std::endl;
+    
     uint32_t num_cores_x = grid.x;
     uint32_t num_cores_y = grid.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -423,7 +428,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
          writer_kernel_id,
          utilized_cores,
          // cache this tensor
-         mapping_tensor_device_buffer = mapping_tensor.device_storage()](
+         mapping_tensor_device_buffer = mapping_tensor](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -431,7 +436,14 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             const std::vector<Tensor>& output_tensors) {
             const auto input_buffer_addr = input_tensors.at(0).buffer()->address();
             const auto output_buffer_addr = output_tensors.at(0).buffer()->address();
-
+            
+            std::cout<<"OVERRIDE input shape: "<<input_tensors.at(0).logical_shape()<< " output shape: "<<output_tensors.at(0).logical_shape()<<std::endl;
+            std::cout<<"map addr: "<<mapping_tensor_device_buffer.buffer()->address() << std::endl;
+            
+            TT_ASSERT(mapping_tensor_device_buffer.is_allocated());
+            TT_ASSERT(mapping_tensor_device_buffer.device_storage().is_allocated());
+            mapping_tensor_device_buffer.cpu().print();
+            
             for (const auto& core : utilized_cores) {
                 auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
                 reader_runtime_args_core.at(0) = input_buffer_addr;
