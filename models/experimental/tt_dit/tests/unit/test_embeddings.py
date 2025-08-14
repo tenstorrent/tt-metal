@@ -175,7 +175,7 @@ def test_timestep_embedding(
 
     # Convert back to torch and compare
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).squeeze(0)
-    assert_quality(torch_output, tt_output_torch, pcc=0.999_000)
+    assert_quality(torch_output, tt_output_torch, pcc=0.9998, relative_rmse=0.017)
 
 
 @pytest.mark.parametrize(
@@ -229,7 +229,7 @@ def test_pixart_alpha_text_projection(
 
     # Convert back to torch and compare
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).squeeze(0)
-    assert_quality(torch_output, tt_output_torch, pcc=0.999_000)
+    assert_quality(torch_output, tt_output_torch, pcc=0.99984, relative_rmse=0.019)
 
 
 @pytest.mark.parametrize(
@@ -286,7 +286,9 @@ def test_combined_timestep_text_proj_embeddings(
 
     # Convert back to torch and compare
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).squeeze(0)
-    assert_quality(torch_output, tt_output_torch, pcc=0.998_000)  # Slightly lower PCC due to sinusoidal ops
+    assert_quality(
+        torch_output, tt_output_torch, pcc=0.99984, relative_rmse=0.019
+    )  # Slightly lower PCC due to sinusoidal ops
 
 
 @pytest.mark.parametrize(
@@ -373,4 +375,6 @@ def test_patch_embed(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
     )
-    assert_quality(torch_output, tt_output_torch, pcc=0.995_000)  # Lower PCC due to conv2d approximation
+    assert_quality(
+        torch_output, tt_output_torch, pcc=0.999_995, relative_rmse=0.05
+    )  # Lower PCC due to conv2d approximation

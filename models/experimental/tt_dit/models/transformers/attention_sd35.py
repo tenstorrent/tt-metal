@@ -109,11 +109,14 @@ class SD35JointAttention:
             k_chunk_size=512,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
+
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
     def load_state_dict(self, state_dict):
         def reshape_and_merge_qkv(q_state, k_state, v_state):
@@ -176,7 +179,7 @@ class SD35JointAttention:
         Outputs are width-fractured
         """
 
-        qkv_1BNF = self.to_qkv(spatial_1BND)
+        qkv_1BNF = self.to_qkv(spatial_1BND, core_grid=self.core_grid)
         local_heads = self.n_local_heads
         q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(qkv_1BNF, 0), num_heads=local_heads, transpose_key=False
@@ -185,7 +188,7 @@ class SD35JointAttention:
         q_BHNE = self.norm_q(q_BHNE)
         k_BHNE = self.norm_k(k_BHNE)
 
-        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLD)
+        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLD, core_grid=self.core_grid)
         add_q_BHLE, add_k_BHLE, add_v_BHLE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(add_qkv_1BLF, 0), num_heads=local_heads, transpose_key=False
         )
@@ -209,7 +212,7 @@ class SD35JointAttention:
                 joint_strategy="rear",
                 logical_n=N,
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
                 num_links=self.ccl_manager.num_links,
@@ -229,7 +232,7 @@ class SD35JointAttention:
                 add_v_BHLE,
                 joint_strategy="rear",
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
             )
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
@@ -246,12 +249,10 @@ class SD35JointAttention:
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # chunks_per_sync=16,
-                # num_workers_per_link=3,
-                # num_buffers_per_channel=2,
+                **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
             )
 
-        spatial_1BND = self.to_out(spatial_1BND)
+        spatial_1BND = self.to_out(spatial_1BND, core_grid=self.core_grid)
 
         prompt_out = None
         if self.context_pre_only is not None and not self.context_pre_only:
@@ -268,11 +269,9 @@ class SD35JointAttention:
                     num_links=self.ccl_manager.num_links,
                     topology=self.ccl_manager.topology,
                     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                    # chunks_per_sync=16,
-                    # num_workers_per_link=3,
-                    # num_buffers_per_channel=2,
+                    **self.ccl_manager.get_ag_hyperparams(prompt_1BLD.shape),
                 )
-            prompt_1BLD = self.to_add_out(prompt_1BLD)
+            prompt_1BLD = self.to_add_out(prompt_1BLD, core_grid=self.core_grid)
             prompt_out = prompt_1BLD
 
         return spatial_1BND, prompt_out

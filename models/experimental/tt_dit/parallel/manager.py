@@ -155,3 +155,24 @@ class CCLManager:
             ttnn.reset_global_semaphore_value(sem, 0)
         for sem in self.ag_ping_pong_semaphores:
             ttnn.reset_global_semaphore_value(sem, 0)
+
+    def get_ag_hyperparams(self, shape):
+        if shape[2] > 512:
+            return {
+                "chunks_per_sync": 16,
+                "num_workers_per_link": 3,
+                "num_buffers_per_channel": 2,
+            }
+        else:
+            return {
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "num_buffers_per_channel": 2,
+            }
+
+    def get_rs_hyperparams(self, shape):
+        return {
+            "chunks_per_sync": 10,
+            "num_workers_per_link": 2,
+            "num_buffers_per_channel": 2,
+        }

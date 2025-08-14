@@ -138,11 +138,8 @@ class SD35TransformerBlock:
                 init=init,
             )
 
-        # self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        #     math_fidelity=ttnn.MathFidelity.HiFi2,
-        #     math_approx_mode=False,
-        #     fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        # )
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
     def load_state_dict(self, state_dict):
         def _shuffle_ada_norm_linear(linear_state):
@@ -198,8 +195,8 @@ class SD35TransformerBlock:
         """
 
         time_embed_11BE = ttnn.silu(time_embed_11BE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        spatial_time_11BF = self.norm1_linear(time_embed_11BE)
-        prompt_time_11BE = self.norm1_context_linear(time_embed_11BE)
+        spatial_time_11BF = self.norm1_linear(time_embed_11BE, core_grid=self.core_grid)
+        prompt_time_11BE = self.norm1_context_linear(time_embed_11BE, core_grid=self.core_grid)
 
         (
             spatial_shift_attn,
@@ -244,9 +241,7 @@ class SD35TransformerBlock:
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # chunks_per_sync=16,
-                # num_workers_per_link=3,
-                # num_buffers_per_channel=2,
+                **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
             )
             prompt_normed_1BLD = ttnn.experimental.all_gather_async(
                 prompt_normed_1BLD,
@@ -258,9 +253,7 @@ class SD35TransformerBlock:
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # chunks_per_sync=10,
-                # num_workers_per_link=2,
-                # num_buffers_per_channel=2,
+                **self.ccl_manager.get_ag_hyperparams(prompt_normed_1BLD.shape),
             )
 
         spatial_attn_1BLD, prompt_attn_1BLD = self.attn(spatial_normed_1BND, prompt_normed_1BLD, N)
@@ -284,12 +277,10 @@ class SD35TransformerBlock:
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # chunks_per_sync=16,
-                # num_workers_per_link=3,
-                # num_buffers_per_channel=2,
+                **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
             )
 
-        spatial_ff_1BND = self.ff(spatial_normed_1BND)
+        spatial_ff_1BND = self.ff(spatial_normed_1BND, core_grid=self.core_grid)
         spatial_ff_1BND = spatial_ff_1BND * spatial_gate_ff
 
         spatial_1BND += spatial_ff_1BND
@@ -313,12 +304,10 @@ class SD35TransformerBlock:
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # chunks_per_sync=10,
-                # num_workers_per_link=2,
-                # num_buffers_per_channel=2,
+                **self.ccl_manager.get_ag_hyperparams(prompt_normed_1BLD.shape),
             )
 
-        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD)
+        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD, core_grid=self.core_grid)
         prompt_ff_1BLD = prompt_ff_1BLD * prompt_gate_ff
 
         prompt_1BLD += prompt_ff_1BLD
@@ -427,6 +416,17 @@ class SD35Transformer2DModel:
             self.inner_dim, patch_size * patch_size * self.out_channels, mesh_device=mesh_device, init=init
         )
 
+        self.hifi_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
     def load_state_dict(self, state_dict):
         self.pos_embed.load_state_dict(substate(state_dict, "pos_embed"))
         self.time_text_embed.load_state_dict(substate(state_dict, "time_text_embed"))
@@ -456,7 +456,9 @@ class SD35Transformer2DModel:
         for block in self.transformer_blocks:
             spatial, prompt_embed = block(spatial, prompt_embed, time_embed, N, L)
         # Final normalization and projection
-        spatial_time = self.norm_out_linear(ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        spatial_time = self.norm_out_linear(
+            ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG), core_grid=self.core_grid
+        )
         scale, shift = chunk_time(spatial_time, 2)
 
         # Gather spatial such that it is fully replicated for final norm and projection
@@ -493,7 +495,9 @@ class SD35Transformer2DModel:
 
         spatial = self.norm_out_norm(spatial) * (1 + scale) + shift
 
-        spatial_out = self.proj_out(spatial)
+        spatial_out = self.proj_out(
+            spatial, core_grid=self.core_grid, compute_kernel_config=self.hifi_compute_kernel_config
+        )
 
         # NOTE: While we should be able to gather on sequence after norm and proj,
         # it leads to terrible outputs for 2x2sp1tp0. Need to debug.

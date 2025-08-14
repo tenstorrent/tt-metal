@@ -24,6 +24,18 @@ class Linear:
             else:
                 self.bias = None
 
+        """
+        NOTE: This is the special config which attains good correctness
+        HiFi2 + packer_l1_acc + bf16 acc in a fused linear (matmul + bias) with unfused non-approx activation
+        """
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
     def load_state_dict(self, state_dict, transform=None):
         """
         Loads the state dict into the layer.
@@ -41,8 +53,18 @@ class Linear:
         else:
             self.bias = None
 
-    def __call__(self, x):
-        return ttnn.linear(x, self.weight, bias=self.bias, activation=self.activation)
+    def __call__(self, x, core_grid=None, compute_kernel_config=None):
+        output = ttnn.linear(
+            x,
+            self.weight,
+            bias=self.bias,
+            core_grid=core_grid,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
+        )
+        if self.activation is not None:
+            assert self.activation == "gelu"
+            output = ttnn.gelu(output, fast_and_approximate_mode=False)
+        return output
 
 
 class ColParallelLinear:
@@ -69,6 +91,14 @@ class ColParallelLinear:
             else:
                 self.bias = None
 
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
     def load_state_dict(self, state_dict, transform=None):
         """
         Loads the state dict into the layer.
@@ -86,12 +116,22 @@ class ColParallelLinear:
         else:
             self.bias = None
 
-    def __call__(self, x):
+    def __call__(self, x, core_grid=None, compute_kernel_config=None):
         """
         Expects x to be replicated.
         Return output fractured on columns.
         """
-        return ttnn.linear(x, self.weight, bias=self.bias, activation=self.activation)
+        output = ttnn.linear(
+            x,
+            self.weight,
+            bias=self.bias,
+            core_grid=core_grid,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
+        )
+        if self.activation is not None:
+            assert self.activation == "gelu"
+            output = ttnn.gelu(output, fast_and_approximate_mode=False)
+        return output
 
 
 class RowParallelLinear:
@@ -130,6 +170,14 @@ class RowParallelLinear:
             else:
                 self.bias = None
 
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
     def load_state_dict(self, state_dict, transform=None):
         """
         Loads the state dict into the layer.
@@ -150,12 +198,18 @@ class RowParallelLinear:
         else:
             self.bias = None
 
-    def __call__(self, x):
+    def __call__(self, x, core_grid=None, compute_kernel_config=None):
         """
         Expects x to be column fractured.
         Return output fractured on columns.
         """
-        output = ttnn.linear(x, self.weight, bias=self.bias, activation=self.activation)
+        output = ttnn.linear(
+            x,
+            self.weight,
+            bias=self.bias,
+            core_grid=core_grid,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
+        )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
             output = ttnn.experimental.reduce_scatter_minimal_async(
@@ -169,5 +223,11 @@ class RowParallelLinear:
                 memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.mesh_axis,
+                **self.ccl_manager.get_rs_hyperparams(output.shape),
             )
+
+        if self.activation is not None:
+            assert self.activation == "gelu"
+            output = ttnn.gelu(output, fast_and_approximate_mode=False)
+
         return output

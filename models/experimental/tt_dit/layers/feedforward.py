@@ -40,8 +40,9 @@ class FeedForward:
         self.ff1.load_state_dict(substate(state_dict, "ff1"))
         self.ff2.load_state_dict(substate(state_dict, "ff2"))
 
-    def __call__(self, x):
-        return self.ff2(self.ff1(x))
+    def __call__(self, x, core_grid=None, compute_kernel_config=None):
+        ff1_out = self.ff1(x, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
+        return self.ff2(ff1_out, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
 
 
 class ParallelFeedForward:
@@ -90,9 +91,10 @@ class ParallelFeedForward:
         self.ff1.load_state_dict(substate(state_dict, "ff1"))
         self.ff2.load_state_dict(substate(state_dict, "ff2"))
 
-    def __call__(self, x):
+    def __call__(self, x, core_grid=None, compute_kernel_config=None):
         """
         Expects x to be replicated.
         Return output fractured on columns.
         """
-        return self.ff2(self.ff1(x))
+        ff1_out = self.ff1(x, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
+        return self.ff2(ff1_out, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
