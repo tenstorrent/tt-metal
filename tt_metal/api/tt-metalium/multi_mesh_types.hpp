@@ -48,6 +48,7 @@ struct EthConnectivityDescriptor {
 struct ASICDescriptor {
     uint64_t unique_id;
     uint32_t tray_id;
+    uint32_t n_id;
 
     bool operator==(const ASICDescriptor& other) const {
         return unique_id == other.unique_id && tray_id == other.tray_id;

@@ -186,53 +186,17 @@ std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t ch
     return str.str();
 }
 
-std::string build_local_connectivity_desc_yaml(
-    const std::unordered_map<std::string, std::unordered_map<uint64_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>>& local_eth_connectivity,
-    const std::string& filename) {
-
-    TT_FATAL(local_eth_connectivity.size() == 1, "Local ethernet connectivity should only have one host");
-
-    YAML::Node root;
-    root["host_name"] = local_eth_connectivity.begin()->first;
-
-    YAML::Node asic_ids(YAML::NodeType::Sequence);
-    YAML::Node connections;
-
-    for (const auto& [src_asic_id, asic_data] : local_eth_connectivity.begin()->second) {
-        asic_ids.push_back(src_asic_id);
-        YAML::Node asic_node;
-        asic_node["asic_id"] = src_asic_id;
-
-        for (const auto& [src_channel, connection_tuple] : asic_data) {
-            uint64_t dst_asic_id = std::get<0>(connection_tuple);
-            ethernet_channel_t dst_channel = std::get<1>(connection_tuple);
-            YAML::Node connection;
-            connection["asic_id"] = dst_asic_id;
-            connection["chan"] = dst_channel;
-            asic_node[std::to_string(src_channel)] = connection;
-        }
-        connections.push_back(asic_node);
-    }
-    root["asic_ids"] = asic_ids;
-    root["eth_connections"] = connections;
-
-    YAML::Emitter emitter;
-    emitter << root;
-    std::cout << emitter.c_str() << std::endl;
-    return emitter.c_str();
-}
-
 void dump_to_yaml(const SystemDescriptor& descriptor) {
     YAML::Node root;
 
     // Build hosts section
-    YAML::Node hosts;
+    YAML::Node asic_info_map;
 
     for (const auto& host_entry : descriptor.asic_ids) {
         const std::string& hostname = host_entry.first;
         const std::vector<ASICDescriptor>& asics = host_entry.second;
 
-        YAML::Node host_node;
+        YAML::Node asic_info_node;
 
         // ASIC info section
         YAML::Node asic_info;
@@ -240,89 +204,109 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
             YAML::Node asic_node;
             asic_node["asic_id"] = asic.unique_id;
             asic_node["tray_id"] = asic.tray_id;
+            asic_node["nid"] = asic.n_id;
             asic_info.push_back(asic_node);
         }
-        host_node["asic_info"] = asic_info;
+        asic_info_node["asic_info"] = asic_info;
 
-        // Find corresponding EthConnectivityDescriptor for this host
-        auto conn_it = std::find_if(
-            descriptor.eth_connectivity_descs.begin(),
-            descriptor.eth_connectivity_descs.end(),
-            [&hostname](const EthConnectivityDescriptor& desc) { return desc.host_name == hostname; });
-
-        // Local ethernet connections (avoid duplicates)
-        if (conn_it != descriptor.eth_connectivity_descs.end() && !conn_it->local_eth_connections.empty()) {
-            YAML::Node local_connections;
-            std::set<std::pair<EthChanDescriptor, EthChanDescriptor>> reported_connections;
-
-            for (const auto& local_conn : conn_it->local_eth_connections) {
-                const EthChanDescriptor& src = local_conn.first;
-                const EthChanDescriptor& peer = local_conn.second;
-
-                // Create normalized connection pair (always put smaller one first)
-                auto conn_pair = std::make_pair(src, peer);
-                auto reverse_pair = std::make_pair(peer, src);
-
-                // Skip if reverse connection already reported
-                if (reported_connections.find(reverse_pair) != reported_connections.end()) {
-                    continue;
-                }
-
-                // Mark this connection as reported
-                reported_connections.insert(conn_pair);
-
-                YAML::Node conn_node;
-                conn_node["asic_id"] = src.board_id;
-                conn_node["channel"] = src.chan_id;
-                conn_node["peer_asic_id"] = peer.board_id;
-                conn_node["peer_channel"] = peer.chan_id;
-                local_connections.push_back(conn_node);
-            }
-
-            if (local_connections.size() > 0) {
-                host_node["local_eth_connections"] = local_connections;
-            }
-        }
-
-        hosts[hostname] = host_node;
+        asic_info_map[hostname] = asic_info_node;
     }
 
-    root["hosts"] = hosts;
+    root["asic_info"] = asic_info_map;
+
+    YAML::Node local_eth_connections(YAML::NodeType::Sequence);
+    ;
+    for (const auto& conn_desc : descriptor.eth_connectivity_descs) {
+        const auto& local_host_name = conn_desc.host_name;
+        std::set<std::pair<std::string, std::string>> processed_connections;
+
+        for (const auto& local_conn : conn_desc.local_eth_connections) {
+            const EthChanDescriptor& src = local_conn.first;
+            const EthChanDescriptor& dst = local_conn.second;
+
+            std::string src_id = std::to_string(src.board_id) + ":" + std::to_string(src.chan_id);
+            std::string dst_id = std::to_string(dst.board_id) + ":" + std::to_string(dst.chan_id);
+            auto connection_key = std::make_pair(std::min(src_id, dst_id), std::max(src_id, dst_id));
+
+            if (processed_connections.find(connection_key) != processed_connections.end()) {
+                continue;
+            }
+            processed_connections.insert(connection_key);
+            YAML::Node connection_pair(YAML::NodeType::Sequence);
+            connection_pair.SetStyle(YAML::EmitterStyle::Flow);
+            YAML::Node src_conn_node;
+            YAML::Node dst_conn_node;
+            src_conn_node["host_name"] = local_host_name;
+            src_conn_node["chan_id"] = src.chan_id;
+            dst_conn_node["host_name"] = local_host_name;
+            dst_conn_node["chan_id"] = dst.chan_id;
+            for (const auto& asic_desc : descriptor.asic_ids.at(local_host_name)) {
+                if (asic_desc.unique_id == src.board_id) {
+                    src_conn_node["tray_id"] = asic_desc.tray_id;
+                    src_conn_node["nid"] = asic_desc.n_id;
+                }
+                if (asic_desc.unique_id == dst.board_id) {
+                    dst_conn_node["tray_id"] = asic_desc.tray_id;
+                    dst_conn_node["nid"] = asic_desc.n_id;
+                }
+            }
+            connection_pair.push_back(src_conn_node);
+            connection_pair.push_back(dst_conn_node);
+            local_eth_connections.push_back(connection_pair);
+        }
+    }
+    root["local_connections"] = local_eth_connections;
 
     // Global ethernet connections (avoid duplicates)
     YAML::Node global_connections;
-    std::set<std::tuple<std::string, EthChanDescriptor, std::string, EthChanDescriptor>> reported_global_connections;
+    std::set<std::pair<std::string, std::string>> processed_connections;
 
     for (const auto& conn_desc : descriptor.eth_connectivity_descs) {
+        const auto& local_host_name = conn_desc.host_name;
         for (const auto& remote_conn : conn_desc.remote_eth_connections) {
             const EthChanDescriptor& src = remote_conn.first;
-            const std::string& peer_host = remote_conn.second.first;
-            const EthChanDescriptor& peer = remote_conn.second.second;
+            const auto& dst_desc = remote_conn.second;
 
-            // Create normalized connection tuple (put lexicographically smaller host first)
-            auto conn_tuple = std::make_tuple(conn_desc.host_name, src, peer_host, peer);
-            auto reverse_tuple = std::make_tuple(peer_host, peer, conn_desc.host_name, src);
-
-            // Skip if reverse connection already reported
-            if (reported_global_connections.find(reverse_tuple) != reported_global_connections.end()) {
+            if (dst_desc.first == "UNKNOWN") {
                 continue;
             }
 
-            // Mark this connection as reported
-            reported_global_connections.insert(conn_tuple);
+            std::string src_id = std::to_string(src.board_id) + ":" + std::to_string(src.chan_id);
+            std::string dst_id =
+                std::to_string(dst_desc.second.board_id) + ":" + std::to_string(dst_desc.second.chan_id);
+            auto connection_key = std::make_pair(std::min(src_id, dst_id), std::max(src_id, dst_id));
 
-            YAML::Node global_conn_node;
-            global_conn_node["host"] = conn_desc.host_name;
-            global_conn_node["asic_id"] = src.board_id;
-            global_conn_node["channel"] = src.chan_id;
-            global_conn_node["peer_host"] = peer_host;
-            global_conn_node["peer_asic_id"] = peer.board_id;
-            global_conn_node["peer_channel"] = peer.chan_id;
-            global_connections.push_back(global_conn_node);
+            if (processed_connections.find(connection_key) != processed_connections.end()) {
+                continue;
+            }
+            processed_connections.insert(connection_key);
+            YAML::Node connection_pair(YAML::NodeType::Sequence);
+            connection_pair.SetStyle(YAML::EmitterStyle::Flow);
+            YAML::Node src_conn_node;
+            YAML::Node dst_conn_node;
+            src_conn_node["host_name"] = local_host_name;
+            src_conn_node["chan_id"] = src.chan_id;
+            dst_conn_node["host_name"] = dst_desc.first;
+            dst_conn_node["chan_id"] = dst_desc.second.chan_id;
+
+            for (const auto& asic_desc : descriptor.asic_ids.at(local_host_name)) {
+                if (asic_desc.unique_id == src.board_id) {
+                    src_conn_node["tray_id"] = asic_desc.tray_id;
+                    src_conn_node["nid"] = asic_desc.n_id;
+                }
+            }
+            for (const auto& asic_desc : descriptor.asic_ids.at(dst_desc.first)) {
+                if (asic_desc.unique_id == dst_desc.second.board_id) {
+                    dst_conn_node["tray_id"] = asic_desc.tray_id;
+                    dst_conn_node["nid"] = asic_desc.n_id;
+                }
+            }
+            connection_pair.push_back(src_conn_node);
+            connection_pair.push_back(dst_conn_node);
+            global_connections.push_back(connection_pair);
         }
     }
-
-    root["global_eth_connections"] = global_connections;
+    root["global_connections"] = global_connections;
 
     // Output to console
     std::cout << "# ASIC Ethernet Connectivity Configuration" << std::endl;
@@ -333,22 +317,17 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     using namespace tt::tt_metal::distributed::multihost;
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
     const auto& eth_connections = cluster.get_ethernet_connections();
+    auto cross_host_eth_connections = cluster.get_ethernet_connections_to_remote_devices();
+    auto cluster_desc = cluster.get_cluster_desc();
 
     auto my_rank = *(distributed_context.rank());
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
     std::string hostname_str = std::string(hostname) + "_" + std::to_string(my_rank);
-    std::cout << "Hostname: " << hostname_str << std::endl;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        const auto eth_coord = cluster.get_user_chip_ethernet_coordinates().at(chip_id);
-        std::cout << "ASIC: " << unique_id << " " << eth_coord.x << " " << eth_coord.y << std::endl;
-        ;
-    }
 
     tt::tt_fabric::EthConnectivityDescriptor eth_connectivity_desc;
     std::vector<tt::tt_fabric::ASICDescriptor> asic_descriptors;
@@ -357,8 +336,9 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     // Populate local ethernet connections and ASIC descriptors
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = chip_unique_ids.at(src);
+        uint32_t n_id = cluster_desc->is_chip_mmio_capable(src) ? 1 : 2;
         asic_descriptors.push_back(
-            tt::tt_fabric::ASICDescriptor(src_unique_id, cluster.get_physical_slot(src).value()));
+            tt::tt_fabric::ASICDescriptor(src_unique_id, cluster.get_physical_slot(src).value(), n_id));
         for (auto& [chan, dst] : conn) {
             eth_connectivity_desc
                 .local_eth_connections[tt::tt_fabric::EthChanDescriptor{.board_id = src_unique_id, .chan_id = chan}] =
@@ -367,33 +347,15 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
         }
     }
 
-    const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
-
-    uint64_t remote_board_id = 0;
-    uint32_t remote_chan_id = 0;
-
-    for (auto chip : cluster.user_exposed_chip_ids()) {
-        if (control_plane.has_intermesh_links(chip)) {
-            for (auto [eth_coord, link] : control_plane.get_intermesh_eth_links(chip)) {
-                tt_cxy_pair virtual_eth_core(
-                    chip, cluster.get_virtual_coordinate_from_logical_coordinates(chip, eth_coord, CoreType::ETH));
-                cluster.read_core(
-                    &remote_board_id,
-                    sizeof(uint64_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::REMOTE_BOARD_ID_OFFSET);
-                cluster.read_core(
-                    &remote_chan_id,
-                    sizeof(uint32_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::REMOTE_ETH_CHAN_ID_OFFSET);
-                eth_connectivity_desc.remote_eth_connections[tt::tt_fabric::EthChanDescriptor{
-                    .board_id = chip_unique_ids.at(chip), .chan_id = link}] =
-                    std::make_pair(
-                        "UNKNOWN",
-                        tt::tt_fabric::EthChanDescriptor{.board_id = remote_board_id, .chan_id = remote_chan_id});
-            }
+    for (const auto& [local_chip_id, eth_link_info] : cross_host_eth_connections) {
+        auto local_asic_id = chip_unique_ids.at(local_chip_id);
+        for (const auto& [eth_chan, remote_info] : eth_link_info) {
+            eth_connectivity_desc.remote_eth_connections[tt::tt_fabric::EthChanDescriptor{
+                .board_id = local_asic_id, .chan_id = eth_chan}] =
+                std::make_pair(
+                    "UNKNOWN",
+                    tt::tt_fabric::EthChanDescriptor{
+                        .board_id = std::get<0>(remote_info), .chan_id = std::get<1>(remote_info)});
         }
     }
 
@@ -470,7 +432,6 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
         }
         dump_to_yaml(system_desc);
     }
-    // build_local_connectivity_desc_yaml(local_eth_connectivity, "local_ethernet_connectivity.yaml");
 }
 
 TEST(Cluster, ReportIntermeshLinks) {

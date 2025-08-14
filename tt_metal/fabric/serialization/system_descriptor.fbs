@@ -17,6 +17,7 @@ table EthConnectivityDescriptor {
 table ASICDescriptor {
     unique_id: uint64;
     tray_id: uint32;
+    n_id: uint32;  // NID for the ASIC, used for MMIO capabilities
 }
 
 table HostASICGroup {
