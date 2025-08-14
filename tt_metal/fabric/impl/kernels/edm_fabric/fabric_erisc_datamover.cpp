@@ -1838,10 +1838,16 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
     if constexpr (is_2d_fabric) {
-        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        // setup VC0 credits (we have one extra stream reg for VC0 and hence can do +1)
+        for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS - 1; i++) {
             local_sender_channel_free_slots_stream_ids_ordered[i] = sender_channel_free_slots_stream_ids[i + 1];
         }
         local_sender_channel_free_slots_stream_ids_ordered[my_direction] = sender_channel_free_slots_stream_ids[0];
+        // setup VC1 credits (only if present)
+        if constexpr (NUM_SENDER_CHANNELS == MAX_NUM_SENDER_CHANNELS) {
+            local_sender_channel_free_slots_stream_ids_ordered[NUM_SENDER_CHANNELS - 1] =
+                vc1_sender_channel_free_slots_stream_id;
+        }
     } else {
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
             local_sender_channel_free_slots_stream_ids_ordered[i] = sender_channel_free_slots_stream_ids[i];
@@ -2256,8 +2262,7 @@ void kernel_main() {
         downstream_edm_noc_interfaces;
     populate_local_sender_channel_free_slots_stream_id_ordered_map(
         has_downstream_edm_vc0_buffer_connection, local_sender_channel_free_slots_stream_ids_ordered);
-    constexpr auto worker_sender_channel_id = my_direction;
-    size_t next_available_sender_channel_free_slots_stream_index = 1;
+
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
         // upto 3 bits set for 2D. 0, 1, 2, 3 for East, West, North, South downstream connections.
