@@ -104,7 +104,6 @@ public:
 
     const std::map<std::string, std::string>& defines() const { return defines_; }
 
-    virtual RISCV processor() const = 0;
     uint32_t dispatch_class() { return this->dispatch_class_; }
 
     virtual bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
