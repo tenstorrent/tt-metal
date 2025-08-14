@@ -7,79 +7,31 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [2, 1000, 1000],
-        [1, 2, 64, 1000],
-        [4, 2, 32, 1000],
-        [4, 2, 1000, 32],
-        [8, 1000, 32],
-        [8, 32, 1000],
-        [8, 1000, 1000],
-        [4, 2, 1000, 1000],
-        [4, 1000, 2, 32],
-        [1, 4000, 64],
-        [1, 80, 50, 64],
-        [1, 64, 80, 50],
-        [4, 1000, 1000],
-        [1, 4, 1000, 1000],
-        [1, 1000, 4, 32],
-        [4, 32, 1000],
-        [1, 4, 32, 1000],
-        [1, 40, 25, 128],
-        [1, 128, 40, 25],
-        [1000, 1, 256],
-        [1, 64000, 1000],
-        [1, 64000, 32],
-        [2, 16000, 1000],
-        [2, 16000, 32],
-        [5, 4000, 1000],
-        [5, 4000, 32],
-        [1334, 4, 32, 49],
-        [1334, 4, 49, 32],
-        [5336, 49, 49],
-        [5336, 49, 32],
-        [345, 8, 32, 49],
-        [345, 8, 49, 32],
-        [2760, 49, 49],
-        [2760, 49, 32],
-        [96, 16, 32, 49],
-        [96, 16, 49, 32],
-        [1536, 49, 49],
-        [1536, 49, 32],
-        [24, 32, 32, 49],
-        [24, 32, 49, 32],
-        [768, 49, 49],
-        [768, 49, 32],
-        [1000, 4, 32, 64],
-        [1000, 4, 64, 32],
-        [4000, 64, 32],
-        [4000, 32, 64],
-        [4000, 64, 64],
-        [1000, 4, 64, 64],
-        [1, 1000, 4, 64, 64],
-        [260, 8, 32, 64],
-        [260, 8, 64, 32],
-        [2080, 64, 32],
-        [2080, 32, 64],
-        [2080, 64, 64],
-        [260, 8, 64, 64],
-        [1, 260, 8, 64, 64],
-        [70, 16, 32, 64],
-        [70, 16, 64, 32],
-        [1120, 64, 32],
-        [1120, 32, 64],
-        [1120, 64, 64],
-        [70, 16, 64, 64],
-        [1, 70, 16, 64, 64],
-        [20, 32, 32, 64],
-        [20, 32, 64, 32],
-        [640, 64, 32],
-        [640, 32, 64],
-        [640, 64, 64],
-        [20, 32, 64, 64],
+        # YOLOv12 high-resolution unsafe view operations
+        [1, 3, 1280, 1280],   # YOLOv12 high-res input
+        [1, 96, 640, 640],    # After first conv stride=2
+        [1, 192, 320, 320],   # After second conv stride=2
+        [1, 384, 160, 160],   # After third conv stride=2
+        [1, 768, 80, 80],     # After fourth conv stride=2
+        [1, 768, 40, 40],     # After fifth conv stride=2
+        [1, 64, 1280, 800],   # High-res feature maps
+        [1, 128, 640, 400],   # Medium-res feature maps
+        [1, 256, 320, 200],   # Lower-res feature maps
+        [1, 32, 1280, 800],   # High-res channels
+        [1, 80, 640, 400],    # Detection head shapes
+        [1, 160, 320, 200],   # Detection head shapes
+        [1, 320, 160, 100],   # Detection head shapes
+        [1, 640, 80, 50],     # Detection head shapes
+        [1, 1280, 40, 25],    # Detection head shapes
+        [1, 3, 640, 640],     # Standard YOLOv12 input
+        [1, 96, 320, 320],    # Standard feature maps
+        [1, 192, 160, 160],   # Standard feature maps
+        [1, 384, 80, 80],     # Standard feature maps
+        [1, 768, 40, 40],     # Standard feature maps
     ],
 )
 def test_unsafeview(device, input_shape):
-    """Test unsafeview operator with various input shapes from vision models"""
+    """Test unsafeview operator with YOLOv12 high-resolution input shapes"""
     torch.manual_seed(0)
 
     try:
@@ -89,7 +41,7 @@ def test_unsafeview(device, input_shape):
             torch_input = torch_input.permute(0, 2, 3, 1)
 
         ttnn_input = ttnn.from_torch(
-            torch_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+            torch_input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
         )
 
         ttnn_output = ttnn.reshape(ttnn_input, input_shape)

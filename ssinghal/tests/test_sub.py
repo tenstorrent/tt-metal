@@ -5,8 +5,9 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 
 @pytest.mark.parametrize(
-    "input_shape", [
-        # YOLOv12 high-resolution transpose operations
+    "input_shape",
+    [
+        # YOLOv12 high-resolution input shapes
         [1, 3, 1280, 1280],   # YOLOv12 high-res input
         [1, 96, 640, 640],    # After first conv stride=2
         [1, 192, 320, 320],   # After second conv stride=2
@@ -22,30 +23,35 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
         [1, 320, 160, 100],   # Detection head shapes
         [1, 640, 80, 50],     # Detection head shapes
         [1, 1280, 40, 25],    # Detection head shapes
-        [300, 1280],          # 2D transpose
-        [640, 768],           # 2D transpose
-        [1280, 384],          # 2D transpose
-        [8, 1280, 768],       # 3D transpose
-        [16, 640, 384],       # 3D transpose
-    ]
+        [1, 3, 640, 640],     # Standard YOLOv12 input
+        [1, 96, 320, 320],    # Standard feature maps
+        [1, 192, 160, 160],   # Standard feature maps
+        [1, 384, 80, 80],     # Standard feature maps
+        [1, 768, 40, 40],     # Standard feature maps
+    ],
 )
-def test_transpose(device, input_shape):
-    """Test transpose operator with YOLOv12 high-resolution input shapes"""
+def test_sub(device, input_shape):
+    """Test sub operator with YOLOv12 high-resolution input shapes"""
     torch.manual_seed(0)
 
     try:
-        torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+        torch_input1 = torch.rand(input_shape, dtype=torch.bfloat16)
+        torch_input2 = torch.rand(input_shape, dtype=torch.bfloat16)
 
         if len(input_shape) == 4:
-            torch_input = torch_input.permute(0, 2, 3, 1)
+            torch_input1 = torch_input1.permute(0, 2, 3, 1)
+            torch_input2 = torch_input2.permute(0, 2, 3, 1)
 
-        ttnn_input = ttnn.from_torch(
-            torch_input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+        ttnn_input1 = ttnn.from_torch(
+            torch_input1, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+        )
+        ttnn_input2 = ttnn.from_torch(
+            torch_input2, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
         )
 
-        ttnn_output = ttnn.transpose(ttnn_input, -2, -1)
+        ttnn_output = ttnn.sub(ttnn_input1, ttnn_input2)
 
-        torch_reference = torch.transpose(torch_input, -2, -1)
+        torch_reference = torch.sub(torch_input1, torch_input2)
 
         # Convert output back to torch
         ttnn_result = ttnn.to_torch(ttnn_output)

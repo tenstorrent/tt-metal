@@ -107,7 +107,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
     ],
 )
 def test_permute(device, input_shape):
-    """Test permute operator with various input shapes from vision models"""
+    """Test permute operator with YOLOv12 high-resolution input shapes"""
     torch.manual_seed(0)
 
     try:
@@ -117,7 +117,7 @@ def test_permute(device, input_shape):
             torch_input = torch_input.permute(0, 2, 3, 1)
 
         ttnn_input = ttnn.from_torch(
-            torch_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+            torch_input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
         )
 
         ttnn_output = ttnn.permute(ttnn_input, (0, 3, 1, 2)) if len(input_shape) == 4 else ttnn_input

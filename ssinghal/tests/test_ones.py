@@ -5,8 +5,9 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 
 @pytest.mark.parametrize(
-    "input_shape", [
-        # YOLOv12 high-resolution transpose operations
+    "input_shape",
+    [
+        # YOLOv12 high-resolution input shapes
         [1, 3, 1280, 1280],   # YOLOv12 high-res input
         [1, 96, 640, 640],    # After first conv stride=2
         [1, 192, 320, 320],   # After second conv stride=2
@@ -22,30 +23,30 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
         [1, 320, 160, 100],   # Detection head shapes
         [1, 640, 80, 50],     # Detection head shapes
         [1, 1280, 40, 25],    # Detection head shapes
-        [300, 1280],          # 2D transpose
-        [640, 768],           # 2D transpose
-        [1280, 384],          # 2D transpose
-        [8, 1280, 768],       # 3D transpose
-        [16, 640, 384],       # 3D transpose
-    ]
+        [1, 3, 640, 640],     # Standard YOLOv12 input
+        [1, 96, 320, 320],    # Standard feature maps
+        [1, 192, 160, 160],   # Standard feature maps
+        [1, 384, 80, 80],     # Standard feature maps
+        [1, 768, 40, 40],     # Standard feature maps
+    ],
 )
-def test_transpose(device, input_shape):
-    """Test transpose operator with YOLOv12 high-resolution input shapes"""
+def test_ones(device, input_shape):
+    """Test ones operator with YOLOv12 high-resolution input shapes"""
     torch.manual_seed(0)
 
     try:
-        torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+        torch_reference = torch.ones(input_shape, dtype=torch.bfloat16)
 
         if len(input_shape) == 4:
-            torch_input = torch_input.permute(0, 2, 3, 1)
+            torch_reference = torch_reference.permute(0, 2, 3, 1)
 
-        ttnn_input = ttnn.from_torch(
-            torch_input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
-        )
-
-        ttnn_output = ttnn.transpose(ttnn_input, -2, -1)
-
-        torch_reference = torch.transpose(torch_input, -2, -1)
+        # Create ones tensor for YOLOv12 shapes
+        if len(input_shape) == 4:
+            ttnn_shape = [input_shape[0], input_shape[2], input_shape[3], input_shape[1]]  # NHWC for ttnn
+        else:
+            ttnn_shape = input_shape
+        
+        ttnn_output = ttnn.ones(ttnn_shape, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
         # Convert output back to torch
         ttnn_result = ttnn.to_torch(ttnn_output)
