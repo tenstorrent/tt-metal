@@ -442,6 +442,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
     };
 
     // https://github.com/tenstorrent/tt-metal/issues/24235
+    // Remove when https://github.com/tenstorrent/tt-metal/issues/25418 is fixed.
     for (auto& device : single_meshes) {
         device->disable_and_clear_program_cache();
     }
