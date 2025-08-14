@@ -91,7 +91,7 @@ jobs:
       model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@gsarabando-workflow
 
   metalium-smoke-tests:
     needs: [ asan-build, find-changed-files ]
