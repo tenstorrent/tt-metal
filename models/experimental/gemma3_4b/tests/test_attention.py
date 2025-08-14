@@ -14,6 +14,7 @@ import ttnn
 from models.experimental.gemma3_4b.tt.attention import Attention
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -65,6 +66,7 @@ def test_attention_inference(
     dtype = ttnn.bfloat16
     pcc = 0.99
 
+    tt_ccl = TT_CCL(mesh_device)
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
@@ -127,6 +129,7 @@ def test_attention_inference(
 
     tt_model = Attention(
         mesh_device,
+        tt_ccl,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,

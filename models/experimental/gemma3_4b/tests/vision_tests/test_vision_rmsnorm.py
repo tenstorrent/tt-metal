@@ -10,6 +10,7 @@ import ttnn
 from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
 
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -56,9 +57,10 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     }
 
     # reference_model.load_state_dict(partial_state_dict)
-
+    tt_ccl = TT_CCL(device)
     tt_inner_norm = RMSNorm(
         device=device,
+        tt_ccl=tt_ccl,
         dim=1152,
         state_dict=state_dict,
         state_dict_prefix="",
@@ -70,7 +72,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, tt_model_args, TG=tt_model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, tt_model_args, tt_ccl, TG=tt_model_args.is_galaxy)
 
     input = torch.rand(1, 1, 1152)
 

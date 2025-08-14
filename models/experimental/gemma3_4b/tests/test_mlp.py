@@ -11,6 +11,7 @@ from models.experimental.gemma3_4b.tt.mlp import MLP
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 @torch.no_grad()
@@ -57,8 +58,11 @@ def test_mlp_inference(seq_len, batch_size, reset_seeds, device):
     reference_model = tt_model_args.reference_mlp()  # Gemma3 MLP
     reference_model.load_state_dict(partial_state_dict)
 
+    tt_ccl = TT_CCL(device)
+
     tt_model = MLP(
         mesh_device=device,
+        tt_ccl=tt_ccl,
         args=tt_model_args,
         state_dict=state_dict,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
