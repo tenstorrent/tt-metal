@@ -15,7 +15,7 @@
             "op_name": "AllGatherConcat",
             "kernel_duration": 10079.010416666666 ,
             "op_to_op": 723.1111111111111,
-            "first_to_last_start": 262.77777777777777,
+            "first_to_last_start": 129.77777777777777 ,
             "non-overlapped-dispatch-time": 12462.644444444442,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
