@@ -193,6 +193,19 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
+        (  # Batch-32 run with single decoder layer (CI only) - 32 users
+            "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",  # real multi-user prompts
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users with the same prompt
+            4096,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -202,6 +215,7 @@ def create_tt_model(
         "ci-only-repeated-batch",  # ci_only repeated batch for faster testing coverage in CI pipelines
         "ci-only-32-users",  # ci_only batch-32 for faster testing coverage in CI pipelines
         "ci-only-bleu-score",  # ci_only batch-bleu-score for faster testing coverage in CI pipelines
+        "ci-only-text-only",  # ci_only batch-text-only for faster testing coverage in CI pipelines
     ],
 )
 @pytest.mark.parametrize(
@@ -395,9 +409,13 @@ def test_demo(
             padding=True,
             return_tensors="pt",
         )
-        merge_length = processor.image_processor.merge_size**2
-        num_image_tokens.append([inputs.image_grid_thw[i].prod().item() // merge_length for i in range(batch_size)])
-        logger.info(f"num_image_tokens: {num_image_tokens[-1]}")
+        if image_inputs:
+            merge_length = processor.image_processor.merge_size**2
+            num_image_tokens.append([inputs.image_grid_thw[i].prod().item() // merge_length for i in range(batch_size)])
+            logger.info(f"num_image_tokens: {num_image_tokens[-1]}")
+        else:
+            # text-only
+            num_image_tokens.append([0] * batch_size)
 
         # Vision prefill
         logger.info(f"Vision model prefill batch {batch_idx}")
