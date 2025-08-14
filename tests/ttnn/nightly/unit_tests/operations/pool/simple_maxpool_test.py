@@ -5,8 +5,8 @@ import math
 device = ttnn.CreateDevice(0, l1_small_size=8192)
 
 in_n = 1
-in_h = 10
-in_w = 10
+in_h = 20
+in_w = 20
 in_c = 32
 kernel_size = [2, 2]
 stride = [1, 1]
@@ -134,6 +134,15 @@ if not output_match:
             diff_val = diff[n, h, w, c]
             print(f"  [{n}, {h}, {w}, {c}]: {torch_val:.6f} vs {ttnn_val:.6f} (diff: {diff_val:.6f})")
 
+# Count total output elements
+total_output_elements = torch_output_reshaped.numel()
+print(f"\nTotal output elements: {total_output_elements}")
+
+# Analyze indices mismatches
+tie_breaking_differences = 0
+value_differences = 0
+has_actual_errors = False
+
 if not indices_match:
     print("\n=== INDICES MISMATCHES ===")
     torch_indices_float = torch_indices_reshaped.float()
@@ -154,9 +163,54 @@ if not indices_match:
             torch_idx = torch_indices_float[n, h, w, c]
             ttnn_idx = ttnn_indices_float[n, h, w, c]
             diff_val = diff[n, h, w, c]
-            print(f"  [{n}, {h}, {w}, {c}]: {torch_idx:.0f} vs {ttnn_idx:.0f} (diff: {diff_val:.0f})")
 
-if output_match and indices_match:
+            # Convert linear indices back to spatial coordinates in the input tensor
+            # PyTorch uses NCHW format for indexing in max_pool2d
+            torch_idx_int = int(torch_idx.item())
+            ttnn_idx_int = int(ttnn_idx.item())
+
+            # Convert linear index to (h, w) coordinates within the pooling window
+            # For PyTorch indices, they are relative to the flattened spatial dimensions (H*W)
+            torch_h = torch_idx_int // in_w
+            torch_w = torch_idx_int % in_w
+            ttnn_h = ttnn_idx_int // in_w
+            ttnn_w = ttnn_idx_int % in_w
+
+            # Get the actual input values at these positions
+            torch_input_val = torch_input[n, c, torch_h, torch_w] if torch_h < in_h and torch_w < in_w else float("nan")
+            ttnn_input_val = torch_input[n, c, ttnn_h, ttnn_w] if ttnn_h < in_h and ttnn_w < in_w else float("nan")
+
+            print(
+                f"  [{n}, {h}, {w}, {c}]: torch_idx={torch_idx:.0f} vs ttnn_idx={ttnn_idx:.0f} (diff: {diff_val:.0f})"
+            )
+            print(f"    Torch chose input[{n},{c},{torch_h},{torch_w}] = {torch_input_val:.6f}")
+            print(f"    TTNN chose input[{n},{c},{ttnn_h},{ttnn_w}] = {ttnn_input_val:.6f}")
+
+            # Check if the values are the same (indicating a tie in max pooling)
+            if abs(torch_input_val - ttnn_input_val) < 1e-6:
+                print(f"    -> Same input values! This is a tie-breaking difference.")
+                tie_breaking_differences += 1
+            else:
+                print(f"    -> Different input values! Value difference: {abs(torch_input_val - ttnn_input_val):.6f}")
+                value_differences += 1
+                has_actual_errors = True
+            print()
+
+print(f"\n=== SUMMARY ===")
+print(f"Total output elements: {total_output_elements}")
+print(f"Tie-breaking differences: {tie_breaking_differences}")
+print(f"Value differences (actual errors): {value_differences}")
+
+# Updated test result logic - only fail if there are actual value differences or output mismatches
+test_passed = output_match and (not has_actual_errors)
+
+if test_passed:
     print("\n✓ Test PASSED: TTNN and PyTorch outputs match!")
+    if tie_breaking_differences > 0:
+        print(f"  Note: {tie_breaking_differences} tie-breaking differences in indices are acceptable.")
 else:
-    print("\n✗ Test FAILED: Outputs do not match")
+    print("\n✗ Test FAILED:")
+    if not output_match:
+        print("  - Output values do not match")
+    if has_actual_errors:
+        print(f"  - {value_differences} actual value differences found in indices")
