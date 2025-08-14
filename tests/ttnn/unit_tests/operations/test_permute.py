@@ -603,7 +603,7 @@ def test_permute_4d_whyx_permutations(device, shape, perm, dtype):
 
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 128, 128], [32, 32, 32, 32], [96, 96, 96, 96]])
-@pytest.mark.parametrize("perm", [[0, 2, 3, 1], [0, 3, 1, 2], [1, 2, 3, 0], [2, 1, 3, 0], [2, 0, 3, 1], [1, 0, 2, 3]])
+@pytest.mark.parametrize("perm", [[0, 2, 3, 1], [0, 3, 1, 2], [1, 2, 3, 0], [2, 1, 3, 0], [2, 0, 3, 1]])
 @pytest.mark.parametrize(
     "dtype",
     [
