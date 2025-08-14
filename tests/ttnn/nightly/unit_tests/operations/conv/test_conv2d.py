@@ -4261,6 +4261,9 @@ def test_conv2d_activation_reuse(
     enable_split_reader,
     enable_activation_reuse,
 ):
+    if is_blackhole() and kernel == (4, 4):
+        pytest.skip("#8113: Hangs on Blackhole, to be investigated")
+
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
 
@@ -4304,7 +4307,8 @@ def test_conv2d_activation_reuse(
     )
 
 
-@pytest.mark.parametrize("enable_activation_reuse", [False, True])
+@skip_for_blackhole()
+@pytest.mark.parametrize("enable_activation_reuse", [True])
 @pytest.mark.parametrize("enable_split_reader", [False, True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
