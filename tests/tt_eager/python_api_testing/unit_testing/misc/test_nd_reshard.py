@@ -67,7 +67,7 @@ def run_nd_reshard_test_diff_width(
         output_dtype=tt_dtype,
     )
 
-    tt_tensor_reshard = ttnn.reshard(tt_tensor_sharded, output_mem_config, use_nd_reshard=True)
+    tt_tensor_reshard = ttnn.reshard(tt_tensor_sharded, output_mem_config)
 
     tt_tensor_interleaved = ttnn.sharded_to_interleaved(
         tt_tensor_reshard,
@@ -841,7 +841,6 @@ def test_DRAM_nd_reshard(
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [
-        # block sharded with different page sizes
         (
             [1, 1, 16384, 320],
             ttnn.ROW_MAJOR_LAYOUT,
@@ -854,6 +853,33 @@ def test_DRAM_nd_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+        # Test case: input [1, 1, 4096, 320] sharded (512, 40) on 8x8 grid, reshard to (512, 64) on 5x8 grid
+        (
+            [1, 1, 4096, 320],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 40),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (4, 7)]],
+            (512, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 640] sharded (512, 80) on 8x8 grid, reshard to (512, 96) on 7x8 grid
+        (
+            [1, 1, 4096, 640],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 80),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 96),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 1024, 640] sharded (128, 80) on 8x8 grid, reshard to (128, 96) on 7x8 grid
         (
             [1, 1, 1024, 640],
             ttnn.ROW_MAJOR_LAYOUT,
@@ -866,6 +892,7 @@ def test_DRAM_nd_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+        # Test case: input [1, 1, 4096, 1920] sharded (512, 240) on 8x8 grid, reshard to (512, 288) on 7x8 grid
         (
             [1, 1, 4096, 1920],
             ttnn.ROW_MAJOR_LAYOUT,
@@ -875,6 +902,58 @@ def test_DRAM_nd_reshard(
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             [[(0, 0), (6, 7)]],
             (512, 288),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 1280] sharded (512, 160) on 8x8 grid, reshard to (512, 192) on 7x8 grid
+        (
+            [1, 1, 4096, 1280],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 160),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 960] sharded (512, 120) on 8x8 grid, reshard to (512, 192) on 5x8 grid
+        (
+            [1, 1, 4096, 960],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 120),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (4, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # input and output with different page size and have padding
+        (
+            [1, 1, 4096, 1248],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 160),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # input and output with different page size and input has padding
+        (
+            [1, 1, 4096, 1280],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (6, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (7, 7)]],
+            (512, 160),
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),

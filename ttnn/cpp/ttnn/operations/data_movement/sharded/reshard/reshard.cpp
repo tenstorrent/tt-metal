@@ -14,13 +14,9 @@ ttnn::Tensor ReshardOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    bool use_nd_reshard) {
+    const std::optional<Tensor>& optional_output_tensor) {
     return operation::run(
-               ReshardDeviceOperation{.output_mem_config = memory_config, .use_nd_reshard = use_nd_reshard},
-               {input_tensor},
-               {},
-               {optional_output_tensor})
+               ReshardDeviceOperation{.output_mem_config = memory_config}, {input_tensor}, {}, {optional_output_tensor})
         .at(0);
 }
 

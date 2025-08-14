@@ -12,7 +12,6 @@ namespace ttnn::operations::data_movement {
 
 struct ReshardDeviceOperation {
     const tt::tt_metal::MemoryConfig output_mem_config;
-    bool use_nd_reshard;
 
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
@@ -27,10 +26,8 @@ struct ReshardDeviceOperation {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("output_mem_config", "use_nd_reshard");
-    auto attribute_values() const {
-        return std::make_tuple(std::cref(this->output_mem_config), std::cref(this->use_nd_reshard));
-    }
+    static constexpr auto attribute_names = std::make_tuple("output_mem_config");
+    auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
 };
 
 }  // namespace ttnn::operations::data_movement
