@@ -37,22 +37,26 @@ using namespace tt::tt_metal;
  * 5. Writer exits spin, reads all pending data (3 steps worth of data)
  *    If cb_reserve_back handles the overflow correctly, it should hang writer till reader exits spin, resulting in BBA.
  *    If cb_reserve_back handles the overflow incorrectly, premature write will happen before reader exists spin,
- *    resulting in ABA.
+ *    resulting in ABA (first page is overwritten with A).
  *
  */
 
-constexpr CoreCoord worker_core = {0, 0};
+static constexpr auto CB_ID = tt::CBIndex::c_0;
+static constexpr CoreCoord WORKER_CORE = {0, 0};
+
+using DataT = std::uint32_t;
+static constexpr auto DATA_FORMAT = DataFormat::UInt32;
 
 // CB have 64 pages.
-constexpr size_t cb_size = 1024;
-constexpr size_t cb_page_size = 16;
+static constexpr std::size_t CB_SIZE = 1024;
+static constexpr std::size_t CB_PAGE_SIZE = 16;
 
 // Values we write to the areas that could be overwritten by incorrect reserve calls.
-static constexpr uint32_t WRAP_WRITE_VALUE = 0xAAAA;
+static constexpr DataT WRAP_WRITE_VALUE = 0xAAAA;
 // Values used to overwrite the buffer in the last few pages.
-static constexpr uint32_t WRITE_OVER_VALUE = 0xBBBB;
+static constexpr DataT WRITE_OVER_VALUE = 0xBBBB;
 // Expected result of the test.
-static const std::vector<uint32_t> EXPECTED_RESULT = {WRAP_WRITE_VALUE, WRITE_OVER_VALUE, WRITE_OVER_VALUE};
+static const std::vector<DataT> EXPECTED_RESULT = {WRAP_WRITE_VALUE, WRAP_WRITE_VALUE, WRITE_OVER_VALUE};
 
 TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
     auto device = devices_.at(0);
@@ -60,29 +64,27 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_writer.cpp",
-        worker_core,
+        WORKER_CORE,
         ComputeConfig{});
 
     auto reader_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_reader.cpp",
-        worker_core,
+        WORKER_CORE,
         WriterDataMovementConfig{});
 
     CreateCircularBuffer(
-        program,
-        worker_core,
-        CircularBufferConfig{cb_size, {{CBIndex::c_0, DataFormat::UInt32}}}.set_page_size(CBIndex::c_0, cb_page_size));
+        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    // We really only need to put 2 values in, but here the size is cb_page_size to ensure alignment.
-    auto result_buffer = Buffer::create(device, cb_page_size, cb_page_size, BufferType::L1);
-    SetRuntimeArgs(program, reader_kernel, worker_core, {result_buffer->address()});
+    // We really only need to put 2 values in, but here the size is CB_PAGE_SIZE to ensure alignment.
+    auto result_buffer = Buffer::create(device, CB_PAGE_SIZE, CB_PAGE_SIZE, BufferType::L1);
+    SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
 
     EnqueueProgram(device->command_queue(), program, true);
 
-    std::vector<uint32_t> host_buffer;
-    size_t expected_result_size = EXPECTED_RESULT.size() * sizeof(uint32_t);
-    detail::ReadFromDeviceL1(device, worker_core, result_buffer->address(), expected_result_size, host_buffer);
+    std::vector<DataT> host_buffer;
+    auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
+    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
 }
