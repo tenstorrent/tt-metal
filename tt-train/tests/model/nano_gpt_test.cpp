@@ -38,7 +38,7 @@ constexpr bool is_nigthly_tt_train_tests_enabled = false;
 [[nodiscard]] bool should_run_nightly_tests() {
     const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
     bool is_whb0 = is_wormhole_b0();
-    bool is_ci = env_var || is_nigthly_tt_train_tests_enabled;
+    bool is_ci = env_var && is_nigthly_tt_train_tests_enabled;
     return is_whb0 && is_ci;
 }
 
