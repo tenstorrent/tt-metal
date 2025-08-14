@@ -126,18 +126,18 @@ export class HierarchicalTelemetryStore {
         }
     }
 
-    // Updates telemetry state for a particular int-valued node. Will set the value directly
+    // Updates telemetry state for a particular uint-valued node. Will set the value directly
     // and then propagate upwards if changed. If the value did not already exist and this is the
     // first insertion, propagation will occur.
-    updateIntValue(id, value) {
+    updateUIntValue(id, value) {
         if (!isInt(value)) {
-            console.error(`[HierarchicalTelemetryStore] Value is not int (${typeof value})`);
+            console.error(`[HierarchicalTelemetryStore] Value is not uint (${typeof value})`);
         }
 
         const path = this._pathById.get(id);
         if (!path) {
             // Invalid telemetry data, does not map to any known path
-            console.error(`[HierarchicalTelemetryStore] Invalid id ${id}, cannot update int value`);
+            console.error(`[HierarchicalTelemetryStore] Invalid id ${id}, cannot update uint value`);
             return;
         }
 
@@ -159,7 +159,7 @@ export class HierarchicalTelemetryStore {
             const currentPath = parts.slice(0, i).join("_");
             if (currentPath != path) {
                 // _getAggregateHealth only supports bools at leaf level, so we don't want to
-                // invoke it on our int
+                // invoke it on our uint
                 this._valueByPath.set(currentPath, this._getAggregateHealth(currentPath));
             }
         }
@@ -193,7 +193,7 @@ export class HierarchicalTelemetryStore {
         if (isBoolValue) {
             this.updateBoolValue(id, initialValue);
         } else {
-            this.updateIntValue(id, initialValue);
+            this.updateUIntValue(id, initialValue);
         }
     }
 

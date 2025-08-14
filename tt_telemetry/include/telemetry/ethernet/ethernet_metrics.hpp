@@ -3,7 +3,7 @@
 /*
  * telemetry/ethernet/ethernet_metrics.hpp
  *
- * Ethernet channel metrics.
+ * Ethernet endpoint (i.e., a core or channel) metrics.
  */
 
  #include <optional>
@@ -30,7 +30,7 @@ private:
     EthernetEndpoint endpoint_;
 };
 
-class EthernetCRCErrorCountMetric: public IntMetric {
+class EthernetCRCErrorCountMetric: public UIntMetric {
 public:
     EthernetCRCErrorCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster);
 
@@ -41,4 +41,43 @@ private:
     EthernetEndpoint endpoint_;
     std::optional<tt_cxy_pair> virtual_eth_core_;
     uint32_t crc_addr_;
+};
+
+class EthernetRetrainCountMetric: public UIntMetric {
+public:
+    EthernetRetrainCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(const tt::Cluster &cluster) override;
+
+private:
+    EthernetEndpoint endpoint_;
+    tt_cxy_pair virtual_eth_core_;
+    uint32_t retrain_count_addr_;
+};
+
+class EthernetCorrectedCodewordCountMetric: public UIntMetric {
+public:
+    EthernetCorrectedCodewordCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(const tt::Cluster &cluster) override;
+
+private:
+    EthernetEndpoint endpoint_;
+    std::optional<tt_cxy_pair> virtual_eth_core_;
+    uint32_t corr_addr_;
+};
+
+class EthernetUncorrectedCodewordCountMetric: public UIntMetric {
+public:
+    EthernetUncorrectedCodewordCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(const tt::Cluster &cluster) override;
+
+private:
+    EthernetEndpoint endpoint_;
+    std::optional<tt_cxy_pair> virtual_eth_core_;
+    uint32_t uncorr_addr_;
 };

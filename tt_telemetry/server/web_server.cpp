@@ -31,8 +31,8 @@ private:
     // Telemetry data
     std::unordered_map<size_t, std::string> bool_metric_name_by_id_;
     std::unordered_map<size_t, bool> bool_metric_value_by_id_;
-    std::unordered_map<size_t, std::string> int_metric_name_by_id_;
-    std::unordered_map<size_t, int> int_metric_value_by_id_;
+    std::unordered_map<size_t, std::string> uint_metric_name_by_id_;
+    std::unordered_map<size_t, uint64_t> uint_metric_value_by_id_;
     std::mutex snapshot_mutex_;
     std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
@@ -52,10 +52,10 @@ private:
             full_snapshot.bool_metric_names.push_back(name);
             full_snapshot.bool_metric_values.push_back(bool_metric_value_by_id_[id]);
         }
-        for (const auto &[id, name]: int_metric_name_by_id_) {
-            full_snapshot.int_metric_ids.push_back(id);
-            full_snapshot.int_metric_names.push_back(name);
-            full_snapshot.int_metric_values.push_back(int_metric_value_by_id_[id]);
+        for (const auto &[id, name]: uint_metric_name_by_id_) {
+            full_snapshot.uint_metric_ids.push_back(id);
+            full_snapshot.uint_metric_names.push_back(name);
+            full_snapshot.uint_metric_values.push_back(uint_metric_value_by_id_[id]);
         }
         json j = full_snapshot;
         std::string message = "data: " + j.dump() + "\n\n";
@@ -93,8 +93,8 @@ private:
             // Absolute snapshot -- replace everything with new data
             bool_metric_name_by_id_.clear();
             bool_metric_value_by_id_.clear();
-            int_metric_name_by_id_.clear();
-            int_metric_value_by_id_.clear();
+            uint_metric_name_by_id_.clear();
+            uint_metric_value_by_id_.clear();
         }
 
         for (size_t i = 0; i < snapshot->bool_metric_ids.size(); i++) {
@@ -106,13 +106,13 @@ private:
             bool_metric_value_by_id_[idx] = snapshot->bool_metric_values[i];
         }
 
-        for (size_t i = 0; i < snapshot->int_metric_ids.size(); i++) {
-            size_t idx = snapshot->int_metric_ids[i];
-            if (snapshot->int_metric_names.size() > 0) {
+        for (size_t i = 0; i < snapshot->uint_metric_ids.size(); i++) {
+            size_t idx = snapshot->uint_metric_ids[i];
+            if (snapshot->uint_metric_names.size() > 0) {
                 // Names were included, which indicates new metrics added!
-                int_metric_name_by_id_[idx] = snapshot->int_metric_names[i];
+                uint_metric_name_by_id_[idx] = snapshot->uint_metric_names[i];
             }
-            int_metric_value_by_id_[idx] = snapshot->int_metric_values[i];
+            uint_metric_value_by_id_[idx] = snapshot->uint_metric_values[i];
         }
     }
 
