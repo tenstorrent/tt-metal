@@ -61,6 +61,8 @@ def standardize_hf_keys_multimodal(state_dict):
             new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
         elif "model.vision_tower.vision_model." in k:
             new_state_dict[k.replace("model.vision_tower.vision_model.", "visual.")] = state_dict[k]
+        elif "model.vision_model." in k:
+            new_state_dict[k.replace("model.vision_model.", "vision_model.")] = state_dict[k]
         elif "model.language_model." in k:
             new_state_dict[k.replace("model.language_model.", "model.")] = state_dict[k]
         else:
@@ -82,6 +84,14 @@ def convert_hf_to_meta(state_dict, head_dim):
     state_dict = split_hf_keys(state_dict)
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
+    return state_dict
+
+
+def convert_hf_to_meta_mllama(state_dict, head_dim, config):
+    state_dict = split_hf_keys(state_dict)
+    state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+    state_dict = map_hf_to_meta_keys_mllama(state_dict, config)
+    state_dict = convert_tile_pos_embeddings(state_dict)
     return state_dict
 
 
@@ -228,6 +238,144 @@ def replace_keys(state_dict, replacements):
         pattern = pre + pattern + post
         state_dict = {re.sub(pattern, replacement, k): v for k, v in state_dict.items()}
     return state_dict
+
+
+def map_hf_to_meta_keys_mllama(loaded_weights, config):
+    replacements = [
+        (r"^model.norm.weight", r"text_model.norm.weight"),
+        (r"^lm_head.weight", r"text_model.output.weight"),
+        (r"^model.embed_tokens", r"text_model.tok_embeddings"),
+        (r"^vision_model.patch_embedding", r"vision_model.conv1._linear"),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).self_attn.q_proj",
+            r"vision_model.\1.resblocks.\2.attn.wq",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).self_attn.k_proj",
+            r"vision_model.\1.resblocks.\2.attn.wk",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).self_attn.v_proj",
+            r"vision_model.\1.resblocks.\2.attn.wv",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).self_attn.o_proj",
+            r"vision_model.\1.resblocks.\2.attn.wo",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).mlp.fc1",
+            r"vision_model.\1.resblocks.\2.mlp.c_fc",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).mlp.fc2",
+            r"vision_model.\1.resblocks.\2.mlp.c_proj",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).input_layernorm",
+            r"vision_model.\1.resblocks.\2.ln_1",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).post_attention_layernorm",
+            r"vision_model.\1.resblocks.\2.ln_2",
+        ),
+        (
+            r"^vision_model.global_transformer.layers.(\d+).(gate_ffn|gate_attn)",
+            r"vision_model.global_transformer.resblocks.\1.\2",
+        ),
+        (r"^vision_model.layernorm_(pre|post).(weight|bias)", r"vision_model.ln_\1.\2"),
+        (r"^vision_model.gated_positional_embedding.embedding", r"vision_model.positional_embedding"),
+        (r"^vision_model.gated_positional_embedding.tile_embedding.weight", r"vision_model.gated_positional_embedding"),
+        (r"^vision_model.gated_positional_embedding.gate", r"vision_model.gated_positional_embedding_gate"),
+        (r"^vision_model.pre_tile_positional_embedding.embedding.weight", r"vision_model.pre_tile_pos_embed.embedding"),
+        (
+            r"^vision_model.post_tile_positional_embedding.embedding.weight",
+            r"vision_model.post_tile_pos_embed.embedding",
+        ),
+        (r"^vision_model.pre_tile_positional_embedding.gate", r"vision_model.pre_tile_pos_embed.gate"),
+        (r"^vision_model.post_tile_positional_embedding.gate", r"vision_model.post_tile_pos_embed.gate"),
+        (r"^vision_model.", r"vision_model.vision_encoder."),
+        (r"^model.multi_modal_projector.", r"vision_model.vision_projection."),
+    ]
+
+    self_attn_replacements = {
+        (r"^model.layers.(\d+).mlp.gate_proj.", r"text_model.layers.\1.feed_forward.w1."),
+        (r"^model.layers.(\d+).mlp.down_proj.", r"text_model.layers.\1.feed_forward.w2."),
+        (r"^model.layers.(\d+).mlp.up_proj.", r"text_model.layers.\1.feed_forward.w3."),
+        (r"^model.layers.(\d+).input_layernorm.weight", r"text_model.layers.\1.attention_norm.weight"),
+        (r"^model.layers.(\d+).post_attention_layernorm.weight", r"text_model.layers.\1.ffn_norm.weight"),
+        (r"^model.layers.(\d+).self_attn.(q|k|v|o)_proj.weight", r"text_model.layers.\1.attention.w\2.weight"),
+    }
+    cross_attn_replacements = {
+        (r"^model.layers.(\d+).mlp.gate_proj.weight", r"text_model.cross_attention_layers.\1.feed_forward.w1.weight"),
+        (r"^model.layers.(\d+).mlp.down_proj.weight", r"text_model.cross_attention_layers.\1.feed_forward.w2.weight"),
+        (r"^model.layers.(\d+).mlp.up_proj.weight", r"text_model.cross_attention_layers.\1.feed_forward.w3.weight"),
+        (r"^model.layers.(\d+).input_layernorm.weight", r"text_model.cross_attention_layers.\1.attention_norm.weight"),
+        (
+            r"^model.layers.(\d+).post_attention_layernorm.weight",
+            r"text_model.cross_attention_layers.\1.ffn_norm.weight",
+        ),
+        (r"^model.layers.(\d+).cross_attn_attn_gate", r"text_model.cross_attention_layers.\1.gate_attn"),
+        (r"^model.layers.(\d+).cross_attn_mlp_gate", r"text_model.cross_attention_layers.\1.gate_ffwd"),
+        (r"^model.layers.(\d+).cross_attn.(q|k|v|o)_proj", r"text_model.cross_attention_layers.\1.attention.w\2"),
+        (r"^model.layers.(\d+).cross_attn.(q|k)_norm", r"text_model.cross_attention_layers.\1.attention.\2_norm"),
+    }
+
+    idx_cross_attn = 0
+    for i in range(config.text_config.num_hidden_layers):
+        if i in config.text_config.cross_attention_layers:
+            cur_replacements = [
+                (
+                    k.replace(r"layers.(\d+).", rf"layers.{i}."),
+                    v.replace(r"cross_attention_layers.\1.", rf"cross_attention_layers.{idx_cross_attn}.").replace(
+                        r"\2", r"\1"
+                    ),
+                )
+                for k, v in cross_attn_replacements
+            ]
+            idx_cross_attn += 1
+        else:
+            cur_replacements = [
+                (
+                    k.replace(r"layers.(\d+).", rf"layers.{i}."),
+                    v.replace(r"layers.\1.", rf"layers.{i-idx_cross_attn}.").replace(r"\2", r"\1"),
+                )
+                for k, v in self_attn_replacements
+            ]
+        replacements.extend(cur_replacements)
+
+    return replace_keys(loaded_weights, replacements)
+
+
+def convert_tile_pos_embeddings(state_dict):
+    state_dict = {
+        k: invert_pre_compute_positional_embedding(v) if "tile_pos_embed.embedding" in k else v
+        for k, v in state_dict.items()
+    }
+    return state_dict
+
+
+def invert_pre_compute_positional_embedding(precomputed_embeddings):
+    """Inverts https://github.com/huggingface/transformers/blob/41980ce93e775f6c88500c51c8db7946fc6a2add/src/transformers/models/mllama/convert_mllama_weights_to_hf.py#L122-L148"""
+
+    # TBD: remove hardcode
+    assert tuple(precomputed_embeddings.shape) == (9, 5120)
+    max_aspect_ratio_id, max_num_tiles, num_patches, hidden_size = 9 - 1, 4, 1, 1280
+    precomputed_embeddings = precomputed_embeddings.reshape(
+        max_aspect_ratio_id + 1, max_num_tiles, num_patches, hidden_size
+    )
+
+    from transformers.models.mllama.image_processing_mllama import get_all_supported_aspect_ratios
+
+    supported_aspect_ratios = get_all_supported_aspect_ratios(max_num_tiles)
+
+    embedding = torch.zeros(max_num_tiles, max_num_tiles, num_patches, hidden_size, dtype=precomputed_embeddings.dtype)
+
+    for i, (height, width) in enumerate(supported_aspect_ratios):
+        aspect_ratio_id = i + 1
+        current_embedding = precomputed_embeddings[aspect_ratio_id, : height * width]
+        embedding[:height, :width] = current_embedding.reshape(height, width, num_patches, hidden_size)
+
+    return embedding
 
 
 def map_hf_to_meta_keys(loaded_weights):

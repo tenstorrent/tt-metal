@@ -1167,11 +1167,11 @@ class Generator:
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
-        model_input = self.processor.apply_chat_template(
+        model_input = self.preprocessor.apply_chat_template(
             messages, add_generation_prompt=True, tokenize=True, return_dict=True
         )
         vision_images = extract_images_from_messages(messages) or None
-        vision_mask = create_vision_mask(model_input["input_ids"][0], self.processor.image_token_id) or None
+        vision_mask = create_vision_mask(model_input["input_ids"][0], self.preprocessor.image_token_id) or None
 
         tokens = []
 
@@ -1209,10 +1209,10 @@ class Generator:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
         vision_images = []
-        text = encode_content(content, vision_images, self.processor.image_token)
+        text = encode_content(content, vision_images, self.preprocessor.image_token)
         vision_images = vision_images or None
-        model_input = self.processor(text=text, images=vision_images, add_special_tokens=False)
-        vision_mask = create_vision_mask(model_input["input_ids"][0], self.processor.image_token_id) or None
+        model_input = self.preprocessor(text=text, images=vision_images, add_special_tokens=False)
+        vision_mask = create_vision_mask(model_input["input_ids"][0], self.preprocessor.image_token_id) or None
 
         tokens = []
 
@@ -1226,7 +1226,7 @@ class Generator:
         ):
             tokens.append(result.token)
 
-        generation = self.processor.decode(tokens, skip_special_tokens=True)
+        generation = self.preprocessor.decode(tokens, skip_special_tokens=True)
 
         return generation
 

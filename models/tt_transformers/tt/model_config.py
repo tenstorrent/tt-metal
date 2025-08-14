@@ -27,6 +27,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
+    convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
@@ -1408,6 +1409,9 @@ class ModelArgs:
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
+        # multimodal llama additionally adds cross attention layers
+        # they are calculated in HF but not calculated in Meta
+        self.n_layers -= len(text_config.get("cross_attention_layers", ()))
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
@@ -1707,7 +1711,10 @@ class ModelArgs:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
             else:
                 state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+            if self.is_multimodal and "llama" in self.CKPT_DIR.lower():
+                state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
+            else:
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
