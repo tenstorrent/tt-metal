@@ -383,12 +383,14 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     // Number of tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
 
-    // Input buffers - Create CB0 (always predicate for all cases)
-    uint32_t cb0_tile_size = predicate_single_tile_size;
-    DataFormat cb0_data_format = predicate_data_format;
-
-    auto [predicate_tensor_cb, predicate_tensor_cb_handle] =
-        create_cb(tt::CBIndex::c_0, program, all_device_cores, cb0_tile_size, num_tiles_per_cb, cb0_data_format);
+    // Input buffers - Create predicate CB (always c_0)
+    auto [predicate_tensor_cb, predicate_tensor_cb_handle] = create_cb(
+        tt::CBIndex::c_0,
+        program,
+        all_device_cores,
+        predicate_single_tile_size,
+        num_tiles_per_cb,
+        predicate_data_format);  // predicate_tensor
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
@@ -440,8 +442,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
     } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // TTT with row broadcast: use row broadcast reader with pred→CB0, true→CB1, true→CB2
-        // Row broadcast reader reads predicate and true tensor, CB2 uses true tensor for compute compatibility
+        // TTT with row broadcast: use row broadcast reader with pred→CB0, true→CB1, false→CB2
 
         // CB1 = value_true tensor
         auto [cb1, cb1_handle] = create_cb(
