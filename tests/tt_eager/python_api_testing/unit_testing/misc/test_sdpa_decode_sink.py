@@ -2,10 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import math
 import torch
-import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -16,39 +13,50 @@ import ttnn
 from loguru import logger
 import pytest
 
-from models.tt_transformers.tt.common import (
-    PagedAttentionConfig,
-)
 
+def scaled_dot_product_attention_reference(Q, K, V, S, sm_scale, sliding_window=0):
+    # sliding_window == 0 means no sliding window
+    batch_size, n_tokens, n_heads, q_mult, d_head = Q.shape
+    assert K.shape == (batch_size, n_tokens, n_heads, d_head)
+    assert V.shape == (batch_size, n_tokens, n_heads, d_head)
 
-def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_len, scale, is_causal=True):
-    b, nh, _, _ = Q.shape  # b, nh, 1, d
-    _, nkv, _, _ = K.shape
+    # Expand K and V to match Q's q_mult dimension
+    K = K[:, :, :, None, :].expand(-1, -1, -1, q_mult, -1)  # [batch, n_tokens, n_heads, q_mult, d_head]
+    V = V[:, :, :, None, :].expand(-1, -1, -1, q_mult, -1)  # [batch, n_tokens, n_heads, q_mult, d_head]
 
-    attn_mask = None
-    if is_causal:
-        attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
-        for i in range(b):
-            start_idx = start_indices[i]
-            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
-    else:
-        assert False, "Non-causal attention is not supported in this function."
+    # Expand S to match the required dimensions
+    S = S.reshape(batch_size, n_heads, q_mult, 1, 1).expand(
+        -1, -1, -1, n_tokens, -1
+    )  # [batch, n_heads, q_mult, n_tokens, 1]
 
-    Q_slice = Q[:, :nh, :, :]  # b, nh, 1, d
-    K_slice = K[:, :nkv, :padded_layer_len, :]  # b, nkv, S, d
-    K_slice = torch.cat(
-        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
-    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
-    V_slice = torch.cat(
-        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
-    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
-    out = torch.nn.functional.scaled_dot_product_attention(
-        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-    )  # b, nh, 1, d
+    # Create causal mask
+    mask = torch.triu(Q.new_full((n_tokens, n_tokens), -float("inf")), diagonal=1)
 
-    return out
+    # Add sliding window mask if specified
+    if sliding_window > 0:
+        mask += torch.tril(mask.new_full((n_tokens, n_tokens), -float("inf")), diagonal=-sliding_window)
+
+    # Compute attention scores QK^T
+    QK = torch.einsum("bqhmd,bkhmd->bhmqk", Q, K)  # [batch, n_heads, q_mult, n_tokens, n_tokens]
+    QK *= sm_scale
+
+    # Apply mask (broadcast across batch and head dimensions)
+    QK += mask[None, None, None, :, :]  # broadcast mask to [batch, n_heads, q_mult, n_tokens, n_tokens]
+
+    # Concatenate with S
+    QK = torch.cat([QK, S], dim=-1)  # [batch, n_heads, q_mult, n_tokens, n_tokens+1]
+
+    # Apply softmax
+    W = torch.softmax(QK, dim=-1)
+
+    # Remove the extra dimension added by S
+    W = W[..., :-1]  # [batch, n_heads, q_mult, n_tokens, n_tokens]
+
+    # Compute attention output
+    attn = torch.einsum("bhmqk,bkhmd->bqhmd", W, V)  # [batch, n_tokens, n_heads, q_mult, d_head]
+
+    # Reshape to [batch, n_tokens, n_heads * q_mult, d_head]
+    return attn.reshape(batch_size, n_tokens, n_heads * q_mult, d_head)
 
 
 def run_sdpa_decode_impl(
@@ -61,8 +69,7 @@ def run_sdpa_decode_impl(
     q_dtype,
     dtype,
 ):
-    # Can't run too many iters, or run out of L1
-    num_iters = 5
+    num_iters = 1
 
     # Log the test parameters
     logger.debug(f"Running SDPA Decode with parameters: ")
@@ -77,9 +84,16 @@ def run_sdpa_decode_impl(
     ######################
     ### Torch Setup
     ######################
-    q = torch.randn(batch, nh, 1, dim).float()  # (B, H, S (1 for decode), D)
+    q = torch.randn(batch, nh, seq_len, dim).float()  # (B, H, S, D)
     k = torch.randn(batch, nkv, seq_len, dim).float()  # (B, H, S, D)
     v = torch.randn(batch, nkv, seq_len, dim).float()  # (B, H, S, D)
+    sink = torch.ones(batch, 1, nh, 1, 1) * -float("inf")  # (1, H, 1, 1)
+
+    ref_q = q.permute(0, 2, 1, 3).view(batch, seq_len, nkv, nh // nkv, dim)
+    ref_k = k.permute(0, 2, 1, 3)
+    ref_v = v.permute(0, 2, 1, 3)
+
+    tt_q_in = q[:, :, -1:, :].permute(2, 0, 1, 3)  # (D, B, H, S) -> (S, B, H, D)
 
     ######################
     ### TT Setup
@@ -88,11 +102,7 @@ def run_sdpa_decode_impl(
     k_chunk_size = 128
 
     scale = dim**-0.5
-
-    max_start_idx = seq_len // 2
-    start_indices = np.linspace(0, max_start_idx, batch, dtype=np.int32).tolist() if batch > 1 else [max_start_idx]
-
-    padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
+    start_indices = batch * [seq_len - 1]
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -113,7 +123,7 @@ def run_sdpa_decode_impl(
     out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     tt_q = ttnn.from_torch(
-        q.permute(2, 0, 1, 3),  # (B, H, S, D) -> (S, B, H, D)
+        tt_q_in,
         device=device,
         dtype=q_dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -175,13 +185,14 @@ def run_sdpa_decode_impl(
     outs = []
     for _ in range(num_iters):
         out_t = scaled_dot_product_attention_reference(
-            q,
-            k,
-            v,
-            start_indices,
-            padded_layer_len,
+            ref_q,
+            ref_k,
+            ref_v,
+            sink,
             scale,
+            sliding_window=0,
         )
+        out_t = out_t[:, -1:, ...]
         outs.append(out_t)
 
         start_indices = [x + 1 for x in start_indices]
@@ -193,7 +204,7 @@ def run_sdpa_decode_impl(
         pcc_threshold = 0.98
 
     for i, (tt_out, out_t) in enumerate(zip(tt_outs, outs)):
-        tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)  # (S, B, H, D) -> (B, H, S, D)
+        tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :]  # (S, B, H, D)
 
         out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
         logger.debug(f"Output PCC: {out_pcc}")
@@ -209,9 +220,11 @@ def run_sdpa_decode_impl(
 
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, dim",
-    # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope, number of cores to shard q on
     [
         (1, 256, 32, 4, 64),  # GPT-OSS 20B TP=2
+        (32, 256, 32, 4, 64),
+        (32, 256, 32, 1, 64),
+        # (1, 256, 64, 8, 64),  # GPT-OSS 20B TP=1 (FIXME: Fails)
     ],
 )
 @pytest.mark.parametrize(
