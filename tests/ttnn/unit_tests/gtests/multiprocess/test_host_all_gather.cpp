@@ -52,7 +52,7 @@ TEST_F(BigMeshDualRankTest2x4, HostAllGather) {
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    ASSERT_EQ(device_tensors.size(), 8);
+    ASSERT_EQ(device_tensors.size(), 4);
 
     // Perform all-gather on host and validate the data at each host.
     auto all_gather_tensor = host_ccl::all_gather(sharded_tensor);

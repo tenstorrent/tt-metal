@@ -5,7 +5,6 @@
 import pytest
 import torch
 import ttnn
-import os
 from loguru import logger
 from models.experimental.vadv2.reference import temporal_self_attention
 from models.experimental.vadv2.tt import tt_temporal_self_attention
@@ -18,6 +17,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
+from models.experimental.vadv2.common import load_torch_model
 
 
 def custom_preprocessor(model, name):
@@ -85,21 +85,14 @@ def create_vadv2_model_parameters_tsa(model: ResNet, input_tensor, device=None):
 def test_vadv2_tsa(
     device,
     reset_seeds,
+    model_location_generator,
 ):
-    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = temporal_self_attention.TemporalSelfAttention(embed_dims=256, num_levels=1)
-    torch_dict = torch.load(weights_path)
-
-    state_dict = {
-        k: v
-        for k, v in torch_dict.items()
-        if (k.startswith("pts_bbox_head.transformer.encoder.layers.0.attentions.0."))
-    }
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), state_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model=torch_model,
+        layer="pts_bbox_head.transformer.encoder.layers.0.attentions.0.",
+        model_location_generator=model_location_generator,
+    )
 
     query = torch.randn(1, 10000, 256)
     query_pos = torch.randn(1, 10000, 256)

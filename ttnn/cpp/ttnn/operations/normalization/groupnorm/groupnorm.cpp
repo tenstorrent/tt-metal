@@ -23,7 +23,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     std::optional<bool> inplace,
     std::optional<ttnn::Layout> output_layout,
     std::optional<int> num_out_blocks,
-    const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& negative_mask) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
@@ -119,7 +120,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .program_config = program_config,
                        .compute_kernel_config = kernel_config_val},
                    {input_tensor},
-                   {gamma, beta, input_mask})
+                   {gamma, beta, input_mask, negative_mask})
             .at(0);
     } else {
         const ttnn::operations::normalization::GroupNormMultiCoreProgramConfig& program_config = {
@@ -137,7 +138,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .program_config = program_config,
                        .compute_kernel_config = kernel_config_val},
                    {input_tensor},
-                   {gamma, beta, input_mask})
+                   {gamma, beta, input_mask, negative_mask})
             .at(0);
     }
 }

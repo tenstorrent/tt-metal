@@ -48,6 +48,7 @@ from models.tt_transformers.tt.generator import Generator
     "warmup_iters",
     (0, 1),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_multimodal_demo_text(
     mesh_device,
     target,
