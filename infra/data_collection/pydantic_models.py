@@ -436,7 +436,7 @@ class PerfMetric(BaseModel):
         frozen = True
 
 
-class TestVector(BaseModel):
+class OpParam(BaseModel):
     """
     Test parameter (i.e. test vector) and its value.
     """
@@ -445,9 +445,12 @@ class TestVector(BaseModel):
 
     # Test parameter values can be a single str/int/float value or a list of values,
     # e.g. dtype="int8", shape=[1, 2, 3].
-    param_value_numeric: float = Field(description="Test parameter value in float.")
-    param_value_text: str = Field(description="Test parameter value in text.")
-    param_value_json: dict = Field(description="Test parameter value as JSON (object or array).")
+    param_value_numeric: Optional[float] = Field(default=None, description="Test parameter value in float.")
+    param_value_text: Optional[str] = Field(default=None, description="Test parameter value in text.")
+    # JSON value holder for complex params: can be a JSON object (dict) or JSON array (list).
+    param_value_json: Optional[Union[dict, list]] = Field(
+        default=None, description="Test parameter value as JSON (object or array)."
+    )
 
     class Config:
         frozen = True
@@ -516,7 +519,7 @@ class OpTest(BaseModel):
     # i.e. op_param table.
     # We have both implementations to avoid the impact on the data production/consumption
     # of the primary data producer (Forge: Vladimir, James).
-    test_vectors: Optional[set[TestVector]] = Field(
+    op_params_set: Optional[List[OpParam]] = Field(
         description="Original test vector contents captured for traceability, normalized for JSON compatibility.",
     )
 

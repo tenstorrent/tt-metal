@@ -19,7 +19,7 @@ from framework.database import (
 from framework.serialize import serialize, serialize_structured
 from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
-from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, TestVector
+from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam
 
 
 class ResultDestination(ABC):
@@ -252,11 +252,12 @@ class FileResultDestination(ResultDestination):
         if not results:
             return "success"
 
-        module_name = header_info[0]["sweep_name"]
-        export_path = self.export_dir / f"{module_name}.json"
+        sweep_name = header_info[0]["sweep_name"]
+        export_path = self.export_dir / f"{sweep_name}.json"
 
-        curr_git_hash = run_context.get("git_hash", "unknown")
+        git_hash = run_context.get("git_hash", "unknown")
 
+        # this will be the list of OpTest objects that will be exported to the file
         validated_records = []
 
         # Map internal TestStatus enum (or strings) to file schema enum values
@@ -319,43 +320,75 @@ class FileResultDestination(ResultDestination):
             header = header_info[i]
             raw = results[i]
 
-            exception_text = raw.get("exception", None)
+            exception = raw.get("exception", None)
+            mapped_status = _map_status(raw.get("status"))
+            is_success = mapped_status in (TestStatus.success, TestStatus.passed)
+            is_skipped = mapped_status == TestStatus.skipped
 
-            # Build a validated record via Pydantic
-            # Prepare flattened test vector as a set[TestVector]
+            # Convert original vector data into a JSON-friendly dict suitable for JSONB/file storage
             normalized_vector = _normalize_original_vector_data(raw.get("original_vector_data")) or {}
-            # Flatten entire structure, including dicts nested within lists
+            # Flatten nested structure into a single-level dict with dotted keys
             flattened_vector = _flatten_any_to_dotted(normalized_vector)
-            test_vector_set = set()
+            op_param_list: List[OpParam] = []
             for k, v in flattened_vector.items():
-                # Values should now be primitives or lists of primitives; coerce if not
+                # Coerce to JSON-friendly primitives when needed, but preserve dict/list for JSON column
+                coerced_value = v
                 if isinstance(v, dict):
-                    # Should not occur after flatten; stringify as last resort
-                    v = json.dumps(v)
+                    # keep dicts as-is for param_value_json
+                    pass
                 elif isinstance(v, list):
-                    # Convert lists to tuples so they are hashable for the set[TestVector]
-                    v = tuple(item if isinstance(item, (int, float, str)) else str(item) for item in v)
-                elif not isinstance(v, (int, float, str)):
-                    v = str(v)
-                test_vector_set.add(TestVector(param_name=k, param_value=v))
+                    # keep lists as-is for param_value_json
+                    pass
+                elif isinstance(v, (int, float)):
+                    pass
+                elif isinstance(v, str):
+                    pass
+                else:
+                    # fallback to string representation for unsupported types
+                    coerced_value = str(v)
+
+                if i == 0:
+                    logger.info(f"k: {k}, v:  {coerced_value}")
+
+                # Map value into appropriate OpParam field
+                if isinstance(coerced_value, (int, float)):
+                    op_param_list.append(OpParam(param_name=k, param_value_numeric=float(coerced_value)))
+                elif isinstance(coerced_value, str):
+                    op_param_list.append(OpParam(param_name=k, param_value_text=coerced_value))
+                elif isinstance(coerced_value, (list, dict)):
+                    op_param_list.append(OpParam(param_name=k, param_value_json=coerced_value))
+                else:
+                    op_param_list.append(OpParam(param_name=k, param_value_text=str(coerced_value)))
 
             record = OpTest(
-                test_name=header.get("sweep_name"),
-                suite_name=header.get("suite_name"),
-                vector_id=header.get("vector_id"),
-                input_hash=header.get("input_hash"),
+                github_job_id=run_context.get("github_job_id", None),
+                full_test_name=header.get("sweep_name"),
                 test_start_ts=raw.get("start_time_ts"),
                 test_end_ts=raw.get("end_time_ts"),
-                status=_map_status(raw.get("status")),
-                message=raw.get("message"),
-                exception=exception_text,
-                error_signature=generate_error_signature(exception_text),
-                e2e_perf=raw.get("e2e_perf"),
-                device_perf=_coerce_device_perf(raw.get("device_perf")),
-                git_hash=curr_git_hash,
-                host=raw.get("host"),
-                user=raw.get("user"),
-                test_vector=test_vector_set,
+                test_case_name=header.get("suite_name"),
+                filepath=header.get("sweep_name"),
+                success=is_success,
+                skipped=is_skipped,
+                error_message=raw.get("exception", None),
+                config=None,
+                frontend="ttnn.op",
+                model_name="n/a",
+                op_kind=header.get("sweep_name"),
+                op_name=header.get("sweep_name"),
+                framework_op_name="sweep",
+                inputs=None,
+                outputs=None,
+                op_params=None,
+                git_sha=git_hash,
+                status=mapped_status,
+                card_type="n/a",
+                backend="n/a",
+                data_source="ttnn op test",
+                input_hash=header.get("input_hash"),
+                message=raw.get("message", None),
+                exception=raw.get("exception", None),
+                metrics=raw.get("device_perf", None),
+                op_params_set=op_param_list,
             )
 
             # Convert to JSON-ready dict and deeply flatten any nested types
@@ -466,25 +499,6 @@ def _flatten_serialized(value):
     except Exception:
         pass
     return value
-
-
-def _flatten_dict_to_dotted(value: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Flatten nested dictionaries to a single level with dotted keys.
-    Lists are preserved, and dicts inside lists are stringified in the caller.
-    """
-    flat: Dict[str, Any] = {}
-
-    def _recurse(prefix: str, obj: Any):
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                new_key = f"{prefix}.{k}" if prefix else str(k)
-                _recurse(new_key, v)
-        else:
-            flat[prefix] = obj
-
-    _recurse("", value)
-    return flat
 
 
 def _flatten_any_to_dotted(value: Any) -> Dict[str, Any]:
