@@ -333,7 +333,7 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, ag_output_shape, dim, layout, matmul_output_dim, max_in0_block_w, matmul_weights_dtype, ag_input_dtype, use_bias",
     [
-        # (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, 960, 2, ttnn.bfloat16, ttnn.bfloat16, True),
+        (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, 960, 2, ttnn.bfloat16, ttnn.bfloat16, True),
         (8, 1, [1, 1, 32, 512], 3, ttnn.TILE_LAYOUT, 960, 2, ttnn.bfloat16, ttnn.bfloat16, True),
         (8, 1, [1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT, 960, 2, ttnn.bfloat16, ttnn.bfloat16, True),
     ],
