@@ -360,6 +360,18 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     }
 }
 
+namespace {
+
+uint64_t get_processor_mask(const Kernel& kernel) {
+    uint64_t processor_mask = 0;
+    for (int i = 0; i < kernel.expected_num_binaries(); i++) {
+        processor_mask |= (1ULL << kernel.get_processor_id(i));
+    }
+    return processor_mask;
+}
+
+}  // namespace
+
 KernelHandle detail::ProgramImpl::add_kernel(
     const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& programmable_core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
@@ -367,22 +379,30 @@ KernelHandle detail::ProgramImpl::add_kernel(
     KernelHandle id = this->num_kernels();
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
 
-    RISCV new_kernel_type = kernel->processor();
+    auto new_kernel_core_type = kernel->get_kernel_programmable_core_type();
+    auto new_kernel_processor_class = kernel->get_kernel_processor_class();
+
     std::set<CoreCoord> kernel_logical_cores = kernel->logical_cores();
+    uint64_t new_kernel_processor_mask = get_processor_mask(*kernel);
     for (size_t i = 0; i < this->num_kernels(); i++) {
         // Note, looks like id is program specific, and increments naturally as kernels are added.
         //  add_kernel -> id = num_kernels -> kernel is inserted -> next num_kernels() increments.
         std::shared_ptr<Kernel> check_kernel = this->get_kernel(i);
-        RISCV check_kernel_type = check_kernel->processor();
-        std::set<CoreCoord> check_kernel_logical_cores = check_kernel->logical_cores();
-        for (CoreCoord coreCoord : kernel_logical_cores) {
-            TT_FATAL(
-                !(check_kernel_logical_cores.find(coreCoord) != check_kernel_logical_cores.end() &&
-                  new_kernel_type == check_kernel_type),
-                "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {}",
-                check_kernel->name(),
-                kernel->name(),
-                coreCoord.str());
+        auto check_kernel_core_type = check_kernel->get_kernel_programmable_core_type();
+        auto check_kernel_processor_class = check_kernel->get_kernel_processor_class();
+        if (check_kernel_core_type == new_kernel_core_type ||
+            check_kernel_processor_class == new_kernel_processor_class ||
+            (new_kernel_processor_mask & get_processor_mask(*check_kernel))) {
+            // Two kernels are using the same processor, need to check core ranges.
+            std::set<CoreCoord> check_kernel_logical_cores = check_kernel->logical_cores();
+            for (CoreCoord coreCoord : kernel_logical_cores) {
+                TT_FATAL(
+                    !(check_kernel_logical_cores.find(coreCoord) != check_kernel_logical_cores.end()),
+                    "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {}",
+                    check_kernel->name(),
+                    kernel->name(),
+                    coreCoord.str());
+            }
         }
     }
 
