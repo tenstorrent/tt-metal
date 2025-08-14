@@ -35,9 +35,11 @@ def run_all_gather_impl(
     enable_trace=True,
     cluster_axis=None,
     use_barrier=False,
+    use_persistent_buffers=True,
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
+    allowed_pcc=1,
 ):
     torch.manual_seed(0)
 
@@ -124,7 +126,7 @@ def run_all_gather_impl(
     def run_op(i):
         tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh_list[i],
-            persistent_output_buffer=None if use_barrier else persistent_output_buffers[i],
+            persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
             num_links=num_links,
@@ -177,7 +179,7 @@ def run_all_gather_impl(
         tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
         tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
         tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
-        eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, 1)
+        eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
 
@@ -226,12 +228,13 @@ def run_all_gather_impl(
     ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
-    "use_barrier",
+    "use_barrier, use_persistent_buffers",
     [
-        True,
-        False,
+        (True, True),
+        (True, False),
+        (False, True),
     ],
-    ids=["barrier_active", "barrier_inactive"],
+    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -254,6 +257,7 @@ def test_all_gather_async(
     mem_config_ag,
     enable_trace,
     use_barrier,
+    use_persistent_buffers,
     all_gather_topology,
     num_iters,
 ):
@@ -271,6 +275,7 @@ def test_all_gather_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
     )
 
 
