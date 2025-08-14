@@ -49,7 +49,7 @@ def run(cmd, dry=False, check=True, capture=False):
         return subprocess.run(cmd, check=check)
 
 
-def verify_local_files(metal_home: Path, config_name: str):
+def verify_local_files(metal_home: Path, config_name: str, mesh_desc_rel_path: str = None):
     bin_dir = metal_home / "tt-train" / "build" / "sources" / "examples" / "nano_gpt"
     cfg_dir = metal_home / "tt-train" / "configs"
 
@@ -74,6 +74,15 @@ def verify_local_files(metal_home: Path, config_name: str):
     else:
         print(f"✓ Found: {cfg}")
 
+    # Check mesh descriptor if provided
+    if mesh_desc_rel_path:
+        mesh_desc = metal_home / mesh_desc_rel_path
+        if not mesh_desc.exists():
+            print(f"ERROR: Mesh descriptor not found: {mesh_desc}", file=sys.stderr)
+            missing += 1
+        else:
+            print(f"✓ Found: {mesh_desc}")
+
     if missing:
         print(f"ERROR: {missing} required files are missing or invalid", file=sys.stderr)
         print(f"Build directory: {bin_dir}", file=sys.stderr)
@@ -97,14 +106,16 @@ def detect_fabric(cfg_path: Path) -> bool:
     return re.search(r"\bsocket_type:\s*fabric\b", text) is not None
 
 
-def copy_to_remote_hosts(hosts, ssh_user, bin_dir: Path, cfg_dir: Path, config_name: str, dry: bool):
+def copy_to_remote_hosts(
+    hosts, ssh_user, bin_dir: Path, cfg_dir: Path, config_name: str, mesh_desc_path: Path, use_fabric: bool, dry: bool
+):
     # de-duplicate
     unique_hosts = list(dict.fromkeys(hosts))
     if len(unique_hosts) == 1:
         print(f"All hosts are the same ({unique_hosts[0]}) - skipping remote copy")
         return
 
-    print("Copying binaries and config to remote hosts...")
+    print("Copying binaries, config, and mesh descriptor to remote hosts...")
     for host in unique_hosts[1:]:  # skip index 0 (often local)
         print(f" -> {host}")
 
@@ -130,7 +141,12 @@ def copy_to_remote_hosts(hosts, ssh_user, bin_dir: Path, cfg_dir: Path, config_n
             continue
 
         # mkdirs
-        run(["ssh", f"{ssh_user}@{host}", "mkdir", "-p", str(bin_dir), str(cfg_dir)], dry=dry, check=True)
+        mesh_desc_dir = mesh_desc_path.parent
+        run(
+            ["ssh", f"{ssh_user}@{host}", "mkdir", "-p", str(bin_dir), str(cfg_dir), str(mesh_desc_dir)],
+            dry=dry,
+            check=True,
+        )
 
         # copy binaries
         for b in BINARIES:
@@ -144,6 +160,14 @@ def copy_to_remote_hosts(hosts, ssh_user, bin_dir: Path, cfg_dir: Path, config_n
 
         # copy config
         run(["scp", *SCP_OPTS, str(cfg_dir / config_name), f"{ssh_user}@{host}:{cfg_dir}/"], dry=dry, check=True)
+
+        # copy mesh descriptor if using fabric
+        if use_fabric:
+            try:
+                run(["scp", *SCP_OPTS, str(mesh_desc_path), f"{ssh_user}@{host}:{mesh_desc_path}"], dry=dry, check=True)
+                print(f"   ✓ mesh descriptor copied successfully")
+            except subprocess.CalledProcessError as e:
+                print(f"   ERROR: Failed to copy mesh descriptor to {host}", file=sys.stderr)
 
     print("✔ Remote copy step done.")
 
@@ -256,7 +280,14 @@ def main():
         print("No additional arguments to forward to workers")
 
     metal_home = Path(args.metal_home).resolve()
-    bin_dir, cfg_dir = verify_local_files(metal_home, args.config)
+
+    # Need to detect fabric first to know if mesh descriptor is required
+    cfg_path = metal_home / "tt-train" / "configs" / args.config
+    use_fabric = detect_fabric(cfg_path)
+
+    # Verify files including mesh descriptor if using fabric
+    mesh_desc_rel_path = MESH_GRAPH_DESC_REL if use_fabric else None
+    bin_dir, cfg_dir = verify_local_files(metal_home, args.config, mesh_desc_rel_path)
     cfg_path = cfg_dir / args.config
 
     num_hosts = len(args.hosts)
@@ -274,8 +305,7 @@ def main():
     if total_ranks <= 0:
         die("total ranks computed to 0; check workers/aggregators/optimizers/hosts")
 
-    # Detect fabric
-    use_fabric = detect_fabric(cfg_path)
+    # Set mesh IDs based on fabric configuration
     if use_fabric:
         print("Fabric configuration detected - using mesh graph descriptor")
         mesh_ids = FABRIC_MESH_IDS
@@ -293,7 +323,9 @@ def main():
 
     # Remote copy step
     if not args.skip_copy:
-        copy_to_remote_hosts(args.hosts, args.ssh_user, bin_dir, cfg_dir, args.config, args.dry_run)
+        copy_to_remote_hosts(
+            args.hosts, args.ssh_user, bin_dir, cfg_dir, args.config, mesh_graph_desc_path, use_fabric, args.dry_run
+        )
     else:
         print("Skipping remote copy step (--skip-copy)")
 

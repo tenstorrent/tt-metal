@@ -498,11 +498,6 @@ int main(int argc, char **argv) {
         fmt::print("  argv[{}]: {}\n", i, argv[i]);
     }
 
-    fmt::println("Environments:");
-    fmt::println("  TT_MESH_GRAPH_DESC_PATH: {}", std::getenv("TT_MESH_GRAPH_DESC_PATH"));
-    fmt::println("  TT_LOGGER_LEVEL: {}", std::getenv("TT_LOGGER_LEVEL"));
-    fmt::println("  TT_MESH_ID: {}", std::getenv("TT_MESH_ID"));
-
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
