@@ -343,7 +343,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
         TT_THROW("Both TT_MESH_ID and TT_MESH_HOST_RANK environment variables must be set together or both unset");
     }
 
-    // If both TT_MESH_ID and TT_MESH_HOST_RANK are unset, we don't initialzie the local mesh binding.
+    // If both TT_MESH_ID and TT_MESH_HOST_RANK are unset, we don't initialize the local mesh binding.
     // A nullopt here indicates that the host this ControlPlane is runnning on owns all Meshes in
     // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
     if (mesh_id_str == nullptr && host_rank_str == nullptr) {
