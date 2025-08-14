@@ -60,7 +60,8 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
 
     uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size =
+        CoreCoord{1u, 1u};  // input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
 
@@ -210,7 +211,8 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     uint32_t w_blocks = tt::div_up(W, w_block_size);
     uint32_t num_blocks_total = (num_rows / X) * x_blocks * w_blocks;
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size =
+        CoreCoord{1u, 1u};  // input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks_total);
 
