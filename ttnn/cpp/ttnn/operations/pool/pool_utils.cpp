@@ -232,10 +232,11 @@ uint32_t calculate_L1_usage(
     }
 
     // after reduction
-    const uint32_t out_cb_pagesize = tt::constants::TILE_HW * params.nbytes *
-                                     params.in_ntiles_c;  // there is just one row of channels after each reduction (or
-                                                          // 1 block of c if its greater than 8 tiles)
-    const uint32_t out_cb_npages = 2;
+    const uint32_t out_cb_pagesize =
+        tt::constants::TILE_HW * params.nbytes;  // there is just one row of channels after each reduction (or 1
+                                                 // block of c if its greater than 8 tiles)
+    const uint32_t out_cb_npages =
+        params.in_ntiles_c * output_memory.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
     uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
