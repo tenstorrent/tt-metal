@@ -89,14 +89,18 @@ struct WormholeEfficientStack {
 
     FORCE_INLINE void push(T value) {
         ASSERT(!is_full());
+        DPRINT << "WormholeEfficientStack::push\n";
+        DPRINT << "\t" << (uint32_t)top << " " << (uint32_t)value << "\n";
         *top = value;
         top++;
     }
 
     FORCE_INLINE T pop() {
         ASSERT(!is_empty());
-        T value = *top;
+        DPRINT << "WormholeEfficientStack::pop\n";
         --top;
+        DPRINT << "\t" << (uint32_t)top << " " << (uint32_t)*top << "\n";
+        T value = *top;
         return value;
     }
 
@@ -106,23 +110,47 @@ struct WormholeEfficientStack {
     }
 };
 
-template <typename T, size_t SIZE, size_t INCREMENT_SIZE = 1>
-struct OnePassIterator {
+template <typename T, typename INHERITED_TYPE>
+struct OnePassIteratorBase {
     T* current_ptr;
     T* end_ptr;
 
-    OnePassIterator() : current_ptr(nullptr), end_ptr(nullptr) {}
+    OnePassIteratorBase() : current_ptr(nullptr), end_ptr(nullptr) {}
 
     FORCE_INLINE T* get_current_ptr() const { return current_ptr; }
-    FORCE_INLINE void increment() {
-        current_ptr += INCREMENT_SIZE;
-    }
+    FORCE_INLINE void increment() { static_cast<INHERITED_TYPE*>(this)->increment_impl(); }
 
     FORCE_INLINE bool is_done() const { return current_ptr == end_ptr; }
 
-    FORCE_INLINE void reset_to(T* base_ptr) {
-        current_ptr = base_ptr;
-        end_ptr = base_ptr + (SIZE * INCREMENT_SIZE);
+    FORCE_INLINE void reset_to(T* base_ptr) { static_cast<INHERITED_TYPE*>(this)->reset_to_impl(base_ptr); }
+};
+
+template <typename T, size_t NUM_ENTRIES, size_t ENTRY_SIZE_BYTES>
+struct OnePassIteratorStaticSizes
+    : public OnePassIteratorBase<T, OnePassIteratorStaticSizes<T, NUM_ENTRIES, ENTRY_SIZE_BYTES>> {
+    OnePassIteratorStaticSizes() :
+        OnePassIteratorBase<T, OnePassIteratorStaticSizes<T, NUM_ENTRIES, ENTRY_SIZE_BYTES>>() {}
+
+    FORCE_INLINE void increment_impl() { this->current_ptr += ENTRY_SIZE_BYTES; }
+
+    FORCE_INLINE void reset_to_impl(T* base_ptr) {
+        this->current_ptr = base_ptr;
+        this->end_ptr = base_ptr + (NUM_ENTRIES * ENTRY_SIZE_BYTES);
+    }
+};
+
+template <typename T>
+struct OnePassIterator : public OnePassIteratorBase<T, OnePassIterator<T>> {
+    uint32_t num_entries;
+    uint32_t increment_size;
+    OnePassIterator(uint32_t num_entries, uint32_t entry_size_bytes) :
+        OnePassIteratorBase<T, OnePassIterator<T>>(), num_entries(num_entries), increment_size(entry_size_bytes) {}
+
+    FORCE_INLINE void increment_impl() { this->current_ptr += increment_size; }
+
+    FORCE_INLINE void reset_to_impl(T* base_ptr) {
+        this->current_ptr = base_ptr;
+        this->end_ptr = base_ptr + (num_entries * increment_size);
     }
 };
 
@@ -153,15 +181,17 @@ struct ChannelBuffersPool {
     std::array<chunk_t, N_CHUNKS> all_buffers;
     free_chunks_stack_t free_chunks;
 
-    // using init_regions_t = std::initializer_list<std::tuple<size_t, uint8_t>>;
-    using init_regions_t = std::array<std::tuple<size_t, uint8_t>, N_CHUNKS>;
+    // using chunk_base_address_t = std::initializer_list<std::tuple<size_t, uint8_t>>;
+    using chunk_base_address_t = std::array<size_t, N_CHUNKS>;
 
-    void init(const init_regions_t& buffer_regions, size_t buffer_size_bytes, size_t header_size_bytes) {
+    void init(const chunk_base_address_t& buffer_regions, size_t buffer_size_bytes, size_t header_size_bytes) {
         size_t idx = 0;
-        for (const auto& [channel_base_address, channel_base_id] : buffer_regions) {
+        DPRINT << "ChannelBuffersPool::init\n";
+        for (const auto& chunk_base_address : buffer_regions) {
             ASSERT(idx < N_CHUNKS);
-            new (&all_buffers[idx]) chunk_t(channel_base_address, buffer_size_bytes, header_size_bytes, N_CHUNKS);
+            new (&all_buffers[idx]) chunk_t(chunk_base_address, buffer_size_bytes, header_size_bytes, idx);
             free_chunks.push(&all_buffers[idx]);
+            DPRINT << "pool[" << (uint32_t)idx << "] = " << (uint32_t)&all_buffers[idx] << "\n";
             idx++;
         }
     }
@@ -352,15 +382,17 @@ struct SenderChannelView {
     }
 };
 
-
 // Used by the worker to know where to send packets to next
-template <size_t N_CHUNKS, size_t CHUNK_N_PKTS>
-struct FabricWriterAdapter {
+// TODO: export constants via JIT_BUILD for better performance (fewer RT args and literals)
+struct WorkerFabricWriterAdapter {
     SenderChannelView sender_channel_view;
-    tt::tt_fabric::OnePassIterator<size_t, CHUNK_N_PKTS> current_chunk;
+    // We have a uint8_t (byte) iterator with a step size of buffer slot. The uint8_t is the type because then we can
+    // safely due byte address increments
+    tt::tt_fabric::OnePassIterator<uint8_t> current_chunk;
 
-    FabricWriterAdapter(volatile uint32_t *next_chunk_ptr) : 
-        sender_channel_view(next_chunk_ptr), current_chunk() {}
+    WorkerFabricWriterAdapter(
+        volatile uint32_t* next_chunk_ptr, uint32_t num_buffer_slots_per_chunk, uint32_t max_payload_size_bytes) :
+        sender_channel_view(next_chunk_ptr), current_chunk(num_buffer_slots_per_chunk, max_payload_size_bytes) {}
 
     FORCE_INLINE bool has_valid_destination() {
         return !current_chunk.is_done();
@@ -374,10 +406,7 @@ struct FabricWriterAdapter {
         return sender_channel_view.has_new_chunk();
     }
 
-    FORCE_INLINE size_t* get_next_write_address() const {
-        return current_chunk.get_current_ptr();
-    }
-    
+    FORCE_INLINE size_t get_next_write_address() const { return (size_t)current_chunk.get_current_ptr(); }
 
     // return true if the new chunk was updated
     FORCE_INLINE void update_to_new_chunk() {
@@ -387,9 +416,8 @@ struct FabricWriterAdapter {
         auto chunk_base_address = sender_channel_view.get_next_chunk();
         auto new_chunk_base_address = chunk_base_address;
         sender_channel_view.clear_new_chunk_flag();
-        current_chunk.reset_to(reinterpret_cast<size_t*>(new_chunk_base_address));
+        current_chunk.reset_to(reinterpret_cast<uint8_t*>(new_chunk_base_address));
     }
 };
-
 
 }  // namespace tt::tt_fabric

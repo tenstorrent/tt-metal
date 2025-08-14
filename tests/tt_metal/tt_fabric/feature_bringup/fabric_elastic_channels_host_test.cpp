@@ -70,10 +70,10 @@ public:
     }
     ~N300TestDevice() {
         if (device_open) {
-            log_info(tt::LogTest, "Tearing down devices");
+            log_info(tt::LogAlways, "Tearing down devices");
             TearDown();
         }
-        log_info(tt::LogTest, "Tearing down devices complete");
+        log_info(tt::LogAlways, "Tearing down devices complete");
     }
 
     void TearDown() {
@@ -118,50 +118,46 @@ struct TestResources {
     DeviceTestResources remote_device;
 };
 
-
 void create_worker_kernels(
-    tt_metal::Program &program0, 
-    tt_metal::Program &program1, 
-    size_t n_sender_workers, 
-    std::vector<tt_metal::KernelHandle>& local_sender_worker_kernels, 
+    TestResources& test_resources,
+    std::vector<tt_metal::KernelHandle>& local_sender_worker_kernels,
     std::vector<tt_metal::KernelHandle>& remote_sender_worker_kernels,
-    const TestConfig& config
-) {
-
+    const TestConfig& config) {
     std::vector<uint32_t> ct_args = {
         config.n_chunks,
         config.chunk_n_pkts,
     };
 
-    CoreRangeSet sender_worker_cores;
+    auto local_sender_worker_kernel = tt_metal::CreateKernel(
+        test_resources.local_device.program,
+        "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channel_sender_worker.cpp",
+        test_resources.local_device.worker_cores,
+        tt::tt_metal::WriterDataMovementConfig(ct_args));
 
-    for (size_t i = 0; i < n_sender_workers; i++) {
-        auto local_sender_worker_kernel = tt_metal::CreateKernel(
-            program1,
-            "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channel_sender_worker.cpp",
-            sender_worker_cores,
-            tt::tt_metal::WriterDataMovementConfig(ct_args));
-
-        auto remote_sender_worker_kernel = tt_metal::CreateKernel(
-            program1,
-            "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channel_sender_worker.cpp",
-            sender_worker_cores,
-            tt::tt_metal::WriterDataMovementConfig(ct_args));
+    for (size_t i = 0; i < config.n_workers; i++) {
+        local_sender_worker_kernels.push_back(local_sender_worker_kernel);
     }
+    log_info(tt::LogAlways, "Local sender worker kernel: {}", local_sender_worker_kernel);
+
+    auto remote_sender_worker_kernel = tt_metal::CreateKernel(
+        test_resources.remote_device.program,
+        "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channel_sender_worker.cpp",
+        test_resources.remote_device.worker_cores,
+        tt::tt_metal::WriterDataMovementConfig(ct_args));
+
+    for (size_t i = 0; i < config.n_workers; i++) {
+        remote_sender_worker_kernels.push_back(remote_sender_worker_kernel);
+    }
+    log_info(tt::LogAlways, "Remote sender worker kernel: {}", remote_sender_worker_kernel);
 }
 
-std::tuple<tt_metal::Program, tt_metal::Program> build(
+void build(
     TestResources& test_resources,
     const TestConfig& config,
     tt_metal::KernelHandle& local_erisc_kernel,
     tt_metal::KernelHandle& remote_erisc_kernel,
     std::vector<tt_metal::KernelHandle>& local_sender_worker_kernels,
     std::vector<tt_metal::KernelHandle>& remote_sender_worker_kernels) {
-
-    tt_metal::Program program0;
-    tt_metal::Program program1;
-
-    size_t n_sender_workers = config.n_workers;
     // Compile-time arguments - match kernel expectations:
     // get_compile_time_arg_val(0) = N_CHUNKS
     // get_compile_time_arg_val(1) = RX_N_PKTS
@@ -171,50 +167,48 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
     // get_compile_time_arg_val(5) = N_SRC_CHANS
     uint32_t rx_n_pkts = config.rx_chunk_n_pkts;
     std::vector<uint32_t> erisc_kernel_compile_time_args = {
-        config.n_chunks,           // N_CHUNKS
-        rx_n_pkts,                 // RX_N_PKTS
-        config.chunk_n_pkts,       // CHUNK_N_PKTS
-        config.packet_size,        // PACKET_SIZE
-        config.bidirectional_mode, // BIDIRECTIONAL_MODE
-        n_sender_workers           // N_SRC_CHANS
+        config.n_chunks,            // N_CHUNKS
+        rx_n_pkts,                  // RX_N_PKTS
+        config.chunk_n_pkts,        // CHUNK_N_PKTS
+        config.packet_size,         // PACKET_SIZE
+        config.bidirectional_mode,  // BIDIRECTIONAL_MODE
+        config.n_workers            // N_SRC_CHANS
     };
 
+    auto erisc_kernel_name = config.n_workers > 0
+                                 ? "tests/tt_metal/tt_fabric/feature_bringup/kernels/"
+                                   "fabric_elastic_channels_erisc_forward_worker_traffic.cpp"
+                                 : "tests/tt_metal/tt_fabric/feature_bringup/fabric_elastic_channels_test.cpp";
+    log_info(tt::LogAlways, "Erisc kernel name: {}", erisc_kernel_name);
     local_erisc_kernel = tt_metal::CreateKernel(
-        program0,
-        config.n_workers > 0 ? "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channels_erisc_forward_worker_traffic.cpp" :
-        "tests/tt_metal/tt_fabric/feature_bringup/fabric_elastic_channels_test.cpp",
+        test_resources.local_device.program,
+        erisc_kernel_name,
         test_resources.local_device.eth_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::RISCV_0_default, .compile_args = erisc_kernel_compile_time_args});
 
     remote_erisc_kernel = tt_metal::CreateKernel(
-        program1,
-        config.n_workers > 0 ? "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channels_erisc_forward_worker_traffic.cpp" :
-        "tests/tt_metal/tt_fabric/feature_bringup/fabric_elastic_channels_test.cpp",
+        test_resources.remote_device.program,
+        erisc_kernel_name,
         test_resources.remote_device.eth_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::RISCV_0_default, .compile_args = erisc_kernel_compile_time_args});
 
-    if (n_sender_workers > 0) {
-        create_worker_kernels(
-            program0,
-            program1,
-            n_sender_workers,
-            local_sender_worker_kernels,
-            remote_sender_worker_kernels,
-            config);
+    log_info(tt::LogAlways, "Local erisc kernel: {}", local_erisc_kernel);
+    log_info(tt::LogAlways, "Remote erisc kernel: {}", remote_erisc_kernel);
+
+    if (config.n_workers > 0) {
+        create_worker_kernels(test_resources, local_sender_worker_kernels, remote_sender_worker_kernels, config);
     }
 
     // Compile programs
     try {
-        tt::tt_metal::detail::CompileProgram(test_resources.local_device.device, program0);
-        tt::tt_metal::detail::CompileProgram(test_resources.remote_device.device, program1);
+        tt::tt_metal::detail::CompileProgram(test_resources.local_device.device, test_resources.local_device.program);
+        tt::tt_metal::detail::CompileProgram(test_resources.remote_device.device, test_resources.remote_device.program);
     } catch (std::exception& e) {
         log_error(tt::LogTest, "Failed compile: {}", e.what());
         throw e;
     }
-
-    return std::tuple<tt_metal::Program, tt_metal::Program>{std::move(program0), std::move(program1)};
 }
 
 void set_worker_runtime_args(
@@ -222,7 +216,7 @@ void set_worker_runtime_args(
     std::vector<tt_metal::KernelHandle>& worker_kernels,
     const TestConfig& config) {
     auto eth_core_virtual = device_resources.device->ethernet_core_from_logical_core(device_resources.eth_core);
-    
+
     for (size_t i = 0; i < device_resources.worker_cores_vec.size(); i++) {
         auto worker_core = device_resources.worker_cores_vec[i];
 
@@ -301,32 +295,54 @@ void run_test(
             static_cast<uint32_t>(send_channels_at_offset_0),
             send_buffer_base,
             recv_buffer_base,
-            timing_stats_addr,
-            device_resources.worker_ack_semaphore_id,
-            device_resources.worker_new_chunk_semaphore_id};
+            timing_stats_addr};
+        for (size_t i = 0; i < config.n_workers; i++) {
+            auto translated =
+                device_resources.device->worker_core_from_logical_core(device_resources.worker_cores_vec[i]);
+            rt_args.push_back(translated.x);
+        }
+        for (size_t i = 0; i < config.n_workers; i++) {
+            auto translated =
+                device_resources.device->worker_core_from_logical_core(device_resources.worker_cores_vec[i]);
+            rt_args.push_back(translated.y);
+        }
+        for (size_t i = 0; i < config.n_workers; i++) {
+            rt_args.push_back(device_resources.worker_ack_semaphore_id);
+        }
+        for (size_t i = 0; i < config.n_workers; i++) {
+            rt_args.push_back(device_resources.worker_new_chunk_semaphore_id);
+        }
+        for (size_t i = 0; i < config.n_workers; i++) {
+            rt_args.push_back(device_resources.worker_src_buffer_address);
+        }
+
         return rt_args;
     };
 
-    log_info(tt::LogTest, "Running Fabric Elastic Channels Test...");
+    log_info(tt::LogAlways, "Running Fabric Elastic Channels Test...");
     log_info(
         tt::LogTest,
-        "Config: n_chunks={}, chunk_n_pkts={}, packet_size={}, bidirectional={}, message_size={}, total_messages={}",
+        "Config: n_chunks={}, chunk_n_pkts={}, packet_size={}, bidirectional={}, message_size={}, total_messages={}, "
+        "num_workers={}",
         config.n_chunks,
         config.chunk_n_pkts,
         config.packet_size,
         config.bidirectional_mode,
         config.message_size,
-        config.total_messages);
+        config.total_messages,
+        config.n_workers);
 
     tt_metal::SetRuntimeArgs(test_resources.local_device.program, local_erisc_kernel, test_resources.local_device.eth_core, rt_args(true, test_resources.local_device));
     tt_metal::SetRuntimeArgs(test_resources.remote_device.program, remote_erisc_kernel, test_resources.remote_device.eth_core, rt_args(false, test_resources.remote_device));
 
     if (config.n_workers > 0) {
+        log_info(tt::LogAlways, "Setting worker runtime args");
         set_worker_runtime_args(test_resources, local_sender_worker_kernels, remote_sender_worker_kernels, config);
     }
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
+    log_info(tt::LogAlways, "Launching programs");
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(test_resources.local_device.device, test_resources.local_device.program); });
         std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(test_resources.remote_device.device, test_resources.remote_device.program); });
@@ -351,32 +367,32 @@ void run_test(
     TimingStats stats1 = read_timing_stats(test_resources.remote_device.device, test_resources.remote_device.eth_core, handshake_addr);
 
     // Report results
-    log_info(tt::LogTest, "Test completed in {} microseconds", duration.count());
+    log_info(tt::LogAlways, "Test completed in {} microseconds", duration.count());
 
-    log_info(tt::LogTest, "Device 0 (Sender) Timing Stats:");
-    log_info(tt::LogTest, "  Acquire operations: {}", stats0.acquire_count);
-    log_info(tt::LogTest, "  Total acquire cycles: {}", stats0.total_acquire_cycles);
+    log_info(tt::LogAlways, "Device 0 (Sender) Timing Stats:");
+    log_info(tt::LogAlways, "  Acquire operations: {}", stats0.acquire_count);
+    log_info(tt::LogAlways, "  Total acquire cycles: {}", stats0.total_acquire_cycles);
     log_info(
         tt::LogTest,
         "  Average acquire cycles: {:.2f}",
         stats0.acquire_count > 0 ? (double)stats0.total_acquire_cycles / stats0.acquire_count : 0.0);
-    log_info(tt::LogTest, "  Release operations: {}", stats0.release_count);
-    log_info(tt::LogTest, "  Total release cycles: {}", stats0.total_release_cycles);
+    log_info(tt::LogAlways, "  Release operations: {}", stats0.release_count);
+    log_info(tt::LogAlways, "  Total release cycles: {}", stats0.total_release_cycles);
     log_info(
         tt::LogTest,
         "  Average release cycles: {:.2f}",
         stats0.release_count > 0 ? (double)stats0.total_release_cycles / stats0.release_count : 0.0);
 
     if (config.bidirectional_mode) {
-        log_info(tt::LogTest, "Device 1 (Receiver) Timing Stats:");
-        log_info(tt::LogTest, "  Acquire operations: {}", stats1.acquire_count);
-        log_info(tt::LogTest, "  Total acquire cycles: {}", stats1.total_acquire_cycles);
+        log_info(tt::LogAlways, "Device 1 (Receiver) Timing Stats:");
+        log_info(tt::LogAlways, "  Acquire operations: {}", stats1.acquire_count);
+        log_info(tt::LogAlways, "  Total acquire cycles: {}", stats1.total_acquire_cycles);
         log_info(
             tt::LogTest,
             "  Average acquire cycles: {:.2f}",
             stats1.acquire_count > 0 ? (double)stats1.total_acquire_cycles / stats1.acquire_count : 0.0);
-        log_info(tt::LogTest, "  Release operations: {}", stats1.release_count);
-        log_info(tt::LogTest, "  Total release cycles: {}", stats1.total_release_cycles);
+        log_info(tt::LogAlways, "  Release operations: {}", stats1.release_count);
+        log_info(tt::LogAlways, "  Total release cycles: {}", stats1.total_release_cycles);
         log_info(
             tt::LogTest,
             "  Average release cycles: {:.2f}",
@@ -384,30 +400,31 @@ void run_test(
     }
 
     // Calculate throughput metrics
-    uint32_t total_messages_sent = config.total_messages;
+    uint32_t total_messages_sent = config.total_messages * config.n_workers;
     auto total_cycles = stats0.total_test_cycles;
     auto test_seconds = (double)total_cycles / 1000000000;
     double throughput_msgs_per_sec = (double)total_messages_sent / test_seconds;
     double throughput_bytes_per_sec = throughput_msgs_per_sec * config.message_size;
     double throughput_GB_s = throughput_bytes_per_sec / 1e9;
-    log_info(tt::LogTest, "Total_cycles: {}", total_cycles);
+    log_info(tt::LogAlways, "Total_cycles: {}", total_cycles);
 
-    log_info(tt::LogTest, "Performance Metrics:");
-    log_info(tt::LogTest, "  Total messages sent: {}", total_messages_sent);
-    log_info(tt::LogTest, "  Throughput: {:.2f} messages/second", throughput_msgs_per_sec);
-    log_info(tt::LogTest, "  Throughput: {:.2f} GB/s", throughput_GB_s);
+    log_info(tt::LogAlways, "Performance Metrics:");
+    log_info(tt::LogAlways, "  Total messages sent: {}", total_messages_sent);
+    log_info(tt::LogAlways, "  Throughput: {:.2f} messages/second", throughput_msgs_per_sec);
+    log_info(tt::LogAlways, "  Throughput: {:.2f} GB/s", throughput_GB_s);
 }
 
 TestResources create_test_resources(
-    tt_metal::IDevice* device_0, 
-    tt_metal::IDevice* device_1, 
-    CoreCoord eth_sender_core, 
-    CoreCoord eth_receiver_core, 
+    tt_metal::IDevice* device_0,
+    tt_metal::IDevice* device_1,
+    CoreCoord eth_sender_core,
+    CoreCoord eth_receiver_core,
     const TestConfig& config) {
-
     TestResources resources;
     resources.local_device.device = device_0;
     resources.remote_device.device = device_1;
+    resources.local_device.eth_core = eth_sender_core;
+    resources.remote_device.eth_core = eth_receiver_core;
 
     for (auto &device_resource_reference : {std::ref(resources.local_device), std::ref(resources.remote_device)}) {
         auto& device_resource = device_resource_reference.get();
@@ -416,11 +433,9 @@ TestResources create_test_resources(
         worker_cores_vec.reserve(config.n_workers);
         worker_cores = CoreRange(CoreCoord(0, 0), CoreCoord(0, config.n_workers - 1));
         worker_cores_vec = corerange_to_cores(worker_cores);
-        
 
         device_resource.worker_ack_semaphore_id = tt_metal::CreateSemaphore(device_resource.program, device_resource.worker_cores, 0, CoreType::WORKER);
         device_resource.worker_new_chunk_semaphore_id = tt_metal::CreateSemaphore(device_resource.program, device_resource.worker_cores, 0, CoreType::WORKER);
-
 
         auto worker_src_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::InterleavedBufferConfig{
             .device = device_resource.device,
@@ -435,17 +450,50 @@ TestResources create_test_resources(
             .buffer_type = tt::tt_metal::BufferType::L1
         });
         device_resource.worker_src_buffer_address = worker_src_buffer->address();
-        device_resource.erisc_write_out_buffer_address = erisc_write_out_dest_buffer->address();
     }
 
     return resources;
+}
+
+void validate_test_config(const TestConfig& config) {
+    if (config.message_size > config.packet_size) {
+        log_error(
+            tt::LogTest,
+            "Message size ({}) cannot be larger than packet size ({})",
+            config.message_size,
+            config.packet_size);
+        exit(-1);
+    }
+
+    if (config.n_workers > config.n_chunks) {
+        log_error(
+            tt::LogTest,
+            "Number of workers ({}) cannot be greater than number of chunks ({})",
+            config.n_workers,
+            config.n_chunks);
+        exit(-1);
+    }
+
+    if (config.chunk_n_pkts == 0 || config.chunk_n_pkts == 0 || config.n_chunks == 0 || config.packet_size == 0 ||
+        config.message_size == 0 || config.total_messages == 0 || config.n_workers == 0) {
+        log_error(
+            tt::LogTest,
+            "Invalid test config. Found a zero value. The following are all expected to be non-zero: chunk_n_pkts={}, "
+            "packet_size={}, message_size={}, total_messages={}, n_workers={}",
+            config.chunk_n_pkts,
+            config.packet_size,
+            config.message_size,
+            config.total_messages,
+            config.n_workers);
+        exit(-1);
+    }
 }
 
 int main(int argc, char** argv) {
     // Command line argument parsing
     // Usage: fabric_elastic_channels_host_test <n_chunks> <chunk_n_pkts> <packet_size> <bidirectional> <message_size>
     // <total_messages>
-    if (argc < 9) {
+    if (argc != 9) {
         log_error(
             tt::LogTest,
             "Usage: {} <n_chunks> <chunk_n_pkts> <rx_chunk_n_pkts> <packet_size> <bidirectional> <message_size> "
@@ -465,15 +513,12 @@ int main(int argc, char** argv) {
     config.total_messages = std::stoi(argv[arg_idx++]);
     config.n_workers = std::stoi(argv[arg_idx++]);
 
-    // Validate arguments
-    if (config.message_size > config.packet_size) {
-        log_error(
-            tt::LogTest,
-            "Message size ({}) cannot be larger than packet size ({})",
-            config.message_size,
-            config.packet_size);
-        return -1;
+    if (config.packet_size % 16 != 0) {
+        log_warning(tt::LogTest, "Packet size is not aligned to 16 bytes. Aligning to 16 bytes.");
+        config.packet_size = tt::align(config.packet_size, 16);
     }
+
+    validate_test_config(config);
 
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -505,7 +550,7 @@ int main(int argc, char** argv) {
 
     bool success = false;
     try {
-        log_info(tt::LogTest, "Building programs...");
+        log_info(tt::LogAlways, "Building programs...");
         tt_metal::KernelHandle local_kernel;
         tt_metal::KernelHandle remote_kernel;
 
@@ -514,11 +559,16 @@ int main(int argc, char** argv) {
 
         auto test_resources = create_test_resources(device_0, device_1, eth_sender_core, eth_receiver_core, config);
 
-        auto [program0, program1] =
-            build(test_resources, config, local_kernel, remote_kernel, local_sender_worker_kernels, remote_sender_worker_kernels);
+        build(
+            test_resources,
+            config,
+            local_kernel,
+            remote_kernel,
+            local_sender_worker_kernels,
+            remote_sender_worker_kernels);
 
         run_test(
-            test_resources, 
+            test_resources,
             local_kernel,
             remote_kernel,
             local_sender_worker_kernels,
@@ -532,6 +582,6 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    log_info(tt::LogTest, "Test completed successfully");
+    log_info(tt::LogAlways, "Test completed successfully");
     return success ? 0 : -1;
 }

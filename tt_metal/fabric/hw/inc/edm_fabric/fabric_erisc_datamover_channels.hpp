@@ -57,8 +57,10 @@ public:
         buffer_size_in_bytes(buffer_size_bytes),
         max_eth_payload_size_in_bytes(buffer_size_in_bytes),
         channel_id(channel_id) {
+        DPRINT << "EthChannelBuffer::EthChannelBuffer\n";
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
+            DPRINT << "\t[" << (uint32_t)i << "] = " << (uint32_t)this->buffer_addresses[i] << "\n";
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
             for (size_t j = 0; j < sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t); j++) {
