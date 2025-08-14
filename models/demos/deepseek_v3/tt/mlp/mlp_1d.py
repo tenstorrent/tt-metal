@@ -55,16 +55,13 @@ class MLP1D(AbstractModule):
     WEIGHT_DTYPE = ttnn.bfloat4_b
 
     @dataclass
-    class MLPProgramConfigData(OpConfigBase):
+    class ProgramConfigData(OpConfigBase):
         """Data class for the data for generating the PC for ttnn.linear."""
 
         dim: int
         hidden_dim: int
         num_devices: int
         core_grid_size: ttnn.CoreCoord
-
-    DRAM_SHARD_GRID_WIDTH = 8
-    PREFILL_ROWS = 8
 
     @classmethod
     def convert_weights(
@@ -196,7 +193,7 @@ class MLP1D(AbstractModule):
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
-            "linear_pc_gen": MLP1D.MLPProgramConfigData(
+            "linear_pc_gen": MLP1D.ProgramConfigData(
                 dim=dim, hidden_dim=hidden_dim, num_devices=mesh_width, core_grid_size=matmul_core_grid_size
             ),
             "w1": linear_op_config,
@@ -496,7 +493,7 @@ class MLP1D(AbstractModule):
         # All gather
         x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
 
-        # TODO: File issue on AG not being able to do this internally
+        # TODO: File issue on AG not being able to do this internally (Issue #26672)
         x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
 
         # Gate and up projections

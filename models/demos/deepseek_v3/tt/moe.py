@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from typing import cast
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -39,20 +40,19 @@ class MoE(SharedStateAddOn, AbstractModule):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dict: dict[str, torch.Tensor],
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        weight_config = {}
+        assert (
+            len(state_dicts) == 1 and state_dicts[0] is not None
+        ), f"MoE expects exactly one non-padding state dict, got {len(state_dicts)}"
+        (state_dict,) = cast(tuple[dict[str, torch.Tensor]], state_dicts)
 
-        # Create subdirectories for each submodule
-        moe_gate_path = output_path / "moe_gate"
-        moe_experts_path = output_path / "moe_experts"
-
-        weight_config["moe_gate"] = MoEGate.convert_weights(hf_config, state_dict, moe_gate_path, mesh_device, "gate.")
-        weight_config["moe_experts"] = MoEExperts.convert_weights(hf_config, state_dict, moe_experts_path, mesh_device)
-
-        return weight_config
+        return {
+            "moe_gate": MoEGate.convert_weights(hf_config, state_dict, output_path / "moe_gate", mesh_device, "gate."),
+            "moe_experts": MoEExperts.convert_weights(hf_config, state_dict, output_path / "moe_experts", mesh_device),
+        }
 
     @classmethod
     def create_state(
