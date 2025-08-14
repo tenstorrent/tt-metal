@@ -239,10 +239,10 @@ void process_go_signal_mcast_cmd() {
         // future kernels.
         if (stream_wrap_gt(wait_count, *worker_sem) &&
             (distributed_dispatcher || !wrap_ge(mcasts_sent, *sync_sem_addr))) {
-            // We're currently waiting for workers. Send a linked multicast to the first group of workers so the first
-            // multicast once the workers are ready doesn't need to do a path reservation. Normally keeping a path
-            // reservation open arbitrarily long could cause deadlocks or poor performance, but this code is the only
-            // user of NOC_DISPATCH_MULTICAST_WRITE_VC on this NOC (NOC 1).
+            // We're currently waiting for workers. Send a linked multicast to the workers so the first multicast once
+            // the workers are ready doesn't need to do a path reservation. Normally keeping a path reservation open
+            // arbitrarily long could cause deadlocks or poor performance, but this code is the only user of
+            // NOC_DISPATCH_MULTICAST_WRITE_VC on this NOC (NOC 1).
             uint64_t fake_noc_addr_multicast = get_noc_addr_helper(dst_noc, MEM_DISPATCH_NOOP);
             constexpr bool linked = true;
             cq_noc_async_write_init_state<CQ_NOC_SNDL, true, linked>(
