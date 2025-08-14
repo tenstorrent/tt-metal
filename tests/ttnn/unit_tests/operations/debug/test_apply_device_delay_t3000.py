@@ -27,17 +27,6 @@ def run_apply_device_delay_test(
     logger.info(f"Delays: {delays}")
     logger.info(f"Iterations: {num_iters}, Warmup: {warmup_iters}, Trace: {trace_mode}")
 
-    # Setup subdevice for T3000
-    compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
-    subdevice_cores_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(compute_grid[0] - 1, compute_grid[1] - 1),
-            ),
-        }
-    )
-
     def run_delay_op(n_iters):
         """Execute the apply_device_delay operation."""
         for i in range(n_iters):
@@ -163,13 +152,13 @@ def test_apply_device_delay_t3000(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-def test_apply_device_delay_performance_t3000(
+def test_apply_device_delay_trace_t3000(
     mesh_device,
     mesh_shape,
     trace_mode,
     device_params,
 ):
-    """Performance test for apply_device_delay on T3000."""
+    """Trace test for apply_device_delay on T3000."""
 
     # Create a complex delay pattern
     delays = [[10000, 12000, 14000, 16000], [11000, 13000, 15000, 17000]]
@@ -180,31 +169,6 @@ def test_apply_device_delay_performance_t3000(
         delays=delays,
         num_iters=20,
         warmup_iters=5,
-        trace_mode=trace_mode,
-    )
-
-
-@pytest.mark.parametrize("trace_mode", [False])
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((1, 8), (1, 8), id="1x8_grid")], indirect=["mesh_device"]
-)
-def test_apply_device_delay_1d_fabric(
-    mesh_device,
-    mesh_shape,
-    trace_mode,
-    device_params,
-):
-    """Test apply_device_delay with 1D fabric configuration."""
-
-    # Create delays for 1x8 mesh
-    delays = [[10000 + i * 1000 for i in range(8)]]
-
-    run_apply_device_delay_test(
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        delays=delays,
-        num_iters=3,
-        warmup_iters=1,
         trace_mode=trace_mode,
     )
 

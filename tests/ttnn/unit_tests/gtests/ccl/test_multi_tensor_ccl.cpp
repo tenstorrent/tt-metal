@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
+#include "ttnn/cpp/ttnn/operations/debug/apply_device_delay.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "test_fabric_edm_common.hpp"
@@ -148,6 +149,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllReduceAsync) {
         ttnn::ccl::Topology::Linear,
         1,
         SubDeviceId(0));
+    ttnn::operations::debug::apply_device_delay(
+        *mesh_devices.at(0).get(), std::vector<std::vector<uint32_t>>{{10000, 10000, 10000, 10000}});
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = all_reduced[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {

@@ -15,6 +15,7 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         apply_device_delay.cpp
+        device/apply_device_delay_device_operation.cpp
 )
 
 target_include_directories(ttnn_op_debug PRIVATE ${FixmeOpIncDirs})

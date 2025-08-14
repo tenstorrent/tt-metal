@@ -10,6 +10,8 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <ttnn/common/queue_id.hpp>
+#include <ttnn/distributed/types.hpp>
 
 namespace ttnn::operations::debug {
 
@@ -18,9 +20,9 @@ namespace ttnn::operations::debug {
 // (rows x cols), e.g. for an 8x4 mesh, delays.size()==8 and delays[r].size()==4.
 // If `subdevice_id` is provided, the kernel will be scheduled on a worker core belonging to that subdevice.
 void apply_device_delay(
-    const MeshDevice& mesh_device,
+    const ttnn::MeshDevice& mesh_device,
     const std::vector<std::vector<uint32_t>>& delays,
-    QueueId queue_id = DefaultQueueId,
+    ttnn::QueueId queue_id = ttnn::DefaultQueueId,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
 
 }  // namespace ttnn::operations::debug
