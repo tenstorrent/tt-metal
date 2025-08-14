@@ -21,6 +21,8 @@ Tiles are fixed-size data structures, so matrices and tensors must be aligned to
 
     The Tensix Processor is a little-endian architecture. Though all officially host architectures supported by Metalium are all little-endian, extra care must be taken when the host system may be big-endian.
 
+.. _internal_structure_of_a_tile:
+
 Internal structure of a Tile
 ----------------------------
 
