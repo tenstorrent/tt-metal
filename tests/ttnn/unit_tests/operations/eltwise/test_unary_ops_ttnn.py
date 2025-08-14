@@ -10,6 +10,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range_dtype,
     compare_pcc,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -790,6 +791,8 @@ def test_unary_signbit_ttnn(input_shapes, device):
     ),
 )
 def test_unary_silu_ttnn(input_shapes, device):
+    torch.manual_seed(0)
+    max_atol = 0.03125
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -799,6 +802,31 @@ def test_unary_silu_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+    atol_delta = torch.max(torch.abs(ttnn.to_torch(output_tensor) - golden_tensor)).item()
+    torch.allclose(golden_tensor, ttnn.to_torch(output_tensor), atol=max_atol)
+    assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_silu_ttnn_pos_ulp_check(input_shapes, device):
+    torch.manual_seed(0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 1, 10, device)
+
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+
+    cq_id = 0
+    ttnn.silu(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
+    golden_tensor = torch.nn.functional.silu(in_data)
+
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(

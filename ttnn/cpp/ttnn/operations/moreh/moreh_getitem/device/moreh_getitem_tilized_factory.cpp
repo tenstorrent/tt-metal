@@ -7,11 +7,13 @@
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
+#include <tt-metalium/tensor_accessor_args.hpp>
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 struct IndexInfo {
     bool is_defined;
-    bool is_dram;
+    tt::tt_metal::TensorAccessorArgs args;
     uint32_t address;
     uint32_t unit_size;
 };
@@ -94,7 +96,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
             index_info[dim].is_defined = true;
             index_info[dim].address = index.buffer()->address();
-            index_info[dim].is_dram = is_dram(index);
+            index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index.buffer());
             index_info[dim].unit_size = index.element_size();
         }
 
@@ -153,9 +155,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         CreateCircularBuffer(program, all_cores, cb_out1_config);
 
         // create read/wrtie kernel
-        auto src_is_dram = is_dram(input);
-        auto dst_is_dram = is_dram(output);
-
         std::map<std::string, std::string> reader_defines;
         std::map<std::string, std::string> writer_defines;
 
@@ -165,26 +164,26 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             reader_defines["TILIZE_INDEX"] = 1;
         }
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+        for (uint32_t dim = 0; dim < 5; dim++) {
+            index_info[dim].args.append_to(reader_compile_time_args);
+        }
         auto reader_kernel_id = CreateReadKernel(
             program,
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "reader_moreh_getitem_tilize_w.cpp",
             all_cores,
-            {
-                src_is_dram,
-                index_info[0].is_dram,
-                index_info[1].is_dram,
-                index_info[2].is_dram,
-                index_info[3].is_dram,
-                index_info[4].is_dram,
-            },
+            reader_compile_time_args,
             reader_defines);
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
         auto writer_kernel_id = CreateWriteKernel(
             program,
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "writer_moreh_getitem_tilize_w.cpp",
             all_cores,
-            {dst_is_dram},
+            writer_compile_time_args,
             writer_defines);
 
         uint32_t face_width = 16;
@@ -330,7 +329,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
             index_info[dim].is_defined = true;
             index_info[dim].address = index_tensors[i].buffer()->address();
-            index_info[dim].is_dram = is_dram(index_tensors[i]);
+            index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
             index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
         }
         uint32_t index_size = index_tensors[0].logical_shape()[-1];
@@ -380,9 +379,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         CreateCircularBuffer(program, all_cores, cb_out0_config);
 
         // create read/wrtie kernel
-        auto src_is_dram = is_dram(input);
-        auto dst_is_dram = is_dram(output);
-
         std::map<std::string, std::string> reader_defines;
         std::map<std::string, std::string> writer_defines;
 
@@ -392,26 +388,26 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             reader_defines["TILIZE_INDEX"] = 1;
         }
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+        for (uint32_t dim = 0; dim < 5; dim++) {
+            index_info[dim].args.append_to(reader_compile_time_args);
+        }
         auto reader_kernel_id = CreateReadKernel(
             program,
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "reader_moreh_getitem_tilize.cpp",
             all_cores,
-            {
-                src_is_dram,
-                index_info[0].is_dram,
-                index_info[1].is_dram,
-                index_info[2].is_dram,
-                index_info[3].is_dram,
-                index_info[4].is_dram,
-            },
+            reader_compile_time_args,
             reader_defines);
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
         auto writer_kernel_id = CreateWriteKernel(
             program,
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "writer_moreh_getitem_tilize.cpp",
             all_cores,
-            {dst_is_dram},
+            writer_compile_time_args,
             writer_defines);
 
         uint32_t face_width = 16;

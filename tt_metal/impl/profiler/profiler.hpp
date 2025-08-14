@@ -51,6 +51,9 @@ struct pair_hash {
     }
 };
 
+constexpr uint32_t TRACE_RISC_ID = 6;
+constexpr uint32_t ERISC_RISC_ID = 5;
+
 // defined locally in profiler.cpp
 class FabricRoutingLookup;
 
@@ -69,6 +72,12 @@ struct ZoneDetails {
     enum class ZoneNameKeyword : uint16_t {
         BRISC_FW,
         ERISC_FW,
+        NCRISC_FW,
+        TRISC_FW,
+        BRISC_KERNEL,
+        ERISC_KERNEL,
+        NCRISC_KERNEL,
+        TRISC_KERNEL,
         SYNC_ZONE,
         PROFILER,
         DISPATCH,
@@ -82,6 +91,12 @@ struct ZoneDetails {
     static inline std::unordered_map<std::string, ZoneNameKeyword> zone_name_keywords_map = {
         {"BRISC-FW", ZoneNameKeyword::BRISC_FW},
         {"ERISC-FW", ZoneNameKeyword::ERISC_FW},
+        {"NCRISC-FW", ZoneNameKeyword::NCRISC_FW},
+        {"TRISC-FW", ZoneNameKeyword::TRISC_FW},
+        {"BRISC-KERNEL", ZoneNameKeyword::BRISC_KERNEL},
+        {"ERISC-KERNEL", ZoneNameKeyword::ERISC_KERNEL},
+        {"NCRISC-KERNEL", ZoneNameKeyword::NCRISC_KERNEL},
+        {"TRISC-KERNEL", ZoneNameKeyword::TRISC_KERNEL},
         {"SYNC-ZONE", ZoneNameKeyword::SYNC_ZONE},
         {"PROFILER", ZoneNameKeyword::PROFILER},
         {"DISPATCH", ZoneNameKeyword::DISPATCH},
