@@ -308,6 +308,11 @@ run_vanilla_unet_demo() {
 >>>>>>> f8dd685c21 (remove fail flags added for all models in single card demo tests)
 }
 
+run_swin_s_demo() {
+
+  pytest models/experimental/swin_s/demo/demo.py
+
+}
 
 run_swin_v2_demo() {
 
