@@ -189,3 +189,22 @@ class StatsCollector:
 
             result[riscv] = agg
         return result
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python stats_collector.py <path_to_log_file>")
+        sys.exit(1)
+
+    file_path = sys.argv[1]
+    collector = StatsCollector(file_path, {}, {}, verbose=True)
+    dm_stats, aggregate_stats = collector.gather_analysis_stats()
+
+    # Print the aggregated stats for verification
+    for riscv, stats in aggregate_stats.items():
+        print(f"RISC-V: {riscv}")
+        for run_host_id, data in stats.items():
+            print(f"  Run Host ID: {run_host_id}, Data: {data}")
+            print(f"Max bw: {max(data['all_bandwidths'])}, Min bw: {min(data['all_bandwidths'])}")
