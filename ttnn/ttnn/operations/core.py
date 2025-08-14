@@ -708,10 +708,11 @@ def as_tensor(
             storage_type = f"_multi_device_{device.get_num_devices()}"
         else:
             storage_type = ""
-        if enable_multihost_format:
-            cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}_{os.getenv('TT_HOST_RANK')}.bin"
-        else:
-            cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
+
+        base_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}"
+        if ttnn.using_distributed_env():
+            base_file_name = f"{base_file_name}_{os.getenv('TT_HOST_RANK')}"
+        cache_file_name = f"{base_file_name}.bin"
 
         cache_path = pathlib.Path(cache_file_name)
 
