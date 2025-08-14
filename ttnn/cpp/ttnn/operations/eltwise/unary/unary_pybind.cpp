@@ -346,6 +346,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
     py::module& module,
     const unary_operation_t& operation,
     const std::string& supported_dtype = "BFLOAT16",
+    bool fast_approx_mode = false,
     const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -388,6 +389,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
         operation.base_name(),
         operation.python_fully_qualified_name(),
         supported_dtype,
+        fast_approx_mode,
         info_doc);
 
     bind_registered_operation(
@@ -405,7 +407,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             },
             py::arg("input_tensor"),
             py::kw_only(),
-            py::arg("fast_and_approximate_mode") = false,
+            py::arg("fast_and_approximate_mode") = fast_approx_mode,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
@@ -1986,7 +1988,8 @@ void py_module(py::module& module) {
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::log, R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(
+        module, ttnn::log, R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc", true);
 
     // Unaries with float parameter
     bind_unary_operation_with_float_parameter(

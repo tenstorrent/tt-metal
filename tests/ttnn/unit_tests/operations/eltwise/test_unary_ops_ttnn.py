@@ -1089,13 +1089,10 @@ def test_unary_log_ttnn(input_shapes, torch_dtype, ttnn_dtype, fast_and_approx, 
 
     golden_function = ttnn.get_golden_function(ttnn.log)
     torch_output_tensor = golden_function(torch_input_tensor)
-    if ttnn_dtype == ttnn.float32:
+    if ttnn_dtype == ttnn.float32 or fast_and_approx:
         assert_allclose(output_tensor_tt, torch_output_tensor, atol=0.05)
     else:
-        if fast_and_approx:
-            assert_allclose(output_tensor_tt, torch_output_tensor, atol=0.05)
-        else:
-            assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+        assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
 
 
 @pytest.mark.parametrize("scalar", [1, 2, -10, -25, 15.5, 28.5, -13.5, -29.5, 0, -0, -5, 8, 100, -100])
