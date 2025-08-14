@@ -18,5 +18,4 @@ Summarize the changes made and its impact.
 - [ ] [TG demo tests, for Llama](https://github.com/tenstorrent/tt-metal/actions/workflows/tg-demo-tests.yaml) CI passes, if applicable, because of current Llama work
 - [ ] (For runtime and ops writers) [T3000 unit tests](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-unit-tests.yaml) CI passes (if applicable, since this is run on push to main)
 - [ ] (For models and ops writers) [T3000 demo tests](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-demo-tests.yaml) CI passes (if applicable, since this is required for release)
-- [ ] (For models and ops writers) [Single-card demo tests](https://github.com/tenstorrent/tt-metal/actions/workflows/single-card-demo-tests.yaml) CI passes (if applicable, since this is required for release)
 - [ ] New/Existing tests provide coverage for changes
