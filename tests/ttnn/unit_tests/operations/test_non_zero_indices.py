@@ -38,3 +38,17 @@ def test_non_zero_indices_ttnn(input_shapes, device):
     tt_output_tensor = output_tensor2[:, :, :, :no_of_non_zero_indices]
 
     assert_equal(torch_output_tensor, tt_output_tensor)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_nonzero(
+    device,
+    reset_seeds,
+):
+    torch_input = torch.tensor([[[[0, 4, 0, 2, 4, 0, 3]]]])
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device)
+    for i in range(6):
+        output_indices, output_tensor = ttnn.nonzero(ttnn_input)
+        ttnn.deallocate(output_indices)
+        ttnn.deallocate(output_tensor)

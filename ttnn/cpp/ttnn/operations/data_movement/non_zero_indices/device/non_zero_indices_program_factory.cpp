@@ -99,7 +99,7 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
                                               const std::vector<Tensor>& output_tensors) {
         const auto& output_0 = output_tensors.at(0);
         const auto& output_1 = output_tensors.at(1);
-        const auto& input = input_tensors.at(1);
+        const auto& input = input_tensors.at(0);
         uint32_t alignment_base = 32 / input.element_size();
         uint32_t aligned_elements = tt::div_up(input.padded_shape()[-1], alignment_base) * alignment_base;
         uint32_t actual_elements = input.padded_shape()[-1];
