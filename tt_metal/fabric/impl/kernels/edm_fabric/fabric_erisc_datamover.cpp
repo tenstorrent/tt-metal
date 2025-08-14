@@ -2058,12 +2058,8 @@ void kernel_main() {
     // Common runtime args:
     ///////////////////////
     const size_t local_sender_channel_0_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_1_connection_semaphore_addr =
-        is_2d_fabric ? get_arg_val<uint32_t>(arg_idx++)
-                     : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
-    const size_t local_sender_channel_2_connection_semaphore_addr =
-        is_2d_fabric ? get_arg_val<uint32_t>(arg_idx++)
-                     : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+    const size_t local_sender_channel_1_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_sender_channel_2_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_3_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_4_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_0_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
@@ -2118,12 +2114,8 @@ void kernel_main() {
     // Sender runtime args
     ////////////////////////
     auto sender0_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    auto sender1_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(
-        is_2d_fabric ? get_arg_val<uint32_t>(arg_idx++)
-                     : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++)));
-    auto sender2_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(
-        is_2d_fabric ? get_arg_val<uint32_t>(arg_idx++)
-                     : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++)));
+    auto sender1_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    auto sender2_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender3_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender4_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
 
@@ -2135,17 +2127,17 @@ void kernel_main() {
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
         *sender0_worker_semaphore_ptr = 0;
     }
+    if constexpr (is_sender_channel_serviced[1]) {
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_semaphore_addr) = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_buffer_index_id) = 0;
+        *sender1_worker_semaphore_ptr = 0;
+    }
+    if constexpr (is_sender_channel_serviced[2]) {
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_semaphore_addr) = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_buffer_index_id) = 0;
+        *sender2_worker_semaphore_ptr = 0;
+    }
     if constexpr (is_2d_fabric) {
-        if constexpr (is_sender_channel_serviced[1]) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_buffer_index_id) = 0;
-            *sender1_worker_semaphore_ptr = 0;
-        }
-        if constexpr (is_sender_channel_serviced[2]) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_buffer_index_id) = 0;
-            *sender2_worker_semaphore_ptr = 0;
-        }
         if constexpr (is_sender_channel_serviced[3]) {
             *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_semaphore_addr) = 0;
             *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_buffer_index_id) = 0;
@@ -2276,19 +2268,11 @@ void kernel_main() {
                 // Receiver channels local semaphore for managing flow control with the downstream EDM.
                 // The downstream EDM should be sending semaphore updates to this address any time it can
                 // accept a new message
-                const auto local_sem_address_for_acks = is_2d_fabric
-                                                            ? local_sem_for_acks_from_downstream_edm[edm_index]
-                                                            : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
-                                                                  local_sem_for_acks_from_downstream_edm[edm_index]);
-                const auto teardown_sem_address = is_2d_fabric
-                                                      ? local_sem_for_teardown_from_downstream_edm[edm_index]
-                                                      : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
-                                                            local_sem_for_teardown_from_downstream_edm[edm_index]);
-                if constexpr (is_2d_fabric) {
-                    // reset the handshake addresses to 0 (this is for router -> router handshake for connections over noc)
-                    *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
-                    *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
-                }
+                const auto local_sem_address_for_acks = local_sem_for_acks_from_downstream_edm[edm_index];
+                const auto teardown_sem_address = local_sem_for_teardown_from_downstream_edm[edm_index];
+                // reset the handshake addresses to 0 (this is for router -> router handshake for connections over noc)
+                *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
+                *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
                 auto downstream_direction = edm_index;
                 auto receiver_channel_free_slots_stream_id =
                     is_2d_fabric ? StreamId{receiver_channel_free_slots_stream_ids[downstream_direction]}
@@ -2298,7 +2282,7 @@ void kernel_main() {
                     // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
                     // connections we must always use semaphore lookup
                     // For 2D, downstream_edm_vc0_semaphore_id is an address.
-                    is_2d_fabric,
+                    is_persistent_fabric,
                     0,  // Unused in routers. Used by workers to get edm direction for 2D.
                     (downstream_edm_vc0_noc_x >> (edm_index * 8)) & 0xFF,
                     (downstream_edm_vc0_noc_y >> (edm_index * 8)) & 0xFF,
@@ -2308,11 +2292,7 @@ void kernel_main() {
                     downstream_edm_vc0_worker_registration_id,
                     downstream_edm_vc0_worker_location_info_address,
                     channel_buffer_size,
-#ifdef FABRIC_2D
                     local_sender_channel_connection_buffer_index_id[edm_index],
-#else
-                    local_sender_channel_1_connection_buffer_index_id,
-#endif
                     reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
@@ -2349,18 +2329,12 @@ void kernel_main() {
     if constexpr (enable_ring_support && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
         if (has_downstream_edm_vc1_buffer_connection) {
             const auto local_sem_address_for_acks =
-                is_2d_fabric ? local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]
-                             : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
-                                   local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]);
+                local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1];
             const auto teardown_sem_address =
-                is_2d_fabric ? local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]
-                             : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
-                                   local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]);
-            if constexpr (is_2d_fabric) {
-                // reset the handshake addresses to 0
-                *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
-                *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
-            }
+                local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1];
+            // reset the handshake addresses to 0
+            *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
+            *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
 
             auto downstream_sender_channel_credit_stream_id =
                 is_2d_fabric ? StreamId{vc1_sender_channel_free_slots_stream_id}
@@ -2369,7 +2343,7 @@ void kernel_main() {
                 tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS>(
                     // persistent_mode -> hardcode to false because for EDM -> EDM
                     //  connections we must always use semaphore lookup
-                    is_2d_fabric,
+                    is_persistent_fabric,
                     0,  // Unused in routers. Used by workers to get edm direction for 2D.
                     downstream_edm_vc1_noc_x,
                     downstream_edm_vc1_noc_y,
@@ -2379,11 +2353,7 @@ void kernel_main() {
                     downstream_edm_vc1_worker_registration_id,
                     downstream_edm_vc1_worker_location_info_address,
                     channel_buffer_size,
-#ifdef FABRIC_2D
                     local_sender_channel_connection_buffer_index_id[NUM_USED_RECEIVER_CHANNELS - 1],
-#else
-                    local_sender_channel_2_connection_buffer_index_id,
-#endif
                     reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc1_noc_interface_buffer_index_local_addr,
@@ -2450,21 +2420,6 @@ void kernel_main() {
 #else
     constexpr bool use_posted_writes_for_connection_open = true;
 #endif
-
-    if constexpr (!is_2d_fabric) {
-        // We can check just the first index because all receiver channels are serviced by the same core
-        if constexpr (is_receiver_channel_serviced[0]) {
-            const size_t start = !has_downstream_edm_vc0_buffer_connection;
-            const size_t end = has_downstream_edm_vc1_buffer_connection + 1;
-            for (size_t i = start; i < end; i++) {
-                downstream_edm_noc_interfaces[i]
-                    .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
-                ASSERT(
-                    get_ptr_val(downstream_edm_noc_interfaces[i].worker_credits_stream_id) ==
-                    DOWNSTREAM_SENDER_NUM_BUFFERS);
-            }
-        }
-    }
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         // This barrier is here just in case the initialization process of any of the sender/receiver channel
@@ -2556,6 +2511,19 @@ void kernel_main() {
                     *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_free_slots_ptr =
                         0;
                 }
+            }
+        }
+    } else {
+        // We can check just the first index because all receiver channels are serviced by the same core
+        if constexpr (is_receiver_channel_serviced[0]) {
+            const size_t start = !has_downstream_edm_vc0_buffer_connection;
+            const size_t end = has_downstream_edm_vc1_buffer_connection + 1;
+            for (size_t i = start; i < end; i++) {
+                downstream_edm_noc_interfaces[i]
+                    .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
+                ASSERT(
+                    get_ptr_val(downstream_edm_noc_interfaces[i].worker_credits_stream_id) ==
+                    DOWNSTREAM_SENDER_NUM_BUFFERS);
             }
         }
     }
