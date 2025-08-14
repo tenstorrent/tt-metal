@@ -13,7 +13,7 @@
 using namespace tt;
 
 /*
- * The CB holdes 64 pages (2 steps).
+ * The CB holds 64 pages (2 steps).
  */
 
 static constexpr auto cb_id = tt::CBIndex::c_0;
