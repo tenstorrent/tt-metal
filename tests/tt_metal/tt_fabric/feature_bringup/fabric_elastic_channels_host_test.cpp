@@ -98,6 +98,7 @@ struct TestConfig {
     uint32_t message_size;
     uint32_t total_messages;
     uint32_t n_workers;
+    uint32_t fabric_mcast_factor;
 };
 
 
@@ -184,15 +185,13 @@ void build(
         test_resources.local_device.program,
         erisc_kernel_name,
         test_resources.local_device.eth_core,
-        tt_metal::EthernetConfig{
-            .noc = tt_metal::NOC::RISCV_0_default, .compile_args = erisc_kernel_compile_time_args});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .compile_args = erisc_kernel_compile_time_args});
 
     remote_erisc_kernel = tt_metal::CreateKernel(
         test_resources.remote_device.program,
         erisc_kernel_name,
         test_resources.remote_device.eth_core,
-        tt_metal::EthernetConfig{
-            .noc = tt_metal::NOC::RISCV_0_default, .compile_args = erisc_kernel_compile_time_args});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .compile_args = erisc_kernel_compile_time_args});
 
     log_info(tt::LogAlways, "Local erisc kernel: {}", local_erisc_kernel);
     log_info(tt::LogAlways, "Remote erisc kernel: {}", remote_erisc_kernel);
@@ -295,7 +294,10 @@ void run_test(
             static_cast<uint32_t>(send_channels_at_offset_0),
             send_buffer_base,
             recv_buffer_base,
-            timing_stats_addr};
+            timing_stats_addr,
+            device_resources.worker_src_buffer_address,
+            config.fabric_mcast_factor};
+
         for (size_t i = 0; i < config.n_workers; i++) {
             auto translated =
                 device_resources.device->worker_core_from_logical_core(device_resources.worker_cores_vec[i]);
@@ -487,17 +489,22 @@ void validate_test_config(const TestConfig& config) {
             config.n_workers);
         exit(-1);
     }
+
+    if (config.fabric_mcast_factor > 10) {
+        log_error(tt::LogTest, "Fabric mcast factor ({}) cannot be greater than 10", config.fabric_mcast_factor);
+        exit(-1);
+    }
 }
 
 int main(int argc, char** argv) {
     // Command line argument parsing
     // Usage: fabric_elastic_channels_host_test <n_chunks> <chunk_n_pkts> <packet_size> <bidirectional> <message_size>
     // <total_messages>
-    if (argc != 9) {
+    if (argc != 10) {
         log_error(
             tt::LogTest,
             "Usage: {} <n_chunks> <chunk_n_pkts> <rx_chunk_n_pkts> <packet_size> <bidirectional> <message_size> "
-            "<total_messages> <n_workers>",
+            "<total_messages> <n_workers> <fabric_mcast_factor>",
             argv[0]);
         return -1;
     }
@@ -512,6 +519,7 @@ int main(int argc, char** argv) {
     config.message_size = std::stoi(argv[arg_idx++]);
     config.total_messages = std::stoi(argv[arg_idx++]);
     config.n_workers = std::stoi(argv[arg_idx++]);
+    config.fabric_mcast_factor = std::stoi(argv[arg_idx++]);
 
     if (config.packet_size % 16 != 0) {
         log_warning(tt::LogTest, "Packet size is not aligned to 16 bytes. Aligning to 16 bytes.");

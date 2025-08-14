@@ -54,7 +54,7 @@ void kernel_main() {
             DPRINT << "Has dest\n";
             auto dest_bank_addr = fabric_writer_adapter.get_next_write_address();
             auto dest_noc_addr = get_noc_addr(dest_eth_noc_x, dest_eth_noc_y, dest_bank_addr);
-            DPRINT << "writing to bank addr: " << dest_bank_addr << "\n";
+            DPRINT << "writing to bank addr: " << (uint32_t)dest_bank_addr << "\n";
             noc_async_write(src_addr, dest_noc_addr, payload_size_bytes);
             DPRINT << "notifying erisc at " << (uint64_t)dest_sem_noc_addr << "\n";
             // noc_semaphore_inc(dest_sem_noc_addr, pack_value_for_inc_on_write_stream_reg_write(1));

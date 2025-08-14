@@ -21,12 +21,22 @@ constexpr size_t PACKET_SIZE_BYTES = get_compile_time_arg_val(3);
 constexpr bool BIDIRECTIONAL_MODE = get_compile_time_arg_val(4);
 constexpr size_t N_SRC_CHANS = get_compile_time_arg_val(5);
 
+enum class WRITE_OUT_MODE {
+    ALL_AT_ONCE,
+    ALL_AT_ONCE_WITH_SEPARATE_FLUSH,
+    ONE_AT_A_TIME,
+};
+
+constexpr WRITE_OUT_MODE write_out_mode = WRITE_OUT_MODE::ALL_AT_ONCE;
+// constexpr WRITE_OUT_MODE write_out_mode = WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH;
+// constexpr WRITE_OUT_MODE write_out_mode = WRITE_OUT_MODE::ONE_AT_A_TIME;
+
 // pkts received (from worker) stream IDs are [0, N_SRC_CHANS-1]
 // pkts acked (to sender from receiver) stream IDs are [N_SRC_CHANS, 2*N_SRC_CHANS-1]
 
 constexpr int32_t pkts_received_stream_id = 2 * N_SRC_CHANS;  // read by receiver, written by sender
 
-static_assert(pkts_received_stream_id < 10, "pkts_received_stream_id must be less than 10");
+static_assert(pkts_received_stream_id < 32, "pkts_received_stream_id must be less than 10");
 static_assert(PACKET_SIZE_BYTES % sizeof(uint32_t) == 0, "PACKET_SIZE_BYTES must be a multiple of sizeof(uint32_t)");
 
 using tt::tt_fabric::BufferIndex;
@@ -121,14 +131,7 @@ void process_send_side(
                << " n_unsent_messages: " << (uint32_t)n_unsent_messages << "\n";
     }
     // Try to send from current chunk
-    if (!eth_txq_is_busy() && n_unsent_messages > 0  // &&
-
-        // if we got a chunk, it implies the worker already has a valid address, we don't need to check this
-        // !open_chunks_cb.is_empty() &&
-
-        // ditto as above
-        // !current_chunk_ptr.is_done()
-    ) {
+    if (!eth_txq_is_busy() && n_unsent_messages > 0) {
         if (current_chunk_ptr.is_done()) {
             DPRINT << "ERROR CONDITION - CURRENT CHUNK IS EXHAUSTED BUT WE ARE TRYING TO SEND FROM IT\n";
             DPRINT << "\tcurrent_chunk_ptr.current_ptr: " << (uint32_t)(current_chunk_ptr.current_ptr) << "\n";
@@ -149,9 +152,6 @@ void process_send_side(
         DPRINT << "ch " << (uint32_t)local_src_ch_flow_control_stream_id << " Sending packet from "
                << (uint32_t)src_addr << "\n\tto " << (uint32_t)dest_addr << "\n\tof size " << (uint32_t)message_size
                << "\n";
-
-        // asm memory fence
-        asm volatile("" ::: "memory");
 
         // Send packet using the buffer's channel ID
         eth_send_bytes_over_channel_payload_only_unsafe_one_packet((uint32_t)src_addr, dest_addr, message_size);
@@ -249,6 +249,10 @@ void kernel_main() {
     const uint32_t recv_buffer_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t timing_stats_addr = get_arg_val<uint32_t>(arg_idx++);
 
+    // Where receiver will write to
+    uint32_t receiver_channel_write_out_l1_bank_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t fabric_mcast_factor = get_arg_val<uint32_t>(arg_idx++);
+
     // DPRINT << "Checkpoint 2\n";
     auto remote_src_noc_x_ords = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
     arg_idx += N_SRC_CHANS;
@@ -270,10 +274,17 @@ void kernel_main() {
     std::array<noc_addr_t, N_SRC_CHANS> remote_src_ch_semaphore_ack_addrs;
     std::array<noc_addr_t, N_SRC_CHANS> src_ch_new_chunk_addrs;
     std::array<noc_addr_t, N_SRC_CHANS> dest_noc_write_addrs;
+    std::array<noc_addr_t, 10> fabric_fwd_addrs;
     for (size_t i = 0; i < N_SRC_CHANS; i++) {
         remote_src_ch_semaphore_ack_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_semaphore_ack_addrs[i]));
         src_ch_new_chunk_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_new_chunk_addrs[i]));
         dest_noc_write_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], dest_noc_buffer_addrs[i]);
+    }
+    for (size_t i = 0; i < fabric_mcast_factor; i++) {
+        fabric_fwd_addrs[i] = get_noc_addr(
+            remote_src_noc_x_ords[i % N_SRC_CHANS],
+            remote_src_noc_y_ords[i % N_SRC_CHANS],
+            receiver_channel_write_out_l1_bank_addr);
     }
 
     // DPRINT << "Checkpoint 4\n";
@@ -364,6 +375,9 @@ void kernel_main() {
 
         // DPRINT << "Main loop\n";
 
+        size_t write_outs_remaining = 0;
+        bool send_ack = false;
+
         while (n_sender_channels_done < N_SRC_CHANS || messages_received < total_messages_target) {
             bool made_progress = false;
             for (size_t i = 0; i < N_SRC_CHANS; i++) {
@@ -400,7 +414,7 @@ void kernel_main() {
                 if (BIDIRECTIONAL_MODE || !is_sender_offset_0) {
                     // Receiver logic - also use ChannelBuffersPool
                     auto num_unprocessed_packets = get_receiver_num_unprocessed_packets();
-                    if (num_unprocessed_packets > 0 && !eth_txq_is_busy()) {
+                    if (num_unprocessed_packets > 0 && !eth_txq_is_busy() && write_outs_remaining == 0) {
                         size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
                         DPRINT << "Receiving packet at " << (uint32_t)packet_src_addr << "\n";
                         auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
@@ -412,13 +426,67 @@ void kernel_main() {
                             };
                         }
                         receiver_mark_packet_processed();
-                        messages_received++;
-                        DPRINT << "\tSending ack to stream id(" << (uint32_t)remote_src_ack_stream_id << ")\n";
-                        send_ack_to_sender(remote_src_ack_stream_id);
 
-                        receiver_rd_ptr.increment();
+                        if constexpr (
+                            write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE ||
+                            write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
+                            for (size_t i = 0; i < fabric_mcast_factor; i++) {
+                                noc_async_write(packet_src_addr, fabric_fwd_addrs[i], message_size);
+                            }
+                            DPRINT << "\tSending ack to stream id(" << (uint32_t)remote_src_ack_stream_id << ")\n";
+                            if constexpr (write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
+                                send_ack = true;
+                            } else {
+                                noc_async_writes_flushed();
+                                send_ack_to_sender(remote_src_ack_stream_id);
+                                receiver_rd_ptr.increment();
+                            }
+                        } else {
+                            write_outs_remaining = fabric_mcast_factor;
+                            send_ack = write_outs_remaining == 0;
+                            DPRINT << "WRITE OUTS REMAINING: " << (uint32_t)write_outs_remaining << "\n";
+                        }
+
+                        messages_received++;
+
                         made_progress = true;
                     }
+
+                    if constexpr (write_out_mode == WRITE_OUT_MODE::ONE_AT_A_TIME) {
+                        if (write_outs_remaining > 0
+                            // && noc_cmd_buf_ready(noc_index, write_cmd_buf)
+                            // && ncrisc_noc_posted_writes_sent(noc_index)
+                        ) {
+                            size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
+                            noc_async_write(packet_src_addr, fabric_fwd_addrs[0], message_size);
+                            // noc_async_write(packet_src_addr, fabric_fwd_addrs[write_outs_remaining], message_size);
+                            DPRINT << "WRITE OUT\n";
+
+                            write_outs_remaining--;
+                            made_progress = true;
+                            send_ack = write_outs_remaining == 0;
+                        }
+                    }
+                    if constexpr (
+                        write_out_mode == WRITE_OUT_MODE::ONE_AT_A_TIME ||
+                        write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
+                        if (send_ack &&
+                            !eth_txq_is_busy()
+                            // && noc_cmd_buf_ready(noc_index, write_cmd_buf)
+                            && ncrisc_noc_posted_writes_sent(noc_index)
+                            //  && ncrisc_noc_posted_writes_sent(noc_index)
+                        ) {
+                            DPRINT << "SEND ACK\n";
+                            noc_async_writes_flushed();
+                            size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
+                            auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
+                            DPRINT << "\tSending ack to stream id(" << (uint32_t)remote_src_ack_stream_id << ")\n";
+                            send_ack_to_sender(remote_src_ack_stream_id);
+                            receiver_rd_ptr.increment();
+                            send_ack = false;
+                        }
+                    }
+                    invalidate_l1_cache();
                 }
             }
 
