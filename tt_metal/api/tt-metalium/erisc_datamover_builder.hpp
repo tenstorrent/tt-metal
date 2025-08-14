@@ -265,6 +265,35 @@ struct FabricEriscDatamoverConfig {
     // emd vcs
     std::size_t edm_noc_vc = 0;
 
+    // Stream IDs
+    // Packet send/ack/complete stream IDs
+    static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
+    static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
+    static constexpr uint32_t to_sender_0_pkts_acked_id = 2;
+    static constexpr uint32_t to_sender_1_pkts_acked_id = 3;
+    static constexpr uint32_t to_sender_2_pkts_acked_id = 4;
+    static constexpr uint32_t to_sender_3_pkts_acked_id = 5;
+    static constexpr uint32_t to_sender_4_pkts_acked_id = 6;
+    static constexpr uint32_t to_sender_0_pkts_completed_id = 7;
+    static constexpr uint32_t to_sender_1_pkts_completed_id = 8;
+    static constexpr uint32_t to_sender_2_pkts_completed_id = 9;
+    static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
+    static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
+    // Receiver channel free slots stream IDs
+    static constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
+    static constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+    // Sender channel free slots stream IDs
+    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
+    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
+    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
+    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
+    static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    // Multi-RISC teardown synchronization stream ID
+    static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
+
 private:
     void configure_buffer_slots_helper(
         Topology topology,
