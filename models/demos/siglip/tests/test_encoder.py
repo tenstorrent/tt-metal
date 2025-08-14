@@ -18,9 +18,6 @@ from models.demos.siglip.tests.common import convert_state_dict
 from models.demos.siglip.tt.encoder import siglip_encoder_ttnn
 from models.demos.siglip.tt.encoder_layer import siglip_encoder_layer_ttnn
 
-# Global device variable to be set from outside
-global mesh_device
-
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
