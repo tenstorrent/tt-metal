@@ -2386,8 +2386,7 @@ void kernel_main() {
         }
     }
 
-    static_assert(!enable_deadlock_avoidance || !is_2d_fabric, "2D mode does not yet support ring/torus");
-    if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
+    if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[0]) {
         if (has_downstream_edm_vc1_buffer_connection) {
             const auto local_sem_address_for_acks =
                 local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1];
