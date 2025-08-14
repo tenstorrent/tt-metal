@@ -19,6 +19,7 @@
 
 #include "assert.hpp"
 #include "data_types.hpp"
+#include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
@@ -28,6 +29,7 @@
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
+#include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>
 #include "kernel_impl.hpp"
 
@@ -84,10 +86,12 @@ KernelSource::KernelSource(const std::string& source, const SourceType& source_t
 };
 
 Kernel::Kernel(
+    HalProgrammableCoreType programmable_core_type,
     const KernelSource& kernel_src,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& compile_args,
     const std::map<std::string, std::string>& defines) :
+    programmable_core_type_(programmable_core_type),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
     max_runtime_args_per_core_(0),
@@ -149,31 +153,14 @@ bool Kernel::is_on_logical_core(const CoreCoord& logical_core) const {
     return this->core_range_set_.contains(logical_core);
 }
 
-HalProgrammableCoreType Kernel::get_kernel_programmable_core_type() const {
-    RISCV riscv_processor = this->processor();
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: return HalProgrammableCoreType::TENSIX;
-        case RISCV::ERISC:
-        case RISCV::ERISC1:
-            return this->is_idle_eth() ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-        default: TT_ASSERT(false, "Unsupported kernel processor!");
-    }
-    return HalProgrammableCoreType::TENSIX;
-}
-
 CoreType Kernel::get_kernel_core_type() const {
-    RISCV riscv_processor = this->processor();
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: return CoreType::WORKER;
-        case RISCV::ERISC:
-        case RISCV::ERISC1: return CoreType::ETH;
-        default: TT_ASSERT(false, "Unsupported kernel processor!");
+    switch (programmable_core_type_) {
+        case HalProgrammableCoreType::TENSIX: return CoreType::WORKER;
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH: return CoreType::ETH;
+        case HalProgrammableCoreType::COUNT: TT_THROW("Bad programmable core type!");
     }
-    return CoreType::WORKER;
+    TT_THROW("Unreachable");
 }
 
 const std::string& KernelImpl::get_full_kernel_name() const { return this->kernel_full_name_; }
@@ -419,10 +406,7 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     this->common_runtime_args_data_.rt_args_count = count;
 }
 
-bool Kernel::is_idle_eth() const {
-    return std::holds_alternative<EthernetConfig>(this->config()) &&
-           std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
-}
+bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
 
 uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
