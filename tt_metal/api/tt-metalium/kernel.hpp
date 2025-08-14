@@ -122,6 +122,7 @@ public:
     int get_watcher_kernel_id() const { return watcher_kernel_id_; }
 
     HalProgrammableCoreType get_kernel_programmable_core_type() const { return this->programmable_core_type_; }
+    HalProcessorClassType get_kernel_processor_class() const { return this->processor_class_; }
     CoreType get_kernel_core_type() const;
     void set_full_name(const std::string& s) { kernel_full_name_ = s; }
     void add_defines(const std::map<std::string, std::string>& defines);
@@ -131,6 +132,7 @@ public:
 
 protected:
     HalProgrammableCoreType programmable_core_type_;
+    HalProcessorClassType processor_class_;
 
     int watcher_kernel_id_;
     KernelSource kernel_src_;
@@ -156,6 +158,7 @@ private:
 
     Kernel(
         HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
         const KernelSource& kernel_src,
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,

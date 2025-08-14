@@ -19,6 +19,7 @@ namespace tt::tt_metal {
 class KernelImpl : public Kernel, public JitBuildSettings {
 public:
     const std::vector<const ll_api::memory*>& binaries(uint32_t build_key) const;
+    virtual uint32_t get_processor_id(int index) const = 0;
     uint32_t get_binary_packed_size(IDevice* device, int index) const override;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
     void set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries);
@@ -49,11 +50,12 @@ public:
 protected:
     KernelImpl(
         HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
         const KernelSource& kernel_src,
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines) :
-        Kernel(programmable_core_type, kernel_src, core_range_set, compile_args, defines) {}
+        Kernel(programmable_core_type, processor_class, kernel_src, core_range_set, compile_args, defines) {}
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
@@ -67,7 +69,13 @@ protected:
 class DataMovementKernel : public KernelImpl {
 public:
     DataMovementKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DataMovementConfig& config) :
-        KernelImpl(HalProgrammableCoreType::TENSIX, kernel_src, cr_set, config.compile_args, config.defines),
+        KernelImpl(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines),
         config_(config) {
         this->dispatch_class_ =
             enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(config.processor);
@@ -77,6 +85,7 @@ public:
 
     RISCV processor() const override;
 
+    uint32_t get_processor_id(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
@@ -107,6 +116,7 @@ public:
     EthernetKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const EthernetConfig& config) :
         KernelImpl(
             config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
+            HalProcessorClassType::DM,
             kernel_src,
             cr_set,
             config.compile_args,
@@ -120,6 +130,7 @@ public:
 
     RISCV processor() const override;
 
+    uint32_t get_processor_id(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
@@ -147,7 +158,13 @@ private:
 class ComputeKernel : public KernelImpl {
 public:
     ComputeKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const ComputeConfig& config) :
-        KernelImpl(HalProgrammableCoreType::TENSIX, kernel_src, cr_set, config.compile_args, config.defines),
+        KernelImpl(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::COMPUTE,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines),
         config_(config) {
         this->dispatch_class_ = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     }
@@ -156,6 +173,7 @@ public:
 
     RISCV processor() const override;
 
+    uint32_t get_processor_id(int index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     bool binaries_exist_on_disk(const IDevice* device) const override;

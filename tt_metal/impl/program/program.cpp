@@ -1122,18 +1122,13 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto &kernels : this->kernels_) {
         for (const auto &[kernel_id, kernel] : kernels) {
-            std::vector<RISCV> sub_kernels;
-            if (kernel->processor() == RISCV::COMPUTE) {
-                sub_kernels = {RISCV::TRISC0, RISCV::TRISC1, RISCV::TRISC2};
-            } else {
-                sub_kernels = {kernel->processor()};
-            }
-            const auto& binaries = KernelImpl::from(*kernel).binaries(
+            auto& kernel_impl = KernelImpl::from(*kernel);
+            const auto& binaries = kernel_impl.binaries(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
-            std::vector<RISCV> riscvs;
+            std::vector<uint32_t> processor_ids;
             uint32_t transfer_info_index = 0;
 
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
@@ -1145,7 +1140,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 dst_base_addrs.resize(dst_base_addrs.size() + num_spans);
                 page_offsets.resize(page_offsets.size() + num_spans);
                 lengths.resize(lengths.size() + num_spans);
-                riscvs.resize(riscvs.size() + num_spans);
+                processor_ids.resize(processor_ids.size() + num_spans);
 
                 kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr,
                                              uint64_t dst,
@@ -1155,7 +1150,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     page_offsets[transfer_info_index] =
                         binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                     lengths[transfer_info_index] = len * sizeof(uint32_t);
-                    riscvs[transfer_info_index] = sub_kernels[sub_kernel_index];
+                    processor_ids[transfer_info_index] = kernel_impl.get_processor_id(sub_kernel_index);
 
                     binaries_data.insert(binaries_data.end(), mem_ptr, mem_ptr + len);
                     binaries_data.resize(
@@ -1164,9 +1159,16 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 });
             }
 
-            kernel_bins_transfer_info kb_transfer_info = {
-                .dst_base_addrs = dst_base_addrs, .page_offsets = page_offsets, .lengths = lengths, .riscvs = riscvs};
-            kernel_transfer_info.insert({kernel_id, kb_transfer_info});
+            kernel_transfer_info.emplace(
+                kernel_id,
+                kernel_bins_transfer_info{
+                    .core_type = kernel->get_kernel_programmable_core_type(),
+                    .processor_class = kernel->get_kernel_processor_class(),
+                    .dst_base_addrs = std::move(dst_base_addrs),
+                    .page_offsets = std::move(page_offsets),
+                    .lengths = std::move(lengths),
+                    .processor_ids = std::move(processor_ids),
+                });
         }
     }
 
