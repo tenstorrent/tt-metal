@@ -24,6 +24,30 @@ inline void open_direction_connections(
 }
 
 template <size_t Size>
+inline void open_direction_connections_async(
+    const std::array<bool, Size>& directions,
+    std::array<WorkerToFabricEdmSender, Size>& connections,
+    size_t& rt_args_idx) {
+    for (uint32_t i = 0; i < Size; i++) {
+        if (directions[i]) {
+            connections[i] =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+            connections[i].open_start();
+        }
+    }
+}
+
+template <size_t Size>
+inline void open_direction_connections_barrier(
+    const std::array<bool, Size>& directions, std::array<WorkerToFabricEdmSender, Size>& connections) {
+    for (uint32_t i = 0; i < Size; i++) {
+        if (directions[i]) {
+            connections[i].open_finish();
+        }
+    }
+}
+
+template <size_t Size>
 inline void close_direction_connections(
     const std::array<bool, Size>& directions, std::array<WorkerToFabricEdmSender, Size>& connections) {
     for (size_t i = 0; i < Size; ++i) {
@@ -408,4 +432,40 @@ inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
         return false;
     }
 }
+
+// Send initialization semaphore to configured target devices for synchronization
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t SrcChipId,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReplicateGroup Axis,
+    uint32_t NumDevices>
+inline void send_init_semaphore_to_configured_targets(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    const uint8_t dest_chip_ids[NumDevices],
+    const uint8_t dest_mesh_ids[NumDevices],
+    uint64_t init_noc_semaphore_addr) {
+    for (uint32_t device_idx = 0; device_idx < NumDevices; ++device_idx) {
+        if (device_idx == LinearizedSrcMeshCoord) {
+            continue;
+        } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(device_idx)) {
+            if constexpr (is_1d_topology<Topology>()) {
+                fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                    LinearizedSrcMeshCoord,
+                    Topology,
+                    MeshRows,
+                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
+            } else {
+                const auto& dest_chip_id = dest_chip_ids[device_idx];
+                const auto& dest_mesh_id = dest_mesh_ids[device_idx];
+                fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
+                    fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, false);
+            }
+        }
+    }
+}
+
 }  // namespace ttnn::operations::ccl::common

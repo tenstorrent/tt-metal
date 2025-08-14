@@ -25,7 +25,8 @@ struct ExecuteAllToAllCombine {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<uint32_t>& axis = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<GlobalSemaphore>& init_semaphore = std::nullopt);
 };
 
 }  // namespace operations::ccl
