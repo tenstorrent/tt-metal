@@ -1202,55 +1202,61 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     IDevice* device = a.device();
 
-    // grid
-    uint32_t num_cores_c = grid_size.y;
-    uint32_t num_cores_r = grid_size.x;
-    uint32_t num_cores = num_cores_c * num_cores_r;
+    // Compute optimal core grid
+    uint32_t num_virtual_cols = grid_size.y;  // TODO: Fix frame of reference. X/Y flipped
+    while (num_groups % (TILE_WIDTH * num_virtual_cols) != 0) {
+        num_virtual_cols -= 1;
+    }
+    uint32_t num_actual_cols =
+        (grid_size.y / num_virtual_cols) *
+        num_virtual_cols;  // Largest multiple of virtual cols < 8 //TODO: Fix frame of reference. X/Y flipped
+    uint32_t num_actual_rows = grid_size.x;  // TODO: Fix frame of reference. X/Y flipped
+    uint32_t num_virtual_rows =
+        (grid_size.y / num_virtual_cols) * num_actual_rows;  // TODO: Assert if we don't have enough data
+
+    uint32_t num_cores = num_actual_cols * num_actual_rows;
     auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
 
-    // tensor shape
-    const auto& shape = a.padded_shape();
-    uint32_t H = shape[2] * num_batches;
+    TT_FATAL(
+        num_groups % num_virtual_cols == 0, "num_groups: {} must divide cores_y: {}", num_groups, num_virtual_cols);
+    TT_FATAL(
+        ((num_groups / num_virtual_cols) * (num_channels / num_groups)) % TILE_WIDTH == 0,
+        "(num_groups: {}/virtual_cols: {})*(num_channels: {}/num_groups: {}) must be divisible by {}",
+        num_groups,
+        num_virtual_cols,
+        W,
+        num_groups,
+        TILE_WIDTH);
+    const q
+        // tensor shape
+        auto& shape = a.padded_shape();
+    uint32_t H = shape[1] * shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
-    uint32_t per_core_M_group_1 = H / num_cores_r;
+    uint32_t per_core_M_group_1 = H / num_virtual_rows;
     uint32_t per_core_M_group_2 = 0;
-    uint32_t per_core_N = W / num_cores_c;
-    TT_FATAL(num_cores_c != 0, "num_cores_c should not equal 0");
-    TT_FATAL(num_cores_r != 0, "num_cores_r should not equal 0");
-    TT_FATAL(H % num_cores_r == 0, "width * height: {} must be divisible by num_cores.y: {}", H, num_cores_r);
-    TT_FATAL(W % num_cores_c == 0, "channels: {} must be divisible by num_cores.x: {}", W, num_cores_c);
+    uint32_t per_core_N = W / num_virtual_cols;
     uint32_t per_core_Mt_group_1 = per_core_M_group_1 / TILE_HEIGHT;
     uint32_t per_core_Mt_group_2 = 0;
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
-    uint32_t num_datum_row_per_group = W / num_groups;
+    uint32_t num_datum_row_per_group = W / num_groups;  // TODO: Rename to num_channels_per_group
     uint32_t num_datum_row_per_group_mod_tile_w =
         num_datum_row_per_group % TILE_WIDTH == 0 ? TILE_WIDTH : num_datum_row_per_group % TILE_WIDTH;
-    uint32_t group_size = W / num_groups;
     // split each batch into multiple cores
-    uint32_t num_shards_r = H / per_core_M_group_1;
+    uint32_t num_shards_r = H / per_core_M_group_1;  // TODO: This should be num_virtual_rows
     uint32_t num_cores_per_batch = num_batches > num_shards_r ? 1 : num_shards_r / num_batches;
-    uint32_t num_shards_c = W / per_core_N;
+    uint32_t num_shards_c = W / per_core_N;  // TODO: This should be num_virtual_cols
     uint32_t num_cores_per_group = num_groups > num_shards_c ? 1 : num_shards_c / num_groups;
     // each core contains multiple batches
     uint32_t num_batches_per_core_group_1 = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_batches_per_core_group_2 = num_batches_per_core_group_1;  // need this to be non-zero even if unused
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
-    TT_FATAL(num_groups % num_cores_c == 0, "num_groups: {} must divide cores_y: {}", num_groups, num_cores_c);
-    TT_FATAL(
-        ((num_groups / num_cores_c) * group_size) % TILE_WIDTH == 0,
-        "(num_groups: {}/cores_y: {})*(num_channels: {}/num_groups: {}) must be divisible by {}",
-        num_groups,
-        num_cores_c,
-        W,
-        num_groups,
-        TILE_WIDTH);
 
     // subblock
     uint32_t num_rows_per_batch_per_core_group_1 = per_core_M_group_1 / num_batches_per_core_group_1;
     uint32_t num_rows_per_batch_per_core_group_2 = 0;
-    auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, group_size);
+    auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, num_datum_row_per_group);
     uint32_t block_ht_group_1 = per_core_Mt_group_1 / num_batches_per_core_group_1;
     uint32_t block_ht_group_2 = 0;
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
@@ -1260,7 +1266,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // support for uneven batches across rows
     bool equal_batches_per_core = true;
     uint32_t last_row_with_extra_batch = 0;
-    if (num_batches >= num_cores_r) {
+    if (num_batches >= num_shards_r) {
         last_row_with_extra_batch = (num_batches % num_shards_r);
         equal_batches_per_core = (last_row_with_extra_batch == 0);
         if (!equal_batches_per_core) {
@@ -1271,7 +1277,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // Have first group (each row has 1 extra batch compared to second group), and second group
     if (!equal_batches_per_core) {
         // tensor shape
-        num_batches_per_core_group_2 = num_batches / num_cores_r;
+        num_batches_per_core_group_2 = num_batches / num_shards_r;
         num_batches_per_core_group_1 = num_batches_per_core_group_2 + 1;
 
         TT_FATAL(Ht % num_batches == 0, "Ht ({}) needs to be divisible by the number of batches ({})", Ht, num_batches);
@@ -1304,11 +1310,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     if (per_core_M_group_2 > 0) {
         TT_FATAL(per_core_M_group_2 % TILE_HEIGHT == 0, "per_core_M: {} divides Tile Height", per_core_M_group_2);
     }
-    if (per_core_N != W) {
-        TT_FATAL(per_core_N * num_cores_c == W, "cores_x mus divide Channels");
-        // TT_FATAL(per_core_M_group_1 * num_cores_r == H, "{} * {} should equal {}", per_core_M_group_1, num_cores_r,
-        // H); TODO VASH
-    }
+    // if (per_core_N != W) {
+    //     TT_FATAL(per_core_N * num_cores_c == W, "cores_x mus divide Channels");
+    //  TT_FATAL(per_core_M_group_1 * num_cores_r == H, "{} * {} should equal {}", per_core_M_group_1, num_cores_r,
+    //  H); TODO VASH
+    //}
 
     TT_FATAL(per_core_M_group_1 % TILE_HEIGHT == 0, "per_core_M must be divisible by TILE_HEIGHT");
     if (per_core_M_group_2 > 0) {
