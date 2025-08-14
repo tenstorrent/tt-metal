@@ -888,362 +888,318 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool process_mask_for_chec
 
 #if defined(FABRIC_2D)
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
-FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_mask_for_forwarding(
-    uint32_t mask,
+FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_packet(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
-    uint8_t transaction_id) {
-    using eth_chan_directions::EAST;
-    using eth_chan_directions::NORTH;
-    using eth_chan_directions::SOUTH;
-    using eth_chan_directions::WEST;
-
-    auto payload_size_bytes = packet_start->payload_size_bytes;
-
-    if (mask > 0xF) {
-        __builtin_unreachable();
-    }
-
-    switch (mask & 0xF) {
-        case LowLatencyMeshRoutingFields::NOOP: return;
-        case LowLatencyMeshRoutingFields::FORWARD_EAST: {
+    uint8_t transaction_id,
+    uint32_t mask) {
+    uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+    switch (mask) {
+        case LowLatencyMeshRoutingFields::NOOP: break;
+        case LowLatencyMeshRoutingFields::FORWARD_EAST:
             if constexpr (my_direction == eth_chan_directions::EAST) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, false, eth_chan_directions::EAST>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::EAST>()],
+                    downstream_edm_interface[eth_chan_directions::EAST],
                     transaction_id);
             }
             break;
-        }
-        case LowLatencyMeshRoutingFields::FORWARD_WEST: {
+        case LowLatencyMeshRoutingFields::FORWARD_WEST:
             if constexpr (my_direction == eth_chan_directions::WEST) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, false, eth_chan_directions::WEST>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::WEST>()],
+                    downstream_edm_interface[eth_chan_directions::WEST],
                     transaction_id);
             }
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW: {
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
             if constexpr (my_direction == eth_chan_directions::WEST) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, false, eth_chan_directions::EAST>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::EAST>()],
+                    downstream_edm_interface[eth_chan_directions::EAST],
                     transaction_id);
             } else {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, false, eth_chan_directions::WEST>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::WEST>()],
+                    downstream_edm_interface[eth_chan_directions::WEST],
                     transaction_id);
             }
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             break;
-        }
-        case LowLatencyMeshRoutingFields::FORWARD_NORTH: {
+        case LowLatencyMeshRoutingFields::FORWARD_NORTH:
             if constexpr (my_direction == eth_chan_directions::NORTH) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, false, eth_chan_directions::NORTH>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::NORTH>()],
+                    downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             }
             break;
-        }
-        case LowLatencyMeshRoutingFields::FORWARD_SOUTH: {
+        case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, false, eth_chan_directions::SOUTH>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::SOUTH>()],
+                    downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             }
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS: {
-            if constexpr (my_direction == eth_chan_directions::NORTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, false, eth_chan_directions::SOUTH>(
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
+            if constexpr (my_direction == eth_chan_directions::SOUTH) {
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::SOUTH>()],
+                    downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, false, eth_chan_directions::NORTH>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::NORTH>()],
+                    downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             }
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW: {
-            if constexpr (my_direction == eth_chan_directions::NORTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::SOUTH>(
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
+            cached_routing_fields.value++;
+            if constexpr (my_direction == eth_chan_directions::SOUTH) {
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::SOUTH>()],
+                    downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::NORTH>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::NORTH>()],
+                    downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             }
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::EAST>(
+            cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::EAST>()],
+                downstream_edm_interface[eth_chan_directions::EAST],
                 transaction_id);
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::WEST>(
+            cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::WEST>()],
+                downstream_edm_interface[eth_chan_directions::WEST],
                 transaction_id);
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE: {
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
+            cached_routing_fields.value++;
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::NORTH>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::NORTH>()],
+                    downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::SOUTH>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::SOUTH>()],
+                    downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             }
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::EAST>(
+            cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::EAST>()],
+                downstream_edm_interface[eth_chan_directions::EAST],
                 transaction_id);
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW: {
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
+            cached_routing_fields.value++;
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::NORTH>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::NORTH>()],
+                    downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::SOUTH>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::SOUTH>()],
+                    downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             }
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::WEST>(
+            cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::WEST>()],
+                downstream_edm_interface[eth_chan_directions::WEST],
                 transaction_id);
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW: {
-            if constexpr (my_direction == eth_chan_directions::NORTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::SOUTH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::SOUTH>()],
-                    transaction_id);
-            } else {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            }
-
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::EAST>(
-                packet_start,
-                payload_size_bytes,
-                cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::EAST>()],
-                transaction_id);
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::WEST>(
-                packet_start,
-                payload_size_bytes,
-                cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::WEST>()],
-                transaction_id);
-
-            break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW: {
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::NORTH>(
+                cached_routing_fields.value++;
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::NORTH>()],
+                    downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
-
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::EAST>(
+            cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::EAST>()],
+                downstream_edm_interface[eth_chan_directions::EAST],
                 transaction_id);
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::WEST>(
+            cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::WEST>()],
+                downstream_edm_interface[eth_chan_directions::WEST],
                 transaction_id);
-
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE: {
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
             if constexpr (my_direction == eth_chan_directions::NORTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::SOUTH>(
+                cached_routing_fields.value++;
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::SOUTH>()],
+                    downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             } else {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
-
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::EAST>(
+            cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::EAST>()],
+                downstream_edm_interface[eth_chan_directions::EAST],
+                transaction_id);
+            cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interface[eth_chan_directions::WEST],
                 transaction_id);
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW: {
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
+            if constexpr (my_direction == eth_chan_directions::SOUTH) {
+                cached_routing_fields.value++;
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                    packet_start,
+                    payload_size_bytes,
+                    cached_routing_fields,
+                    downstream_edm_interface[eth_chan_directions::NORTH],
+                    transaction_id);
+            } else {
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            }
+            cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interface[eth_chan_directions::EAST],
+                transaction_id);
+            break;
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
+            if constexpr (my_direction == eth_chan_directions::SOUTH) {
+                cached_routing_fields.value++;
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                    packet_start,
+                    payload_size_bytes,
+                    cached_routing_fields,
+                    downstream_edm_interface[eth_chan_directions::NORTH],
+                    transaction_id);
+            } else {
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            }
+            cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interface[eth_chan_directions::WEST],
+                transaction_id);
+            break;
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
             if constexpr (my_direction == eth_chan_directions::NORTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::SOUTH>(
+                cached_routing_fields.value++;
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::SOUTH>()],
+                    downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             } else {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
-
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::WEST>(
+            cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::WEST>()],
+                downstream_edm_interface[eth_chan_directions::EAST],
                 transaction_id);
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE: {
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::NORTH>(
+        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
+            if constexpr (my_direction == eth_chan_directions::NORTH) {
+                cached_routing_fields.value++;
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::NORTH>()],
+                    downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             } else {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
-
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::EAST>(
+            cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::EAST>()],
+                downstream_edm_interface[eth_chan_directions::WEST],
                 transaction_id);
             break;
-        }
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW: {
-            if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::NORTH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interface
-                        [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::NORTH>()],
-                    transaction_id);
-            } else {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            }
-
-            forward_to_downstream_edm<SENDER_NUM_BUFFERS, true, eth_chan_directions::WEST>(
-                packet_start,
-                payload_size_bytes,
-                cached_routing_fields,
-                downstream_edm_interface
-                    [get_downstream_edm_interface_index<rx_channel_id, eth_chan_directions::WEST>()],
-                transaction_id);
-            break;
-        }
         default: __builtin_unreachable();
     }
 }
@@ -1315,6 +1271,7 @@ FORCE_INLINE void receiver_forward_packet(
 }
 
 #if defined(FABRIC_2D)
+/*
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void receiver_forward_packet(
@@ -1326,6 +1283,7 @@ FORCE_INLINE void receiver_forward_packet(
     process_mask_for_forwarding<rx_channel_id, SENDER_NUM_BUFFERS>(
         directions_mask, packet_start, cached_routing_fields, downstream_edm_interface, transaction_id);
 }
+*/
 #endif
 
 template <typename EdmChannelWorkerIFs>
@@ -1579,7 +1537,7 @@ void run_receiver_channel_step_impl(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
                 receiver_forward_packet<receiver_channel>(
-                    packet_header, directions_mask, cached_routing_fields, downstream_edm_interface, trid);
+                    packet_header, cached_routing_fields, downstream_edm_interface, trid, directions_mask);
             } else {
                 receiver_forward_packet<receiver_channel>(
                     packet_header, cached_routing_fields, downstream_edm_interface[receiver_channel], trid);
