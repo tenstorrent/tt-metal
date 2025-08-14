@@ -21,7 +21,7 @@ Mesh: [
   board: N300_2x2,
   host_topology: [1, 1],
   device_topology: [2, 2],
-  host_ranks: [[0]]}
+}
 ]
 
 Graph: [

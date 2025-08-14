@@ -38,6 +38,6 @@ enum class FabricReliabilityMode : uint32_t {
 namespace tt::tt_fabric {
 
 using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
-using HostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
+using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
 
 }  // namespace tt::tt_fabric

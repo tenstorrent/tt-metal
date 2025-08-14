@@ -21,13 +21,13 @@ Mesh: [
   board: 2x2,
   device_topology: [2, 2],
   host_topology: [1, 1],
-  host_ranks: [[0]]},
+},
 {
   id: 1,
   board: 2x2,
   device_topology: [2, 2],
   host_topology: [1, 1],
-  host_ranks: [[0]]}
+}
 ]
 
 Graph: [
