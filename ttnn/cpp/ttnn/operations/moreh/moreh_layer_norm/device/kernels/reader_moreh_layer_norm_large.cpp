@@ -28,26 +28,21 @@ void kernel_main() {
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
     const auto input_data_format = get_dataformat(cb_id_input);
 
-    constexpr bool input_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool beta_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t block_size = get_compile_time_arg_val(3);
+    constexpr uint32_t block_size = get_compile_time_arg_val(0);
+    constexpr auto input_args = TensorAccessorArgs<1>();
+    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGenFast<input_is_dram> input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
 
 #ifdef GAMMA_HAS_VALUE
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto gamma_data_format = get_dataformat(cb_id_gamma);
-    const InterleavedAddrGenFast<gamma_is_dram> gamm_addrg = {
-        .bank_base_address = gamma_addr, .page_size = gamma_tile_bytes, .data_format = gamma_data_format};
+    const auto gamm_addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
 #endif
 
 #ifdef BETA_HAS_VALUE
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto beta_data_format = get_dataformat(cb_id_beta);
-    const InterleavedAddrGenFast<beta_is_dram> beta_addrg = {
-        .bank_base_address = beta_addr, .page_size = beta_tile_bytes, .data_format = beta_data_format};
+    const auto beta_addrg = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
 #endif
 
     fill_cb_with_value(cb_id_scaler, scaler);
