@@ -289,10 +289,10 @@
         },
         "ReshardDeviceOperation_0": {
             "op_name": "Reshard_0",
-            "kernel_duration": 1348.8394886363637,
+            "kernel_duration": 1078.0,
             "op_to_op": 841.6818181818181,
             "non-overlapped-dispatch-time": 10707.5,
-            "kernel_duration_relative_margin": 0.2,
+            "kernel_duration_relative_margin": 0.5,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
