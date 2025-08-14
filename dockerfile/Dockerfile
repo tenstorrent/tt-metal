@@ -135,7 +135,7 @@ RUN mkdir -p /tmp/iwyu \
 RUN [ "$UBUNTU_VERSION" != "24.04" ] && apt-get remove -y gdb || true
 RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
-    && wget -O /tmp/gdb-build/gdb.tar.gz https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
+    && wget -O /tmp/gdb-build/gdb.tar.gz https://ftpmirror.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
     && tar -xvf /tmp/gdb-build/gdb.tar.gz -C /tmp/gdb-build --strip-components=1 \
     && /tmp/gdb-build/configure --prefix=/usr/local \
     && make -j$(nproc) \
