@@ -697,7 +697,7 @@ FORCE_INLINE void receiver_forward_packet(
         bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
         // disable when dprint enabled due to noc cmd buf usage of DPRINT
         if (not_last_destination_device) {
-            forward_payload_to_downstream_edm<enable_ring_support, ENABLE_STATEFUL_NOC_APIS>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
         }
         if (start_distance_is_terminal_value) {
@@ -711,11 +711,11 @@ FORCE_INLINE void receiver_forward_packet(
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
-                forward_payload_to_downstream_edm<enable_ring_support, ENABLE_STATEFUL_NOC_APIS>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
-                forward_payload_to_downstream_edm<enable_ring_support, ENABLE_STATEFUL_NOC_APIS>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
@@ -747,7 +747,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         uint32_t downstream_channel = routing_table->inter_mesh_table.dest_entry[dest_mesh_id];
         ASSERT(downstream_channel != INVALID_DIRECTION);
         auto downstream_direction = port_direction_table[downstream_channel];
-        forward_payload_to_downstream_edm<enable_ring_support, false>(
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
             packet_start,
             payload_size_bytes,
             cached_routing_fields,
@@ -763,7 +763,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     if constexpr (my_direction == eth_chan_directions::NORTH) {
                         if (packet_start->mcast_params[eth_chan_directions::SOUTH]) {
                             packet_start->mcast_params[eth_chan_directions::SOUTH]--;
-                            forward_payload_to_downstream_edm<enable_ring_support, false>(
+                            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                                 packet_start,
                                 payload_size_bytes,
                                 cached_routing_fields,
@@ -773,7 +773,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     } else if constexpr (my_direction == eth_chan_directions::SOUTH) {
                         if (packet_start->mcast_params[eth_chan_directions::NORTH]) {
                             packet_start->mcast_params[eth_chan_directions::NORTH]--;
-                            forward_payload_to_downstream_edm<enable_ring_support, false>(
+                            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                                 packet_start,
                                 payload_size_bytes,
                                 cached_routing_fields,
@@ -786,7 +786,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                         // decrement east hop count
                         cached_routing_fields.value = packet_start->mcast_params[eth_chan_directions::EAST] - 1;
                         // north/south hop counts will be cleared when making trunk->branch trun.
-                        forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                             packet_start,
                             payload_size_bytes,
                             cached_routing_fields,
@@ -797,7 +797,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                         // decrement west hop count
                         cached_routing_fields.value = (packet_start->mcast_params[eth_chan_directions::WEST] - 1) << 16;
                         // north/south hop counts will be cleared when making trunk->branch trun.
-                        forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                             packet_start,
                             payload_size_bytes,
                             cached_routing_fields,
@@ -808,7 +808,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     if (packet_start->mcast_params[eth_chan_directions::WEST]) {
                         // decrement west hop count
                         packet_start->mcast_params[eth_chan_directions::WEST]--;
-                        forward_payload_to_downstream_edm<enable_ring_support, false>(
+                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                             packet_start,
                             payload_size_bytes,
                             cached_routing_fields,
@@ -819,7 +819,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     if (packet_start->mcast_params[eth_chan_directions::EAST]) {
                         // decrement east hop count
                         packet_start->mcast_params[eth_chan_directions::EAST]--;
-                        forward_payload_to_downstream_edm<enable_ring_support, false>(
+                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                             packet_start,
                             payload_size_bytes,
                             cached_routing_fields,
@@ -833,7 +833,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             auto downstream_channel = routing_table->intra_mesh_table.dest_entry[dest_chip_id];
             ASSERT(downstream_channel != INVALID_DIRECTION);
             auto downstream_direction = port_direction_table[downstream_channel];
-            forward_payload_to_downstream_edm<enable_ring_support, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -861,7 +861,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::EAST) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -873,7 +873,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::WEST) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -883,14 +883,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
             if constexpr (my_direction == eth_chan_directions::WEST) {
-                forward_payload_to_downstream_edm<enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     downstream_edm_interface[eth_chan_directions::EAST],
                     transaction_id);
             } else {
-                forward_payload_to_downstream_edm<enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -903,7 +903,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::NORTH) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -915,7 +915,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -925,14 +925,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_payload_to_downstream_edm<enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_payload_to_downstream_edm<enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -944,14 +944,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
             cached_routing_fields.value++;
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -959,14 +959,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             }
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface[eth_chan_directions::EAST],
                 transaction_id);
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -977,14 +977,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
             cached_routing_fields.value++;
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -992,7 +992,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             }
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -1003,14 +1003,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
             cached_routing_fields.value++;
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1018,7 +1018,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             }
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -1029,7 +1029,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
                 cached_routing_fields.value++;
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1039,14 +1039,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface[eth_chan_directions::EAST],
                 transaction_id);
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -1056,7 +1056,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
             if constexpr (my_direction == eth_chan_directions::NORTH) {
                 cached_routing_fields.value++;
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1066,14 +1066,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
                 downstream_edm_interface[eth_chan_directions::EAST],
                 transaction_id);
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -1083,7 +1083,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
                 cached_routing_fields.value++;
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1093,7 +1093,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -1103,7 +1103,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
                 cached_routing_fields.value++;
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1113,7 +1113,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -1123,7 +1123,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
             if constexpr (my_direction == eth_chan_directions::NORTH) {
                 cached_routing_fields.value++;
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1133,7 +1133,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -1143,7 +1143,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
             if constexpr (my_direction == eth_chan_directions::NORTH) {
                 cached_routing_fields.value++;
-                forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1153,7 +1153,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             }
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            forward_payload_to_downstream_edm<enable_ring_support, false, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -1234,7 +1234,7 @@ void run_sender_channel_step_impl(
         if constexpr (!enable_first_level_ack) {
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface
-                    .template update_persistent_connection_copy_of_free_slots<enable_ring_support>(
+                    .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(
                         completions_since_last_check);
             } else {
                 // Connection liveness checks are only done for connections that are not persistent
@@ -1262,7 +1262,7 @@ void run_sender_channel_step_impl(
         if (acks_since_last_check > 0) {
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface
-                    .template update_persistent_connection_copy_of_free_slots<enable_ring_support>();
+                    .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>();
             } else {
                 if (channel_connection_established) {
                     local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
@@ -1614,7 +1614,7 @@ void run_fabric_edm_main_loop(
                     port_direction_table,
                     receiver_channel_response_credit_senders);
             }
-            if constexpr (enable_ring_support && !skip_receiver_channel_1_connection) {
+            if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
                 run_receiver_channel_step<1>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces,
@@ -1658,7 +1658,7 @@ void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector);
             }
-            if constexpr (enable_ring_support && !dateline_connection && !skip_sender_vc1_channel_connection) {
+            if constexpr (enable_deadlock_avoidance && !dateline_connection && !skip_sender_vc1_channel_connection) {
                 run_sender_channel_step<enable_packet_header_recording, VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
@@ -2325,8 +2325,8 @@ void kernel_main() {
         }
     }
 
-    static_assert(!enable_ring_support || !is_2d_fabric, "2D mode does not yet support ring/torus");
-    if constexpr (enable_ring_support && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
+    static_assert(!enable_deadlock_avoidance || !is_2d_fabric, "2D mode does not yet support ring/torus");
+    if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
         if (has_downstream_edm_vc1_buffer_connection) {
             const auto local_sem_address_for_acks =
                 local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1];
@@ -2496,7 +2496,7 @@ void kernel_main() {
             edm_index++;
             has_downstream_edm >>= 1;
         }
-        if constexpr (enable_ring_support) {
+        if constexpr (enable_deadlock_avoidance) {
             bool connect_ring = false;
             if constexpr (my_direction == eth_chan_directions::EAST) {
                 connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::WEST)) != 0;
@@ -2508,7 +2508,8 @@ void kernel_main() {
                 connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::NORTH)) != 0;
             }
             if (connect_ring) {
-                if constexpr (enable_ring_support && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
+                if constexpr (
+                    enable_deadlock_avoidance && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
                     downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
                         .template open<
                             false,
