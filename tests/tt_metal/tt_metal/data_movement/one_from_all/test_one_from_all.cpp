@@ -329,7 +329,7 @@ void custom_test(
 }  // namespace unit_tests::dm::core_from_all
 
 /* ========== Test case for one from all data movement; Test id = 15 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     uint32_t test_id = 15;
     auto mesh_device = get_mesh_device();
     Device* device = mesh_device->get_device(0);
@@ -343,7 +343,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
 }
 
 /* ========== Test case for one from all data movement; Test id = 30 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
     uint32_t test_id = 30;
     auto mesh_device = get_mesh_device();
     Device* device = mesh_device->get_device(0);
@@ -356,7 +356,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
         get_mesh_device(), test_id, master_core_coord, subordinate_start_coord, subordinate_grid_size);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
     uint32_t test_id = 153;
@@ -371,7 +371,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
         get_mesh_device(), test_id, master_core_coord, subordinate_start_coord, subordinate_grid_size);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementOneFromAllCustom) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllCustom) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_id = 160;
     auto mesh_device = get_mesh_device();

@@ -201,11 +201,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemeSingle
     uint32_t test_case_id = 110;
 
     auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->get_device(0)->arch();
 
     bool loopback = false;
     NOC noc_id = NOC::NOC_0;
-    uint32_t sub_grid_dimension_size = arch_ == ARCH::WORMHOLE_B0 ? 7 : 9;  // Adjust based on architecture
+    uint32_t sub_grid_dimension_size =
+        mesh_device->get_device(0)->arch() == ARCH::WORMHOLE_B0 ? 7 : 9;  // Adjust based on architecture
     unit_tests::dm::core_to_all::multicast_schemes::MulticastSchemeType multicast_scheme =
         unit_tests::dm::core_to_all::multicast_schemes::MulticastSchemeType::SenderInGridTopRight;
 

@@ -264,9 +264,9 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
 
     for (unsigned int dram_channel = 0; dram_channel < device->num_dram_channels(); dram_channel++) {
         for (unsigned int vc = 0; vc < 4; vc++) {
-            unit_tests::dm::dram::directed_ideal_test(
-                get_mesh_device(), test_case_id, core_coord, dram_channel, vc);
+            unit_tests::dm::dram::directed_ideal_test(mesh_device, test_case_id, core_coord, dram_channel, vc);
         }
+    }
 }
 
 /* ========== Directed ideal test case; Test id = 3 ========== */
@@ -274,9 +274,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
     // Test ID (Arbitrary)
     uint32_t test_id = 3;
 
-    auto mesh_device = get_mesh_device();
-
-    unit_tests::dm::dram::directed_ideal_test(mesh_device, test_id);
+    unit_tests::dm::dram::directed_ideal_test(get_mesh_device(), test_id);
 }
 
 }  // namespace tt::tt_metal

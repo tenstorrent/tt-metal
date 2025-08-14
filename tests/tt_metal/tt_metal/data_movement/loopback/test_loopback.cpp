@@ -176,11 +176,14 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
     uint32_t test_id = 55;
 
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     uint32_t num_of_transactions = 128;
     uint32_t transaction_size_pages =
@@ -199,9 +202,7 @@ TEST_F(DeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
         .noc_id = noc_id};
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 }  // namespace tt::tt_metal
