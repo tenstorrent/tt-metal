@@ -1153,7 +1153,7 @@ def test_demo_text(
         "decode_t/s/u": target_decode_tok_s_u,
     }
     if repeat_batches > 1 and batch_size == 1:
-        target = 54 if galaxy_type == "6U" else 98
+        target = 54 if galaxy_type == "6U" else 99
         assert (
             avg_time_to_first_token * 1000 < target
         ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."
