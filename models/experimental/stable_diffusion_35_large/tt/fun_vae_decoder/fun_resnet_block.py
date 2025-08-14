@@ -74,8 +74,9 @@ class TtResnetBlock2DParameters:
         )
 
 
+# NOTE: CCL Calls with persistent buffer affect the programming expectations
 def resnet_block(x_in: ttnn.Tensor, parameters: TtResnetBlock2DParameters) -> ttnn.Tensor:
-    residual = x_in
+    residual = ttnn.clone(x_in)
     x = vae_group_norm(x_in, parameters.norm1)
     x = ttnn.silu(x)
     x = vae_conv2d(x, parameters.conv1)
