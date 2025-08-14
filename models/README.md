@@ -127,5 +127,5 @@
 
 ## Adding a new model
 
-- [Adding a model to `experimental`](MODEL_ADD.md)
-- [Graduating `experimental` model to `demo`](MODEL_GRADUATION.md)
+- [Adding a model to `experimental`](docs/MODEL_ADD.md)
+- [Graduating `experimental` model to `demo`](docs/MODEL_GRADUATION.md)
