@@ -79,6 +79,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
         "fabric_ring",
     ],
 )
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("chunks_per_sync", [2])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [8])
@@ -98,10 +99,13 @@ def test_rs_row_nightly(
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
+    cluster_axis,
 ):
-    cluster_axis = 0
     validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, cluster_axis)
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    if cluster_axis == 0:
+        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    else:
+        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_reduce_scatter_impl(
         submesh_device,
         num_devices,

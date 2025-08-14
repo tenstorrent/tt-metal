@@ -15,10 +15,11 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
+        (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
         (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
         (2, [1, 1, 256, 256], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
-    ids=["4_device_ring", "2_device_line"],
+    ids=["4 device line", "4_device_ring", "2_device_line"],
 )
 @pytest.mark.parametrize(
     "ag_input_dtype",
@@ -105,28 +106,33 @@ def test_ccl_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, cluster_axis)
-    if cluster_axis == 0:
-        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    else:
-        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
-    run_all_gather_impl(
-        submesh_device,
-        num_devices,
-        ag_output_shape,
-        dim,
-        num_links,
-        ag_input_dtype,
-        layout,
-        mem_config_input,
-        mem_config_ag,
-        all_gather_topology=all_gather_topology,
-        enable_trace=enable_trace,
-        num_iters=num_iters,
-        cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
-        allowed_pcc=0.9999,
-    )
+    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
+    for i in range(bh_2d_mesh_device.shape[(cluster_axis - 1) % 2]):
+        if cluster_axis == 0:
+            submesh_device = bh_2d_mesh_device.create_submesh(
+                ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, i)
+            )
+        else:
+            submesh_device = bh_2d_mesh_device.create_submesh(
+                ttnn.MeshShape((1, num_devices)), offset=ttnn.MeshCoordinate(i, 0)
+            )
+        run_all_gather_impl(
+            submesh_device,
+            num_devices,
+            ag_output_shape,
+            dim,
+            num_links,
+            ag_input_dtype,
+            layout,
+            mem_config_input,
+            mem_config_ag,
+            all_gather_topology=all_gather_topology,
+            enable_trace=enable_trace,
+            num_iters=num_iters,
+            cluster_axis=cluster_axis,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
+            allowed_pcc=0.9999,
+        )
     ttnn.ReadDeviceProfiler(submesh_device)

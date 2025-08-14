@@ -88,6 +88,8 @@ def test_rs_row_nightly(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    if (8 == ttnn.get_num_devices()) and (rs_topology == ttnn.Topology.Ring):
+        pytest.skip("Rackbox is a mesh not a torus so ring wouldn't work")
     if (2 == num_devices) and (rs_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires more than 2 devices")
     if (bh_2d_mesh_device.shape[0] != num_devices) and (rs_topology == ttnn.Topology.Ring):
