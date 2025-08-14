@@ -73,7 +73,7 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
 )
 @pytest.mark.parametrize(
     "weights_type",
-    ["random", "real"],
+    [None, "real"],
 )
 @pytest.mark.parametrize(
     "device_params",
