@@ -94,7 +94,7 @@ public:
         }
         outfile << fmt::format("\t{} stats:\n", type);
 
-        // Track stats for all RISCVS, as well as per RISC
+        // Track stats for all processors, as well as per processor
         DispatchStats total_stats;
         std::map<uint32_t, uint32_t> total_data;
         for (auto& [processor, processor_data] : data) {
