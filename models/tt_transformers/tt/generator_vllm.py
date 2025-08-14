@@ -373,3 +373,111 @@ class MistralForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+def input_processor_for_mistral(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
+    input_processor = ctx.get_hf_processor()
+    if "prompt" in inputs:
+        prompt_text = inputs["prompt"]
+    else:
+        assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
+        prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
+
+    if "multi_modal_data" in inputs and "image" in inputs["multi_modal_data"]:
+        images = inputs["multi_modal_data"]["image"]
+    else:
+        images = None
+
+    processed_inputs = input_processor(
+        text=prompt_text,
+        images=images,
+        return_tensors="pt",
+    )
+
+    assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
+    return {
+        "type": inputs["type"],
+        "prompt_token_ids": processed_inputs.input_ids[0].tolist(),
+        "prompt": prompt_text,
+        "multi_modal_data": {"image": processed_inputs},  # [INFO] add processed_inputs
+    }
+
+
+from types import SimpleNamespace
+
+
+class CustomNamespace(SimpleNamespace):
+    def __contains__(self, key):
+        return key in self.__dict__
+
+
+@INPUT_REGISTRY.register_input_processor(input_processor_for_mistral)
+class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.MISTRAL_IMAGE_TOKEN_ID = 10
+        self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
+
+    @classmethod
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+    ):
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+        model_args = []
+        model = []
+        state_dict = None
+
+        for submesh in submesh_devices:
+            model_args_i, model_i, state_dict = create_multimodal_model(
+                mesh_device=submesh,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                max_seq_len=max_seq_len,
+                use_paged_kv_cache=True,
+                checkpoint=state_dict,
+            )
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        self.tokenizer = self.model_args[0].tokenizer
+        pad_token_id = self.tokenizer.pad_token_id
+
+        tokens = kwargs["tokens"]
+        prompt_lens = kwargs["prompt_lens"]
+        inputs = CustomNamespace()
+        inputs.input_ids = tokens
+        data = kwargs.get("images", None)  # This contains the entire Data list, not just the pixel values
+        for i in range(tokens.shape[0]):  # for each user, fix their padding
+            tokens[i][prompt_lens[i] :] = pad_token_id
+        pixel_values = None
+
+        if hasattr(data[0], "pixel_values"):
+            # If inputs is a list of objects with .pixel_values, concatenate them
+            pixel_values = torch.concat([im.pixel_values for im in data if hasattr(im, "pixel_values")], dim=0)
+
+        page_table = kwargs.get("page_table", None)
+        kv_cache = kwargs.get("kv_cache", None)
+        vision_images = pixel_values
+
+        vision_images = [vision_images] if vision_images is not None else None
+
+        return super().prefill_forward_text(
+            tokens=inputs.input_ids,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            pixel_values=vision_images,
+        )
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)
