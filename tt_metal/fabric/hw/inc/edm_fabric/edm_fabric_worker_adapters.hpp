@@ -80,7 +80,8 @@ struct WorkerToFabricEdmSenderImpl {
         uint16_t buffer_size_bytes;
         uint32_t edm_copy_of_wr_counter_addr;
         volatile uint32_t* writer_send_sem_addr;
-        uint32_t worker_free_slots_stream_id;
+        uint32_t worker_free_slots_stream_id;  // used to update the available buffer slot on the receiving router
+                                               // (decrement by 1 from the sending side for each packet)
 
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
         // remove redundant nested constructor to avoid copy

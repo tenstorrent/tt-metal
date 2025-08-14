@@ -32,7 +32,7 @@ void py_bind_fabric_api(py::module& module) {
         .value("DYNAMIC_RECONFIG", tt::tt_fabric::FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE);
 
     py::enum_<tt::tt_fabric::FabricTensixConfig>(module, "FabricTensixConfig", R"(
-        Specifies the fabric tensix configuration mode for mux functionality.
+        Specifies the fabric tensix configuration mode for mux functionality. Enabling a FabricTensixConfig will result in fabric permanently reserving additional worker cores for the duration of the workload. This means fewer worker cores will be available for compute.
         Values:
             DISABLED: Fabric tensix mux functionality is disabled (default).
             MUX: Enable fabric tensix mux mode for worker → mux → fabric router routing.
