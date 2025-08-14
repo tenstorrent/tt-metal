@@ -142,6 +142,7 @@ class UNetConv2D:
         reallocate_halo_output=False,
         override_core_grid=None,
         mesh_mapper=None,
+        enable_activation_reuse=False,
     ):
         assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on WH or 10x13/10x11 on BH"
 
@@ -173,15 +174,14 @@ class UNetConv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=True,
-            enable_act_double_buffer=(
-                conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
-            ),
+            enable_act_double_buffer=False,
             enable_split_reader=(conv.use_split_reader if "use_split_reader" in conv else False),
             activation=activation,
             output_layout=output_layout,
             reshard_if_not_optimal=reshard_if_not_optimal,
             reallocate_halo_output=reallocate_halo_output,
             enable_weights_double_buffer=True,
+            enable_activation_reuse=enable_activation_reuse,
         )
 
         if override_core_grid is not None:
@@ -275,6 +275,7 @@ class UNetDownblock:
         mesh_mapper=None,
         reshard_if_not_optimal=True,
         override_core_grid=None,
+        first_downblock=False,
     ):
         self.conv1 = UNetConv2D(
             conv1,
@@ -283,6 +284,7 @@ class UNetDownblock:
             reshard_if_not_optimal=reshard_if_not_optimal,
             mesh_mapper=mesh_mapper,
             override_core_grid=override_core_grid,
+            enable_activation_reuse=first_downblock,
         )
         self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, mesh_mapper=mesh_mapper)
         self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device)
@@ -413,6 +415,7 @@ class UNet:
             override_core_grid=63 if is_wormhole_b0(self.device) else None,
             reshard_if_not_optimal=not is_wormhole_b0(self.device),
             mesh_mapper=mesh_mapper,
+            first_downblock=True,
         )
         self.downblock2 = UNetDownblock(
             parameters.c2,
