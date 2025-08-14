@@ -484,6 +484,8 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
 // TODO: move this to compile time args if we need to enable it
 constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
+constexpr bool is_persistent_fabric = true;
+
 namespace tt::tt_fabric {
 static_assert(
     receiver_channel_local_write_noc_ids[0] == edm_to_local_chip_noc,
