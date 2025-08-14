@@ -979,22 +979,7 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
     core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
 
-    // BEFORE/AFTER comparison for "Remove virtual coords" commit
-    std::cout << "=== PCIE CORES COMPARISON (metal_context.cpp) ===" << std::endl;
-    std::cout << "BEFORE (get_umd_coord_system): ";
-    const std::vector<tt::umd::CoreCoord>& pcie_cores_old =
-        soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
-    for (const auto& core : pcie_cores_old) {
-        std::cout << "(" << core.x << "," << core.y << ") ";
-    }
-    std::cout << std::endl;
-
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
-    std::cout << "AFTER  (NOC0):                ";
-    for (const auto& core : pcie_cores) {
-        std::cout << "(" << core.x << "," << core.y << ") ";
-    }
-    std::cout << std::endl;
     // There are multiple NoC endpoints for DRAM, but not all are exposed through the API. Watcher will flag endpoints
     // that are not exposed as invalid transactions. This helps to avoid BH issue highlighted by SYS-592 where writing
     // to multiple DRAM endpoints can hang the card.
