@@ -74,8 +74,6 @@ private:
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_router_config_ = {};
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_adjcent_router_config_ =
         {};
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2>
-        dateline_upstream_adjcent_upstream_router_config_ = {};
 
     // Using vectors. Use Device IDs as indices
     size_t num_devices = 0;

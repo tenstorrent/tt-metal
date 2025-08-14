@@ -136,14 +136,6 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
         tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice,
         tt::tt_fabric::FabricEriscDatamoverAxis::Long);
 
-    // dateline upstream adjacent upstream edm router
-    this->dateline_upstream_adjcent_upstream_router_config_[short_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_upstream_adjcent_upstream_router_config_[long_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Long);
-
     this->num_devices = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
     if (this->num_devices != 4 && num_pcie_devices == 4) {
@@ -196,12 +188,6 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
                 this->dateline_upstream_adjcent_router_config_[axis_index] != nullptr,
                 "Error, fabric dateline upstream adjacent device router config is uninitialized");
             return *this->dateline_upstream_adjcent_router_config_[axis_index].get();
-            break;
-        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
-            TT_FATAL(
-                this->dateline_upstream_adjcent_upstream_router_config_[axis_index] != nullptr,
-                "Error, fabric dateline upstream adjacent device upstream router config is uninitialized");
-            return *this->dateline_upstream_adjcent_upstream_router_config_[axis_index].get();
             break;
         default: TT_FATAL(false, "Error, invalid fabric edm type");
     }
