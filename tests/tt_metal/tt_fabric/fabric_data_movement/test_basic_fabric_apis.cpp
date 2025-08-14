@@ -290,89 +290,83 @@ TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_4N3S1E2W) { RunTest2DMCastConn
 
 TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_7N0S3E0W) { RunTest2DMCastConnAPI(this, 7, 0, 3, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_TGSouthWestCorner) { RunTest2DMCastConnAPI(this, 3, 0, 7, 0); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N0S7E0W) { RunTest2DMCastConnAPI(this, 3, 0, 7, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_T3kSouthWestCorner) { RunTest2DMCastConnAPI(this, 1, 0, 3, 0); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N0S3E0W) { RunTest2DMCastConnAPI(this, 1, 0, 3, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_EastHeavy) { RunTest2DMCastConnAPI(this, 1, 1, 5, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N1S5E1W) { RunTest2DMCastConnAPI(this, 1, 1, 5, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_WestHeavy) { RunTest2DMCastConnAPI(this, 1, 1, 1, 5); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N1S1E5W) { RunTest2DMCastConnAPI(this, 1, 1, 1, 5); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_NorthTrunkHeavy) { RunTest2DMCastConnAPI(this, 5, 0, 1, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_5N0S1E1W) { RunTest2DMCastConnAPI(this, 5, 0, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_SouthTrunkHeavy) { RunTest2DMCastConnAPI(this, 0, 5, 1, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N5S1E1W) { RunTest2DMCastConnAPI(this, 0, 5, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_MaxComplexity2x4) { RunTest2DMCastConnAPI(this, 1, 0, 3, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N0S3E3W) { RunTest2DMCastConnAPI(this, 1, 0, 3, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_MaxComplexity4x8) { RunTest2DMCastConnAPI(this, 3, 0, 7, 0); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N0S7E0W) { RunTest2DMCastConnAPI(this, 3, 0, 7, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_MaxComplexity8x4) { RunTest2DMCastConnAPI(this, 7, 0, 0, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_7N0S0E3W) { RunTest2DMCastConnAPI(this, 7, 0, 0, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_BidirectionalStress) { RunTest2DMCastConnAPI(this, 2, 1, 4, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N1S4E3W) { RunTest2DMCastConnAPI(this, 2, 1, 4, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_Progressive1) { RunTest2DMCastConnAPI(this, 1, 0, 2, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N0S2E3W) { RunTest2DMCastConnAPI(this, 1, 0, 2, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_Progressive2) { RunTest2DMCastConnAPI(this, 2, 1, 3, 4); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N1S3E4W) { RunTest2DMCastConnAPI(this, 2, 1, 3, 4); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_MaxNorthTrunk) { RunTest2DMCastConnAPI(this, 7, 0, 1, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_7N0S1E1W) { RunTest2DMCastConnAPI(this, 7, 0, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_MaxSouthTrunk) { RunTest2DMCastConnAPI(this, 0, 7, 1, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N7S1E1W) { RunTest2DMCastConnAPI(this, 0, 7, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_MaxSouthWithBranches) { RunTest2DMCastConnAPI(this, 0, 7, 2, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N7S2E1W) { RunTest2DMCastConnAPI(this, 0, 7, 2, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_BidirectionalTrunkEqual) { RunTest2DMCastConnAPI(this, 3, 3, 1, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N3S1E1W) { RunTest2DMCastConnAPI(this, 3, 3, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_BidirectionalTrunkNorthHeavy) {
-    RunTest2DMCastConnAPI(this, 5, 2, 1, 2);
-}
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_5N2S1E1W) { RunTest2DMCastConnAPI(this, 5, 2, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_BidirectionalTrunkSouthHeavy) {
-    RunTest2DMCastConnAPI(this, 2, 5, 2, 1);
-}
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N5S2E1W) { RunTest2DMCastConnAPI(this, 2, 5, 2, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_BidirectionalTrunkMaxBoth) {
-    RunTest2DMCastConnAPI(this, 3, 4, 1, 1);
-}
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N4S1E1W) { RunTest2DMCastConnAPI(this, 3, 4, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_BothAsymmetricBranches) { RunTest2DMCastConnAPI(this, 2, 3, 1, 2); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N3S1E2W) { RunTest2DMCastConnAPI(this, 2, 3, 1, 2); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_ProgressiveNorth3) { RunTest2DMCastConnAPI(this, 3, 0, 2, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N0S2E1W) { RunTest2DMCastConnAPI(this, 3, 0, 2, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_ProgressiveNorth4) { RunTest2DMCastConnAPI(this, 4, 0, 1, 2); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_4N0S1E2W) { RunTest2DMCastConnAPI(this, 4, 0, 1, 2); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_ProgressiveNorth5) { RunTest2DMCastConnAPI(this, 5, 0, 1, 2); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_5N0S1E2W) { RunTest2DMCastConnAPI(this, 5, 0, 1, 2); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_ProgressiveSouth3) { RunTest2DMCastConnAPI(this, 0, 3, 1, 2); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N3S1E2W) { RunTest2DMCastConnAPI(this, 0, 3, 1, 2); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_ProgressiveSouth4) { RunTest2DMCastConnAPI(this, 0, 4, 1, 2); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N4S1E2W) { RunTest2DMCastConnAPI(this, 0, 4, 1, 2); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_TopLeftCorner) { RunTest2DMCastConnAPI(this, 0, 3, 3, 0); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N3S3E0W) { RunTest2DMCastConnAPI(this, 0, 3, 3, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_TopRightCorner) { RunTest2DMCastConnAPI(this, 0, 3, 0, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N3S0E3W) { RunTest2DMCastConnAPI(this, 0, 3, 0, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_BottomLeftCorner) { RunTest2DMCastConnAPI(this, 3, 0, 3, 0); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N0S3E0W) { RunTest2DMCastConnAPI(this, 3, 0, 3, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_BottomRightCorner) { RunTest2DMCastConnAPI(this, 3, 0, 0, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N0S0E3W) { RunTest2DMCastConnAPI(this, 3, 0, 0, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_VerticalSpread) { RunTest2DMCastConnAPI(this, 3, 3, 1, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N3S1E1W) { RunTest2DMCastConnAPI(this, 3, 3, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_HorizontalSpread) { RunTest2DMCastConnAPI(this, 1, 1, 3, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N1S3E3W) { RunTest2DMCastConnAPI(this, 1, 1, 3, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_TopBoundary) { RunTest2DMCastConnAPI(this, 0, 1, 3, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_0N1S3E3W) { RunTest2DMCastConnAPI(this, 0, 1, 3, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_BottomBoundary) { RunTest2DMCastConnAPI(this, 1, 0, 3, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N0S3E3W) { RunTest2DMCastConnAPI(this, 1, 0, 3, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_LeftBoundary) { RunTest2DMCastConnAPI(this, 3, 3, 3, 0); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N3S3E0W) { RunTest2DMCastConnAPI(this, 3, 3, 3, 0); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_RightBoundary) { RunTest2DMCastConnAPI(this, 3, 3, 0, 3); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_3N3S0E3W) { RunTest2DMCastConnAPI(this, 3, 3, 0, 3); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_CenterExpansion1) { RunTest2DMCastConnAPI(this, 2, 2, 1, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_2N2S1E1W) { RunTest2DMCastConnAPI(this, 2, 2, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_NorthDominant) { RunTest2DMCastConnAPI(this, 6, 1, 1, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_6N1S1E1W) { RunTest2DMCastConnAPI(this, 6, 1, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_SouthDominant) { RunTest2DMCastConnAPI(this, 1, 6, 1, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_1N6S1E1W) { RunTest2DMCastConnAPI(this, 1, 6, 1, 1); }
 
-TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_NorthDominant2) { RunTest2DMCastConnAPI(this, 5, 1, 2, 1); }
+TEST_F(NightlyFabric2DFixture, Test2DMCastConnAPI_5N1S2E1W) { RunTest2DMCastConnAPI(this, 5, 1, 2, 1); }
 
 // 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
