@@ -144,7 +144,7 @@ def generate_report(outputFolder, nameAppend, childCalls, collect_noc_traces=Fal
         if childCallsList:
             childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -p TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
+            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -t TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,
