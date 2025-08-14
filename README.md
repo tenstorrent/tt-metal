@@ -150,13 +150,13 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 
 ### Hello World
 
-- [Hello World! Compute Kernel](./tt_metal/programming_examples/hello_world_compute_kernel)
-- [Hello World! Data Movement Kernel](./tt_metal/programming_examples/hello_world_datamovement_kernel)
+- [Hello World! Compute Kernel](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/hello_world_compute_kernel/hello_world_compute.md)
+- [Hello World! Data Movement Kernel](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/hello_world_datamovement_kernel/hello_world_data_movement.md)
 
 ### Add Integers
 
-- [Add 2 Integers in Baby RiscV](./tt_metal/programming_examples/add_2_integers_in_riscv)
-- [Add 2 Integers in Compute Kernel](./tt_metal/programming_examples/add_2_integers_in_compute)
+- [Add 2 Integers in Baby RiscV](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.md)
+- [Add 2 Integers in Compute Kernel](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/add_2_integers_in_compute/add_2_integers_in_compute.md)
 
 ### Simple Tensor Manipulation
 
@@ -165,17 +165,17 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 
 ### DRAM Data Movement
 
-- [Dram Loopback Data Movement](./tt_metal/programming_examples/loopback)
+- [Dram Loopback Data Movement](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/loopback/dram_loopback.md)
 
 ### Eltwise
 
-- [Eltwise Unary OP in Vector Engine (SFPU)](./tt_metal/programming_examples/eltwise_sfpu)
-- [Eltwise Binary OP in Matrix Engine (FPU)](./tt_metal/programming_examples/eltwise_binary)
+- [Eltwise Unary OP in Vector Engine (SFPU)](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/eltwise_sfpu/eltwise_sfpu.md)
+- [Eltwise Binary OP in Matrix Engine (FPU)](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/eltwise_binary/eltwise_binary.md)
 
 ### Matmul
 
-- [Matmul OP on a Single_core](./tt_metal/programming_examples/matmul/matmul_single_core)
-- [Matmul OP on Multi_core (Basic)](./tt_metal/programming_examples/matmul/matmul_multi_core)
+- [Matmul OP on a Single_core](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/matmul/matmul_single_core/matmul_single_core.md)
+- [Matmul OP on Multi_core (Basic)](https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/programming_examples/matmul/matmul_multi_core/matmul_multi_core.md)
 - [Matmul Multi_core Reuse (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_reuse.md)
 - [Matmul Multi_core Multi-Cast (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_mcast.md)
 
