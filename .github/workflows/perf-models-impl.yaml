@@ -119,8 +119,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e GITHUB_ACTIONS=true
-            # -e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
-            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface
+            -e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
           install_wheel: true
           run_args: |
             if [[ "${{ matrix.model-group.name }}" == "other" ]]; then

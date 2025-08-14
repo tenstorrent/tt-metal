@@ -109,7 +109,6 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
 
 test_suite_bh_multi_pcie_llama_stress_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama stress model tests"
-
     # verify_llama_dir_
 
     if [[ "$hw_topology" == "blackhole_deskbox" ]]; then

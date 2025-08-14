@@ -39,13 +39,13 @@ run_t3000_llama3_tests() {
 
   # Run test model for llama3 - 1B, 3B, 8B and 11B weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    HF_MODEL=$hf_model WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-    HF_MODEL=$hf_model WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
+    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
+    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
   # Run chunked prefill test for llama3-1B
-  HF_MODEL=$llama1b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/tests/test_chunked_generation.py; fail+=$?
+  HF_MODEL=$llama1b pytest models/tt_transformers/tests/test_chunked_generation.py; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -64,10 +64,9 @@ run_t3000_llama3_70b_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
   # Run test_model (decode and prefill) for llama3 70B
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   llama70b=meta-llama/Llama-3.1-70B-Instruct
-  HF_MODEL=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-  HF_MODEL=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
+  HF_MODEL=$llama70b pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
+  HF_MODEL=$llama70b pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -86,10 +85,9 @@ run_t3000_llama3_90b_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_90b_tests"
 
   # Run test_model (decode and prefill) for llama3 70B
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-  HF_MODEL=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
-  HF_MODEL=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
+  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
+  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -122,7 +120,7 @@ run_t3000_llama3_accuracy_tests() {
 
   # Run test accuracy llama3 - 1B, 3B, 8B, 11B and 70B weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b" "$llama90b"; do
-    HF_MODEL=$hf_model WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf ; fail+=$?
+    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf ; fail+=$?
     echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
 
@@ -145,10 +143,10 @@ run_t3000_llama3.2-11b-vision_freq_tests() {
   # Llama3.2-11B
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
-  HF_MODEL=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  HF_MODEL=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  HF_MODEL=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-  HF_MODEL=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
+  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -171,10 +169,10 @@ run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
   # Use MESH_DEVICE env variable to run on an N300 mesh
   mesh_device=N300
 
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -194,10 +192,10 @@ run_t3000_llama3.2-90b-vision_freq_tests() {
 
   # Llama3.2-90B -- use repacked weights when acceptable for faster testing
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-  HF_MODEL=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
-  HF_MODEL=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  HF_MODEL=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  HF_MODEL=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
+  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -215,8 +213,8 @@ run_t3000_mistral_tests() {
 
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
   hf_model="mistralai/Mistral-7B-Instruct-v0.3"
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_model.py -k full
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_model_prefill.py
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_model.py -k full
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_model_prefill.py
 
 }
 

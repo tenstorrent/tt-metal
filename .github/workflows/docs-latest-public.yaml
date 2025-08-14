@@ -32,8 +32,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
-        # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
     defaults:

@@ -182,9 +182,9 @@ def test_multimodal_demo_text(
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
     )
-    generator = Generator(model, model_args, mesh_device)
     processor = AutoProcessor.from_pretrained(ckpt_dir)
     tokenizer = processor.tokenizer
+    generator = Generator(model, model_args, mesh_device, preprocessor=processor)
 
     xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
 
@@ -338,7 +338,7 @@ def test_multimodal_demo_text(
                     content = " ".join(
                         str(value) for content in msg["content"] for key, value in content.items() if key != "type"
                     )
-                    print(f"{msg['role'].capitalize()}: {content}\n")
+                    print(f"{msg["role"].capitalize()}: {content}\n")
             batch_inputs = [
                 processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
                 for messages in batch_dialogs

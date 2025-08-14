@@ -49,8 +49,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -98,8 +96,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -147,8 +143,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -196,8 +190,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

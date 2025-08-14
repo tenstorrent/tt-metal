@@ -41,8 +41,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         HF_MODEL: meta-llama/Llama3.3-70B-Instruct
-        # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /work
@@ -90,8 +89,7 @@ jobs:
         LOGURU_LEVEL: INFO
         HF_MODEL: meta-llama/Llama3.3-70B-Instruct
         TT_METAL_ENABLE_ERISC_IRAM: 1
-        # HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /work

@@ -28,7 +28,7 @@ run_t3000_mistral7b_perf_tests() {
 
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
   hf_model="mistralai/Mistral-7B-Instruct-v0.3"
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

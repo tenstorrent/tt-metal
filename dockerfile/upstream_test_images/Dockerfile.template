@@ -24,7 +24,6 @@ RUN git reset --hard ${TT_METAL_COMMIT_SHA} && git submodule update --init --rec
 ENV PYTHONPATH=/home/user/tt-metal
 ENV LD_LIBRARY_PATH=/home/user/tt-metal/build/lib
 ENV TT_METAL_HOME=/home/user/tt-metal
-ENV HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
 
 RUN ls -hal
 
