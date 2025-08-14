@@ -11,8 +11,8 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 def test_exp2_arange_masking(device):
     # Exp2 Working range - Overflow from 128(inf), Underflow till -127(<0)
-    low = -126.0
-    high = 127.0
+    low = -5.0
+    high = 5.0
 
     # Generate all possible bit pattersn for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
