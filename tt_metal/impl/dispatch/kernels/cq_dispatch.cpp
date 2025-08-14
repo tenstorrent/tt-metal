@@ -1058,6 +1058,26 @@ void process_go_signal_mcast_cmd() {
     uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
     uint32_t wait_count = cmd->mcast.wait_count;
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
+        uint32_t dst_noc = worker_mcast_grid;
+        uint32_t num_dests = num_worker_cores_to_mcast;
+        // lock_no_atomic is only supported on wormhole. TODO: use real atomics and support this on blackhole.
+        volatile uint32_t* worker_sem =
+            (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+        // Check if we're currently waiting for workers.
+        if (stream_wrap_gt(wait_count, *worker_sem)) {
+            // We're currently waiting for workers. Send a linked multicast to the workers so the first multicast once
+            // the workers are ready doesn't need to do a path reservation. Normally keeping a path reservation open
+            // arbitrarily long could cause deadlocks or poor performance, but this code is the only user of
+            // NOC_DISPATCH_MULTICAST_WRITE_VC on this NOC.
+            uint64_t fake_noc_addr_multicast = get_noc_addr_helper(dst_noc, MEM_DISPATCH_NOOP);
+            constexpr bool linked = true;
+            cq_noc_async_write_init_state<CQ_NOC_SNDL, true, linked>(
+                ((uint32_t)aligned_go_signal_storage) + MEM_DISPATCH_NOOP, fake_noc_addr_multicast, sizeof(uint32_t));
+
+            cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
+            noc_nonposted_writes_acked[noc_index] += num_dests;
+            noc_nonposted_writes_num_issued[noc_index]++;
+        }
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
             get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
