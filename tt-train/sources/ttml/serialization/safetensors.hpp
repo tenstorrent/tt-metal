@@ -4,6 +4,7 @@
 
 #pragma once
 #include <core/ttnn_all_includes.hpp>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <span>
@@ -19,9 +20,13 @@ public:
         ttnn::Shape shape;  // dims
     };
 
-    // Return false from callback to stop early.
     using TensorCallback = std::function<bool(const TensorInfo& info, std::span<const std::byte> bytes)>;
 
     static void visit_safetensors_file(const std::filesystem::path& path, const TensorCallback& cb);
+
+    /*
+        Span can point to the unaligned memory, so it is not safe to copy it to the float buffer before using it.
+    */
+    static std::vector<float> bytes_to_floats_copy(std::span<const std::byte> bytes);
 };
 }  // namespace ttml::serialization

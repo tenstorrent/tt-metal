@@ -56,4 +56,5 @@ public:
 [[nodiscard]] std::shared_ptr<Transformer> create(const TransformerConfig& config);
 [[nodiscard]] std::shared_ptr<Transformer> create(const YAML::Node& config);
 
+void load_gpt2_from_safetensors(const std::filesystem::path& path, const std::shared_ptr<Transformer>& transformer);
 }  // namespace ttml::models::gpt2

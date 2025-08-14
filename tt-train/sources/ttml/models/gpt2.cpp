@@ -10,7 +10,30 @@
 #include "modules/gpt_block.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
-#include "ops/unary_ops.hpp"
+#include "serialization/safetensors.hpp"
+
+namespace {
+
+static std::vector<float> transpose_2d_flat(const std::vector<float>& flat, int64_t rows, int64_t cols) {
+    assert(rows * cols == static_cast<int64_t>(flat.size()));
+    auto src = xt::adapt(flat, {static_cast<size_t>(rows), static_cast<size_t>(cols)});
+    auto t = xt::transpose(src);
+    std::vector<float> out(t.size());
+    std::copy(t.begin(), t.end(), out.begin());
+    return out;
+}
+
+static std::vector<float> pad_rows_flat(
+    const std::vector<float>& flat, int64_t rows, int64_t cols, int64_t target_rows) {
+    if (rows >= target_rows)
+        return flat;
+    std::vector<float> out;
+    out.reserve(static_cast<size_t>(target_rows * cols));
+    out.insert(out.end(), flat.begin(), flat.end());
+    out.insert(out.end(), static_cast<size_t>((target_rows - rows) * cols), 0.0f);
+    return out;
+}
+}  // namespace
 
 namespace ttml::models::gpt2 {
 
@@ -168,4 +191,14 @@ std::shared_ptr<Transformer> create(const YAML::Node& config) {
     return std::make_shared<Transformer>(transformer_config);
 }
 
+void load_gpt2_from_safetensors(const std::filesystem::path& path, const std::shared_ptr<Transformer>& transformer) {
+    auto loading_callback = [&transformer](
+                                const serialization::SafetensorSerialization::TensorInfo& info,
+                                std::span<const std::byte> bytes) {
+        if (info.dtype != "F32" {
+            throw std::runtime_error(fmt::format("Unsupported dtype: {}", info.dtype));
+        }
+    };
+    SafetensorSerialization::load_from_safetensors(path, loading_callback);
+}
 }  // namespace ttml::models::gpt2

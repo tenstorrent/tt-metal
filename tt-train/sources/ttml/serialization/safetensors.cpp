@@ -20,6 +20,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "autograd/auto_context.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "safetensors.hpp"
 
 namespace ttml::serialization {
@@ -119,12 +121,14 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
         const auto& shape_json = obj.at("shape");
         std::vector<uint32_t> shape;
         shape.reserve(shape_json.size());
-        for (const auto& d : shape_json) shape.push_back(d.get<uint32_t>());
+        for (const auto& d : shape_json) {
+            shape.push_back(d.get<uint32_t>());
+        }
 
         const auto offs = obj.at("data_offsets");
         uint64_t begin = offs.at(0).get<uint64_t>();
         uint64_t end = offs.at(1).get<uint64_t>();
-        if (end < begin) {
+        if (begin > end) {
             throw std::runtime_error(fmt::format("Offsets are invalid: end < begin ({} < {})", end, begin));
         }
         const uint64_t len = end - begin;
@@ -140,5 +144,33 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
             break;
         }
     }
+}
+void SafetensorSerialization::read_ttnn_tensor(
+    const TensorInfo& info, std::span<const std::byte> bytes, tt::tt_metal::Tensor& tensor, CastType cast_type) {
+    // currently only supports F32 tensors
+    if (info.dtype != "F32") {
+        throw std::runtime_error(fmt::format("Unsupported dtype: {}", info.dtype));
+    }
+
+    std::vector<float> data = bytes_to_floats_copy(bytes);
+    if (cast_type == CastType::FP32_TO_BF16) {
+        tensor = core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
+            data, info.shape, &ttml::autograd::ctx().get_device());
+    } else {
+        tensor = core::from_vector<float, tt::tt_metal::DataType::FLOAT32>(
+            data, info.shape, &ttml::autograd::ctx().get_device());
+    }
+}
+
+std::vector<float> SafetensorSerialization::bytes_to_floats_copy(std::span<const std::byte> bytes) {
+    if (bytes.size_bytes() % sizeof(float) != 0) {
+        throw std::runtime_error("bytes_to_floats_copy: size not multiple of sizeof(float)");
+    }
+    const std::size_t n = bytes.size_bytes() / sizeof(float);
+    std::vector<float> out(n);
+    if (n) {
+        std::memcpy(out.data(), bytes.data(), n * sizeof(float));
+    }
+    return out;
 }
 }  // namespace ttml::serialization
