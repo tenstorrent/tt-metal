@@ -22,8 +22,8 @@ from models.experimental.stable_diffusion_35_large.tt.utils import assert_qualit
 @pytest.mark.parametrize(
     "clip_path, tokenizer_path, expected_pcc",
     [
-        ("text_encoder", "tokenizer", 0.99),  # this is a different model
-        ("text_encoder_2", "tokenizer_2", 0.99),
+        ("text_encoder", "tokenizer", 0.99),
+        ("text_encoder_2", "tokenizer_2", 0.98),
     ],
     ids=["encoder_1", "encoder_2"],
 )
@@ -95,8 +95,7 @@ def test_clip_encoder(
     # cannot use randn tensor, since HF tokenizer appends a specific eos token syntax
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
-    hf_inputs = tokenizer(test_text, padding="max_length", truncation=True, max_length=77, return_tensors="pt")
-    print("hf_inputs.input_ids.shape =", hf_inputs.input_ids.shape)
+    hf_inputs = tokenizer(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
     tt_tokens = ttnn.from_torch(
         hf_inputs.input_ids,
         dtype=ttnn.uint32,
@@ -105,25 +104,8 @@ def test_clip_encoder(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    print("hf_model is, ", hf_model)
-
     start_time = time.time()
     with torch.no_grad():
-        # ClipTextModel
-        #         return BaseModelOutputWithPooling(
-        #     last_hidden_state=last_hidden_state,
-        #     pooler_output=pooled_output,
-        #     hidden_states=encoder_outputs.hidden_states,
-        #     attentions=encoder_outputs.attentions,
-        # )
-        # ClipTextModelWithProjection
-        # return CLIPTextModelOutput(
-        #     text_embeds=text_embeds,
-        #     last_hidden_state=text_outputs.last_hidden_state,
-        #     hidden_states=text_outputs.hidden_states,
-        #     attentions=text_outputs.attentions,
-        # )
-
         hf_output = hf_model(**hf_inputs, output_hidden_states=True)
         sequence_output = hf_output.hidden_states[-2]
         pooled_output = hf_output.text_embeds if has_projection else hf_output.pooler_output
@@ -166,5 +148,5 @@ def test_clip_encoder(
     assert pooled_output.shape == tt_projected_output_torch.shape
 
     # For some reason, this has pcc 10 both here and in sd3.5 large when max_length padding is used
-    # assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
+    assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
     assert_quality(pooled_output, tt_projected_output_torch, pcc=expected_pcc)
