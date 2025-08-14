@@ -365,35 +365,35 @@
                                 }
                             }
 
-                            const int_metric_ids = data["int_metric_ids"];
-                            const int_metric_names = data["int_metric_names"];    // optional, and indicates new telemetry metrics if present
-                            const int_metric_values = data["int_metric_values"];
+                            const uint_metric_ids = data["uint_metric_ids"];
+                            const uint_metric_names = data["uint_metric_names"];    // optional, and indicates new telemetry metrics if present
+                            const uint_metric_values = data["uint_metric_values"];
 
-                            if (int_metric_ids.length != int_metric_values.length) {
-                                console.log(`SSE error: Received differing id and value counts (${int_metric_ids.length} vs. ${int_metric_values.length})`);
+                            if (uint_metric_ids.length != uint_metric_values.length) {
+                                console.log(`SSE error: Received differing id and value counts (${uint_metric_ids.length} vs. ${uint_metric_values.length})`);
                                 return;
                             }
 
-                            if (int_metric_names.length > 0 && int_metric_names.length != int_metric_ids.length) {
-                                console.log(`SSE error: Received differing name and id counts (${int_metric_names.length} vs. ${int_metric_ids.length})`);
+                            if (uint_metric_names.length > 0 && uint_metric_names.length != uint_metric_ids.length) {
+                                console.log(`SSE error: Received differing name and id counts (${uint_metric_names.length} vs. ${uint_metric_ids.length})`);
                                 return;
                             }
 
-                            if (int_metric_names.length > 0) {
+                            if (uint_metric_names.length > 0) {
                                 // Adding new
-                                for (let i = 0; i < int_metric_ids.length; i++) {
-                                    const path = int_metric_names[i];
-                                    const id = int_metric_ids[i];
-                                    const value = int_metric_values[i];
+                                for (let i = 0; i < uint_metric_ids.length; i++) {
+                                    const path = uint_metric_names[i];
+                                    const id = uint_metric_ids[i];
+                                    const value = uint_metric_values[i];
                                     this._telemetryStore.addPath(path, id, value, false);
                                     did_update = true;
                                 }
                             } else {
                                 // Delta updates
-                                for (let i = 0; i < int_metric_ids.length; i++) {
-                                    const id = int_metric_ids[i];
-                                    const value = int_metric_values[i];
-                                    this._telemetryStore.updateIntValue(id, value);
+                                for (let i = 0; i < uint_metric_ids.length; i++) {
+                                    const id = uint_metric_ids[i];
+                                    const value = uint_metric_values[i];
+                                    this._telemetryStore.updateUIntValue(id, value);
                                     did_update = true;
                                 }
                             }
