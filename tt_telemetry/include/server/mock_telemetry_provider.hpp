@@ -35,11 +35,13 @@
             "foo_glorp_cpu2",
             "foo_glorp_cpu3"
         };
+        std::vector<size_t> bool_metric_ids_;
         std::vector<bool> bool_metric_values_;
         const std::vector<std::string> int_metric_names_ = {
             "foo_bar_baz4int",
             "ints_intermediate_intvalue"
         };
+        std::vector<size_t> int_metric_ids_;
         std::vector<int> int_metric_values_;
     
         // Snapshot and distribution to consumers
@@ -53,7 +55,6 @@
         std::mt19937 gen_;
         std::uniform_int_distribution<> bool_dist_;
         std::uniform_int_distribution<> int_dist_;
-        std::uniform_int_distribution<> metric_dist_;
         std::uniform_int_distribution<> num_updates_dist_;
     
         std::thread thread_;
@@ -103,34 +104,38 @@
     
         void create_random_updates(std::shared_ptr<TelemetrySnapshot> delta) {
             // Select random bool metrics to update
+            std::uniform_int_distribution<> bool_metric_dist(0, bool_metric_names_.size() - 1);
             int num_updates = num_updates_dist_(gen_);
             for (int i = 0; i < num_updates; ++i) {
-                size_t idx = metric_dist_(gen_);
+                size_t idx = bool_metric_dist(gen_);
+                size_t id = bool_metric_ids_[idx];
                 bool new_value = bool_dist_(gen_) & 1;
                 
                 // Only add to updates if state actually changes
                 if (bool_metric_values_[idx] != new_value) {
                     bool_metric_values_[idx] = new_value;
-                    delta->bool_metric_indices.push_back(idx);
+                    delta->bool_metric_ids.push_back(id);
                     delta->bool_metric_values.push_back(new_value);
                 }
             }
 
-            // Select random bool metrics to update
+            // Select random int metrics to update
+            std::uniform_int_distribution<> int_metric_dist(0, int_metric_names_.size() - 1);
             num_updates = num_updates_dist_(gen_);
             for (int i = 0; i < num_updates; ++i) {
-                size_t idx = metric_dist_(gen_);
-                bool new_value = int_dist_(gen_);
-                
+                size_t idx = int_metric_dist(gen_);
+                size_t id = int_metric_ids_[idx];
+                int new_value = int_dist_(gen_);
+
                 // Only add to updates if state actually changes
                 if (int_metric_values_[idx] != new_value) {
                     int_metric_values_[idx] = new_value;
-                    delta->int_metric_indices.push_back(idx);
+                    delta->int_metric_ids.push_back(id);
                     delta->int_metric_values.push_back(new_value);
                 }
             }
     
-            std::cout << "[MockTelemetryProvider] Updated: " << (delta->bool_metric_indices.size() + delta->int_metric_indices.size()) << " values pending" << std::endl;
+            std::cout << "[MockTelemetryProvider] Updated: " << (delta->bool_metric_ids.size() + delta->int_metric_ids.size()) << " values pending" << std::endl;
         }
     
         void update_telemetry_randomly() {
@@ -140,12 +145,14 @@
                 snapshot->clear();
                 snapshot->is_absolute = true;
                 for (size_t i = 0; i < bool_metric_names_.size(); i++) {
-                    snapshot->bool_metric_indices.push_back(i);
+                    size_t id = bool_metric_ids_[i];
+                    snapshot->bool_metric_ids.push_back(id);
                     snapshot->bool_metric_names.push_back(bool_metric_names_[i]);
                     snapshot->bool_metric_values.push_back(bool_metric_values_[i]);
                 }
                 for (size_t i = 0; i < int_metric_names_.size(); i++) {
-                    snapshot->int_metric_indices.push_back(i);
+                    size_t id = int_metric_ids_[i];
+                    snapshot->int_metric_ids.push_back(id);
                     snapshot->int_metric_names.push_back(int_metric_names_[i]);
                     snapshot->int_metric_values.push_back(int_metric_values_[i]);
                 }
@@ -180,21 +187,27 @@
             , gen_(rd_())
             , bool_dist_(0, 1)
             , int_dist_(-100, 100)
-            , metric_dist_(0, bool_metric_names_.size() - 1)
             , num_updates_dist_(1, 4) {
             // Init telemetry randomly
+            bool_metric_ids_.clear();
+            bool_metric_ids_.reserve(bool_metric_names_.size());
             bool_metric_values_.clear();
             bool_metric_values_.reserve(bool_metric_names_.size());
+            int_metric_ids_.clear();
+            int_metric_ids_.reserve(int_metric_names_.size());
             int_metric_values_.clear();
             int_metric_values_.reserve(int_metric_names_.size());
             
+            size_t id = 1;
             for (size_t i = 0; i < bool_metric_names_.size(); ++i) {
                 bool initial_value = bool_dist_(gen_) & 1;
                 bool_metric_values_.push_back(initial_value);
+                bool_metric_ids_.push_back(id++);
             }
             for (size_t i = 0; i < int_metric_names_.size(); ++i) {
                 int initial_value = int_dist_(gen_);
                 int_metric_values_.push_back(initial_value);
+                int_metric_ids_.push_back(id++);
             }
     
             // Start update thread
