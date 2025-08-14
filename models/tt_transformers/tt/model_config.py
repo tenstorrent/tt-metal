@@ -36,6 +36,11 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
+model_name = os.getenv("HF_MODEL")
+print("*" * 200)
+print(f"Model name: {model_name}")
+print(f"model{model_name}")
+print("*" * 200)
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
@@ -141,7 +146,10 @@ class ModelOptimizations:
         """Configuration optimized for performance
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
-        base_model_name = model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+        if model_name == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+            base_model_name = model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+        else:
+            base_model_name = get_base_model_name(model_name)
         if base_model_name == "Qwen2.5-7B":
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
@@ -1487,7 +1495,10 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", 896)
+        if self.model_name in "Mistral-Small-3.1-24B-Instruct-2503":
+            self.vision_chunk_size = config.get("vision_chunk_size", 896)
+        else:
+            self.vision_chunk_size = config.get("vision_chunk_size", -1)
         self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
 
@@ -2352,8 +2363,11 @@ class ModelArgs:
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            layers = getattr(model, "layers", getattr(model, "model", {}).layers)
-            layer = layers[0].input_layernorm
+            if model_name == "Mistral-Small-3.1-24B_Instruct-2503":
+                layers = getattr(model, "layers", getattr(model, "model", {}).layers)
+                layer = layers[0].input_layernorm
+            else:
+                layer = model.model.norm
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
@@ -2381,7 +2395,7 @@ class ModelArgs:
                 elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
                     from transformers import Mistral3ForConditionalGeneration
 
-                    model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
+                    model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
                     model = model
 
                 else:
@@ -2521,7 +2535,10 @@ class ModelArgs:
                 model = self.reference_transformer(wrap=False)
                 layer = model.model.embed_tokens
             else:
-                layer = reference_model.model.embed_tokens
+                if model_name == "Mistral-Small-3.1-24B-Instruct-2503":
+                    layer = reference_model.model.embed_tokens
+                else:
+                    layer = reference_model.model.model.embed_tokens
 
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))

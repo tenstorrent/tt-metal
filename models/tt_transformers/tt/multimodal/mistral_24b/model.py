@@ -7,9 +7,9 @@ pass the resulting visual tokens to the text model along with text tokens.
 """
 
 
-import ttnn
 import torch
 
+import ttnn
 from models.tt_transformers.tt.model import Transformer
 from ttnn import ConcatMeshToTensor
 

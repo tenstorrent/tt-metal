@@ -9,11 +9,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
-
 from models.experimental.mistral_24b.tt.vision_mmp import TTMistral3MultiModalProjector
+from models.tt_transformers.tt.model_config import ModelArgs
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()

@@ -4,13 +4,11 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatch
-from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
-
-from models.tt_transformers.tt.common import position_ids_in_meshgrid_tt, generate_block_attention_mask_tt
-from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
-
-from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
+from models.tt_transformers.tt.common import generate_block_attention_mask_tt, position_ids_in_meshgrid_tt
+from models.tt_transformers.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_conv2d import TtMistralConv2dPatch
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_pixtral_transformer import TtPixtralTransformer
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_rope import VisionRotarySetup as RotarySetup
 from ttnn import ConcatMeshToTensor
 
 

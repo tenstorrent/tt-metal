@@ -8,9 +8,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.model_config import ModelArgs
-
 from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 

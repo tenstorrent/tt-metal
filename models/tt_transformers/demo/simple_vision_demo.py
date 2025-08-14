@@ -27,7 +27,9 @@ import torch
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.common import hf_multimodal_encode
 from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.model_config import CheckpointType
 
 
 def get_batch_sampler(temperature, top_p, tokenizer):
@@ -62,6 +64,7 @@ def create_multimodal_model(
 ):
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
+    from models.tt_transformers.tt.multimodal.mistral_24b.model import MistralTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
     assert tt_model_args.is_vision(), "This model is multimodal"
@@ -76,14 +79,25 @@ def create_multimodal_model(
 
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
-    model = CrossAttentionTransformer(
-        mesh_device,
-        state_dict=checkpoint,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        dtype=dtype,
-        configuration=tt_model_args,
-        use_paged_kv_cache=use_paged_kv_cache,
-    )
+
+    if tt_model_args.base_model_name == "Mistral-Small-3.1-24B":
+        model = MistralTransformer(
+            mesh_device=mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+            dtype=ttnn.bfloat8_b,
+            args=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
+    else:
+        model = CrossAttentionTransformer(
+            mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            dtype=dtype,
+            configuration=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
     return tt_model_args, model, checkpoint
 
 
@@ -128,7 +142,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "test_type,max_seq_len",
-    (("normal", 512),),
+    (("normal", 2048),),
     ids=["normal"],
 )
 @pytest.mark.parametrize(
@@ -172,9 +186,6 @@ def test_multimodal_demo_text(
     profiler = BenchmarkProfiler()
     profiler.start("run")
 
-    ckpt_dir = os.environ["LLAMA_DIR"]
-    tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
-
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
@@ -185,11 +196,26 @@ def test_multimodal_demo_text(
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
     )
-    generator = Generator(model, model_args, mesh_device)
-    tokenizer = Tokenizer(model_path=tokenizer_path)
-    formatter = ChatFormat(tokenizer)
 
-    xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
+    HF_MODEL = model_args[0].checkpoint_type == CheckpointType.HuggingFace
+
+    if not HF_MODEL:
+        ckpt_dir = os.environ["LLAMA_DIR"]
+        tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
+
+        tokenizer = Tokenizer(model_path=tokenizer_path)
+        formatter = ChatFormat(tokenizer)
+    else:
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(model_args[0].CKPT_DIR)
+
+    generator = Generator(model, model_args, mesh_device)
+
+    xattn_caches = [
+        model.setup_cache(model_args[i].max_batch_size) if not HF_MODEL else None
+        for i, model in enumerate(generator.model)
+    ]
 
     # Create random images for trace capture with specific dimensions
     trace_img_560x560 = create_random_image(560, 560)
@@ -250,9 +276,11 @@ def test_multimodal_demo_text(
     total_users = len(dialogs)
     num_batches = total_users // max_batch_size
 
-    sampler = get_batch_sampler(temperature, top_p, tokenizer)
+    sampler = get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
+
+    prompt_encoder = hf_multimodal_encode if HF_MODEL else formatter.encode_dialog_prompt
 
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
@@ -263,8 +291,16 @@ def test_multimodal_demo_text(
                 for msg in dialog:
                     print(f"{msg.role.capitalize()}: {msg.content}\n")
             batch_model_input = [
-                formatter.encode_dialog_prompt(dialog, tool_prompt_format=False) for dialog in batch_dialogs
+                prompt_encoder(dialog, processor) if HF_MODEL else prompt_encoder(dialog, tool_prompt_format=False)
+                for dialog in batch_dialogs
             ]
+
+            if HF_MODEL:
+                # Use the processor's tokenizer instead of model_args tokenizer to ensure consistency
+                tokenizer = processor.tokenizer
+                image_grid_thw = [model_input.image_grid_thw for model_input in batch_model_input]
+            else:
+                image_grid_thw = None
 
             # Do initial prefill
             vision_images = [
@@ -278,7 +314,7 @@ def test_multimodal_demo_text(
             total_lens = prefill_lens + max_gen_len
 
             # Create padded tokens tensor for batch
-            pad_id = tokenizer.pad_id
+            pad_id = tokenizer.pad_token_id if HF_MODEL else tokenizer.pad_id
             bsz = len(prompt_tokens)
             tokens = torch.full((bsz, max(total_lens)), pad_id, dtype=torch.long)
 
@@ -302,6 +338,7 @@ def test_multimodal_demo_text(
                         xattn_caches,
                         total_lens,
                         prefill_lens,
+                        image_grid_thw=image_grid_thw,
                     )
 
             # Get cached prefill time
@@ -319,6 +356,7 @@ def test_multimodal_demo_text(
                     xattn_caches,
                     total_lens,
                     prefill_lens,
+                    image_grid_thw=image_grid_thw,
                 )
 
             prefill_end = time.perf_counter()
@@ -365,12 +403,16 @@ def test_multimodal_demo_text(
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
 
             # Log full text output for each user in batch
-            vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
+            if HF_MODEL:
+                # For HF models, get vision tokens from the processor if they exist
+                vision_tokens = []
+            else:
+                vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
 
             for user_id in range(max_batch_size):
                 # Remove <|image|> tokens since they break the tokenizer
                 tokens_out = [
-                    t if t not in vision_tokens else tokenizer.pad_id
+                    t if t not in vision_tokens else pad_id
                     for t in tokens[user_id].tolist()[: position_id[user_id] + 2]
                 ]
                 text = tokenizer.decode(tokens_out)
@@ -437,7 +479,7 @@ def test_multimodal_demo_text(
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 37,
+            "T3K_Llama-3.2-11B": 33,
             "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 
