@@ -72,7 +72,7 @@ class SwinSPerformanceRunnerInfra:
 
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
-    def _setup_l1_sharded_input(self, device, torch_input_tensor=None):
+    def _setup_l1_sharded_input(self, device, torch_input_tensor=None, channels=3, padded_channels=16):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
@@ -83,10 +83,11 @@ class SwinSPerformanceRunnerInfra:
 
         n, c, h, w = torch_input_tensor.shape
 
-        padded_c = 16 if c < 16 else c  # If the channels < 16, pad the channels to 16 to run the Conv layer
+        if c == channels:
+            c = padded_channels
 
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, padded_c, h, w],
+            [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
