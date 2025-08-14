@@ -11,6 +11,6 @@
 
 namespace ttnn::operations::debug {
 
-void py_module(py::module& module) { debug::py_bind_apply_device_delay(module); }
+void py_module(py::module& module) { py_bind_apply_device_delay(module); }
 
 }  // namespace ttnn::operations::debug

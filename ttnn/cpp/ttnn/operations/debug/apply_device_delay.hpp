@@ -6,9 +6,9 @@
 
 #include <vector>
 #include <optional>
+#include <cstdint>
 
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::operations::debug {
