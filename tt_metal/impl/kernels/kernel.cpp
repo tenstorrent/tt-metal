@@ -158,9 +158,9 @@ CoreType Kernel::get_kernel_core_type() const {
         case HalProgrammableCoreType::TENSIX: return CoreType::WORKER;
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: return CoreType::ETH;
-        default: TT_ASSERT(false, "Bad programmable core type!");
+        case HalProgrammableCoreType::COUNT: TT_THROW("Bad programmable core type!");
     }
-    return CoreType::WORKER;
+    TT_THROW("Unreachable");
 }
 
 const std::string& KernelImpl::get_full_kernel_name() const { return this->kernel_full_name_; }

@@ -130,7 +130,7 @@ public:
     bool is_idle_eth() const;
 
 protected:
-    const HalProgrammableCoreType programmable_core_type_;
+    HalProgrammableCoreType programmable_core_type_;
 
     int watcher_kernel_id_;
     KernelSource kernel_src_;
