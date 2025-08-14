@@ -12,7 +12,7 @@ IFS=$'\n\t'
 
 # Defaults (customize as needed)
 METAL_HOME="${TT_METAL_HOME:-/home/ttuser/git/tt-metal}"
-CONFIG="training_shakespeare_nanogpt_3tier.yaml"
+CONFIG="training_shakespeare_nanogpt_3tier_mpi.yaml"
 BIN_DIR="${METAL_HOME}/tt-train/build/sources/examples/nano_gpt"
 CFG_DIR="${METAL_HOME}/tt-train/configs"
 HOSTFILE="/tmp/mpi_hosts.$$"
@@ -24,17 +24,15 @@ SCP_OPTS="-p"    # preserve modification times & modes
 # Your cluster hosts, in the order MPI should assign ranks:
 HOSTS=(
   "11.228.0.10"
-  # "11.228.0.11"
-  # "11.228.0.14"
+  "11.228.0.11"
+  "11.228.0.14"
   "11.228.0.15"
   "11.228.0.16"
 )
 
 # One MESH_ID per *global* MPI rank (workers..., aggregator, optimizer)
 # If fewer entries than total ranks, ranks beyond the end will default to their rank id.
-# MESH_IDS=(1 4 3 0 2)
-# MESH_IDS=(1 0 2)
-MESH_IDS=(0 0 0)
+MESH_IDS=(1 4 3 0 2)
 
 print_usage() {
   cat <<EOF
