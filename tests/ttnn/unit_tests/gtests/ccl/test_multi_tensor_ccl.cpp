@@ -73,6 +73,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherAsync) {
     }
     auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {semaphore};
+    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
+
     auto all_gathered = ttnn::experimental::all_gather_async(
         tensors, 0, multi_dev_semaphore, 1, std::nullopt, ttnn::ccl::Topology::Linear, SubDeviceId(0));
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
@@ -94,7 +96,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, ReduceScatterAsync) {
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
-        log_info(tt::LogAlways, "Tensor ring index: {}, device id: {}", dev_idx, mesh_devices[dev_idx]->id());
     }
     auto from_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     auto to_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
@@ -120,22 +121,37 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, ReduceScatterAsync) {
     }
 }
 
-TEST_F(MultiCQMeshDevice2x4Fixture, AllReduce) {
-    auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllReduce) {
+    auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+    auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
 
     std::vector<ttnn::Tensor> tensors;
     TensorSpec tensor_spec(
         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
-    for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
+    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(devices[dev_idx].get()));
+        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
     }
-    auto reduced = ttnn::experimental::all_reduce(
-        tensors, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Linear);
-    for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
-        auto data = reduced[dev_idx].to_vector<bfloat16>();
+
+    auto from_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    auto to_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
+
+    auto all_reduced = ttnn::experimental::all_reduce_async(
+        tensors,
+        from_remote_multi_device_global_semaphore,
+        to_remote_multi_device_global_semaphore,
+        semaphore,
+        ttnn::operations::reduction::ReduceType::Sum,
+        std::nullopt,
+        ttnn::ccl::Topology::Linear,
+        1,
+        SubDeviceId(0));
+    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+        auto data = all_reduced[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(devices.size());
+            float expected = static_cast<float>(mesh_devices.size());
             EXPECT_EQ(data[i].to_float(), expected);
         }
     }
