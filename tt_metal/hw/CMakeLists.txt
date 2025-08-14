@@ -301,6 +301,7 @@ target_sources(
             inc/accessor/helpers.h
             inc/accessor/tensor_accessor.h
             inc/accessor/tensor_accessor_args.h
+            inc/accessor/shard_pages_address_iterator.h
             inc/atomic_rwptr.h
             inc/bit_utils.h
             inc/blackhole/c_tensix_core.h

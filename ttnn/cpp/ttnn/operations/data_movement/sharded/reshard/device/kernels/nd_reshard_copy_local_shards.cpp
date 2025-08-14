@@ -5,7 +5,6 @@
 #include <cstdint>
 #include "accessor/tensor_accessor.h"
 #include "dataflow_api.h"
-#include "nd_reshard_common.hpp"
 
 // Kernel that:
 // if (is_reader) {
@@ -36,18 +35,16 @@ void kernel_main() {
 
     for (uint32_t shard_id = first_shard_id; shard_id < num_shards; shard_id += shard_id_stride) {
         if constexpr (is_reader) {
-            iterate_pages_in_shard(accessor_src, shard_id, [&](uint32_t page_id) {
-                // TODO: local noc_addr calculation can be optimized
-                ASSERT(accessor_src.is_local_page(page_id));
-                noc_async_write_page(page_id, accessor_dst, accessor_src.get_noc_addr(page_id));
+            auto shard_pages = accessor_src.shard_pages(shard_id);
+            for (const auto& page : shard_pages) {
+                noc_async_write_page(page.page_id(), accessor_dst, page.get_noc_addr());
                 noc_async_writes_flushed();
-            });
+            }
         } else {
-            iterate_pages_in_shard(accessor_dst, shard_id, [&](uint32_t page_id) {
-                // TODO: local noc_addr calculation can be optimized
-                ASSERT(accessor_dst.is_local_page(page_id));
-                noc_async_read_page(page_id, accessor_src, accessor_dst.get_noc_addr(page_id));
-            });
+            auto shard_pages = accessor_dst.shard_pages(shard_id);
+            for (const auto& page : shard_pages) {
+                noc_async_read_page(page.page_id(), accessor_src, page.get_noc_addr());
+            }
         }
     }
 
