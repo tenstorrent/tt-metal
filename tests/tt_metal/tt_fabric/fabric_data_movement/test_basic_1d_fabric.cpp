@@ -1773,7 +1773,7 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
 void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::vector<std::tuple<RoutingDirection, uint32_t>>& requested_dir_configs) {
+    const std::vector<std::tuple<RoutingDirection, uint32_t>>& pair_ordered_dirs) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
@@ -1782,7 +1782,7 @@ void FabricUnicastCommon(
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
-    std::vector<std::tuple<RoutingDirection, uint32_t>> dir_configs = requested_dir_configs;
+    std::vector<std::tuple<RoutingDirection, uint32_t>> dir_configs = pair_ordered_dirs;
     if (topology == Topology::Mesh) {
         const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
         size_t max_dirs = (cluster_type == tt::tt_metal::ClusterType::T3K) ? 3 : 4;
@@ -1883,20 +1883,40 @@ void FabricUnicastCommon(
         sender_runtime_args.push_back(num_hops);
     }
 
-    // Append EDM connection args per first-hop
-    for (auto first_hop_phys_chip_id : first_hop_phys_chip_ids) {
-        const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-        uint32_t link_idx = 0;
-        if (topology == Topology::Mesh) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
+    // Append FabricConnectionManager args per manager (pair-ordered)
+    size_t num_mgrs = (dir_configs.size() + 1) / 2;
+    // Helper: push have_fwd/bwd flag and append connection args determined by idx parity
+    auto append_flag_and_conn_by_index_unicast = [&](size_t idx) {
+        bool expect_forward = (idx % 2 == 0);
+        bool have = false;
+        if (idx < dir_configs.size()) {
+            auto [dir, _hops] = dir_configs[idx];
+            have = expect_forward ? (dir == RoutingDirection::E || dir == RoutingDirection::N)
+                                  : (dir == RoutingDirection::W || dir == RoutingDirection::S);
+            sender_runtime_args.push_back(have ? 1 : 0);
+            if (have) {
+                auto first_hop_phys_chip_id = physical_end_device_ids_by_dir[dir][0];
+                const auto dst_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
+                uint32_t link_idx = 0;
+                if (topology == Topology::Mesh) {
+                    link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
+                }
+                append_fabric_connection_rt_args(
+                    src_fabric_node_id,
+                    dst_fabric_node_id,
+                    link_idx,
+                    sender_program,
+                    {sender_logical_core},
+                    sender_runtime_args);
+            }
+        } else {
+            sender_runtime_args.push_back(0);
         }
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            dst_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
+    };
+    for (size_t m = 0; m < num_mgrs; ++m) {
+        append_flag_and_conn_by_index_unicast(2 * m);      // fwd
+        append_flag_and_conn_by_index_unicast(2 * m + 1);  // bwd
     }
 
     // For 2D Mesh, append extra route info
@@ -1908,9 +1928,13 @@ void FabricUnicastCommon(
         sender_runtime_args.push_back(ew_dim);
         sender_runtime_args.push_back(my_dev_id);
         sender_runtime_args.push_back(dst_mesh_id);
-        for (auto first_hop_phys_chip_id : first_hop_phys_chip_ids) {
+        for (auto [dir, num_hops] : dir_configs) {
+            auto first_hop_phys_chip_id = physical_end_device_ids_by_dir[dir][0];
             const auto dst_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
+            auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+            TT_ASSERT(dir_opt.has_value());
+            sender_runtime_args.push_back(static_cast<uint32_t>(dir_opt.value()));
             sender_runtime_args.push_back(static_cast<uint16_t>(dst_fabric_node_id.chip_id));
         }
     }
@@ -1976,7 +2000,7 @@ void FabricUnicastCommon(
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>& requested_dir_configs) {
+    const std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>& pair_ordered_dir_configs) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
@@ -1988,7 +2012,7 @@ void FabricMulticastCommon(
     // Limit directions per cluster (T3K: up to 3, TG: up to 4) and force range=1
     const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     size_t max_dirs = (cluster_type == tt::tt_metal::ClusterType::T3K) ? 3 : 4;
-    std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>> dir_configs = requested_dir_configs;
+    std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>> dir_configs = pair_ordered_dir_configs;
     if (dir_configs.size() > max_dirs) {
         dir_configs.resize(max_dirs);
     }
@@ -2080,19 +2104,38 @@ void FabricMulticastCommon(
             .compile_args = compile_time_args,
             .defines = defines});
 
-    for (auto first_hop_phys_chip_id : first_hop_phys_chip_ids) {
-        const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-        uint32_t link_idx = 0;
-        if (topology == Topology::Mesh) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
+    size_t num_mgrs = (dir_configs.size() + 1) / 2;
+    auto append_flag_and_conn_by_index_mcast = [&](size_t idx) {
+        bool expect_forward = (idx % 2 == 0);
+        bool have = false;
+        if (idx < dir_configs.size()) {
+            auto [dir, start_distance, range] = dir_configs[idx];
+            have = expect_forward ? (dir == RoutingDirection::E || dir == RoutingDirection::N)
+                                  : (dir == RoutingDirection::W || dir == RoutingDirection::S);
+            sender_runtime_args.push_back(have ? 1 : 0);
+            if (have) {
+                auto first_hop_phys_chip_id = first_hop_phys_chip_ids[idx];
+                const auto dst_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
+                uint32_t link_idx = 0;
+                if (topology == Topology::Mesh) {
+                    link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
+                }
+                append_fabric_connection_rt_args(
+                    src_fabric_node_id,
+                    dst_fabric_node_id,
+                    link_idx,
+                    sender_program,
+                    {sender_logical_core},
+                    sender_runtime_args);
+            }
+        } else {
+            sender_runtime_args.push_back(0);
         }
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            dst_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
+    };
+    for (size_t m = 0; m < num_mgrs; ++m) {
+        append_flag_and_conn_by_index_mcast(2 * m);      // fwd
+        append_flag_and_conn_by_index_mcast(2 * m + 1);  // bwd
     }
 
     // Append 2D mesh route info only when on Mesh
@@ -2104,9 +2147,15 @@ void FabricMulticastCommon(
         sender_runtime_args.push_back(ew_dim);
         sender_runtime_args.push_back(my_dev_id);
         sender_runtime_args.push_back(dst_mesh_id);
-        for (auto first_hop_phys_chip_id : first_hop_phys_chip_ids) {
+        // Append per-route outgoing eth direction followed by dst dev ids in pair order
+        for (size_t i = 0; i < dir_configs.size(); ++i) {
+            auto [dir, start_distance, range] = dir_configs[i];
+            auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
             const auto dst_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
+            auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+            TT_ASSERT(dir_opt.has_value());
+            sender_runtime_args.push_back(static_cast<uint32_t>(dir_opt.value()));
             sender_runtime_args.push_back(static_cast<uint16_t>(dst_fabric_node_id.chip_id));
         }
     }
