@@ -1002,7 +1002,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const FabricEriscDatamoverConfig& config,
     eth_chan_directions direction,
     bool build_in_worker_connection_mode,
-    bool dateline_connection) :
+    FabricEriscDatamoverType fabric_edm_type) :
     my_eth_core_logical(my_eth_core_logical),
     my_eth_channel(my_eth_core_logical.y),
     my_noc_x(my_noc_x),
@@ -1038,7 +1038,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     edm_local_sync_ptr(config.edm_local_sync_address),
     edm_status_ptr(config.edm_status_address),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
-    dateline_connection(dateline_connection) {
+    fabric_edm_type(fabric_edm_type),
+    dateline_connection(fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline) {
     std::fill(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
@@ -1396,7 +1397,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     chip_id_t peer_physical_chip_id,
     const FabricEriscDatamoverConfig& config,
     bool build_in_worker_connection_mode,
-    bool dateline_connection,
+    FabricEriscDatamoverType fabric_edm_type,
     eth_chan_directions direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return FabricEriscDatamoverBuilder::build(
@@ -1407,8 +1408,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         control_plane.get_fabric_node_id_from_physical_chip_id(peer_physical_chip_id),
         config,
         build_in_worker_connection_mode,
-        dateline_connection,
-        direction);
+        fabric_edm_type);
 }
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
@@ -1419,7 +1419,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     const FabricNodeId& peer_fabric_node_id,
     const FabricEriscDatamoverConfig& config,
     bool build_in_worker_connection_mode,
-    bool dateline_connection,
+    FabricEriscDatamoverType fabric_edm_type,
     eth_chan_directions direction) {
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id;
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id;
@@ -1486,7 +1486,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         config,
         direction,
         build_in_worker_connection_mode,
-        dateline_connection);
+        fabric_edm_type);
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel() const {

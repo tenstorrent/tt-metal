@@ -403,7 +403,7 @@ public:
         const FabricEriscDatamoverConfig& config,
         eth_chan_directions direction,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false);
+        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -413,7 +413,7 @@ public:
         const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false,
+        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     static FabricEriscDatamoverBuilder build(
@@ -424,7 +424,7 @@ public:
         chip_id_t peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false,
+        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
@@ -523,6 +523,7 @@ public:
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
+    FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default;
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
 };

@@ -197,7 +197,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         dest_device->id(),
                         src_curr_edm_config,
                         build_in_worker_connection_mode,
-                        dateline));
+                        src_device_edm_type));
 
                 log_trace(
                     tt::LogOp,
@@ -213,7 +213,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         src_device->id(),
                         dest_curr_edm_config,
                         build_in_worker_connection_mode,
-                        dateline));
+                        dest_device_edm_type));
             }
         };
 
