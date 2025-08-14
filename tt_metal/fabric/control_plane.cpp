@@ -2046,6 +2046,7 @@ void ControlPlane::generate_local_intermesh_link_table() {
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (this->has_intermesh_links(chip_id)) {
+            std::cout << "Intermesh Info In Control Plane: " << chip_id << std::endl;
             for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
                 // TODO: remove below logic, should at very least be using UMD apis to get ids
                 // But all this data can be provided by UMD
@@ -2077,6 +2078,9 @@ void ControlPlane::generate_local_intermesh_link_table() {
                     .board_id = remote_board_id,
                     .chan_id = remote_chan_id,
                 };
+                std::cout << "Eth Channel: " << chan_id << " Dest Chip: " << remote_board_id
+                          << " Dest Chan: " << remote_chan_id << std::endl;
+
                 intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
                 chip_id_to_asic_id_[chip_id] = local_board_id;
             }
@@ -2364,5 +2368,7 @@ void ControlPlane::populate_fabric_connection_info(
 }
 
 ControlPlane::~ControlPlane() = default;
+
+PhysicalDiscoveryManager::PhysicalDiscoveryManager() {}
 
 }  // namespace tt::tt_fabric

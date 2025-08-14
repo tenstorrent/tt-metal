@@ -97,7 +97,8 @@ std::vector<uint8_t> serialize_system_descriptor_to_bytes(const tt::tt_fabric::S
 
     // Helper lambda to create FlatBuffer ASICDescriptor
     auto create_asic_descriptor = [&](const tt::tt_fabric::ASICDescriptor& asic_desc) {
-        return tt::tt_fabric::flatbuffer::CreateASICDescriptor(builder, asic_desc.unique_id, asic_desc.tray_id);
+        return tt::tt_fabric::flatbuffer::CreateASICDescriptor(
+            builder, asic_desc.unique_id, asic_desc.tray_id, asic_desc.n_id);
     };
 
     // Create HostASICGroup vector
@@ -182,6 +183,7 @@ tt::tt_fabric::SystemDescriptor deserialize_system_descriptor_from_bytes(const s
         tt::tt_fabric::ASICDescriptor asic_desc;
         asic_desc.unique_id = asic_desc_fb->unique_id();
         asic_desc.tray_id = asic_desc_fb->tray_id();
+        asic_desc.n_id = asic_desc_fb->n_id();  // Extract NID if available
         return asic_desc;
     };
 
