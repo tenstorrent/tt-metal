@@ -168,8 +168,8 @@ void MAIN {
                 cb_wait_front(cb_x, wt + blk);
                 for (uint32_t j = 0; j < blk; j++) {
                     // Welford's needs transposed input tile
-                    copy_tile_to_dst_init_short(cb_x, /*transpose*/ 1);
-                    copy_tile(cb_x, j, dst0);
+                    transpose_wh_init_short(cb_x);
+                    transpose_wh_tile(cb_x, wt + j, dst0);
                     welford_init();
                     welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
                     start_N += tile_width;
