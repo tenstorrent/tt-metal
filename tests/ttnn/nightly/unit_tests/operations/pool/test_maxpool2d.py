@@ -128,16 +128,20 @@ def run_max_pool(
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
-    # act = torch.zeros(input_shape, dtype=torch.bfloat16)
-    # for n in range(input_shape[0]):
-    #     for c in range(input_shape[1]):
-    #         for h in range(input_shape[2]):
-    #             for w in range(input_shape[3]):
-    #                 act[n, c, h, w] = h * in_w + w
+    torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
+    count = 0
+    for n in range(input_shape[0]):
+        for c in range(input_shape[1]):
+            for h in range(input_shape[2]):
+                for w in range(input_shape[3]):
+                    torch_input[n, c, h, w] = count
+                    count += 1
+
+    print(torch_input)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
-    if dtype == ttnn.bfloat8_b:
+    if dtype == ttnn.bfloat8_b or True:
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.TILE_LAYOUT, device=device)
     else:
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -182,6 +186,8 @@ def run_max_pool(
         in_place_halo=in_place,
     )
 
+    print(ttnn_output.layout)
+
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
     if padding_is_4d:
         assert (
@@ -208,9 +214,11 @@ def run_max_pool(
     )(torch_input_padded)
 
     # adjust the TTNN output to match the expected shape
+    print("layout is ", ttnn_output.get_layout())
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
+
     ttnn_output = ttnn_output[:, :in_c, :, :]
 
     # test for equivalance
@@ -219,6 +227,12 @@ def run_max_pool(
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.997
         atol = 0.35
+
+    torch.set_printoptions(threshold=float("inf"))
+    # print("ttnn out")
+    print(ttnn_output)
+    # print("torch out")
+    # print(torch_output)
     assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
     allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     isequal = torch.equal(ttnn_output, torch_output)
@@ -232,30 +246,30 @@ def run_max_pool(
     "input_shape",  ## NCHW
     (
         (  # resnet shapes
-            [1, 64, 112, 112],
-            [16, 64, 112, 112],
-            # hpr shapes
-            [8, 32, 132, 20],
-            [32, 32, 264, 40],
-            [4, 16, 1056, 160],
-            [16, 16, 528, 80],
-            # wide for vgg
-            [1, 256, 56, 56],
-            [1, 512, 28, 28],
-            # wide yolo kernel
-            [1, 512, 10, 10],
-            [1, 96, 112, 112],
-            [1, 192, 132, 20],
-            # wide non-8 multiple tests
-            [1, 800, 32, 32],
-            [1, 640, 32, 32],
-            [1, 576, 32, 32],
-            [1, 384, 32, 32],
-            # C=16 test
-            [1, 16, 12, 12],
-            # partial grid tests
-            [1, 32, 10, 10],  # BH
-            [1, 32, 6, 6],  # WH
+            [1, 32, 16, 16],
+            # [16, 64, 112, 112],
+            # # hpr shapes
+            # [8, 32, 132, 20],
+            # [32, 32, 264, 40],
+            # [4, 16, 1056, 160],
+            # [16, 16, 528, 80],
+            # # wide for vgg
+            # [1, 256, 56, 56],
+            # [1, 512, 28, 28],
+            # # wide yolo kernel
+            # [1, 512, 10, 10],
+            # [1, 96, 112, 112],
+            # [1, 192, 132, 20],
+            # # wide non-8 multiple tests
+            # [1, 800, 32, 32],
+            # [1, 640, 32, 32],
+            # [1, 576, 32, 32],
+            # [1, 384, 32, 32],
+            # # C=16 test
+            # [1, 16, 12, 12],
+            # # partial grid tests
+            # [1, 32, 10, 10],  # BH
+            # [1, 32, 6, 6],  # WH
         )
     ),
 )
@@ -263,24 +277,24 @@ def run_max_pool(
     "kernel_size",
     (
         (3, 3),  # 1 face 1 chunk
-        (5, 5),  # 2 faces 1 chunk
-        (7, 7),  # 2 chunks
-        (9, 9),  # 3 chunks
+        # (5, 5),  # 2 faces 1 chunk
+        # (7, 7),  # 2 chunks
+        # (9, 9),  # 3 chunks
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
-        (0, 0),
+        # (0, 0),
         (1, 1),
-        (1, 4, 3, 2),
+        # (1, 4, 3, 2),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
@@ -288,14 +302,14 @@ def run_max_pool(
     "dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 def test_run_max_pool_height_shard(

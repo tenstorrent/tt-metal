@@ -5,6 +5,7 @@
 #include "generic_pools.hpp"
 
 #include "tt-metalium/constants.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -39,8 +40,16 @@ static Tensor pool2d_invoke(
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     bool in_place_halo = false) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
-    bool is_out_tiled = false;  // pool output is row major
+    log_info(tt::LogOp, "input tensor layout: {}", input_tensor.layout());
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    bool is_out_tiled = is_in_tiled;
+
+    if (is_out_tiled) {
+        log_info(tt::LogOp, "Input tensor is tiled, using TILE_LAYOUT for output as well.");
+    } else {
+        log_info(tt::LogOp, "Input tensor is not tiled, using ROW_MAJOR_LAYOUT for output.");
+    }
+
     validate_input_params(
         input_tensor,
         batch_size,
@@ -97,10 +106,11 @@ static Tensor pool2d_invoke(
                 input_tensor.device()->compute_with_storage_grid_size(),
                 ShardOrientation::ROW_MAJOR,
                 false,
-                false,
+                is_out_tiled,
                 is_in_tiled,  // if input is tiled we need to choose num_cores_c to make the shard width to be a tile
                               // multiple, it cannot be 16
                 0);
+            log_info(tt::LogOp, "parallel_config: {}", parallel_config);
         } else {  // auto-sharding
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
                 pool::determine_pool_config_for_auto_shard(
@@ -162,7 +172,7 @@ static Tensor pool2d_invoke(
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
         .core_range_set = parallel_config.grid,
-        .snap_to_tile = false,
+        .snap_to_tile = is_out_tiled,
         .ceil_mode = ceil_mode,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };

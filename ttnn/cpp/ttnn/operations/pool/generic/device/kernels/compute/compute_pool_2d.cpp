@@ -6,14 +6,19 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
+#include "tt-metalium/constants.hpp"
+#include "compute_kernel_api/tilize.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #include "debug/dprint_tensix.h"
 #endif
+
+#define TILE_HEIGHT 32
+#define TILE_WIDTH 32
 
 namespace NAMESPACE {
 
@@ -36,6 +41,7 @@ void MAIN {
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t tmp_cb_id = get_compile_time_arg_val(13);
 
     constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
     constexpr bool is_partial_tile = in_c < 32;
@@ -66,9 +72,6 @@ void MAIN {
     // data which is much slower than just untilizing the entire MAX_TILES_PER_REDUCTION
     constexpr bool tilize_reconfig =
         in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 && window_size_hw <= 16;
-    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
-    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -79,6 +82,10 @@ void MAIN {
         cb_wait_front(in_scalar_cb_id_0, 1);
     }
 
+    uint32_t counter = 0;
+    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tmp_cb_id, 2, face_r_dim);
+    pack_untilize_dest_init<max_tiles_per_iter>(tmp_cb_id, num_out_sticks, num_faces_in_output_tile);
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -112,17 +119,59 @@ void MAIN {
                 }
                 cb_pop_front(curr_in_cb_id, 1);
             }
+            dprint_tensix_dest_reg();
             tile_regs_commit();
             tile_regs_wait();
             if (last_c_block) {
-                pack_untilize_dest<partial_iter_output_tiles>(
-                    out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                cb_push_back(out_cb_id, partial_iter_output_tiles);
+                // Accumulate 32 rows into a single tile page per output tile in tmp_cb_id
+                // if (counter == 0) {
+                // cb_reserve_back(tmp_cb_id, partial_iter_output_tiles);
+                // }
+                if (counter == 0) {
+                    cb_reserve_back(tmp_cb_id, partial_iter_output_tiles);
+                }
+                if (counter < TILE_HEIGHT) {
+                    pack_untilize_dest<partial_iter_output_tiles>(
+                        tmp_cb_id, 1 /*out_subblock_h: one row*/, counter, num_out_sticks, num_faces_in_output_tile);
+                    PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+                    tile_regs_release();
+                    counter++;
+                }
+                // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+                // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+
+                if (counter == TILE_HEIGHT) {
+                    // tile_regs_release();
+                    // We finished accumulating 32 rows in tmp_cb_id for this group of tiles across C.
+                    // Convert RM rows in tmp_cb_id into tilized tiles in out_cb_id.
+                    // Close the reserved pages in tmp_cb (now each holds a full tilized tile in RM layout)
+                    PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+                    cb_push_back(tmp_cb_id, partial_iter_output_tiles);
+
+                    // UNPACK((llk_unpack_tilize_uninit(in_cb_id_0)));
+
+                    PACK((pack_untilize_uninit(tmp_cb_id)));  // stop RM packer on tmp_cb_id
+                    PACK(llk_pack_init(out_cb_id));           // needed on WH to set tile pack
+                    tilize_init(tmp_cb_id, partial_iter_output_tiles, out_cb_id);
+
+                    cb_wait_front(tmp_cb_id, partial_iter_output_tiles);
+                    cb_reserve_back(out_cb_id, partial_iter_output_tiles);
+
+                    tilize_block(tmp_cb_id, partial_iter_output_tiles, out_cb_id);
+                    PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
+                    tilize_block(tmp_cb_id, partial_iter_output_tiles, out_cb_id);
+                    PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
+                    // Print while reserved (before push). Data is tilized now.
+
+                    cb_push_back(out_cb_id, partial_iter_output_tiles);
+                    cb_pop_front(tmp_cb_id, partial_iter_output_tiles);
+                    tilize_uninit(tmp_cb_id, out_cb_id);
+                    counter = 0;
+                }
             } else {
-                pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                // pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                 cb_push_back(out_cb_id, max_tiles_per_iter);
             }
-            tile_regs_release();
         }
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);

@@ -4,6 +4,7 @@
 
 #include "pool_op.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
 #include <utility>
 
@@ -84,7 +85,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     uint32_t out_h = sliding_window_config.get_output_shape()[1];
     uint32_t out_w = sliding_window_config.get_output_shape()[2];
 
-    bool is_out_tiled = output_dtype == DataType::BFLOAT8_B;
+    bool is_out_tiled = true;
 
     // need to pad the last dim to TILE_WIDTH
     uint32_t out_c = input_shape[3];
@@ -113,15 +114,19 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
             mem_config.with_shard_spec(tt::tt_metal::ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR});
     }
 
+    log_info(tt::LogOp, "input layout: {}", input.layout());
+    tt::tt_metal::Layout output_layout = is_out_tiled ? tt::tt_metal::Layout::TILE : tt::tt_metal::Layout::ROW_MAJOR;
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
-            output_dtype, tt::tt_metal::PageConfig(input.layout()), mem_config, output_shape, padded_output_shape));
+            output_dtype, output_layout, mem_config, output_shape, padded_output_shape));
 }
 
 Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto output_spec = compute_output_specs(op_attr, tensors);
+    log_info(tt::LogOp, "output_spec: {}", output_spec);
+    log_info(tt::LogOp, "out tensor layout: {}", output_spec.layout());
     return create_device_tensor(output_spec, tensors.input_tensor_.device());
 }
 

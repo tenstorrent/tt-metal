@@ -4,6 +4,7 @@
 #include "pool_op.hpp"
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
+#include "tt-metalium/constants.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "tt-metalium/host_buffer.hpp"
@@ -347,13 +348,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
     }
 
+    const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+    ;
+    const uint32_t temp_cb_npages = 1;
+
+    const auto [temp_cb_id, temp_out] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, temp_cb_pagesize, temp_cb_npages, params.data_format);
+
     // output of reduce == writer to write
     // output rows in RM
     // after reduction
-    const uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) *
-                                     params.nbytes;  // there is just one row of channels after each reduction (or 1
-                                                     // block of c if its greater than 8 tiles)
-    const uint32_t out_cb_npages = output.shard_spec().value().shape[0] * params.in_ntiles_c;
+    const uint32_t out_cb_pagesize =
+        tt::constants::TILE_HW * params.nbytes;  // there is just one row of channels after each reduction (or 1
+                                                 // block of c if its greater than 8 tiles)
+    const uint32_t out_cb_npages = 1;
 
     const auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, output.buffer());
@@ -473,7 +481,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
         out_cb_id,
-        one_scalar_per_core};
+        one_scalar_per_core,
+        temp_cb_id};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

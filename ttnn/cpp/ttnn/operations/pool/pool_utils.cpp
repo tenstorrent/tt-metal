@@ -232,9 +232,10 @@ uint32_t calculate_L1_usage(
     }
 
     // after reduction
-    uint32_t out_cb_pagesize =
-        std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * params.nbytes;
-    uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.in_ntiles_c;
+    const uint32_t out_cb_pagesize =
+        tt::constants::TILE_HW * params.nbytes;  // there is just one row of channels after each reduction (or 1
+                                                 // block of c if its greater than 8 tiles)
+    const uint32_t out_cb_npages = 1;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
     uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
@@ -243,8 +244,11 @@ uint32_t calculate_L1_usage(
         return factor * alignment_bytes;
     };
 
+    const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.nbytes;
+    const uint32_t temp_cb_npages = tt::constants::TILE_HEIGHT;
+
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           align(out_cb_config_size) /* global, involved */;
+           align(out_cb_config_size) /* global, involved */ + temp_cb_pagesize * temp_cb_npages;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
