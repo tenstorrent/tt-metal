@@ -78,9 +78,9 @@ auto create_pybind_from_buffer_overload() {
            const py::object& buffer,
            const Shape& shape,
            const DataType dtype,
-           const Layout layout,
            MeshDevice* device,
-           const MemoryConfig& memory_config) -> ttnn::Tensor {
+           const std::optional<Layout>& layout,
+           const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
             // Overloading this with templates is not working quite as expected,
             // the problem is that the buffer is a py::object, so we can't deduce the type of the data.
             // and sometimes the wrong type is handling the data.
@@ -89,27 +89,27 @@ auto create_pybind_from_buffer_overload() {
             switch (dtype) {
                 case DataType::UINT8: {
                     auto cpp_buffer = buffer.cast<std::vector<uint8_t>>();
-                    return self(cpp_buffer, shape, dtype, layout, device, memory_config);
+                    return self(cpp_buffer, shape, dtype, device, layout, memory_config);
                 }
                 case DataType::UINT16: {
                     auto cpp_buffer = buffer.cast<std::vector<uint16_t>>();
-                    return self(cpp_buffer, shape, dtype, layout, device, memory_config);
+                    return self(cpp_buffer, shape, dtype, device, layout, memory_config);
                 }
                 case DataType::INT32: {
                     auto cpp_buffer = buffer.cast<std::vector<int32_t>>();
-                    return self(cpp_buffer, shape, dtype, layout, device, memory_config);
+                    return self(cpp_buffer, shape, dtype, device, layout, memory_config);
                 }
                 case DataType::UINT32: {
                     auto cpp_buffer = buffer.cast<std::vector<uint32_t>>();
-                    return self(cpp_buffer, shape, dtype, layout, device, memory_config);
+                    return self(cpp_buffer, shape, dtype, device, layout, memory_config);
                 }
                 case DataType::FLOAT32: {
                     auto cpp_buffer = buffer.cast<std::vector<float>>();
-                    return self(cpp_buffer, shape, dtype, layout, device, memory_config);
+                    return self(cpp_buffer, shape, dtype, device, layout, memory_config);
                 }
                 case DataType::BFLOAT16: {
                     auto cpp_buffer = buffer.cast<std::vector<::bfloat16>>();
-                    return self(cpp_buffer, shape, dtype, layout, device, memory_config);
+                    return self(cpp_buffer, shape, dtype, device, layout, memory_config);
                 }
                 case DataType::BFLOAT8_B:
                 case DataType::BFLOAT4_B:
@@ -123,9 +123,9 @@ auto create_pybind_from_buffer_overload() {
         py::arg("buffer"),
         py::arg("shape"),
         py::arg("dtype"),
-        py::arg("layout"),
         py::arg("device"),
-        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG};
+        py::arg("layout") = std::nullopt,
+        py::arg("memory_config") = std::nullopt};
 }
 
 template <typename creation_operation_t>
@@ -444,17 +444,17 @@ void bind_from_buffer_operation(py::module& module, const creation_operation_t& 
             buffer (List[Any]): The buffer to be used to create the tensor.
             shape (ttnn.Shape): The shape of the tensor to be created.
             dtype (ttnn.DataType): The tensor data type.
-            layout (ttnn.Layout): The tensor layout.
             device (ttnn.Device | ttnn.MeshDevice): The device where the tensor will be allocated.
+            layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR` unless `dtype` is `ttnn.bfloat4` or `ttnn.bfloat8`, in which case it defaults to `ttnn.TILE`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
 
         Returns:
             ttnn.Tensor: A tensor with the values from the buffer.
 
         Example:
-            >>> tensor = ttnn.{0}(buffer=[1, 2, 3, 4, 5, 6], shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR, device=device)
+            >>> tensor = ttnn.{0}(buffer=[1, 2, 3, 4, 5, 6], shape=[2, 3], dtype=ttnn.int32, device=device)
             >>> print(tensor)
-            ttnn.Tensor([[1, 2, 3, 4, 5, 6]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+            ttnn.Tensor([[1, 2, 3, 4, 5, 6]], shape=Shape([2, 3]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
