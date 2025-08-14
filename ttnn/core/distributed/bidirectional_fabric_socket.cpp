@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/bidirectional_fabric_socket.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
 
 namespace ttnn::distributed {
 
@@ -12,14 +14,10 @@ BidirectionalFabricSocket::BidirectionalFabricSocket(
     send_socket_(send_socket), recv_socket_(recv_socket) {}
 
 void BidirectionalFabricSocket::send(const ttnn::Tensor& tensor) {
-    // use send_socket_ to send the tensor
-    throw std::runtime_error("BidirectionalFabricSocket::send is not implemented yet. Please use MPISocket for now.");
+    ttnn::experimental::send_async(tensor, send_socket_);
 }
 
-void BidirectionalFabricSocket::recv(ttnn::Tensor& tensor) {
-    // use recv_socket_ to receive the tensor
-    throw std::runtime_error("BidirectionalFabricSocket::recv is not implemented yet. Please use MPISocket for now.");
-}
+void BidirectionalFabricSocket::recv(ttnn::Tensor& tensor) { ttnn::experimental::recv_async(tensor, recv_socket_); }
 
 tt::tt_metal::distributed::multihost::Rank BidirectionalFabricSocket::get_rank() const {
     auto socket_config = send_socket_.get_config();
