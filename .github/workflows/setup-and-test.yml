@@ -11,26 +11,42 @@ on:
         description: "The runner to use for the job"
         required: true
         type: string
-      test_group:
-        description: "Array of test groups. Pass the array as a JSON string (e.g., '[1, 2, 3, 4, 5]')"
+      test_splits:
+        description: "Number of test groups to split tests into (e.g., 4)"
         required: true
+        type: number
+      pytest_markers:
+        description: "Pytest mark expression to select/deselect tests (e.g., 'not perf', 'nightly or not perf')"
+        required: false
+        default: "not perf"
         type: string
 
 permissions:
   checks: write
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          matrix=$(echo "[$(seq -s, 1 ${{ inputs.test_splits }})]")
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+
   setup-and-test:
+    needs: generate-matrix
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
-        test_group: ${{ fromJSON(inputs.test_group) }}
+        test_group: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker_image }}
       options: "--rm --device /dev/tenstorrent"
-    name: "🦄 Run tests (group ${{ matrix.test_group }}${{ fromJSON(inputs.test_group).length }})"
+    name: "🦄 Run tests (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
@@ -48,7 +64,7 @@ jobs:
       - name: Run tests
         shell: bash
         env:
-          TEST_GROUPS: ${{ inputs.test_group }}
+          TEST_SPLITS: ${{ inputs.test_splits }}
         run: |
           CHIP_ARCH=unknown
           if [[ "${{ inputs.runs_on }}" =~ n150 ]]; then
@@ -57,9 +73,9 @@ jobs:
             CHIP_ARCH=blackhole
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
-          SPLITS=$(echo "$TEST_GROUPS" | jq '. | length')
+          SPLITS=$TEST_SPLITS
           cd tests/python_tests/
-          pytest -m "not perf" \
+          pytest -m "${{ inputs.pytest_markers }}" \
                 --splits $SPLITS --group ${{ matrix.test_group }} \
                 --override-ini="addopts=-v" --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}.xml .
