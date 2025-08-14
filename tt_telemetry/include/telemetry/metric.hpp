@@ -12,6 +12,13 @@
 
 class Metric {
 public:
+    const size_t id = 0;
+
+    Metric(size_t metric_unique_id)
+        : id(metric_unique_id)
+    {
+    }
+
     virtual const std::vector<std::string> telemetry_path() const {
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
     }
@@ -36,6 +43,11 @@ protected:
 
 class BoolMetric: public Metric {
 public:
+    BoolMetric(size_t metric_unique_id)
+        : Metric(metric_unique_id)
+    {
+    }
+
     bool value() const {
         return value_;
     }
