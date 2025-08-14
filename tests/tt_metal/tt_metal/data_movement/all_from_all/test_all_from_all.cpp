@@ -398,9 +398,6 @@ TO-DO:
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto device = mesh_device->get_device(0);
-    if (device->arch() == ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
-    }
     uint32_t test_case_id = 310;
 
     /* Parameters */
@@ -420,10 +417,6 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
     auto mesh_device = get_mesh_device();
     auto device = mesh_device->get_device(0);
-
-    if (device->arch() == ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
-    }
 
     uint32_t test_case_id = 311;
 
