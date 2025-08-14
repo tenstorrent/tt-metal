@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "program/program_impl.hpp"
-#include "hal_types.hpp"
 
 enum class CoreType;
 
@@ -24,7 +23,6 @@ enum data_collector_t {
     DISPATCH_DATA_SEMAPHORE,
     DISPATCH_DATA_RTARGS,
     DISPATCH_DATA_BINARY,
-    DISPATCH_DATA_COUNT
 };
 
 /* Record a single dispatch write, to be dumped with stats on program exit. Should only be called once per transaction
