@@ -394,7 +394,15 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
-                fn.template operator()<WorkloadFactory>();
+                if constexpr (HasMeshWorkloadCreate<WorkloadFactory>) {
+                    fn.template operator()<WorkloadFactory>();
+                } else if constexpr (HasMeshWorkloadCreateAt<WorkloadFactory>) {
+                    using Adapted = mesh_device_operation_t::template MeshWorkloadCreateAtAdapter<WorkloadFactory>;
+                    fn.template operator()<Adapted>();
+                } else {
+                    static_assert(tt::stl::concepts::always_false_v<WorkloadFactory>,
+                                  "WorkloadFactory must implement create_mesh_workload or create_at");
+                }
             }},
         program_factory);
 }
