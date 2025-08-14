@@ -343,6 +343,11 @@ set(CCL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/barrier/barrier_${PY_BINDING}.cpp
 )
 
+set(DEBUG_TTNN_SRCS_PYBIND
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/debug/debug_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/debug/apply_device_delay_${PY_BINDING}.cpp
+)
+
 #TODO : should be using pybind11_add_module, but right now it introduces many build problems
 #pybinds will always be built as a shared library
 list(
@@ -560,6 +565,7 @@ if(WITH_PYTHON_BINDINGS)
             ${TTNN_SRC_PYBIND}
             ${CCL_TTNN_SRCS_PYBIND}
             ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
+            ${DEBUG_TTNN_SRCS_PYBIND}
             ${TTNN_P2P_PYBIND}
     )
     target_include_directories(
