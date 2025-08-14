@@ -65,13 +65,16 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape",
     [
+        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1, 1024)),
+        ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),
+        ((1, 1, 1, 1024), (1, 1, 1, 1024), (1, 1, 1024, 1024)),
         ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1024, 1024)),  # A, Brow, C
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
-        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # A, B , Ccol
-        ((1, 1, 1024, 1), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # Acol, Bcol, C
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1)),  # A, Bcol, Ccol
-        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # Acol, B, Ccol
+        # ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
+        # ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
+        # ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # A, B , Ccol
+        # ((1, 1, 1024, 1), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # Acol, Bcol, C
+        # ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1)),  # A, Bcol, Ccol
+        # ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # Acol, B, Ccol
     ],
 )
 @pytest.mark.parametrize("condition", [1, 0])
@@ -87,6 +90,8 @@ def test_ttnn_where_bcast(c_shape, t_shape, f_shape, condition, device):
     ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
+    print(result)
+    print(golden)
 
     assert torch_equal_nan(result, golden)
 

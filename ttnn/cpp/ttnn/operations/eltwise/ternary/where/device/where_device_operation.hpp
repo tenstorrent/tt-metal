@@ -20,6 +20,7 @@ enum class WhereVariant {
 enum class WhereBroadcastType {
     NONE,
     COL_BCAST,
+    ROW_BCAST,
     INVALID_BCAST,  // All other unsupported bcast cases go here for now
 };
 
