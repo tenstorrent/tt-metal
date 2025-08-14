@@ -21,6 +21,8 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "dprint_tensix.h"
+#include "dprint_pages.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -164,12 +166,17 @@ void MAIN {
             cb_reserve_back(cb_ex, onetile);
             cb_reserve_back(cb_ex2, onetile);
             uint32_t start_N = 0;
+            UNPACK(tt::compute::common::print_full_tile(cb_x, 0, true));
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_wait_front(cb_x, wt + blk);
                 for (uint32_t j = 0; j < blk; j++) {
                     // Welford's needs transposed input tile
-                    copy_tile_to_dst_init_short(cb_x, /*transpose*/ 1);
-                    copy_tile(cb_x, j, dst0);
+                    // copy_tile_to_dst_init_short(cb_x, /*transpose*/ 1);
+                    // copy_tile(cb_x, j, dst0);
+                    transpose_wh_init_short(cb_x);
+                    reconfig_data_format_srca(cb_x);
+                    transpose_wh_tile(cb_x, j, dst0);
+                    dprint_tensix_dest_reg(0);  // "0" indicates tile idx of Dest to print
                     welford_init();
                     welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
                     start_N += tile_width;
@@ -189,9 +196,11 @@ void MAIN {
             transpose_wh_init_short(cb_ex);
             reconfig_data_format_srca(cb_ex);
             transpose_wh_tile(cb_ex, 0, dst1);
+            // dprint_tensix_dest_reg(dst1); // "0" indicates tile idx of Dest to print
             transpose_wh_init_short(cb_ex2);
             reconfig_data_format_srca(cb_ex2);
             transpose_wh_tile(cb_ex2, 0, dst2);
+            // dprint_tensix_dest_reg(dst2); // "0" indicates tile idx of Dest to print
             cb_pop_front(cb_ex, onetile);
             cb_pop_front(cb_ex2, onetile);
             cb_reserve_back(cb_ex, onetile);
