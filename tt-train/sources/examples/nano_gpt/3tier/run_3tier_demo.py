@@ -220,7 +220,7 @@ def write_appfile(
     """
     common_env = {
         "TT_METAL_HOME": str(metal_home),
-        "TT_LOGGER_LEVEL": "FATAL",
+        "TT_LOGGER_LEVEL": "DEBUG",
         "TT_HOST_RANK": "0",
     }
     if use_fabric:

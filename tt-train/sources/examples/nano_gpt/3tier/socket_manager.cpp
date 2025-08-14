@@ -9,7 +9,7 @@
 namespace {
 
 tt::tt_metal::distributed::SocketMemoryConfig _make_socket_mem_config() {
-    tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config;
+    tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config{};
     socket_mem_config.socket_storage_type = ttnn::BufferType::L1;
     socket_mem_config.fifo_size = 32U * 32U * 2U * 8U;  // 16KB, 8 bfloat16 tiles
     return socket_mem_config;

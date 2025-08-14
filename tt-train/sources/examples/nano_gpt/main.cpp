@@ -948,9 +948,7 @@ int main(int argc, char **argv) {
             auto loss = ttml::ops::cross_entropy_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
-
             ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
-
             loss->backward();
             ttml::autograd::ctx().reset_graph();
 
@@ -960,7 +958,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (!device_config.enable_tp) {
+                if (!device_config.enable_tp && !config.enable_mpi) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
