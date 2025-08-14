@@ -275,34 +275,15 @@ struct Empty {
 
 struct FromBuffer {
     template <typename BufferType>
-    static std::vector<BufferType> flatten_buffer(const std::vector<std::vector<BufferType>>& buffer) {
-        std::vector<BufferType> flattened;
-        size_t total_size = 0;
-        for (const auto& row : buffer) {
-            total_size += row.size();
-        }
-        flattened.reserve(total_size);
-
-        for (const auto& row : buffer) {
-            flattened.insert(flattened.end(), row.begin(), row.end());
-        }
-
-        return flattened;
-    }
-
-    template <typename BufferType>
     static Tensor invoke(
-        const std::vector<std::vector<BufferType>>& buffer,
+        const std::vector<BufferType>& buffer,
+        const Shape& shape,
         const DataType dtype,
         const Layout layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
-        size_t height = buffer.size();
-        size_t width = buffer.empty() ? 0 : buffer[0].size();
-        ttnn::Shape shape({height, width});
         TensorSpec spec(shape, TensorLayout(dtype, PageConfig(layout), memory_config));
-        std::vector<BufferType> flattened_buffer = flatten_buffer(buffer);
-        return Tensor::from_vector<BufferType>(flattened_buffer, spec, device);
+        return Tensor::from_vector<BufferType>(buffer, spec, device);
     }
 };
 
