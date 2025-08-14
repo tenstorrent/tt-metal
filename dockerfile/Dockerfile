@@ -8,6 +8,7 @@ FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+USER container_app_user
 ENV RUSTUP_HOME=/home/container_app_user/.rustup
 ENV CARGO_HOME=/home/container_app_user/.cargo
 ENV PATH="$CARGO_HOME/bin:$PATH"
