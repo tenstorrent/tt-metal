@@ -471,7 +471,8 @@ BinaryNgDeviceOperation::invoke(
             std::nullopt,
             memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
-            input_tensor_a.dtype(),
+            input_tensor_a.dtype(),  // TODO: For mixed dtypes we need to set this value to the appropriate dtype
+                                     // depending on which LLK is meant to be used.
             output_dtype,
             get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
             std::nullopt,
