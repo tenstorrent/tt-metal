@@ -81,7 +81,7 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
         ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 128)),
     ],
 )
-@pytest.mark.parametrize("condition", [1])
+@pytest.mark.parametrize("condition", [1, 0])
 def test_ttnn_where_bcast(c_shape, t_shape, f_shape, condition, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.float32) * condition
