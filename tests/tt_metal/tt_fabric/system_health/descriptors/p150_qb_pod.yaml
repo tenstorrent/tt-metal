@@ -1,0 +1,17 @@
+PODS:
+  P150_QB_POD:
+    BOARDS:
+      1: P150
+      2: P150
+      3: P150
+      4: P150
+    CONNECTIONS:
+      QSFP:
+        - [{BOARD: 1, PORT: 3}, {BOARD: 4, PORT: 3}]
+        - [{BOARD: 1, PORT: 4}, {BOARD: 4, PORT: 4}]
+        - [{BOARD: 1, PORT: 1}, {BOARD: 2, PORT: 1}]
+        - [{BOARD: 1, PORT: 2}, {BOARD: 2, PORT: 2}]
+        - [{BOARD: 2, PORT: 3}, {BOARD: 3, PORT: 3}]
+        - [{BOARD: 2, PORT: 4}, {BOARD: 3, PORT: 4}]
+        - [{BOARD: 3, PORT: 1}, {BOARD: 4, PORT: 1}]
+        - [{BOARD: 3, PORT: 2}, {BOARD: 4, PORT: 2}]
