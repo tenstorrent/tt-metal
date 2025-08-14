@@ -273,7 +273,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         full_text_row_masked_out_mask_11SD: ttnn.Tensor,
         xattn_caches,
         current_pos,
-        rot_mats=None,
+        rot_mats_global=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -308,7 +308,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             h = layer(
                 h,
                 current_pos,
-                rot_mats_global=rot_mats,
+                rot_mats_global=rot_mats_global,
                 user_id=user_id,
                 mode=mode,
                 page_table=page_table,
