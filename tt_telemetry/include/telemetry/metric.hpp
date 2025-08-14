@@ -55,3 +55,18 @@ public:
 protected:
     bool value_ = false;
 };
+
+class IntMetric: public Metric {
+public:
+    IntMetric(size_t metric_unique_id)
+        : Metric(metric_unique_id)
+    {
+    }
+
+    int64_t value() const {
+        return value_;
+    }
+
+protected:
+    int64_t value_ = 0;
+};
