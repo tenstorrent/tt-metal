@@ -101,30 +101,28 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
     // Second pass: create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
-        if (!(is_TG && device->is_mmio_capable())) {
-            auto dev_id = device->id();
-            auto dev_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+        auto dev_id = device->id();
+        auto dev_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
 
-            // Get all active ethernet channels for this device
-            auto active_channels = control_plane.get_active_fabric_eth_channels(dev_fabric_node_id);
+        // Get all active ethernet channels for this device
+        auto active_channels = control_plane.get_active_fabric_eth_channels(dev_fabric_node_id);
 
-            // Initialize per-device mappings
-            eth_chan_to_core_index_[dev_id] = std::unordered_map<size_t, size_t>();
-            eth_chan_to_risc_id_[dev_id] = std::unordered_map<size_t, size_t>();
+        // Initialize per-device mappings
+        eth_chan_to_core_index_[dev_id] = std::unordered_map<size_t, size_t>();
+        eth_chan_to_risc_id_[dev_id] = std::unordered_map<size_t, size_t>();
 
-            // Create round-robin mapping using the actual ethernet channel IDs from active_channels
-            size_t channel_index = 0;
-            for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
-                size_t core_index = channel_index % logical_fabric_mux_cores_.size();
-                eth_chan_to_core_index_[dev_id][eth_chan_id] = core_index;
+        // Create round-robin mapping using the actual ethernet channel IDs from active_channels
+        size_t channel_index = 0;
+        for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
+            size_t core_index = channel_index % logical_fabric_mux_cores_.size();
+            eth_chan_to_core_index_[dev_id][eth_chan_id] = core_index;
 
-                // Determine RISC ID: round-robin assignment (0 = BRISC, 1 = NCRISC, etc.)
-                size_t channels_on_core = (channel_index / logical_fabric_mux_cores_.size());
-                size_t risc_id = channels_on_core % num_used_riscs_per_tensix_;
-                eth_chan_to_risc_id_[dev_id][eth_chan_id] = risc_id;
+            // Determine RISC ID: round-robin assignment (0 = BRISC, 1 = NCRISC, etc.)
+            size_t channels_on_core = (channel_index / logical_fabric_mux_cores_.size());
+            size_t risc_id = channels_on_core % num_used_riscs_per_tensix_;
+            eth_chan_to_risc_id_[dev_id][eth_chan_id] = risc_id;
 
-                channel_index++;
-            }
+            channel_index++;
         }
     }
 }
