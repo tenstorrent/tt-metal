@@ -302,10 +302,6 @@ run_yolov8s_world_perf() {
 run_vanilla_unet_demo() {
  # vanilla_unet demo
  pytest models/demos/vanilla_unet/demo/demo.py
-<<<<<<< HEAD
-=======
-
->>>>>>> f8dd685c21 (remove fail flags added for all models in single card demo tests)
 }
 
 run_swin_s_demo() {
@@ -330,7 +326,6 @@ run_yolov8x_perf() {
 run_yolov4_perf() {
   #yolov4 demo
   pytest models/demos/yolov4/demo.py
-  pytest models/demos/yolov4/demo.py
 
 }
 
@@ -349,48 +344,16 @@ run_yolov7_demo() {
 }
 
 run_yolov6l_demo() {
-
+  # yolov6 demo
   pytest models/demos/yolov6l/demo/demo.py
 
 }
 
 run_vgg_unet_demo() {
  # vgg_unet demo
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
   pytest models/demos/vgg_unet/demo/demo.py
-=======
-  pytest models/demos/vgg_unet/demo/demo.py; fail+=$?
->>>>>>> da17e21598 ( modify all README eval paths to demos and update classification_eval for mobv2)
-=======
-  pytest models/demos/vgg_unet/demo/demo.py
->>>>>>> f8dd685c21 (remove fail flags added for all models in single card demo tests)
-
-=======
-  pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp
-=======
-  pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp; fail+=$?
->>>>>>> e1c6873aef (move eval to demos)
-
-<<<<<<< HEAD
- # vgg_unet eval
-<<<<<<< HEAD
-<<<<<<< HEAD
-  pytest -n auto models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp --timeout 600
->>>>>>> ef197810ae (Update run_single_card_demo_tests.sh)
-
 }
 
-=======
-=======
->>>>>>> 20e7f2290d ( check vanilla_unet for lower iterations and fix yolov6l, segformer eval and mobv2 e2e perf)
-  pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
-=======
->>>>>>> 2c8edd3897 (disable eval scripts in demo CI's)
-
-}
 
 run_yolov12x_demo() {
 
