@@ -158,6 +158,45 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
     }
 }
 
+std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> GenerateAllValidCombinations(
+    BaseFabricFixture* fixture) {
+    std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> combinations;
+    auto devices = fixture->get_devices();
+
+    if (devices.empty()) {
+        return combinations;
+    }
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->id());
+    auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+
+    uint32_t ns_dim = mesh_shape[0];
+    uint32_t ew_dim = mesh_shape[1];
+
+    for (uint32_t north = 0; north < ns_dim; north++) {
+        for (uint32_t south = 0; south < ns_dim; south++) {
+            if (north + south >= ns_dim) {
+                continue;
+            }
+
+            for (uint32_t east = 0; east < ew_dim; east++) {
+                for (uint32_t west = 0; west < ew_dim; west++) {
+                    if (east + west >= ew_dim) {
+                        continue;
+                    }
+
+                    if (north + south + east + west > 0) {
+                        combinations.emplace_back(north, south, east, west);
+                    }
+                }
+            }
+        }
+    }
+
+    return combinations;
+}
+
 TEST_F(Fabric2DFixture, TestUnicastRaw) {
     for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastRaw(this);
@@ -208,6 +247,18 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_1N2S) {
 
 TEST_F(Fabric2DFixture, TestMCastConnAPI_2N1S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 2, RoutingDirection::S, 1);
+}
+
+TEST_F(NightlyFabric2DFixture, Test2DMCast) {
+    auto valid_combinations = GenerateAllValidCombinations(this);
+    log_info(tt::LogTest, "There are {} many valid combinations", valid_combinations.size());
+    for (const auto& [north, south, east, west] : valid_combinations) {
+        RunTest2DMCastConnAPI(this, north, south, east, west);
+    }
+    for (const auto& [north, south, east, west] : valid_combinations) {
+        log_info(tt::LogTest, "==== NEW TEST ====");
+        log_info(tt::LogTest, "{}N{}S{}E{}W", north, south, east, west);
+    }
 }
 
 TEST_F(Fabric2DFixture, Test2DMCastConnAPI_1S1E1W) { RunTest2DMCastConnAPI(this, 0, 1, 1, 1); }
