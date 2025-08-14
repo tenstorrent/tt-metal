@@ -88,7 +88,6 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
     CreateCircularBuffer(
         program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    // We really only need to put 2 values in, but here the size is CB_PAGE_SIZE to ensure alignment.
     auto result_buffer = Buffer::create(device, CB_PAGE_SIZE, CB_PAGE_SIZE, BufferType::L1);
     SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
 

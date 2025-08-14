@@ -79,7 +79,7 @@ void MAIN {
     // Note: Reader is not pulling any more data out of the buffer,
     // buffer stays full.
 
-    // Wrapped around, so it would be 0x0000.
+    // Acked counter should stay at CHURN_TARGET.
     auto expected_acked = CHURN_TARGET;
     if (*get_cb_tiles_acked_ptr(CB_ID) != expected_acked) {
         DPRINT << "Got: Acked: " << HEX() << *get_cb_tiles_acked_ptr(CB_ID)
