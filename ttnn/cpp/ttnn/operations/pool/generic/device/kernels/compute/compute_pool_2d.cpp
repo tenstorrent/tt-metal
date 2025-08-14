@@ -148,6 +148,13 @@ void MAIN {
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt(curr_in_idx_cb_id, curr_in_cb_id, tile_idx_tmp_cb_id);
 
+                    cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
+                    cb_reserve_back(tile_idx_tmp_cb_id, topk_output_tiles);
+                    cb_push_back(tile_tmp_cb_id, topk_output_tiles);
+                    cb_push_back(tile_idx_tmp_cb_id, topk_output_tiles);
+                    cb_wait_front(tile_tmp_cb_id, topk_output_tiles);
+                    cb_wait_front(tile_idx_tmp_cb_id, topk_output_tiles);
+
                     // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
                     // PACK(DPRINT << "TILE CB " << ENDL());
                     // PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
@@ -164,6 +171,10 @@ void MAIN {
                     // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
                     topk_tile_init();
                     ckernel::topk_local_sort(data_dst_idx, 0, 4, 0);
+
+                    // Pop the temporary circular buffers after processing
+                    cb_pop_front(tile_tmp_cb_id, topk_output_tiles);
+                    cb_pop_front(tile_idx_tmp_cb_id, topk_output_tiles);
 
                     // dprint_tensix_dest_reg(0);
                     // dprint_tensix_dest_reg(2);
