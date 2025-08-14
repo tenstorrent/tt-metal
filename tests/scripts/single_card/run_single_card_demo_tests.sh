@@ -294,6 +294,11 @@ run_vanilla_unet_demo() {
 
 }
 
+run_swin_s_demo() {
+
+  pytest models/experimental/swin_s/demo/demo.py
+
+}
 
 run_swin_v2_demo() {
 
