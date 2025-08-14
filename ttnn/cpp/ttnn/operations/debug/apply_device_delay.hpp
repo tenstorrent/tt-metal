@@ -19,8 +19,8 @@ namespace ttnn::operations::debug {
 // If `subdevice_id` is provided, the kernel will be scheduled on a worker core belonging to that subdevice.
 void apply_device_delay(
     MeshDevice* mesh_device,
-    QueueId queue_id,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::vector<std::vector<uint32_t>>& delays);
+    const std::vector<std::vector<uint32_t>>& delays,
+    std::optional<QueueId> queue_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id);
 
 }  // namespace ttnn::operations::debug

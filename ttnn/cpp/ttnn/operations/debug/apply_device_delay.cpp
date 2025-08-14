@@ -36,9 +36,9 @@ static CoreCoord select_single_worker_core(const CoreRangeSet& worker_cores) {
 
 void apply_device_delay(
     MeshDevice* mesh_device,
-    QueueId queue_id,
-    const std::optional<SubDeviceId>& subdevice_id,
-    const std::vector<std::vector<uint32_t>>& delays) {
+    const std::vector<std::vector<uint32_t>>& delays,
+    std::optional<QueueId> queue_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     TT_FATAL(mesh_device != nullptr, "MeshDevice is null");
 
     const auto& view = mesh_device->get_view();
@@ -95,7 +95,14 @@ void apply_device_delay(
     }
 
     // Enqueue the workload on the provided queue.
-    mesh_device->mesh_command_queue(*queue_id).enqueue_mesh_workload(workload, /*blocking=*/false);
+    // EnqueueMeshWorkload
+    log_info(tt::LogAlways, "Enqueuing workload on queue");
+    if (queue_id.has_value()) {
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(*queue_id.value()), workload, /*blocking=*/false);
+    } else {
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
+    }
+    log_info(tt::LogAlways, "Workload enqueued");
 }
 
 }  // namespace ttnn::operations::debug
