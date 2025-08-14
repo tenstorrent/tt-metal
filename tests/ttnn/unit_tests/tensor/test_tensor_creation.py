@@ -379,3 +379,20 @@ def test_tensor_creation_from_buffer(dtype, buffer, device):
         assert rounded == buffer
     else:
         assert tt_tensor.to_list() == buffer
+
+
+@pytest.mark.parametrize(
+    "dtype,buffer",
+    [
+        (ttnn.bfloat8_b, [[1, 2, 3], [4, 5, 6]]),
+        (ttnn.bfloat4_b, [[1, 2, 3], [4, 5, 6]]),
+        (ttnn.DataType.INVALID, [[1, 2, 3], [4, 5, 6]]),
+    ],
+)
+def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, device):
+    try:
+        tt_tensor = ttnn.from_buffer(buffer, dtype, ttnn.ROW_MAJOR_LAYOUT, device)
+    except Exception as e:
+        assert "Unsupported DataType!" in str(e)
+    else:
+        pytest.fail("Expected an exception, but got none")

@@ -293,8 +293,8 @@ struct FromBuffer {
     template <typename BufferType>
     static Tensor invoke(
         const std::vector<std::vector<BufferType>>& buffer,
-        const DataType& dtype,
-        const Layout& layout,
+        const DataType dtype,
+        const Layout layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
         size_t height = buffer.size();
