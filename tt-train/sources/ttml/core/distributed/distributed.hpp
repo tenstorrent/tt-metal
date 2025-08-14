@@ -5,9 +5,6 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/host_api.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "serialization/serializable.hpp"
