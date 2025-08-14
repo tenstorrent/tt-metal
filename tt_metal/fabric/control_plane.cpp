@@ -2310,6 +2310,7 @@ void ControlPlane::populate_fabric_connection_info(
     chip_id_t physical_chip_id,
     chan_id_t eth_channel_id,
     eth_chan_directions router_direction) const {
+    constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -2331,8 +2332,8 @@ void ControlPlane::populate_fabric_connection_info(
     connection_info.buffer_size_bytes = edm_config.channel_buffer_size_bytes;
     connection_info.buffer_index_semaphore_id =
         edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
-    // TODO: remove hardcoding, and have a common file between host and device for constants
-    connection_info.worker_free_slots_stream_id = 17;
+    // TODO: issue #26853, remove hardcoding, and have a common file between host and device for constants
+    connection_info.worker_free_slots_stream_id = WORKER_FREE_SLOTS_STREAM_ID;
 
     // Check if fabric tensix config is enabled, if so populate tensix mux config as well
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=

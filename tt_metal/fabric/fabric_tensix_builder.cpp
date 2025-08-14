@@ -20,6 +20,23 @@
 
 namespace tt::tt_fabric {
 
+// Helper function to find the maximum number of ethernet channels across all devices
+static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_devices) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    size_t max_eth_channels = 0;
+
+    for (const auto& device : all_active_devices) {
+        auto dev_id = device->id();
+        auto dev_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+
+        // Get all active ethernet channels for this device
+        auto active_channels = control_plane.get_active_fabric_eth_channels(dev_fabric_node_id);
+        max_eth_channels = std::max(max_eth_channels, active_channels.size());
+    }
+
+    return max_eth_channels;
+}
+
 // FabricTensixDatamoverConfig implementation
 
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
@@ -37,20 +54,12 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     // Get logical fabric mux cores from the first available device (same for all devices), except for TG
     const bool is_TG =
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG);
+    TT_FATAL(!is_TG, "Fabric with tensix extension is not supported for TG");
 
     const auto& all_active_devices = tt::DevicePool::instance().get_all_active_devices();
     TT_FATAL(!all_active_devices.empty(), "No active devices found in DevicePool");
 
     auto device_id = all_active_devices.front()->id();
-    if (is_TG) {
-        // For TG systems, use a non-MMIO device for fabric mux cores
-        for (const auto& device : all_active_devices) {
-            if (device && !device->is_mmio_capable()) {
-                device_id = device->id();
-                break;
-            }
-        }
-    }
 
     uint8_t num_hw_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
     tt::tt_metal::DispatchCoreConfig dispatch_core_config =
@@ -80,19 +89,7 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     }
 
     // Get maximum number of active ethernet channels from control plane across all devices
-    size_t max_eth_channels = 0;
-
-    // First pass: find max_eth_channels
-    for (const auto& device : all_active_devices) {
-        if (!(is_TG && device->is_mmio_capable())) {
-            auto dev_id = device->id();
-            auto dev_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
-
-            // Get all active ethernet channels for this device
-            auto active_channels = control_plane.get_active_fabric_eth_channels(dev_fabric_node_id);
-            max_eth_channels = std::max(max_eth_channels, active_channels.size());
-        }
-    }
+    size_t max_eth_channels = find_max_eth_channels(all_active_devices);
 
     TT_FATAL(max_eth_channels > 0, "No active ethernet channels found in the system");
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "logical_fabric_mux_cores_ is empty before division");
@@ -169,7 +166,7 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
         case tt::tt_fabric::Topology::Torus:
             num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_torus;
             break;
-        default: TT_THROW("unknow fabric topology: {}", topology); break;
+        default: TT_THROW("unknown fabric topology: {}", topology); break;
     }
 
     // Calculate buffers per channel based on available space and max channels
