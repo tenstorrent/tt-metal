@@ -7,8 +7,6 @@
  * TODO:
  * -----
  * - Better handling of value types. The isBoolValue param on addPath() needs to go!
- * - Remove nasty hack in index.html of adding 1000000 to id's for int metrics. Need unified id
- *   space in C++.
  * - Better detection of health vs. non-health metrics when rendering (don't just check value
  *   type, need some attribute along with them).
  */

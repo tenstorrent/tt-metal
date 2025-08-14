@@ -105,7 +105,8 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
     
     for (size_t i = 0; i < bool_metrics.size(); i++) {
         std::string path = get_cluster_wide_telemetry_path(*bool_metrics[i]);
-        snapshot->bool_metric_indices.push_back(i);
+        size_t id = bool_metrics[i]->id;
+        snapshot->bool_metric_ids.push_back(id);
         snapshot->bool_metric_names.push_back(path);
         snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
     }
@@ -123,7 +124,7 @@ static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>> &
         if (!bool_metrics[i]->changed_since_transmission()) {
             continue;
         }
-        snapshot->bool_metric_indices.push_back(i);
+        snapshot->bool_metric_ids.push_back(bool_metrics[i]->id);
         snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
         bool_metrics[i]->mark_transmitted();
     }
@@ -138,10 +139,11 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
     const tt::Cluster &cluster = instance.get_cluster();
 
     // Create vectors of all metrics we will monitor by value type
+    size_t id = 1;
     std::vector<std::unique_ptr<BoolMetric>> bool_metrics;
     for (const auto &[chip_id, endpoints]: get_ethernet_endpoints_by_chip(cluster)) {
         for (const auto &endpoint: endpoints) {
-            bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(endpoint));
+            bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(id++, endpoint));
         }
     }
 
