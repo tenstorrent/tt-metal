@@ -1,0 +1,56 @@
+name: 🌙 Nightly Tests
+
+on:
+  schedule:
+    # Run every night at 1AM UTC
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      pytest_markers:
+        description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
+        required: false
+        default: "nightly"
+        type: string
+
+permissions:
+  checks: write
+  contents: read
+
+jobs:
+  build-images:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-images.yml
+    secrets: inherit
+
+  nightly-test-wormhole:
+    name: "🌀 Nightly Tests (Wormhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    needs: build-images
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 10
+      pytest_markers: ${{ inputs.pytest_markers || 'nightly' }}
+
+  nightly-test-blackhole:
+    name: "🕳️ Nightly Tests (Blackhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    needs: build-images
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 10
+      pytest_markers: ${{ inputs.pytest_markers || 'nightly' }}
+
+  nightly-summary:
+    name: "📊 Nightly Summary"
+    if: always()
+    needs:
+      - nightly-test-wormhole
+      - nightly-test-blackhole
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check nightly test results
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
