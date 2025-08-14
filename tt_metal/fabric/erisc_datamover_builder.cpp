@@ -1517,12 +1517,26 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     if (ds_edm >= max_ds_edm_count) {
         TT_THROW("Invalid VC");
     }
+
+    // for all edm types except for dateline upstream will have non zero buffer slots for channel 1,
+    // for dateline upstream channel 1 is removed and we need to use channel 2.
+    static constexpr std::size_t none_zero_buffer_slot_idx = 1;
+    static constexpr std::size_t dateline_upstream_none_zero_idx = 2;
+
+    size_t sender_channels_num_buffer = 0;
+    switch (this->fabric_edm_type) {
+        case FabricEriscDatamoverType::DatelineUpstream:
+            sender_channels_num_buffer = this->sender_channels_num_buffers[dateline_upstream_none_zero_idx];
+            break;
+        default: sender_channels_num_buffer = this->sender_channels_num_buffers[none_zero_buffer_slot_idx]; break;
+    }
+
     this->sender_channel_connection_liveness_check_disable_array[ds_edm] = true;
     return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,
         this->local_sender_channels_buffer_address[ds_edm],
-        this->sender_channels_num_buffers[ds_edm],
+        sender_channels_num_buffer,
         this->sender_channels_flow_control_semaphore_id[ds_edm],
         this->sender_channels_connection_semaphore_id[ds_edm],
         this->config.sender_channels_worker_conn_info_base_address[ds_edm],
@@ -1619,6 +1633,9 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
     if (!is_2D_routing) {
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2] = adapter_spec.buffer_index_semaphore_id;
     }
+
+    // all downstream buffer slots are equal currently
+    this->downstream_sender_channels_num_buffers.fill(adapter_spec.num_buffers_per_channel);
 }
 
 eth_chan_directions FabricEriscDatamoverBuilder::get_direction() const { return this->direction; }
