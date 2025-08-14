@@ -2,44 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
-#include <errno.h>
-#include <fmt/base.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include <tt-metalium/semaphore.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <errno.h>
 #include <exception>
 #include <map>
 #include <memory>
-#include <utility>
+#include <stdlib.h>
+#include <sys/types.h>
 #include <variant>
 #include <vector>
 
+#include <fmt/base.h>
+
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "impl/context/metal_context.hpp"
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
+#include <tt-metalium/semaphore.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt_stl/span.hpp>
+
+#include "hostdevcommon/kernel_structs.h"
+#include "impl/context/metal_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 
@@ -62,7 +62,7 @@ void check_program_is_mapped_to_correct_cores(
                     auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
                     TT_FATAL(kernel->is_on_logical_core(logical_core), "Error");
                     // Check that compute kernel compile time args are mapped to the correct cores
-                    if (kernel->processor() == tt::RISCV::COMPUTE) {
+                    if (kernel->get_kernel_processor_class() == tt_metal::HalProcessorClassType::COMPUTE) {
                         auto kernel_compile_time_args = kernel->compile_time_args();
                         TT_FATAL(kernel_compile_time_args == compute_kernel_args, "Error");
                     }

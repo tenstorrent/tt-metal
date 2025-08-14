@@ -126,6 +126,9 @@ public:
     CoreType get_kernel_core_type() const;
     void set_full_name(const std::string& s) { kernel_full_name_ = s; }
     void add_defines(const std::map<std::string, std::string>& defines);
+    virtual uint8_t expected_num_binaries() const = 0;
+    // Get info for kernel binaries, 0 <= index < expected_num_binaries()
+    virtual uint32_t get_processor_id(int index) const = 0;
     virtual uint32_t get_binary_packed_size(IDevice* device, int index) const = 0;
 
     bool is_idle_eth() const;

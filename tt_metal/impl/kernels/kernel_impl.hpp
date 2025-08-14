@@ -19,7 +19,6 @@ namespace tt::tt_metal {
 class KernelImpl : public Kernel, public JitBuildSettings {
 public:
     const std::vector<const ll_api::memory*>& binaries(uint32_t build_key) const;
-    virtual uint32_t get_processor_id(int index) const = 0;
     uint32_t get_binary_packed_size(IDevice* device, int index) const override;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
     void set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries);
@@ -60,8 +59,6 @@ protected:
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
     std::unordered_map<chip_id_t, std::vector<const ll_api::memory*>> binaries_;
-
-    virtual uint8_t expected_num_binaries() const = 0;
 
     virtual std::vector<std::string> file_paths(IDevice& device) const = 0;
 };
