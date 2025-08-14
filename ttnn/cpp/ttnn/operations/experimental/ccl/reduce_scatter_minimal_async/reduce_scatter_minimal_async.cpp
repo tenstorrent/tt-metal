@@ -96,12 +96,12 @@ ttnn::Tensor composite_reduce_scatter(
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
         input_tensor,
         multi_device_global_semaphore[0],
+        barrier_semaphore,
         num_links,
         memory_config,
         ttnn::ccl::Topology::Linear,
         cluster_axis,
-        subdevice_id,
-        barrier_semaphore);
+        subdevice_id);
 
     // Reduce broadcasted tensors into a single reduced tensor
     ttnn::Tensor all_reduced_tensor = broadcasted_tensors[0];
