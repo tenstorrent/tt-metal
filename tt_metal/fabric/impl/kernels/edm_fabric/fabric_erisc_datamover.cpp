@@ -2501,28 +2501,11 @@ void kernel_main() {
             edm_index++;
             has_downstream_edm >>= 1;
         }
-        if constexpr (enable_deadlock_avoidance) {
-            bool connect_ring = false;
-            if constexpr (my_direction == eth_chan_directions::EAST) {
-                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::WEST)) != 0;
-            } else if constexpr (my_direction == eth_chan_directions::WEST) {
-                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::EAST)) != 0;
-            } else if constexpr (my_direction == eth_chan_directions::NORTH) {
-                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::SOUTH)) != 0;
-            } else if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::NORTH)) != 0;
-            }
-            if (connect_ring) {
-                if constexpr (
-                    enable_deadlock_avoidance && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
-                    downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
-                        .template open<
-                            false,
-                            use_posted_writes_for_connection_open,
-                            tt::tt_fabric::worker_handshake_noc>();
-                    *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_free_slots_ptr =
-                        0;
-                }
+        if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[0]) {
+            if (has_downstream_edm_vc1_buffer_connection) {
+                downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
+                    .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
+                *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_free_slots_ptr = 0;
             }
         }
     } else {
