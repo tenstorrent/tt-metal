@@ -633,7 +633,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             // Active
             std::vector<uint32_t> clear_flag_data = {0};
             tt::llrt::write_hex_vec_to_core(
-                device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+                device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr(), true);
         }
     };
 
@@ -1144,8 +1144,8 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
                     device_id,
                     worker_core,
                     core_info_vec,
-                    hal_->get_dev_addr(
-                        get_programmable_core_type(worker_core, device_id), HalL1MemAddrType::CORE_INFO));
+                    hal_->get_dev_addr(get_programmable_core_type(worker_core, device_id), HalL1MemAddrType::CORE_INFO),
+                    true);
                 initialize_firmware(device_id, HalProgrammableCoreType::TENSIX, worker_core, &launch_msg, &go_msg);
                 not_done_cores.insert(worker_core);
             }
@@ -1165,7 +1165,8 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             device_id,
             virtual_core,
             zero_vec_erisc_init,
-            hal_->get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
+            hal_->get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO),
+            true);
     }
 
     // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
@@ -1179,7 +1180,8 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             device_id,
             virtual_core,
             core_info_vec,
-            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO),
+            true);
         initialize_firmware(device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, &launch_msg, &go_msg);
         if (!hal_->get_eth_fw_is_cooperative()) {
             active_eth_cores.insert(virtual_core);
@@ -1196,7 +1198,8 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             device_id,
             virtual_core,
             core_info_vec,
-            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO),
+            true);
         initialize_firmware(device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, &launch_msg, &go_msg);
         not_done_cores.insert(virtual_core);
     }

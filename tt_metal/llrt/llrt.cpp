@@ -83,11 +83,16 @@ const ll_api::memory& get_risc_binary(
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, tt::stl::Span<const uint8_t> hex_vec, uint64_t addr) {
+void write_hex_vec_to_core(
+    chip_id_t chip,
+    const CoreCoord& core,
+    tt::stl::Span<const uint8_t> hex_vec,
+    uint64_t addr,
+    bool bypass_wc = false) {
     // the API is named "write_core", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr);
+        hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr, bypass_wc);
 }
 
 std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
@@ -134,13 +139,13 @@ void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core) {
     go_msg_t reset_msg{};
     reset_msg.signal = RUN_MSG_RESET_READ_PTR_FROM_HOST;
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        &reset_msg, sizeof(go_msg_t), tt_cxy_pair(chip, virtual_core), go_signal_adrr);
+        &reset_msg, sizeof(go_msg_t), tt_cxy_pair(chip, virtual_core), go_signal_adrr, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(chip);
     uint32_t go_message_index_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
         dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     uint32_t zero = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        &zero, sizeof(uint32_t), tt_cxy_pair(chip, virtual_core), go_message_index_addr);
+        &zero, sizeof(uint32_t), tt_cxy_pair(chip, virtual_core), go_message_index_addr, true);
 }
 
 void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
@@ -152,11 +157,11 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     uint64_t go_addr = base_addr + sizeof(launch_msg_t) * launch_msg_buffer_num_entries;
 
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        (void*)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
+        (void*)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr, true);
     tt_driver_atomics::sfence();
     if (send_go) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
+            go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr, true);
     }
 }
 
@@ -192,7 +197,7 @@ bool test_load_write_read_risc_binary(
         uint64_t relo_addr = tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
+            &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr, true);
     });
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
@@ -360,7 +365,7 @@ void send_msg_to_eth_mailbox(
     // Must write args first.
     auto write_arg = [&](int index, uint32_t val) {
         uint32_t arg_addr = hal.get_eth_fw_mailbox_arg_addr(index);
-        write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{val}, arg_addr);
+        write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{val}, arg_addr, true);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     };
 
@@ -381,7 +386,7 @@ void send_msg_to_eth_mailbox(
         virtual_core.str(),
         mailbox_addr,
         msg);
-    write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{msg}, mailbox_addr);
+    write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{msg}, mailbox_addr, true);
 
     // Wait for ack
     if (wait_for_ack) {
