@@ -148,7 +148,7 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 #############################################################
 
-FROM base AS release
+FROM base AS tt-metalium-ttnn
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -167,3 +167,44 @@ RUN mkdir -p /etc && \
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
 RUN pip3 install $WHEEL_FILENAME
+
+# Set up virtual environment
+RUN python3 -m venv $PYTHON_ENV_DIR
+
+#############################################################
+
+FROM base AS tt-metalium-devel
+
+# Set up virtual environment and TT_METAL_HOME
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+
+# Clone tt-metal
+RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
+    https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
+    && cd ${TT_METAL_HOME}"
+
+WORKDIR /tt-metal
+
+# Build tt-metal and venv, then clear cache
+run /bin/bash -c "./build_metal.sh \
+				&& ./create_venv.sh \
+				&& source $PYTHON_ENV_DIR/bin/activate \
+				&& pip install -r models/tt_transformers/requirements.txt \
+				&& rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+# Extra system deps
+RUN apt-get update && apt-get install -y \
+		# required
+		gosu \
+		libgl1 \
+		libsndfile1 \
+		&& rm -rf /var/lib/apt/lists/*
