@@ -5,9 +5,9 @@ import math
 device = ttnn.CreateDevice(0, l1_small_size=8192)
 
 in_n = 1
-in_h = 2
-in_w = 2
-in_c = 64
+in_h = 10
+in_w = 10
+in_c = 32
 kernel_size = [2, 2]
 stride = [1, 1]
 padding = [0, 0]
@@ -20,14 +20,14 @@ torch.manual_seed(0)
 # torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
 
 # Create tensor where each element equals its HW coordinate (h * in_w + w)
-# torch_input = torch.randn
-torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
-for n in range(in_n):
-    for c in range(in_c):
-        for h in range(in_h):
-            for w in range(in_w):
-                coordinate_value = c  # h * in_w + w
-                torch_input[n, c, h, w] = coordinate_value
+torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+# torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+# for n in range(in_n):
+#     for c in range(in_c):
+#         for h in range(in_h):
+#             for w in range(in_w):
+#                 coordinate_value = c  # h * in_w + w
+#                 torch_input[n, c, h, w] = coordinate_value
 
 ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
 torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
