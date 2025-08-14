@@ -141,6 +141,11 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 }
             };
 
+            // Case where in_nbytes_leftover and in_nbytes_c is different is when we are dealing with
+            // tesnors that have last tile as partial. Cb page size is multiple of tile but when the last
+            // tile is partial we have to read the smaller stick width. Therefore we need to write out the next stick
+            // right bellow the previous one and this is when increment of the write pointer and the read stick size is
+            // not compliant.
             bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c;
             if constexpr (is_large_kernel) {
                 bool whole_row_remaining =
