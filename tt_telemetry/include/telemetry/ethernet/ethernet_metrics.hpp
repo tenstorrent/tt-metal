@@ -14,8 +14,9 @@
 
 class EthernetEndpointUpMetric: public BoolMetric {
 public:
-    EthernetEndpointUpMetric(const EthernetEndpoint &endpoint)
-        : endpoint_(endpoint)
+    EthernetEndpointUpMetric(size_t id, const EthernetEndpoint &endpoint)
+        : BoolMetric(id)
+        , endpoint_(endpoint)
     {
     }
 
