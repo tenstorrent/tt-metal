@@ -125,14 +125,18 @@ MassagedConcat build_untilize_rm_retilize_concat(
         .post_transform = [&logical_output_shape, queue_id](const ttnn::Tensor& output) -> ttnn::Tensor {
             // now we have a rm tensor, so we need ensure its's padded to tile size and re-tilize it
             if (output.layout() != ttnn::TILE_LAYOUT) {
-                auto padded = pad_to_tile_vol(queue_id, output, 0.0f, true, output.memory_config());
-                concat_db_print(true, "[DEBUG] padded to tile layout, now tilizing.");
-                auto tilized =
-                    ttnn::tilize_with_val_padding(padded, padded.padded_shape(), 0.0f, output.memory_config());
-                concat_db_print(true, "[DEBUG] tilized");
-                // need to reshape tilized result to logical concat output shape
-                auto reshaped = ttnn::reshape(tilized, logical_output_shape, tilized.padded_shape());
-                return reshaped;
+                return ttnn::tilize_with_val_padding(
+                    output, compute_padded_shape(output.padded_shape()), 0.0f, output.memory_config());
+
+                //                 auto padded = pad_to_tile_vol(queue_id, output, 0.0f, true, output.memory_config());
+                //                 concat_db_print(true, "[DEBUG] padded to tile layout, now tilizing.");
+                //                 auto tilized =
+                //                     ttnn::tilize_with_val_padding(padded, padded.padded_shape(), 0.0f,
+                //                     output.memory_config());
+                //                 concat_db_print(true, "[DEBUG] tilized");
+                //                 // need to reshape tilized result to logical concat output shape
+                //                 auto reshaped = ttnn::reshape(tilized, logical_output_shape, tilized.padded_shape());
+                //                 return reshaped;
             }
             concat_db_print(true, "[DEBUG] already tilized");
             return output;
