@@ -322,6 +322,9 @@ Tensor reduce_scatter_minimal_async_impl(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
 
+    int32_t rank = input_tensor.logical_shape().rank();
+    int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+
     // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
     // Since we don't have a specific coordinate here, we use the maximum possible devices
     uint32_t num_devices;
@@ -360,7 +363,7 @@ Tensor reduce_scatter_minimal_async_impl(
     return tt::tt_metal::operation::run(
                ttnn::ReduceScatterMinimalAsync(
                    devices,
-                   dim,
+                   scatter_dim,
                    num_links,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
