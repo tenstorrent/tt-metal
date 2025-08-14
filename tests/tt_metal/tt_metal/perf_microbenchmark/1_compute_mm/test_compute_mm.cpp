@@ -584,7 +584,6 @@ int main(int argc, char** argv) {
         int tt_npu_clock = get_tt_npu_clock(device);
         double rpeak_tflops = get_tt_npu_rpeak_tflops(arch, grid_size, tt_npu_clock);
         std::vector<double> rmax_tflops;
-        unsigned long elapsed_us;
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
         log_debug(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
@@ -611,8 +610,6 @@ int main(int argc, char** argv) {
                     rmax_tflops[i]);
             } else {
                 log_debug(LogTest, "calling EnqueueProgram");
-                std::chrono::duration<double, std::nano> duration;
-                auto t_begin = std::chrono::high_resolution_clock::now();
                 EnqueueProgram(device->command_queue(), program, false);
                 Finish(device->command_queue());
                 log_debug(LogTest, "EnqueProgram done");
@@ -889,7 +886,6 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
 
     uint32_t per_core_in0_tiles = per_core_Mt * in0_block_w;
     uint32_t per_core_in1_tiles = per_core_Nt * in0_block_w;
-    uint32_t per_core_out_tiles = per_core_Mt * per_core_Nt;
     uint32_t in0_addr = out_cb_addr + out_cb_size;
     uint32_t in1_addr = in0_addr + (per_core_in0_tiles * single_tile_size);
     uint32_t out_addr = in1_addr + (per_core_in1_tiles * single_tile_size);
@@ -926,10 +922,8 @@ tt_metal::Program create_program_single_core(
     uint32_t num_buffer = 1;  // No double buffer
     uint32_t in0_block_tiles = Mt * Kt;
     uint32_t in0_CB_tiles = in0_block_tiles * num_buffer;
-    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in1_block_tiles = Nt * Kt;
     uint32_t in1_CB_tiles = in1_block_tiles * num_buffer;
-    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
     uint32_t out_block_tiles = Mt * Nt;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
@@ -997,14 +991,14 @@ tt_metal::Program create_program_single_core(
         tt_metal::CircularBufferConfig(in0_CB_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size)
             .set_globally_allocated_address(*in0_cb_addr);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size)
             .set_globally_allocated_address(*in1_cb_addr);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     uint32_t out_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = tt::CBIndex::c_24;
@@ -1014,30 +1008,30 @@ tt_metal::Program create_program_single_core(
             tt_metal::CircularBufferConfig cb_interm_config =
                 tt_metal::CircularBufferConfig(out_CB_tiles * 4096, {{interm0_cb_index, tt::DataFormat::Float32}})
                     .set_page_size(interm0_cb_index, 4096);
-            auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+            tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
         } else {
             tt_metal::CircularBufferConfig cb_interm_config =
                 tt_metal::CircularBufferConfig(out_CB_tiles * 2048, {{interm0_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(interm0_cb_index, 2048);
-            auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+            tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
         }
 
         tt_metal::CircularBufferConfig cb_out_config =
             tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
                 .set_page_size(out_cb_index, single_tile_size)
                 .set_globally_allocated_address(*out_cb_addr);
-        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     } else if (packer_l1 and cb_data_format == tt::DataFormat::Bfp8_b) {
         tt_metal::CircularBufferConfig cb_interm_config =
             tt_metal::CircularBufferConfig(out_CB_tiles * 2048, {{interm0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(interm0_cb_index, 2048);
-        auto cb_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_interm_config);
 
         tt_metal::CircularBufferConfig cb_out_config =
             tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
                 .set_page_size(out_cb_index, single_tile_size)
                 .set_globally_allocated_address(*out_cb_addr);
-        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     } else {
         std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
             {out_cb_index, cb_data_format}, {interm0_cb_index, cb_data_format}};
@@ -1046,7 +1040,7 @@ tt_metal::Program create_program_single_core(
                 .set_page_size(interm0_cb_index, single_tile_size)
                 .set_page_size(out_cb_index, single_tile_size)
                 .set_globally_allocated_address(*out_cb_addr);
-        auto cb_out = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
+        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
     }
 
     log_debug(tt::LogTest, "in0_CB_size: {}", in0_CB_tiles * single_tile_size);
@@ -1059,7 +1053,7 @@ tt_metal::Program create_program_single_core(
         in0_CB_tiles * single_tile_size + in1_CB_tiles * single_tile_size + out_CB_tiles * 4096 + out_CB_size);
 
     // Create reader and writer kernels per core
-    auto mm_in0_reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
         "in0_reader_bmm_single_core.cpp",
@@ -1069,7 +1063,7 @@ tt_metal::Program create_program_single_core(
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = reader_kernel_args});
 
-    auto mm_in1_reader_writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
         "in1_reader_writer_bmm_single_core.cpp",
@@ -1089,7 +1083,7 @@ tt_metal::Program create_program_single_core(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     bool math_approx_mode = false;
-    auto mm_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         matmul_block ? "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
                        "bmm_large_block_zm_fused_bias_activation_copy.cpp"
@@ -1135,10 +1129,8 @@ tt_metal::Program create_program(
     uint32_t num_buffer = 2;  // double buffer
     uint32_t in0_block_tiles = per_core_Mt * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * num_buffer;
-    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in1_block_tiles = per_core_Nt * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles * num_buffer;
-    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
     uint32_t out_block_tiles = per_core_Mt * per_core_Nt;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
@@ -1182,13 +1174,13 @@ tt_metal::Program create_program(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(in0_CB_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // Dummy cb to store one tile of zeros for padding
     uint32_t in2_CB_tiles = 1;  // No double buffer
@@ -1199,7 +1191,7 @@ tt_metal::Program create_program(
     tt_metal::CircularBufferConfig cb_src2_config =
         tt_metal::CircularBufferConfig(in2_CB_tiles * single_tile_size, {{src2_cb_index, cb_data_format}})
             .set_page_size(src2_cb_index, single_tile_size);
-    auto in0_in1_sender_cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
 
     uint32_t out_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = tt::CBIndex::c_24;
@@ -1209,7 +1201,7 @@ tt_metal::Program create_program(
         tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
             .set_page_size(out_cb_index, single_tile_size)
             .set_page_size(interm0_cb_index, single_tile_size);
-    auto cb_out = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
+    tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
 
     // Create reader and writer kernels per core
     auto mm_in0_reader_kernel_id = tt_metal::CreateKernel(
@@ -1239,7 +1231,7 @@ tt_metal::Program create_program(
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     bool math_approx_mode = false;
-    auto mm_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         matmul_block ? "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
                        "bmm_large_block_zm_fused_bias_activation_block.cpp"
