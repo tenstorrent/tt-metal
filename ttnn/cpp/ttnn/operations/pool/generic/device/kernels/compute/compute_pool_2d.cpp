@@ -136,17 +136,19 @@ void MAIN {
                 } else {
                     unary_op_init_common(in_cb_id_0, tile_tmp_cb_id);
 
-                    // UNPACK(DPRINT << "IN CB " << ENDL());
-                    // UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id, 0));
+                    // if (n == 0) {
+                    //     UNPACK(DPRINT << "IN CB " << ENDL());
+                    //     UNPACK(tt::compute::common::print_full_tile(curr_in_idx_cb_id, 0));
+                    // }
 
                     tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
                     tilize_block(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id, tile_tmp_cb_id);
+                    tilize_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id, tile_idx_tmp_cb_id);
 
-                    tilize_init(curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
+                    tilize_init_short_with_dt(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
                     tilize_block(
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt(curr_in_idx_cb_id, curr_in_cb_id, tile_idx_tmp_cb_id);
+                    tilize_uninit_with_dt(curr_in_idx_cb_id, curr_in_cb_id, tile_tmp_cb_id);
 
                     cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
                     cb_reserve_back(tile_idx_tmp_cb_id, topk_output_tiles);
@@ -156,8 +158,10 @@ void MAIN {
                     cb_wait_front(tile_idx_tmp_cb_id, topk_output_tiles);
 
                     // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
-                    // PACK(DPRINT << "TILE CB " << ENDL());
-                    // PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
+                    // if (n == 0) {
+                    //     PACK(DPRINT << "TILE CB " << ENDL());
+                    //     PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id, 0));
+                    // }
 
                     copy_tile_to_dst_init_short(tile_tmp_cb_id);
                     copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
@@ -205,6 +209,10 @@ void MAIN {
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_untilize_dest<topk_output_tiles>(
                     out_idx_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, index_dst_idx);
+                if (n == 0) {
+                    PACK(DPRINT << "OUT CB " << ENDL());
+                    PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
+                }
                 cb_push_back(out_idx_cb_id, topk_output_tiles);
 
                 pack_untilize_uninit(out_cb_id);
