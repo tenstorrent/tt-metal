@@ -1093,7 +1093,7 @@ def test_demo_text(
                 "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
                 # N300 targets
-                "N300_Qwen2.5-7B": 20,
+                "N300_Qwen2.5-7B": 22,
                 # T3K targets
                 # "T3K_Llama-3.1-70B": 16, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
                 # "T3K_Qwen2.5-72B": 13, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
