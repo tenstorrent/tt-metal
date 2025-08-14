@@ -76,8 +76,8 @@ auto create_pybind_from_buffer_overload() {
     return ttnn::pybind_overload_t{
         [](const creation_operation_t& self,
            const py::object& buffer,
-           const DataType& dtype,
-           const Layout& layout,
+           const DataType dtype,
+           const Layout layout,
            MeshDevice* device,
            const MemoryConfig& memory_config) -> ttnn::Tensor {
             // Overloading this with templates is not working quite as expected,
@@ -110,7 +110,13 @@ auto create_pybind_from_buffer_overload() {
                     auto cpp_buffer = buffer.cast<std::vector<std::vector<::bfloat16>>>();
                     return self(cpp_buffer, dtype, layout, device, memory_config);
                 }
-                default: throw std::runtime_error("Unsupported DataType!");
+                case DataType::BFLOAT8_B:
+                case DataType::BFLOAT4_B:
+                case DataType::INVALID: {
+                    // convert_to_data_type() in types.hpp has not an implementation for bfloat8_b and bfloat4_b
+                    // Both are empty structs, so let's not allow users to use them for this particular operation
+                    TT_THROW("Unsupported DataType!");
+                }
             }
         },
         py::arg("buffer"),
