@@ -1,4 +1,5 @@
 import os
+from time import perf_counter
 
 import pytest
 import torch
@@ -27,7 +28,7 @@ BASE_PROMPT_LEN = 81  # Send empty prompt to apply_chat_template
 @pytest.mark.parametrize(
     "generation_length",
     [
-        64,
+        200,
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
@@ -39,7 +40,7 @@ def test_model(
     reset_seeds,
 ):
     # Prepare the prompt
-    prompt = "Who are you?"
+    prompt = "How many r's in the word 'strawberry'?"
 
     padded_prefill_seq_len = nearest_y(len(prompt) + BASE_PROMPT_LEN, ttnn.TILE_SIZE)
     messages = [
@@ -153,17 +154,20 @@ def test_model(
         )
 
         # Get output
+        ta = perf_counter()
         tt_output = tt_model(
             input_ids=tt_input_id,
             attention_masks={"full_attention": tt_mask, "sliding_attention": tt_sliding_mask},
             position_embeddings=rope_stuff,
-            position_idx=cur_pos,
+            position_idx=cur_pos if iteration == 0 else None,  # Only for the first iteration
         )
 
         # Handle output
         tt_output_tensor = ttnn.get_device_tensors(tt_output)[0]
 
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)[:, 0, :]
+        tb = perf_counter()
+        print(f"Iteration {iteration} took {tb - ta:.4f} seconds and t/s: {1 / (tb - ta):.2f}")
         output_token_id = torch.argmax(tt_output_tensor.float(), dim=-1)
         output_token = tokenizer.decode(output_token_id.flatten())
         outputs += output_token
