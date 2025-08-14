@@ -38,6 +38,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/pinned_memory.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "command_queue_fixture.hpp"
 
 namespace tt::tt_metal {
 
@@ -359,7 +360,7 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 }
 
 // Test to ensure writing from 16B aligned L1 address to 16B aligned pinned memory works using MeshDevice
-TEST_F(MeshDevice2x4Fixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
+TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     using tt::tt_metal::distributed::MeshCoordinate;
     using tt::tt_metal::distributed::MeshCoordinateRange;
     using tt::tt_metal::distributed::MeshCoordinateRangeSet;
@@ -368,9 +369,11 @@ TEST_F(MeshDevice2x4Fixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     using tt::tt_metal::distributed::AddProgramToMeshWorkload;
     using tt::tt_metal::distributed::EnqueueMeshWorkload;
 
+    auto mesh_device = devices_.at(0);
+
     // Use first device from the mesh for this test
     MeshCoordinate target_coord(0, 0);
-    IDevice* device = mesh_device_->get_device(target_coord);
+    IDevice* device = mesh_device->get_device(target_coord);
     EXPECT_TRUE(device->is_mmio_capable());
 
     CoreCoord logical_core(0, 0);
@@ -387,7 +390,7 @@ TEST_F(MeshDevice2x4Fixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     // Allocate and pin host memory
     std::vector<uint32_t> host_buffer(size_bytes / sizeof(uint32_t), 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(target_coord, target_coord));
-    auto pinned_memory = mesh_device_->pin_memory(
+    auto pinned_memory = mesh_device->pin_memory(
         coordinate_range_set,
         host_buffer.data(),
         size_bytes,
@@ -417,7 +420,7 @@ TEST_F(MeshDevice2x4Fixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
 
     // Launch workload using mesh command queue
-    auto& mesh_cq = mesh_device_->mesh_command_queue();
+    auto& mesh_cq = mesh_device->mesh_command_queue();
     EnqueueMeshWorkload(mesh_cq, mesh_workload, true);  // blocking = true
 
     // Verify the data was written correctly to pinned memory
