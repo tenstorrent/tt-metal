@@ -43,10 +43,6 @@ run_t3000_ttmetal_tests() {
   fi
 }
 
-run_t3000_dual_rank_big_mesh_tests() {
-  tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTest2x4*"
-}
-
 run_t3000_ttfabric_tests() {
   # Record the start time
   fail=0
@@ -56,6 +52,11 @@ run_t3000_ttfabric_tests() {
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*T3k*
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3kCustomMeshGraphControlPlaneTests*
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
+
+  # originally were in TT-NN, now promoted to TT-Metal (Fabric)
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*WorkerFabricEdmDatapath*:*EdmFabric*"
+  # Instantiate a 1x8 Mesh on a T3K with 2D Fabric
+  TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DFixture.TestUnicast*"
 
   # TODO (issue: #24335) disabled slow dispatch tests for now, need to re-evaluate if need to add in a different pool
   #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
@@ -114,10 +115,12 @@ run_t3000_ttnn_tests() {
 run_t3000_tt_metal_multiprocess_tests() {
   tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
   tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
+  tt-run --mpi-args "--allow-run-as-root --tag-output" --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTest2x4*"
 }
 
 run_t3000_ttnn_multiprocess_tests() {
-  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/unit_tests_ttnn_multihost_ccl_ops
+  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x2
+  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4
 }
 
 run_t3000_falcon7b_tests() {
@@ -494,6 +497,9 @@ run_t3000_qwen25_vl_unit_tests() {
 run_t3000_tests() {
   # Run ttmetal tests
   run_t3000_ttmetal_tests
+
+  # Run ttfabric tests
+  run_t3000_ttfabric_tests
 
   # Run ttnn tests
   run_t3000_ttnn_tests

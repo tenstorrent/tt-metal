@@ -35,7 +35,7 @@ run_qwen25_vl_func() {
   # todo)) Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 900 || fail=1
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
@@ -189,6 +189,11 @@ run_squeezebert_func() {
 
 }
 
+run_efficientnet_b0_func(){
+
+  pytest models/experimental/efficientnetb0/demo/demo.py
+
+}
 run_roberta_func() {
 
   pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600
@@ -293,6 +298,15 @@ run_vanilla_unet_demo() {
  # vanilla_unet demo
  pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
 }
+
+# Commenting out the test from CI due to HF issue. TODO demo will be enabled with CIv2 dataset .
+# Created a PR to enable demo with CIv2 dataset soon - https://github.com/tenstorrent/tt-metal/pull/26236
+run_swin_v2_demo() {
+
+  pytest models/experimental/swin_v2/demo/demo.py
+
+}
+
 run_yolov8x_perf() {
 
   pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
@@ -315,9 +329,9 @@ run_yolov7_demo() {
 
 }
 
-run_yolov6l_perf() {
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov6l/demo/demo.py --timeout 600
+run_yolov6l_demo() {
+  # yolov6 demo
+  pytest models/demos/yolov6l/demo/demo.py
 
 }
 
@@ -329,15 +343,17 @@ run_yolov6l_perf() {
 
 # }
 
-run_yolov6l_demo() {
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov6l/demo/demo.py
-
-}
 
 run_yolov12x_demo() {
 
-  pytest -n auto --disable-warnings  models/demos/yolov12x/demo/demo.py --timeout 600
+  pytest models/demos/yolov12x/demo/demo.py
+
+}
+
+
+run_vovnet_demo(){
+
+ pytest models/experimental/vovnet/demo/demo.py
 
 }
 

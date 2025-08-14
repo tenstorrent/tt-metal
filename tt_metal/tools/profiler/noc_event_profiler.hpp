@@ -61,9 +61,9 @@ FORCE_INLINE void recordNocEvent(
     int8_t vc = -1,
     uint8_t noc = noc_index) {
     KernelProfilerNocEventMetadata ev_md;
-    ev_md.noc_xfer_type = noc_event_type;
 
     auto& local_noc_event = ev_md.data.local_event;
+    local_noc_event.noc_xfer_type = noc_event_type;
     local_noc_event.dst_x = dst_x;
     local_noc_event.dst_y = dst_y;
     local_noc_event.setNumBytes(num_bytes);
@@ -86,9 +86,9 @@ FORCE_INLINE void recordMulticastNocEvent(
     int8_t vc = -1,
     uint8_t noc = noc_index) {
     KernelProfilerNocEventMetadata ev_md;
-    ev_md.noc_xfer_type = noc_event_type;
 
     auto& local_noc_event = ev_md.data.local_event;
+    local_noc_event.noc_xfer_type = noc_event_type;
     local_noc_event.dst_x = mcast_dst_start_x;
     local_noc_event.dst_y = mcast_dst_start_y;
     local_noc_event.mcast_end_dst_x = mcast_dst_end_x;
@@ -130,9 +130,9 @@ FORCE_INLINE void recordFabricNocEvent(
 
     // first profiler packet stores XY address data as well as packet type tag (used to decode routing fields)
     KernelProfilerNocEventMetadata ev_md;
-    ev_md.noc_xfer_type = noc_event_type;
 
     auto& fabric_noc_event = ev_md.data.fabric_event;
+    fabric_noc_event.noc_xfer_type = noc_event_type;
     fabric_noc_event.dst_x = decoded_x;
     fabric_noc_event.dst_y = decoded_y;
     fabric_noc_event.mcast_end_dst_x = -1;
@@ -144,7 +144,8 @@ FORCE_INLINE void recordFabricNocEvent(
 
     // following profiler event just stores the routing fields value
     KernelProfilerNocEventMetadata event_routing_fields;
-    event_routing_fields.noc_xfer_type = KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS;
+    event_routing_fields.data.fabric_routing_fields.noc_xfer_type =
+        KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS;
     event_routing_fields.data.fabric_routing_fields.routing_fields_value = routing_fields;
 
     kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
@@ -162,9 +163,9 @@ FORCE_INLINE void recordFabricNocEventMulticast(
     uint32_t routing_fields) {
     // first profiler packet stores XY address data as well as packet type tag (used to decode routing fields)
     KernelProfilerNocEventMetadata ev_md;
-    ev_md.noc_xfer_type = noc_event_type;
 
     auto& fabric_noc_event = ev_md.data.fabric_event;
+    fabric_noc_event.noc_xfer_type = noc_event_type;
     fabric_noc_event.dst_x = noc_x_start;
     fabric_noc_event.dst_y = noc_y_start;
     fabric_noc_event.mcast_end_dst_x = noc_x_start + mcast_rect_size_x - 1;
@@ -176,7 +177,8 @@ FORCE_INLINE void recordFabricNocEventMulticast(
 
     // following profiler event just stores the routing fields value
     KernelProfilerNocEventMetadata event_routing_fields;
-    event_routing_fields.noc_xfer_type = KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS;
+    event_routing_fields.data.fabric_routing_fields.noc_xfer_type =
+        KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS;
     event_routing_fields.data.fabric_routing_fields.routing_fields_value = routing_fields;
 
     kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
@@ -197,9 +199,9 @@ FORCE_INLINE void recordFabricScatterEvent(
 
         // profiler packet stores XY address data as well as packet type tag and address index
         KernelProfilerNocEventMetadata ev_md;
-        ev_md.noc_xfer_type = noc_event_type;
 
         auto& fabric_scatter_event = ev_md.data.fabric_scatter_event;
+        fabric_scatter_event.noc_xfer_type = noc_event_type;
         fabric_scatter_event.dst_x = decoded_x;
         fabric_scatter_event.dst_y = decoded_y;
         if (i < num_chunks - 1) {
@@ -216,7 +218,8 @@ FORCE_INLINE void recordFabricScatterEvent(
 
     // Store routing fields only once after all addresses
     KernelProfilerNocEventMetadata event_routing_fields;
-    event_routing_fields.noc_xfer_type = KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS;
+    event_routing_fields.data.fabric_routing_fields.noc_xfer_type =
+        KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS;
     event_routing_fields.data.fabric_routing_fields.routing_fields_value = routing_fields;
 
     kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
