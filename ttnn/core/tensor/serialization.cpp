@@ -461,7 +461,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
     Tensor tensor =
         ttnn::from_flatbuffer(fb_tensor, tt::stl::Span<std::byte>(file_data + data_offset, data_size), memory_pin);
     if (device != nullptr) {
-        tensor = tensor.to_device(device);
+        tensor = tensor.to_device(device, tensor.tensor_spec().memory_config());
     }
     return tensor;
 }
