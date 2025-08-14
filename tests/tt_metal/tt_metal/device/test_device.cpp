@@ -361,13 +361,13 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 
 // Test to ensure writing from 16B aligned L1 address to 16B aligned pinned memory works using MeshDevice
 TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
+    using tt::tt_metal::distributed::AddProgramToMeshWorkload;
+    using tt::tt_metal::distributed::CreateMeshWorkload;
+    using tt::tt_metal::distributed::EnqueueMeshWorkload;
     using tt::tt_metal::distributed::MeshCoordinate;
     using tt::tt_metal::distributed::MeshCoordinateRange;
     using tt::tt_metal::distributed::MeshCoordinateRangeSet;
     using tt::tt_metal::distributed::MeshWorkload;
-    using tt::tt_metal::distributed::CreateMeshWorkload;
-    using tt::tt_metal::distributed::AddProgramToMeshWorkload;
-    using tt::tt_metal::distributed::EnqueueMeshWorkload;
 
     auto mesh_device = devices_.at(0);
 
@@ -382,8 +382,8 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
                                    MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
-    std::vector<uint32_t> src = tt::test_utils::generate_uniform_random_vector<uint32_t>(
-        0, UINT32_MAX, size_bytes / sizeof(uint32_t));
+    std::vector<uint32_t> src =
+        tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
     EXPECT_EQ(MetalContext::instance().hal().get_alignment(HalMemType::L1), 16);
     uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
@@ -426,6 +426,5 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     // Verify the data was written correctly to pinned memory
     EXPECT_EQ(src, host_buffer);
 }
-
 
 }  // namespace tt::tt_metal
