@@ -107,10 +107,10 @@ int main() {
 
     // Fake telemetry
     //TODO: make command line option for testing?
-    //MockTelemetryProvider mock_telemetry{web_server_subscriber, web_server2_subscriber};
+    MockTelemetryProvider mock_telemetry{web_server_subscriber, web_server2_subscriber};
 
     // Telemetry
-    run_telemetry_provider({ web_server_subscriber, web_server2_subscriber });
+    //run_telemetry_provider({ web_server_subscriber, web_server2_subscriber });
     
     // Run until finished
     bool web_server_succeeded = web_server.get();
