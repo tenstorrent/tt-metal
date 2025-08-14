@@ -121,7 +121,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, ReduceScatterAsync) {
     }
 }
 
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllReduce) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllReduceAsync) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
 
