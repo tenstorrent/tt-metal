@@ -1105,25 +1105,3 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
             torch_tensor = torch.cat((torch_tensor, tile_row), 2)
 
     return torch_tensor
-
-
-# path related helpers
-def hf_model_weights_to_tt_cache_path(model_weights: str) -> str:
-    def _get_company_model_name(model_weights: str):
-        for dir_name in model_weights.split("/"):
-            if dir_name.startswith("models--"):
-                assert dir_name.split("--") == 3
-                _, company, model_name = dir_name.split("--")
-                return company, model_name
-        raise ValueError(f"Please provide model_weights path in huggingface format, found {model_weights}")
-
-    if "hub" in model_weights:
-        # direct path to hf cache
-        company, model_name = _get_company_model_name(model_weights)
-    else:
-        # model name from hf
-        company, model_name = model_weights.split("/")
-
-    base_tt_cache_path = "/mnt/MLPerf/tt_dnn-models"
-    tt_cache_path = f"{base_tt_cache_path}/{company}/TT_CACHE/{model_name}"
-    return tt_cache_path

@@ -6,7 +6,7 @@ import os
 import pytest
 from loguru import logger
 
-from models.utility_functions import hf_model_weights_to_tt_cache_path, skip_for_grayskull
+from models.utility_functions import skip_for_grayskull
 
 
 # This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]
@@ -28,12 +28,12 @@ from models.utility_functions import hf_model_weights_to_tt_cache_path, skip_for
         "ttt-mistral-7B-v0.3",
     ],
 )
-def test_ci_dispatch(model_weights):
+def test_ci_dispatch(model_weights, get_tt_cache_path):
     logger.info(f"Running fast dispatch tests for {model_weights}")
     if os.getenv("LLAMA_DIR"):
         del os.environ["LLAMA_DIR"]
     os.environ["HF_MODEL"] = model_weights
-    os.environ["TT_CACHE_PATH"] = hf_model_weights_to_tt_cache_path(model_weights)
+    os.environ["TT_CACHE_PATH"] = get_tt_cache_path(model_weights)
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
