@@ -185,7 +185,8 @@ def run_tt_image_gen(
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
             )
             # persistent_output_buffer = ttnn.to_memory_config(persistent_output_buffer, mem_config)
-
+            print(f"before all gather")
+            print(f"noise_pred: {noise_pred}")
             noise_pred = ttnn.experimental.all_gather_async(
                 noise_pred,
                 # persistent_output_buffer=persistent_output_buffer,
@@ -194,20 +195,25 @@ def run_tt_image_gen(
                 num_links=1,
                 cluster_axis=0,
                 mesh_device=ttnn_device,
-                memory_config=mem_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
                 subdevice_id=ttnn.SubDeviceId(0),
             )
-            ttnn.synchronize_device(ttnn_device)
-            print(f"noise_pred memory config: {noise_pred.memory_config()}")
-            print(f"noise_pred layout: {noise_pred.layout}")
-            print(f"noise_pred shape: {noise_pred.shape}")
-
+            print(f"noise_pred: {noise_pred}")
+            print(f"after all gather")
             noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
         else:
             noise_pred_uncond, noise_pred_text = unet_outputs
         # perform guidance
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+        print(f"after guidance")
+        print(f"noise_pred: {noise_pred}")
+        print(f"noise_pred shape: {noise_pred.shape}")
+        noise_pred = noise_pred[..., :4]
+        print(f"after slicing")
+        print(f"noise_pred: {noise_pred}")
+        print(f"noise_pred shape: {noise_pred.shape}")
 
         ttnn.deallocate(noise_pred_uncond)
         ttnn.deallocate(noise_pred_text)
