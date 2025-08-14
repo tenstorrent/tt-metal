@@ -110,7 +110,6 @@ void kernel_main() {
                 coalesced_read_bytes,
                 conv_act_c_read_bytes,
                 act_block_w_extra_align_bytes,
-                stride_w_bytes,
                 window_outer_offset,
                 weight_size_w,
                 stride_w,

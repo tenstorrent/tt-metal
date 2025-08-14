@@ -130,7 +130,6 @@ template <
     uint32_t coalesced_read_bytes,
     uint32_t conv_act_c_read_bytes,
     uint32_t act_block_w_extra_align_bytes,
-    uint32_t stride_w_bytes,
     uint32_t stride_h_bytes,
     uint32_t window_inner,
     uint32_t stride_w,
