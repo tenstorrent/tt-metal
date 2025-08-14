@@ -257,15 +257,14 @@ void set_or_update_runtime_arguments(
             // TODO: value_false_tensor needs to be handled separately (maybe through a different CB or as scalar)
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-            // TTT with row broadcast: binary_ng style 21 args for predicate and true tensor
+            // TTT with row broadcast:
 
-            // Calculate binary_ng style arguments using predicate and true tensor shapes
             const auto pred_shape = predicate_tensor.padded_shape();
             const auto true_shape = value_true_tensor.value().padded_shape();
             const auto output_shape = output.padded_shape();
             const auto& tile = output.tensor_spec().tile();
 
-            // Get shape dims for predicate (a) and true tensor (b) like binary_ng
+            // Get shape dims for predicate (a), true tensor (b) and false tensor (c)
             uint32_t aD = pred_shape.rank() >= 5 ? pred_shape[-5] : 1;
             uint32_t aN = pred_shape[-4];
             uint32_t aC = pred_shape[-3];
@@ -291,7 +290,7 @@ void set_or_update_runtime_arguments(
             uint32_t b_num_tiles = 0;
             uint32_t c_current_shard_width = 0;
 
-            // Handle sharding like binary_ng (simplified for now)
+            // Handle sharding
             bool has_sharding = predicate_tensor.memory_config().is_sharded() ||
                                 value_true_tensor.value().memory_config().is_sharded() ||
                                 value_false_tensor.value().memory_config().is_sharded() ||
@@ -304,7 +303,6 @@ void set_or_update_runtime_arguments(
             }
 
             // Ternary-style runtime argument structure (27 args for 3 tensors: predicate + true + false)
-            // Now reads predicate→CB0, true tensor→CB1, and false tensor→CB2
 
             std::array<uint32_t, 27> reader_runtime_args = {
                 predicate_tensor.buffer()->address(),            // 0: predicate address
@@ -471,12 +469,14 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     // Number of tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
 
-    // Input buffers - Create CB0 (always predicate for all cases)
-    uint32_t cb0_tile_size = predicate_single_tile_size;
-    DataFormat cb0_data_format = predicate_data_format;
-
-    auto [predicate_tensor_cb, predicate_tensor_cb_handle] =
-        create_cb(tt::CBIndex::c_0, program, all_device_cores, cb0_tile_size, num_tiles_per_cb, cb0_data_format);
+    // Input buffers - Create predicate CB (always c_0)
+    auto [predicate_tensor_cb, predicate_tensor_cb_handle] = create_cb(
+        tt::CBIndex::c_0,
+        program,
+        all_device_cores,
+        predicate_single_tile_size,
+        num_tiles_per_cb,
+        predicate_data_format);  // predicate_tensor
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
@@ -529,8 +529,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
     } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // TTT with row broadcast: use row broadcast reader with pred→CB0, true→CB1, true→CB2
-        // Row broadcast reader reads predicate and true tensor, CB2 uses true tensor for compute compatibility
+        // TTT with row broadcast: use row broadcast reader with pred→CB0, true→CB1, false→CB2
 
         // CB1 = value_true tensor
         auto [cb1, cb1_handle] = create_cb(
@@ -742,12 +741,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // TTT with row broadcast: IMPORTANT - Current ternary_reader_rowbcast_ttt.cpp is binary-based (2 tensors only)
-        // For now, use the binary_ng pattern (2 TensorAccessorArgs + sharding flag) to read only predicate + true
-        // tensor
-        // TODO: Need proper 3-tensor ternary row broadcast reader to read all three tensors
-
-        // Calculate has_sharding for ROW_BCAST case (binary_ng style)
+        // TTT with row broadcast:
         bool has_sharding = predicate_tensor.memory_config().is_sharded() ||
                             value_true_tensor.value().memory_config().is_sharded() ||
                             output.memory_config().is_sharded();

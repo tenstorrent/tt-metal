@@ -20,7 +20,7 @@ enum class WhereVariant {
 enum class WhereBroadcastType {
     NONE,
     COL_BCAST,
-    ROW_BCAST,      // Row broadcast - will use no-broadcast kernels temporarily
+    ROW_BCAST,
     INVALID_BCAST,  // All other unsupported bcast cases go here for now
 };
 
