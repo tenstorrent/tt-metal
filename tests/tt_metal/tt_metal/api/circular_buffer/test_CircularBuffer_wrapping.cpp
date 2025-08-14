@@ -78,5 +78,5 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
     detail::ReadFromDeviceL1(device, worker_core, result_buffer->address(), 3 * sizeof(uint32_t), host_buffer);
 
     const static std::vector<uint32_t> expected_result = {0xAAAA, 0xBBBB, 0xAAAA};
-    EXPECT_EQ(host_buffer, expected_result) << "Page coruption detected.";
+    EXPECT_EQ(host_buffer, expected_result) << "Page corruption detected.";
 }
