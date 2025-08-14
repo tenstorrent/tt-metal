@@ -187,10 +187,15 @@ Install via pip or build from source:
 ```bash
 pip install ttnn-visualizer
 ```
+## Related Tenstorrent Projects
+- [TT-Forge](https://github.com/tenstorrent/tt-forge/tree/main)
+- [TT-Forge-FE](https://github.com/tenstorrent/tt-forge-fe)
+- [TT-Torch](https://github.com/tenstorrent/tt-torch)
+- [TT-XLA](https://github.com/tenstorrent/tt-xla)
+- [TT-MLIR](https://github.com/tenstorrent/tt-mlir)
+- [TT-TVM](https://github.com/tenstorrent/tt-tvm)
 
-
-
-### Tenstorrent Bounty Program Terms and Conditions
+## Tenstorrent Bounty Program Terms and Conditions
 This repo is a part of Tenstorrent’s bounty program. If you are interested in helping to improve tt-metal, please make sure to read the [Tenstorrent Bounty Program Terms and Conditions](https://docs.tenstorrent.com/bounty_terms.html) before heading to the issues tab. Look for the issues that are tagged with both “bounty” and difficulty level!
 
 ## License
