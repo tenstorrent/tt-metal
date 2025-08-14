@@ -30,7 +30,7 @@ class RankBinding(BaseModel):
 
     rank: int = Field(..., ge=0, description="MPI rank (must be >= 0)")
     mesh_id: int = Field(..., ge=0, description="`MeshId` defines the mesh to which the rank belongs")
-    mesh_host_rank: int = Field(..., ge=0, description="Host rank within the mesh")
+    mesh_host_rank: Optional[int] = Field(None, ge=0, description="Host rank within the mesh")
     env_overrides: Dict[str, str] = Field(default_factory=dict, description="Environment variable overrides")
 
 
@@ -94,13 +94,16 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
             DEFAULT_CACHE_DIR_PATTERN.format(home=str(Path.home()), hostname=os.uname().nodename, rank=binding.rank),
         ),  # Need to explicitly configure this because kernel cache is not multi-process safe (#21089)
         "TT_MESH_ID": str(binding.mesh_id),
-        "TT_MESH_HOST_RANK": str(binding.mesh_host_rank),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
         "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
         "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
         # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
         "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
     }
+
+    # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
+    if binding.mesh_host_rank is not None:
+        env["TT_MESH_HOST_RANK"] = str(binding.mesh_host_rank)
 
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first

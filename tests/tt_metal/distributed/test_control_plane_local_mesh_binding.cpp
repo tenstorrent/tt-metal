@@ -22,10 +22,12 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::Eq;
+using ::testing::HasSubstr;
 using ::testing::IsEmpty;
-using ::tt::tt_metal::distributed::MeshShape;
+using ::testing::ThrowsMessage;
 using ::tt::tt_metal::distributed::MeshCoordinate;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
+using ::tt::tt_metal::distributed::MeshShape;
 using ::tt::tt_metal::distributed::test::utils::ScopedEnvVar;
 using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
 
@@ -118,40 +120,46 @@ TEST_F(ControlPlaneLocalMeshBinding, WithEnvironmentVariables) {
     EXPECT_EQ(control_plane->get_local_host_rank_id_binding(), MeshHostRankId{0});
 }
 
-// Test case to verify exception when both env vars are set but invalid
-TEST_F(ControlPlaneLocalMeshBinding, InvalidEnvironmentVariablesMeshId) {
-    // Set environment variables with invalid mesh ID
+TEST_F(ControlPlaneLocalMeshBinding, WithEnvironmentVariablesInvalidMeshId) {
     ScopedMeshBinding env_guard(/*mesh_id*/ 99, /*host_rank*/ 0);
 
-    EXPECT_THROW(
-        {
-            auto chip_mapping = get_dual_host_chip_mapping();
-            auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
-        },
-        std::runtime_error);
+    EXPECT_THAT(
+        ([&]() {
+            return std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, get_dual_host_chip_mapping());
+        }),
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("Invalid TT_MESH_ID: Local mesh binding mesh_id 99 not found in mesh graph descriptor")));
+}
+
+TEST_F(ControlPlaneLocalMeshBinding, WithEnvironmentVariablesInvalidMeshHostId) {
+    ScopedMeshBinding env_guard(/*mesh_id*/ 0, /*host_rank*/ 99);
+
+    EXPECT_THAT(
+        ([&]() {
+            return std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, get_dual_host_chip_mapping());
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr(
+            "Invalid TT_MESH_HOST_RANK: Local mesh binding host_rank 99 not found in mesh graph descriptor")));
 }
 
 TEST_F(ControlPlaneLocalMeshBinding, PartialEnvironmentVariables) {
-    // Test with only TT_MESH_ID set
     {
         ScopedEnvVar mesh_only("TT_MESH_ID", "0");
-        EXPECT_THROW(
-            {
-                auto chip_mapping = get_dual_host_chip_mapping();
-                auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
-            },
-            std::runtime_error);
+        EXPECT_THAT(
+            ([&]() {
+                return std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, get_dual_host_chip_mapping());
+            }),
+            ThrowsMessage<std::runtime_error>(HasSubstr("TT_MESH_HOST_RANK must be set when multiple host ranks are "
+                                                        "present in the mesh graph descriptor for mesh ID 0")));
     }
 
-    // Test with only TT_MESH_HOST_RANK set
     {
         ScopedEnvVar host_only("TT_MESH_HOST_RANK", "0");
-        EXPECT_THROW(
-            {
-                auto chip_mapping = get_dual_host_chip_mapping();
-                auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, chip_mapping);
-            },
-            std::runtime_error);
+        EXPECT_THAT(
+            ([&]() {
+                return std::make_unique<tt::tt_fabric::ControlPlane>(kDualHostMeshDesc, get_dual_host_chip_mapping());
+            }),
+            ThrowsMessage<std::runtime_error>(HasSubstr("Mesh 0 has 2 host ranks, expected 1")));
     }
 }
 
