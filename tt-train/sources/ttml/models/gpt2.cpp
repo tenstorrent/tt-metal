@@ -5,28 +5,31 @@
 #include "gpt2.hpp"
 
 #include "autograd/tensor.hpp"
+#include "core/tt_tensor_utils.hpp"
+#include "core/xtensor_utils.hpp"
 #include "models/common/transformer_common.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/gpt_block.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "serialization/safetensors.hpp"
-
+#include "serialization/serializable.hpp"
 namespace {
 
-static std::vector<float> transpose_2d_flat(const std::vector<float>& flat, int64_t rows, int64_t cols) {
+static std::vector<float> transpose_2d_flat(const std::vector<float> &flat, int64_t rows, int64_t cols) {
     assert(rows * cols == static_cast<int64_t>(flat.size()));
-    auto src = xt::adapt(flat, {static_cast<size_t>(rows), static_cast<size_t>(cols)});
-    auto t = xt::transpose(src);
-    std::vector<float> out(t.size());
-    std::copy(t.begin(), t.end(), out.begin());
-    return out;
+    std::vector<int> shape_vec = {static_cast<int>(rows), static_cast<int>(cols)};
+    auto src = xt::adapt(flat, shape_vec);
+    xt::xarray<float> t = xt::transpose(src);
+    auto view = ttml::core::xtensor_to_span(t);
+    return std::vector<float>(view.begin(), view.end());
 }
 
 static std::vector<float> pad_rows_flat(
-    const std::vector<float>& flat, int64_t rows, int64_t cols, int64_t target_rows) {
-    if (rows >= target_rows)
+    const std::vector<float> &flat, int64_t rows, int64_t cols, int64_t target_rows) {
+    if (rows >= target_rows) {
         return flat;
+    }
     std::vector<float> out;
     out.reserve(static_cast<size_t>(target_rows * cols));
     out.insert(out.end(), flat.begin(), flat.end());
@@ -37,7 +40,7 @@ static std::vector<float> pad_rows_flat(
 
 namespace ttml::models::gpt2 {
 
-Transformer::Transformer(const TransformerConfig& config) {
+Transformer::Transformer(const TransformerConfig &config) {
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
@@ -123,10 +126,10 @@ Transformer::Transformer(const TransformerConfig& config) {
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+    const ttml::autograd::TensorPtr &x, const ttml::autograd::TensorPtr &mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = (*pos_emb)(tok_emb_out);
-    for (auto& block : blocks) {
+    for (auto &block : blocks) {
         if (runner_type == RunnerType::MemoryEfficient) {
             out = common::transformer::memory_efficient_runner(*block, out, mask);
         } else if (runner_type == RunnerType::Default) {
@@ -140,7 +143,7 @@ ttml::autograd::TensorPtr Transformer::operator()(
     return logits;
 }
 
-PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config) {
+PositionalEmbeddingType read_positional_embedding_type(const YAML::Node &config) {
     auto positional_embedding_str = config["positional_embedding_type"].as<std::string>("trainable");
     if (positional_embedding_str == "trainable") {
         return PositionalEmbeddingType::Trainable;
@@ -153,7 +156,7 @@ PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config)
     }
 }
 
-TransformerConfig read_config(const YAML::Node& config) {
+TransformerConfig read_config(const YAML::Node &config) {
     TransformerConfig transformer_config;
     transformer_config.num_heads = config["num_heads"].as<uint32_t>();
     transformer_config.embedding_dim = config["embedding_dim"].as<uint32_t>();
@@ -172,7 +175,7 @@ TransformerConfig read_config(const YAML::Node& config) {
     return transformer_config;
 }
 
-YAML::Node write_config(const TransformerConfig& mlp_config) {
+YAML::Node write_config(const TransformerConfig &mlp_config) {
     YAML::Node config;
     config["num_heads"] = mlp_config.num_heads;
     config["embedding_dim"] = mlp_config.embedding_dim;
@@ -183,22 +186,150 @@ YAML::Node write_config(const TransformerConfig& mlp_config) {
     return config;
 }
 
-std::shared_ptr<Transformer> create(const TransformerConfig& config) {
+std::shared_ptr<Transformer> create(const TransformerConfig &config) {
     return std::make_shared<Transformer>(config);
 }
-std::shared_ptr<Transformer> create(const YAML::Node& config) {
+std::shared_ptr<Transformer> create(const YAML::Node &config) {
     TransformerConfig transformer_config = read_config(config);
     return std::make_shared<Transformer>(transformer_config);
 }
 
-void load_gpt2_from_safetensors(const std::filesystem::path& path, const std::shared_ptr<Transformer>& transformer) {
-    auto loading_callback = [&transformer](
-                                const serialization::SafetensorSerialization::TensorInfo& info,
-                                std::span<const std::byte> bytes) {
-        if (info.dtype != "F32" {
-            throw std::runtime_error(fmt::format("Unsupported dtype: {}", info.dtype));
-        }
-    };
-    SafetensorSerialization::load_from_safetensors(path, loading_callback);
+void load_model_from_safetensors(const std::filesystem::path &path, serialization::NamedParameters &parameters) {
+    serialization::SafetensorSerialization::TensorCallback loading_callback =
+        [&parameters](
+            const serialization::SafetensorSerialization::TensorInfo &info, std::span<const std::byte> bytes) {
+            if (info.dtype != "F32") {
+                throw std::runtime_error(fmt::format("Unsupported dtype: {}", info.dtype));
+            }
+            auto float_vec = serialization::SafetensorSerialization::bytes_to_floats_copy(bytes);
+            if (info.name == "transformer.wte.weight") {
+                auto out_tensor1 = parameters["transformer/transformer/tok_emb/weight"];
+                auto out_tensor2 = parameters["transformer/transformer/fc/weight"];
+                auto padded_emb = pad_rows_flat(
+                    float_vec, info.shape[0], info.shape[1], out_tensor1->get_value().logical_shape()[-2]);
+                out_tensor1->set_value(core::from_vector(
+                    padded_emb, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                out_tensor1->set_value(core::from_vector(
+                    padded_emb, out_tensor2->get_value().logical_shape(), out_tensor2->get_value().device()));
+            }
+
+            //  pos_emb -> transformer.wpe.weight
+            if (info.name == "transformer.wpe.weight") {
+                auto out_tensor1 = parameters["transformer/transformer/pos_emb/weight"];
+                out_tensor1->set_value(core::from_vector(
+                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+            }
+
+            //  ln_f.{weight,bias}
+            if (info.name == "transformer.ln_f.weight") {
+                auto out_tensor1 = parameters["transformer/transformer/ln_fc/gamma"];
+                out_tensor1->set_value(core::from_vector(
+                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+            }
+            if (info.name == "transformer.ln_f.bias") {
+                auto out_tensor1 = parameters["transformer/transformer/ln_fc/beta"];
+                out_tensor1->set_value(core::from_vector(
+                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+            }
+
+            // ---- Per-block mappings ----
+            // Keys that require transpose in your Python:
+            // {"attn.c_attn.weight", "attn.c_proj.weight", "mlp.c_fc.weight", "mlp.c_proj.weight"}
+            for (int i = 0; i < 12; ++i) {
+                const std::string pfx = "transformer.h." + std::to_string(i);
+
+                // ln1
+                if (info.name == pfx + ".ln_1.weight") {
+                    auto block_name = fmt::format("transformer/transformer/gpt_block_{}/ln1/gamma", i);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+                if (info.name == pfx + ".ln_1.bias") {
+                    auto block_name = fmt::format("transformer/transformer/gpt_block_{}/ln1/beta", i);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+
+                // attention: qkv_linear <- attn.c_attn.{weight,bias}
+                if (info.name == pfx + ".attn.c_attn.weight") {
+                    auto block_name =
+                        fmt::format("transformer/transformer/gpt_block_{}/attention/qkv_linear/weight", i);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+                if (info.name == pfx + ".attn.c_attn.bias") {
+                    auto block_name = fmt::format("transformer/transformer/gpt_block_{}/attention/qkv_linear/bias", i);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+
+                // attention: out_linear <- attn.c_proj.{weight,bias}
+                if (info.name == pfx + ".attn.c_proj.weight") {
+                    auto block_name =
+                        fmt::format("transformer/transformer/gpt_block_{}/attention/out_linear/weight", i);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+                if (info.name == pfx + ".attn.c_proj.bias") {
+                    auto block_name = fmt::format("transformer/transformer/gpt_block_{}/attention/c_proj/bias", i);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+
+                // ln2
+                if (info.name == pfx + ".ln_2.weight") {
+                    auto block_name = fmt::format("transformer/transformer/gpt_block_{}/ln2/gamma", i);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+                if (info.name == pfx + ".ln_2.bias") {
+                    auto block_name = fmt::format("transformer/transformer/gpt_block_{}/ln2/beta", i);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+
+                // mlp: fc1 <- mlp.c_fc.{weight,bias}
+                if (info.name == pfx + ".mlp.c_fc.weight") {
+                    auto out_tensor1 =
+                        parameters["transformer/transformer/gpt_block_" + std::to_string(i) + "/mlp/fc1/weight"];
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    out_tensor1->set_value(core::from_vector(
+                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+                if (info.name == pfx + ".mlp.c_fc.bias") {
+                    auto block_name = fmt::format("transformer/transformer/gpt_block_{}/mlp/fc1/bias", i);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+
+                // mlp: fc2 <- mlp.c_proj.{weight,bias}
+                if (info.name == pfx + ".mlp.c_proj.weight") {
+                    auto out_tensor1 =
+                        parameters["transformer/transformer/gpt_block_" + std::to_string(i) + "/mlp/fc2/weight"];
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    out_tensor1->set_value(core::from_vector(
+                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+                if (info.name == pfx + ".mlp.c_proj.bias") {
+                    auto block_name = fmt::format("transformer/transformer/gpt_block_{}/mlp/fc2/bias", i);
+                    auto out_tensor1 = parameters[block_name];
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
+            }
+            return true;
+        };
+    serialization::SafetensorSerialization::visit_safetensors_file(path, loading_callback);
 }
 }  // namespace ttml::models::gpt2

@@ -145,22 +145,6 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
         }
     }
 }
-void SafetensorSerialization::read_ttnn_tensor(
-    const TensorInfo& info, std::span<const std::byte> bytes, tt::tt_metal::Tensor& tensor, CastType cast_type) {
-    // currently only supports F32 tensors
-    if (info.dtype != "F32") {
-        throw std::runtime_error(fmt::format("Unsupported dtype: {}", info.dtype));
-    }
-
-    std::vector<float> data = bytes_to_floats_copy(bytes);
-    if (cast_type == CastType::FP32_TO_BF16) {
-        tensor = core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
-            data, info.shape, &ttml::autograd::ctx().get_device());
-    } else {
-        tensor = core::from_vector<float, tt::tt_metal::DataType::FLOAT32>(
-            data, info.shape, &ttml::autograd::ctx().get_device());
-    }
-}
 
 std::vector<float> SafetensorSerialization::bytes_to_floats_copy(std::span<const std::byte> bytes) {
     if (bytes.size_bytes() % sizeof(float) != 0) {
