@@ -23,7 +23,7 @@ namespace {
 Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1
 or setting 'is_nigthly_tt_train_tests_enabled' variable to true.
 */
-constexpr bool is_nigthly_tt_train_tests_enabled = true;
+constexpr bool is_nigthly_tt_train_tests_enabled = false;
 
 [[nodiscard]] bool is_wormhole_b0() {
     static bool arch_is_wormhole_b0 = []() {
