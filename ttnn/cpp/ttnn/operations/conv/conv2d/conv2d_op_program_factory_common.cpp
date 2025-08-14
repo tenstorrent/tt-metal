@@ -383,9 +383,10 @@ bool is_split_reader_viable(
     const float_t noc_transfer_unit = 2 * input_channels * kernel_width;
     const float_t noc_transfer_time =
         noc_transfer_unit / fmin(noc_transfer_c * noc_transfer_unit, upper_bound_noc_transfer_c);
+    const float_t weights_cost = 1.0 * input_channels * output_channels * kernel_width / 16;
+    const float_t act_cost = per_core_out_matrix_height_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_time;
 
-    return 8 * per_core_out_matrix_height_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_time >
-           input_channels * output_channels * kernel_width;
+    return act_cost > weights_cost;
 }
 
 bool is_split_reader_supported(
