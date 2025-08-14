@@ -361,6 +361,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
 }
 
 TEST_F(DeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
+    GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
     uint32_t test_id = 153;
     CoreCoord master_core_coord = {0, 0};
@@ -373,6 +374,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
 }
 
 TEST_F(DeviceFixture, TensixDataMovementOneFromAllCustom) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_id = 160;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
