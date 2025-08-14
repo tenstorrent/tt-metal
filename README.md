@@ -134,7 +134,6 @@
 | [Sentence-Bert (backbone: bert-base)](./models/demos/sentence_bert/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 403     | 550            |         |
 | [Sentence-Bert (backbone: bert-base)](./models/demos/sentence_bert/)   | 64     | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox)  | 2961     | 4400            |         |
 | [Sentence-Bert (backbone: bert-base) (DP=32)](./models/demos/tg/sentence_bert/)   | 256     | [Galaxy](https://tenstorrent.com/hardware/galaxy)  | 10064     | 15000            |         |
-| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  |
 
 ## Featured Models
 
