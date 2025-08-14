@@ -96,9 +96,11 @@ def float_to_bfp8_block(block):
     return shared_exponent, bfp8_mantissas
 
 
-def pack_bfp8_b(tensor, block_size=16):
+def pack_bfp8_b(tensor, block_size=16, num_faces=4):
+    faces_per_tile = 4
     flattened_tensor = tensor.flatten()
     num_blocks = len(flattened_tensor) // block_size
+    num_blocks = num_blocks * num_faces // faces_per_tile
 
     exponents = []
     mantissas = []

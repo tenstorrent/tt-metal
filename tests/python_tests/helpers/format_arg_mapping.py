@@ -199,6 +199,11 @@ class MathFidelity(Enum):
     HiFi4 = 3
 
 
+class DestSync(Enum):
+    Half = 0
+    Full = 1
+
+
 class Mailbox(Enum):
     Unpacker = 0x19FFC
     Math = 0x19FF8

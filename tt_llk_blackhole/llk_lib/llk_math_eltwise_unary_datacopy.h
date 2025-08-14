@@ -19,10 +19,9 @@ using namespace ckernel;
 inline void eltwise_unary_configure_addrmod();
 
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
-inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
+inline void _llk_math_eltwise_unary_datacopy_(
+    const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
 {
-    std::uint32_t constexpr num_faces = 4;
-
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
     std::uint32_t dest_base_offset_in_faces = get_dest_buffer_base() >> 5;
@@ -44,7 +43,12 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         for (std::uint32_t i = 0; i < num_faces; i++)
         {
             // Clears zero flags in DEST for one face.
-            TT_ZEROACC(p_zeroacc::CLR_16, 0, 1 /*clear zero flags*/, ADDR_MOD_3, dest_base_offset_in_faces + dst_index_in_faces + i);
+            TT_ZEROACC(
+                p_zeroacc::CLR_16,
+                static_cast<int>(dst_format == (uint)DataFormat::Float32),
+                1 /*clear zero flags*/,
+                ADDR_MOD_3,
+                dest_base_offset_in_faces + dst_index_in_faces + i);
         }
     }
     else

@@ -445,9 +445,21 @@ class MatmulGolden(FidelityMasking):
 
 @register_golden
 class DataCopyGolden:
-    def __call__(self, operand1, data_format):
+    def __call__(self, operand1, data_format, num_faces, input_dimensions):
         torch_format = format_dict[data_format]
-        return torch.tensor(operand1, dtype=torch_format)
+        height, width = input_dimensions[0], input_dimensions[1]
+        tile_cnt = (height // 32) * (width // 32)
+        tile_size = height * width // tile_cnt
+        # Depending on the value of 'num_faces' (1, 2, 4), select the first 1, 2 or all 4 faces of a tile
+        elements_per_tile_needed = (tile_size // 4) * num_faces
+
+        if not isinstance(operand1, torch.Tensor):
+            operand1 = torch.tensor(operand1)
+
+        reshaped = operand1.view(tile_cnt, tile_size)
+        selected = reshaped[:, :elements_per_tile_needed]
+
+        return selected.flatten().to(torch_format)
 
 
 @register_golden
