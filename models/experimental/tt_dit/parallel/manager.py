@@ -172,7 +172,7 @@ class CCLManager:
 
     def get_rs_hyperparams(self, shape):
         return {
-            "chunks_per_sync": 10,
+            "chunks_per_sync": 2,
             "num_workers_per_link": 2,
             "num_buffers_per_channel": 2,
         }
