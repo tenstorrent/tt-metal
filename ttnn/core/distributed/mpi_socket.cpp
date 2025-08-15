@@ -22,7 +22,7 @@ std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
                 storage.buffer().apply([&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
                 return buffers;
             } else {
-                throw std::runtime_error("Tensor must be on host");
+                TT_THROW("Tensor must be on host");
             }
         },
         tensor.storage());
