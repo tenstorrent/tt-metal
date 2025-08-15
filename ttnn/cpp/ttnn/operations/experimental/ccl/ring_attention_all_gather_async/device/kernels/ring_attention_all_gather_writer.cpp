@@ -288,6 +288,7 @@ void kernel_main() {
                         scatter_fabric_write_unidir(
                             first_tile_id,
                             second_tile_id,
+                            output_addrgens[input_idx],
                             pkt_hdr,
                             *fabric_direction_connection,
                             l1_read_addr,
