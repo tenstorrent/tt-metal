@@ -96,7 +96,7 @@ RISC-V cores can only access their private memory and the local shared SRAM dire
 
     .. code-block:: c++
 
-        // This WILL NOT work as arr lives on the stack this the private memory
+        // This WILL NOT work as arr lives on the stack which is private to the core
         int arr[8];
         noc_async_read(noc_addr, uint32_t(&arr), sizeof(arr));
 
