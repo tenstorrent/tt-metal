@@ -163,6 +163,9 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         } else if (board_type == BoardType::P100) {
             if (cluster_desc->get_all_chips().size() == 1) {
                 cluster_type = tt::tt_metal::ClusterType::P100;
+            } else {
+                TT_THROW("Unknown cluster type for P100 board with {} chips",
+                         cluster_desc->get_all_chips().size());
             }
         } else if (board_type == BoardType::P150) {
             if (cluster_desc->get_all_chips().size() == 1) {
@@ -173,6 +176,18 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
                 cluster_type = tt::tt_metal::ClusterType::P150_X4;
             } else if (cluster_desc->get_all_chips().size() == 8) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X8;
+            } else {
+                TT_THROW("Unknown cluster type for P150 board with {} chips",
+                         cluster_desc->get_all_chips().size());
+            }
+        } else if (board_type == BoardType::P300) {
+            // cluster_desc->get_all_chips().size() is returning 2 because both chips are
+            // PCIe accessible at the moment. Eventually this will become 1
+            if (cluster_desc->get_all_chips().size() == 2) {
+                cluster_type = tt::tt_metal::ClusterType::P300;
+            } else {
+                TT_THROW("Unknown cluster type for P300 board with {} chips. Note: All chips size is set to 2 right now because both chips can be accessed via PCIe",
+                         cluster_desc->get_all_chips().size());
             }
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
