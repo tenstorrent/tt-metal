@@ -1133,7 +1133,7 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
             self.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.lm_head_shape[1] // 32),  # (32, 608)
+                shape=(32, self.lm_head_shape[1] // 32),
                 core_grid=lm_head_ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
