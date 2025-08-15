@@ -71,25 +71,62 @@ The ``Dst`` registers are the only register set that is exposed and visible to t
 
 Note that ``fp32_dest_acc_en`` being enabled DOES NOT guarantee that all computations are performed at 32-bit accuracy. It only means that the ``Dst`` registers will have 32 bits of storage per element for results. For example, the matrix engine may still compute and output in bfloat16, but the results are stored in 32-bit slots. If further processing is done by the vector engine, the final result will be a 32-bit value representing the processed bfloat16 data.
 
-As the compute kernel is expected to run on all 3 cores at the same time, extra care is needed to avoid racing between the cores and users of the ``Dst`` register. Metalium provides mechanisms to ensure safe access to the ``Dst`` registers through 3 functions:
+As the compute kernel is expected to run on all 3 cores at the same time, extra care is needed to avoid racing between the cores and users of the ``Dst`` register. Metalium provides mechanisms to ensure safe access to the ``Dst`` registers through 4 functions:
 
 .. code-block:: c++
 
-    tile_regs_acquire(); // Dst registers are avaliable for unpacking and math
-    .... // perform math and unpack here
-    tile_regs_commit(); // Transfer ownership to the packer
-    .... // perform packing here
-    tile_regs_release(); // Dst registers are no longer needed
+    // Wait for input to be available via circular buffers (e.g., using cb_wait_front).
+    // ...
+
+    // Acquire Dst registers, making them available for unpacking and math operations.
+    tile_regs_acquire();
+
+    // Perform unpacking and math operations here.
+    // e.g., copy_tile(...), matmul_tiles(...), add_tiles(...)
+    // ...
+
+    // Commit the results, transferring ownership of Dst registers to the packer.
+    tile_regs_commit();
+
+    // Release input CBs and reserve space in output CBs.
+    // e.g., cb_pop_front(...), cb_reserve_back(...)
+    // ...
+
+    // Wait until the packer can safely access the Dst registers.
+    tile_regs_wait();
+
+    // Perform packing operations.
+    // e.g., pack_tile(...)
+    // ...
+
+    // Release the Dst registers, as they are no longer needed for this iteration.
+    tile_regs_release();
+
+    // Announce that data has been written to the output CBs.
+    // e.g., cb_push_back(...)
+    // ...
 
 .. note::
 
-    Circular buffers operations (``cb_wait_front``, ``cb_pop_front``, ``cb_reserve_back``, ``cb_push_back``) can be performed before at any location as they do not touch the Dst registers. However, unpacking from the circular buffer requires the Dst registers to be available. Likewise for packing.
+    The ordering of circular buffer operations (``cb_wait_front``, ``cb_pop_front``, ``cb_reserve_back``, ``cb_push_back``) can be adjusted, but their placement is constrained by data dependencies. The pattern shown in the example is designed to minimize stalls by overlapping waiting for space and computation by different threads. Note that unpacking from a circular buffer can only occur after the ``Dst`` registers have been acquired, and packing can only begin after the packer is ready to access them.
 
 .. warning::
 
-    You still must call ``tile_regs_commit`` and ``tile_regs_release`` in sequence even if no packing is needed for whatever reason. Otherwise it is considered undefined behavior.
+    Even when no packing is performed, ``tile_regs_commit`` and ``tile_regs_release`` must still be called in sequence. Failure to do so results in undefined behavior.
 
-The above construction is often used in a loop to perform consecutive computation.
+The above construction is often used in a loop to perform consecutive computation. Moving data from and to the ``Dst`` registers is performed using the ``copy_tile`` and ``pack_tile`` functions.
+
+
+.. code-block:: c++
+
+    // Before calling copy_tile, ensure the circular buffer contains data (use cb_wait_front).
+    // copy_tile transfers a tile from the circular buffer at the specified tile_offset_in_cb
+    // into the destination tile at the given index.
+    copy_tile(CBIndex::c_0, /*tile_offset_in_cb*/0, /*dst_idx*/0);
+
+    // pack_tile performs the opposite operation, transferring a tile from the Dst register
+    // to the circular buffer at the specified tile_offset_in_cb.
+    pack_tile(/*dst_idx*/0, CBIndex::c_16, /*tile_offset_in_cb*/0);
 
 Matrix engine/FPU
 -----------------
@@ -132,9 +169,13 @@ For example, to perform matrix multiplication pairwise:
         cb_pop_front(CBIndex::c_0, 1); cb_pop_front(CBIndex::c_1, 1);
         // Wait for space in the output circular buffer
         cb_reserve_back(CBIndex::c_16, 1);
+
+        // Now we can start packing the output
+        tile_regs_wait();
+
         // Copy tile from dst tile 0 into the output CB. This 0 is the same as
         // the Dst tile index used in matmul_tiles
-        pack_tile(/*src_dst_idx*/0, CBIndex::c_16);
+        pack_tile(/*src_dst_idx*/0, CBIndex::c_16, /*tile_offset_in_cb*/0);
         // We have written the data to CB. Announce it to be done
         cb_push_back(CBIndex::c_16, 1);
 
@@ -169,9 +210,9 @@ For example, to compute the sine of a tile (duplicated comments from the above e
         // Unpack the first tile from the CB into the first tile in DST
         // This function involves both the unpacker and math core to ensure
         // synchronization
-        copy_tile(CBIndex::c_0, /*tile_offset*/0, /*dst_idx*/0);
+        copy_tile(CBIndex::c_0, /*tile_offset_in_cb*/0, /*dst_idx*/0);
         // DITTO but into the second tile in Dst
-        copy_tile(CBIndex::c_1, /*tile_offset*/0, /*dst_idx*/1);
+        copy_tile(CBIndex::c_1, /*tile_offset_in_cb*/0, /*dst_idx*/1);
 
         // Add tile 0 and 1 in the dst registers together. Store result back
         // into (the first argument) tile 0. Pseudo code:
@@ -185,7 +226,8 @@ For example, to compute the sine of a tile (duplicated comments from the above e
         tile_regs_commit();
         cb_pop_front(CBIndex::c_0, 1); cb_pop_front(CBIndex::c_1, 1);
         cb_reserve_back(CBIndex::c_16, 1);
-        pack_tile(/*src_dst_idx*/0, CBIndex::c_16);
+        tile_regs_wait();
+        pack_tile(/*dst_idx*/0, CBIndex::c_16, /*tile_offset_in_cb*/0);
         cb_push_back(CBIndex::c_16, 1);
 
         tile_regs_release();
@@ -197,11 +239,20 @@ For example, to compute the sine of a tile (duplicated comments from the above e
     .. code-block:: c++
 
         copy_tile_init(CBIndex::c_0);
-        copy_tile(CBIndex::c_0, /*tile_offset*/0, /*dst_offset_tiles*/0);
+        copy_tile(CBIndex::c_0, /*tile_offset_in_cb*/0, /*dst_offset_tiles*/0);
         copy_tile_init(CBIndex::c_1);
-        copy_tile(CBIndex::c_1, /*tile_offset*/0, /*dst_offset_tiles*/1);
+        copy_tile(CBIndex::c_1, /*tile_offset_in_cb*/0, /*dst_offset_tiles*/1);
 
     Also note that ``copy_tile_init`` is always needed if you are unpacking FP32 values into 32-bit ``Dst`` registers. As ``init_sfpu`` assumes a 16-bit storage size and sets up the unpacker to unpack as bfloat16. Some accuracy will be lost if an explicit extra initialization is not done.
+
+    Similarly, the ``pack_reconfig_data_format`` function and its variants are used to change the packer's output data format. This is necessary when a computation produces multiple tiles that must be written to circular buffers with different data formats. For example, to pack two tiles into two separate circular buffers, each with a unique data format:
+
+    .. code-block:: c++
+
+        pack_reconfig_data_format(CBIndex::c_16);
+        pack_tile(/*src_idx*/0, CBIndex::c_16, /*tile_offset_in_cb*/0);
+        pack_reconfig_data_format(CBIndex::c_17);
+        pack_tile(/*src_idx*/1, CBIndex::c_17, /*tile_offset_in_cb*/0);
 
 After data is unpacked into the ``Dst`` registers, the vector engine can load data from ``Dst`` into ``LReg`` directly, without involving other hardware blocks. For more details on programming the SFPU, see the :ref:`Low Level Kernels programming guide <llk>`. The ``dst_reg`` variable provides an ``LReg``-sized view into the ``Dst`` registers. For example, on Wormhole and Blackhole, ``LReg`` is 32 elements wide, so the first ``Dst`` tile corresponds to ``dst_reg[0:31]``. To illustrate:
 
