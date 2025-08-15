@@ -111,16 +111,22 @@ void ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::override_run
 
 std::tuple<ApplyDeviceDelayDeviceOperation::operation_attributes_t, ApplyDeviceDelayDeviceOperation::tensor_args_t>
 ApplyDeviceDelayDeviceOperation::invoke(
-    const ttnn::Tensor& tensor,  // need a dummy tensor or else op infra just dies
-    const ttnn::MeshDevice& mesh_device,
+    ttnn::MeshDevice& mesh_device,
     const std::vector<std::vector<uint32_t>>& delays,
     const CoreRangeSet& subdevice_core_range_set) {
     log_info(tt::LogAlways, "Initializing delay op structs");
     operation_attributes_t operation_attributes{
         .delays = delays, .worker_core_range_set = subdevice_core_range_set, .mesh_device = &mesh_device};
 
+    auto input_tensor = create_device_tensor(
+        ttnn::TensorSpec(
+            ttnn::Shape({1}),
+            tt::tt_metal::TensorLayout(
+                ttnn::DataType::BFLOAT16, tt::tt_metal::PageConfig(ttnn::Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG)),
+        std::addressof(mesh_device));
+
     tensor_args_t tensor_args{
-        .input_tensor = tensor,
+        .input_tensor = input_tensor,
     };
 
     log_info(tt::LogAlways, "Returning delay op structs");

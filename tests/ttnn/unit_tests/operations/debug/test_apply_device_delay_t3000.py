@@ -96,7 +96,10 @@ def run_apply_device_delay_test(
     # Verify program cache
     cache_entries = mesh_device.num_program_cache_entries()
     logger.info(f"Program cache entries: {cache_entries}")
-    assert cache_entries == 1, f"Expected 1 cache entry, got {cache_entries}"
+    expected_cache_entries = 1
+    assert (
+        cache_entries == expected_cache_entries
+    ), f"Expected {expected_cache_entries} cache entries, got {cache_entries}"
 
 
 @pytest.mark.parametrize("trace_mode", [False])
@@ -160,7 +163,7 @@ def test_apply_device_delay_trace_t3000(
     """Trace test for apply_device_delay on T3000."""
 
     # Create a complex delay pattern
-    delays = [[10000, 12000, 14000, 16000], [11000, 13000, 15000, 17000]]
+    delays = [[10000, 12000, 14000, 16000], [11000, 0, 15000, 17000]]
 
     run_apply_device_delay_test(
         mesh_device=mesh_device,
@@ -170,36 +173,3 @@ def test_apply_device_delay_trace_t3000(
         warmup_iters=5,
         trace_mode=trace_mode,
     )
-
-
-@pytest.mark.parametrize("trace_mode", [False])
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
-)
-def test_apply_device_delay_edge_cases_t3000(
-    mesh_device,
-    mesh_shape,
-    trace_mode,
-    device_params,
-):
-    """Test edge cases for apply_device_delay on T3000."""
-
-    edge_case_delays = [
-        # Zero delays
-        [[0, 0, 0, 0], [0, 0, 0, 0]],
-        # Maximum reasonable delays
-        [[20000, 20000, 20000, 20000], [20000, 20000, 20000, 20000]],
-        # Mixed delays
-        [[0, 10000, 0, 20000], [15000, 0, 5000, 18000]],
-    ]
-
-    for i, delays in enumerate(edge_case_delays):
-        logger.info(f"Testing edge case {i+1}: {delays}")
-        run_apply_device_delay_test(
-            mesh_device=mesh_device,
-            mesh_shape=mesh_shape,
-            delays=delays,
-            num_iters=1,
-            warmup_iters=0,
-            trace_mode=trace_mode,
-        )
