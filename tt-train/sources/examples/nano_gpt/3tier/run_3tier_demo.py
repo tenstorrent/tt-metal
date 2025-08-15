@@ -15,7 +15,7 @@ from pathlib import Path
 # --------------------------
 # Defaults (customize here)
 # --------------------------
-DEFAULT_METAL_HOME = os.environ.get("TT_METAL_HOME", "/home/ttuser/git/tt-metal")
+DEFAULT_METAL_HOME = os.environ.get("TT_METAL_HOME", "~/git/tt-metal")
 DEFAULT_CONFIG = "training_shakespeare_nanogpt_3tier_mpi.yaml"
 SSH_USER = "ttuser"
 BINARIES = ("nano_gpt", "nano_gpt_aggregator", "nano_gpt_optimizer")
