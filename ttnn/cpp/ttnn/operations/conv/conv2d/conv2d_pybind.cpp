@@ -262,6 +262,7 @@ void py_bind_conv2d(py::module& module) {
         | It slices the input & output into slices and applies the Conv2D op on each slice. \
         | Conv2dSliceConfig determines how this slicing happens.
         )doc");
+
     py_conv_slice_config.def(
         py::init<Conv2dSliceConfig::SliceType, uint32_t>(),
         py::kw_only(),
