@@ -7,26 +7,26 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 @pytest.mark.parametrize(
     "input_shape_and_sizes",
     [
-        # YOLOv12 high-resolution split operations
-        ([1, 96, 640, 640], [48, 48]),      # Split channels after conv
-        ([1, 192, 320, 320], [96, 96]),     # Split channels after conv  
-        ([1, 384, 160, 160], [192, 192]),   # Split channels after conv
-        ([1, 768, 80, 80], [384, 384]),     # Split channels after conv
-        ([1, 1536, 40, 40], [768, 768]),    # Split channels after conv
-        ([1, 128, 1280, 800], [64, 64]),    # High-res feature map splits
-        ([1, 256, 640, 400], [128, 128]),   # Medium-res feature map splits
-        ([1, 512, 320, 200], [256, 256]),   # Lower-res feature map splits
-        ([1, 160, 640, 400], [80, 80]),     # Detection head splits
-        ([1, 320, 320, 200], [160, 160]),   # Detection head splits
-        ([1, 640, 160, 100], [320, 320]),   # Detection head splits
-        ([1, 1280, 80, 50], [640, 640]),    # Detection head splits
-        ([1, 96, 1280, 1280], [48, 48]),    # Very high-res splits
-        ([1, 64, 1280, 800], [32, 32]),     # High-res channel splits
-        ([1, 32, 1280, 800], [16, 16]),     # High-res channel splits
+        # YOLOv12x ultra-high resolution (2176x3840) split operations
+        ([1, 96, 1088, 1920], [48, 48]),      # Split channels after conv
+        ([1, 192, 544, 960], [96, 96]),       # Split channels after conv  
+        ([1, 384, 272, 480], [192, 192]),     # Split channels after conv
+        ([1, 768, 136, 240], [384, 384]),     # Split channels after conv
+        ([1, 1152, 68, 120], [576, 576]),     # Split channels after conv
+        ([1, 192, 2176, 1920], [96, 96]),     # Ultra-high-res splits
+        ([1, 384, 1088, 960], [192, 192]),    # High-res feature map splits
+        ([1, 768, 544, 480], [384, 384]),     # Medium-res feature map splits
+        ([1, 1152, 272, 240], [576, 576]),    # Lower-res feature map splits
+        ([1, 384, 136, 240], [192, 192]),     # Detection head splits
+        ([1, 768, 68, 120], [384, 384]),      # Detection head splits
+        ([1, 1152, 34, 60], [576, 576]),      # Detection head splits
+        ([1, 96, 2176, 3840], [48, 48]),      # Ultra-high-res splits
+        ([1, 192, 1088, 1920], [96, 96]),     # High-res channel splits
+        ([1, 384, 544, 960], [192, 192]),     # Medium-res channel splits
     ],
 )
 def test_split_with_sizes(device, input_shape_and_sizes):
-    """Test split_with_sizes operator with YOLOv12 high-resolution input shapes"""
+    """Test split_with_sizes operator with YOLOv12x ultra-high resolution (2176x3840) input shapes"""
     input_shape, split_sizes = input_shape_and_sizes
     torch.manual_seed(0)
 
@@ -37,7 +37,7 @@ def test_split_with_sizes(device, input_shape_and_sizes):
             torch_input = torch_input.permute(0, 2, 3, 1)
 
         ttnn_input = ttnn.from_torch(
-            torch_input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+            torch_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
         )
 
         # Split with sizes (split along dimension 1 by default)

@@ -3,7 +3,15 @@ import torch
 import ttnn
 
 
-@pytest.mark.parametrize("input_shape_memory", [([1, 1, 1280, 800], 62.5)])
+@pytest.mark.parametrize("input_shape_memory", [
+        # YOLOv12x ultra-high resolution (2176x3840) OOM test shapes
+        ([1, 3, 2176, 3840], 150.0),   # YOLOv12x ultra-high-res input
+        ([1, 96, 1088, 1920], 380.0),  # After first conv stride=2
+        ([1, 192, 544, 960], 190.0),   # After second conv stride=2
+        ([1, 384, 272, 480], 95.0),    # After third conv stride=2
+        ([1, 768, 136, 240], 47.5),    # After fourth conv stride=2
+        ([1, 1152, 68, 120], 17.8),    # Attention feature maps
+])
 def test_oom_sigmoid(device, input_shape_memory):
     """
     Test sigmoid operator with shapes that previously caused OOM failures.
@@ -46,7 +54,15 @@ def test_oom_sigmoid(device, input_shape_memory):
         pytest.fail(f"Unexpected error for {input_shape}: {str(e)}")
 
 
-@pytest.mark.parametrize("input_shape_memory", [([1, 1, 1280, 800], 62.5)])
+@pytest.mark.parametrize("input_shape_memory", [
+        # YOLOv12x ultra-high resolution (2176x3840) OOM test shapes
+        ([1, 3, 2176, 3840], 150.0),   # YOLOv12x ultra-high-res input
+        ([1, 96, 1088, 1920], 380.0),  # After first conv stride=2
+        ([1, 192, 544, 960], 190.0),   # After second conv stride=2
+        ([1, 384, 272, 480], 95.0),    # After third conv stride=2
+        ([1, 768, 136, 240], 47.5),    # After fourth conv stride=2
+        ([1, 1152, 68, 120], 17.8),    # Attention feature maps
+])
 def test_memory_estimation_sigmoid(input_shape_memory):
     """
     Test to estimate memory requirements without actually running on device.

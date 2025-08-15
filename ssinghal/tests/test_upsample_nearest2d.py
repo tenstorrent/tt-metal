@@ -7,26 +7,26 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 @pytest.mark.parametrize(
     "input_shape_and_scale",
     [
-        # YOLOv12 high-resolution upsampling operations
-        ([1, 768, 40, 40], 2),        # Upsample backbone features 40x40 -> 80x80
-        ([1, 768, 80, 80], 2),        # Upsample backbone features 80x80 -> 160x160
-        ([1, 384, 160, 160], 2),      # Upsample backbone features 160x160 -> 320x320
-        ([1, 192, 320, 320], 2),      # Upsample backbone features 320x320 -> 640x640
-        ([1, 96, 640, 640], 2),       # Upsample backbone features 640x640 -> 1280x1280
-        ([1, 384, 80, 80], 2),        # Detection head upsampling
-        ([1, 192, 160, 160], 2),      # Detection head upsampling
-        ([1, 96, 320, 320], 2),       # Detection head upsampling
-        ([1, 768, 20, 20], 4),        # 4x upsampling for very low-res features
-        ([1, 384, 40, 40], 4),        # 4x upsampling for low-res features
-        ([1, 192, 80, 80], 4),        # 4x upsampling for medium-res features
-        ([1, 64, 320, 200], 2),       # Non-square upsampling
-        ([1, 128, 160, 100], 2),      # Non-square upsampling
-        ([1, 256, 80, 50], 2),        # Non-square upsampling
-        ([1, 512, 40, 25], 2),        # Non-square upsampling
+        # YOLOv12x ultra-high resolution (2176x3840) upsampling operations
+        ([1, 768, 68, 120], 2),        # Upsample backbone features 68x120 -> 136x240
+        ([1, 768, 136, 240], 2),       # Upsample backbone features 136x240 -> 272x480
+        ([1, 384, 272, 480], 2),       # Upsample backbone features 272x480 -> 544x960
+        ([1, 192, 544, 960], 2),       # Upsample backbone features 544x960 -> 1088x1920
+        ([1, 96, 1088, 1920], 2),      # Upsample backbone features 1088x1920 -> 2176x3840
+        ([1, 1152, 34, 60], 2),        # Detection head upsampling
+        ([1, 768, 68, 120], 2),        # Detection head upsampling
+        ([1, 384, 136, 240], 2),       # Detection head upsampling
+        ([1, 768, 34, 60], 4),         # 4x upsampling for very low-res features
+        ([1, 384, 68, 120], 4),        # 4x upsampling for low-res features
+        ([1, 192, 136, 240], 4),       # 4x upsampling for medium-res features
+        ([1, 96, 544, 480],  2),       # Non-square upsampling
+        ([1, 192, 272, 240], 2),       # Non-square upsampling
+        ([1, 384, 136, 120], 2),       # Non-square upsampling
+        ([1, 768, 68, 60], 2),         # Non-square upsampling
     ],
 )
 def test_upsample_nearest2d(device, input_shape_and_scale):
-    """Test upsample_nearest2d operator with YOLOv12 high-resolution input shapes"""
+    """Test upsample_nearest2d operator with YOLOv12x ultra-high resolution (2176x3840) input shapes"""
     input_shape, scale_factor = input_shape_and_scale
     torch.manual_seed(0)
 
@@ -41,7 +41,7 @@ def test_upsample_nearest2d(device, input_shape_and_scale):
         torch_input_ttnn = torch_input.permute(0, 2, 3, 1)
 
         ttnn_input = ttnn.from_torch(
-            torch_input_ttnn, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+            torch_input_ttnn, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
         )
 
         # Calculate output size

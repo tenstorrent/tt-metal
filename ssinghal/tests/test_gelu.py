@@ -4,9 +4,22 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 
-@pytest.mark.parametrize("input_shape", [[1, 1000, 1024]])
+@pytest.mark.parametrize("input_shape", [
+    # YOLOv12x ultra-high resolution (2176x3840) GELU activation shapes
+    [1, 32640, 384],      # Flattened attention shapes
+    [1, 8160, 768],       # Flattened feature shapes
+    [1, 3072, 1024],      # MLP hidden layers
+    [1, 6144, 512],       # Large MLP layers
+    [1, 4096, 768],       # Transformer blocks
+    [1, 2048, 1536],      # Medium MLP layers
+    [1, 1536, 2048],      # Inverse MLP layers
+    [1, 384, 1536],       # Small MLP expansion
+    [1, 768, 3072],       # Standard transformer MLP
+    [1, 1152, 4608],      # Large transformer MLP
+    [1, 96, 384],         # Small feature projection
+])
 def test_gelu(device, input_shape):
-    """Test GELU operator with various input shapes from vision models"""
+    """Test GELU operator with YOLOv12x ultra-high resolution (2176x3840) input shapes"""
     torch.manual_seed(0)
 
     try:

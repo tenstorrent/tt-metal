@@ -4,7 +4,15 @@ import ttnn
 
 
 @pytest.mark.parametrize(
-    "input_shape_memory", [([1, 144, 640, 400], 81.25), ([1, 80, 640, 400], 48.75), ([1, 96, 640, 400], 48.75)]
+    "input_shape_memory", [
+        # YOLOv12x ultra-high resolution (2176x3840) OOM test shapes for SiLU
+        ([1, 3, 2176, 3840], 150.0),   # YOLOv12x ultra-high-res input
+        ([1, 96, 1088, 1920], 380.0),  # After first conv stride=2
+        ([1, 192, 544, 960], 190.0),   # After second conv stride=2
+        ([1, 384, 272, 480], 95.0),    # After third conv stride=2
+        ([1, 768, 136, 240], 47.5),    # After fourth conv stride=2
+        ([1, 1152, 68, 120], 17.8),    # Attention feature maps
+    ]
 )
 def test_oom_silu(device, input_shape_memory):
     """

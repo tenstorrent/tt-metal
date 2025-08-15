@@ -3,7 +3,15 @@ import torch
 import ttnn
 
 
-@pytest.mark.parametrize("input_shape_scale_memory", [([1, 768, 320, 320], 2, 150.0), ([1, 384, 640, 640], 2, 300.0), ([1, 192, 640, 640], 4, 600.0)])
+@pytest.mark.parametrize("input_shape_scale_memory", [
+    # YOLOv12x ultra-high resolution (2176x3840) OOM test shapes for upsample
+    ([1, 768, 68, 120], 2, 95.0),       # YOLOv12x upsample 68x120 -> 136x240
+    ([1, 384, 136, 240], 2, 190.0),     # Upsample 136x240 -> 272x480
+    ([1, 192, 272, 480], 2, 380.0),     # Upsample 272x480 -> 544x960
+    ([1, 96, 544, 960], 2, 760.0),      # Upsample 544x960 -> 1088x1920
+    ([1, 768, 34, 60], 4, 190.0),       # 4x upsampling for low-res features
+    ([1, 384, 68, 120], 4, 380.0),      # 4x upsampling for medium-res features
+])
 def test_oom_upsample_nearest2d(device, input_shape_scale_memory):
     """
     Test upsample_nearest2d operator with shapes that previously caused OOM failures.
@@ -51,7 +59,15 @@ def test_oom_upsample_nearest2d(device, input_shape_scale_memory):
         pytest.fail(f"Unexpected error for {input_shape}: {str(e)}")
 
 
-@pytest.mark.parametrize("input_shape_scale_memory", [([1, 768, 320, 320], 2, 150.0), ([1, 384, 640, 640], 2, 300.0), ([1, 192, 640, 640], 4, 600.0)])
+@pytest.mark.parametrize("input_shape_scale_memory", [
+    # YOLOv12x ultra-high resolution (2176x3840) OOM test shapes for upsample
+    ([1, 768, 68, 120], 2, 95.0),       # YOLOv12x upsample 68x120 -> 136x240
+    ([1, 384, 136, 240], 2, 190.0),     # Upsample 136x240 -> 272x480
+    ([1, 192, 272, 480], 2, 380.0),     # Upsample 272x480 -> 544x960
+    ([1, 96, 544, 960], 2, 760.0),      # Upsample 544x960 -> 1088x1920
+    ([1, 768, 34, 60], 4, 190.0),       # 4x upsampling for low-res features
+    ([1, 384, 68, 120], 4, 380.0),      # 4x upsampling for medium-res features
+])
 def test_memory_estimation_upsample_nearest2d(input_shape_scale_memory):
     """
     Test to estimate memory requirements without actually running on device.

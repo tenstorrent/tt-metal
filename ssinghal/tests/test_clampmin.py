@@ -7,17 +7,31 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [1, 1, 40, 25],
-        [1, 1, 80, 50],
-        [1, 1, 160, 100],
-        [1000, 4, 64, 1],
-        [260, 8, 64, 1],
-        [70, 16, 64, 1],
-        [20, 32, 64, 1],
+        # YOLOv12x ultra-high resolution (2176x3840) input shapes
+        [1, 3, 2176, 3840],   # YOLOv12x ultra-high-res input
+        [1, 96, 1088, 1920],  # After first conv stride=2
+        [1, 192, 544, 960],   # After second conv stride=2
+        [1, 384, 272, 480],   # After third conv stride=2
+        [1, 768, 136, 240],   # After fourth conv stride=2
+        [1, 768, 68, 120],    # After fifth conv stride=2
+        [1, 96, 2176, 1920],  # Ultra-high-res feature maps
+        [1, 192, 1088, 960],  # High-res feature maps
+        [1, 384, 544, 480],   # Medium-res feature maps
+        [1, 768, 272, 240],   # Lower-res feature maps
+        [1, 1152, 136, 120],  # Attention feature maps
+        [1, 384, 136, 240],   # Detection head shapes
+        [1, 768, 68, 120],    # Detection head shapes
+        [1, 1152, 34, 60],    # Detection head shapes
+        [1, 32640, 384],      # Flattened attention shapes
+        [1, 8160, 768],       # Flattened feature shapes
+        [1, 3, 1088, 1920],   # Half-res YOLOv12x input
+        [1, 96, 544, 960],    # Quarter-res feature maps
+        [1, 192, 272, 480],   # Eighth-res feature maps
+        [1, 384, 136, 240],   # Sixteenth-res feature maps
     ],
 )
 def test_clampmin(device, input_shape):
-    """Test clampmin operator with various input shapes from vision models"""
+    """Test clampmin operator with YOLOv12x ultra-high resolution (2176x3840) input shapes"""
     torch.manual_seed(0)
 
     try:

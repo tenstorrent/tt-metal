@@ -7,60 +7,31 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [1, 64, 640, 400],
-        [1, 64, 320, 200],
-        [1, 128, 160, 100],
-        [1, 256, 80, 50],
-        [1, 512, 40, 25],
-        [1, 48000, 85],
-        [1, 12000, 85],
-        [1, 3000, 85],
-        [1, 80, 320, 200],
-        [1, 160, 160, 100],
-        [1, 320, 80, 50],
-        [1, 320, 40, 25],
-        [1, 64, 40, 25],
-        [1, 80, 40, 25],
-        [1, 64, 80, 50],
-        [1, 80, 80, 50],
-        [1, 64, 160, 100],
-        [1, 80, 160, 100],
-        [1, 144, 16000],
-        [1, 144, 4000],
-        [1, 144, 1000],
-        [1, 2, 21000],
-        [1, 4, 21000],
-        [1, 80, 21000],
-        [1, 32, 320, 200],
-        [1, 128, 80, 50],
-        [1, 256, 40, 25],
-        [1, 256, 9],
-        [1, 16, 320, 200],
-        [1, 32, 160, 100],
-        [1, 32, 80, 50],
-        [1, 128, 40, 25],
-        [1, 16, 160, 100],
-        [1, 32, 640, 400],
-        [1, 48, 320, 200],
-        [1, 96, 160, 100],
-        [1, 512, 80, 50],
-        [1, 192, 80, 50],
-        [1, 1024, 80, 50],
-        [1, 1024, 40, 25],
-        [1, 384, 40, 25],
-        [1, 16000, 256],
-        [1, 4000, 256],
-        [1, 1000, 256],
-        [1, 512, 160, 100],
-        [1, 256, 320, 200],
-        [1, 128, 640, 400],
-        [1, 64, 1280, 800],
-        [1, 160, 100, 128],
-        [1, 80, 50, 256],
+        # YOLOv12x ultra-high resolution (2176x3840) input shapes
+        [1, 3, 2176, 3840],   # YOLOv12x ultra-high-res input
+        [1, 96, 1088, 1920],  # After first conv stride=2
+        [1, 192, 544, 960],   # After second conv stride=2
+        [1, 384, 272, 480],   # After third conv stride=2
+        [1, 768, 136, 240],   # After fourth conv stride=2
+        [1, 768, 68, 120],    # After fifth conv stride=2
+        [1, 96, 2176, 1920],  # Ultra-high-res feature maps
+        [1, 192, 1088, 960],  # High-res feature maps
+        [1, 384, 544, 480],   # Medium-res feature maps
+        [1, 768, 272, 240],   # Lower-res feature maps
+        [1, 1152, 136, 120],  # Attention feature maps
+        [1, 384, 136, 240],   # Detection head shapes
+        [1, 768, 68, 120],    # Detection head shapes
+        [1, 1152, 34, 60],    # Detection head shapes
+        [1, 32640, 384],      # Flattened attention shapes
+        [1, 8160, 768],       # Flattened feature shapes
+        [1, 3, 1088, 1920],   # Half-res YOLOv12x input
+        [1, 96, 544, 960],    # Quarter-res feature maps
+        [1, 192, 272, 480],   # Eighth-res feature maps
+        [1, 384, 136, 240],   # Sixteenth-res feature maps
     ],
 )
 def test_cat(device, input_shape):
-    """Test cat operator with various input shapes from vision models"""
+    """Test cat operator with YOLOv12x ultra-high resolution (2176x3840) input shapes"""
     torch.manual_seed(0)
 
     try:

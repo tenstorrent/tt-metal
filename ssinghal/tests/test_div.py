@@ -4,9 +4,27 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 
-@pytest.mark.parametrize("input_shape", [[8, 300, 32]])
+@pytest.mark.parametrize("input_shape", [
+    # YOLOv12x ultra-high resolution (2176x3840) element-wise division shapes
+    [1, 3, 2176, 3840],   # YOLOv12x ultra-high-res input
+    [1, 96, 1088, 1920],  # After first conv stride=2
+    [1, 192, 544, 960],   # After second conv stride=2
+    [1, 384, 272, 480],   # After third conv stride=2
+    [1, 768, 136, 240],   # After fourth conv stride=2
+    [1, 768, 68, 120],    # After fifth conv stride=2
+    [1, 1152, 136, 120],  # Attention feature maps
+    [1, 384, 136, 240],   # Detection head shapes
+    [1, 768, 68, 120],    # Detection head shapes
+    [1, 1152, 34, 60],    # Detection head shapes
+    [1, 32640, 384],      # Flattened attention shapes
+    [1, 8160, 768],       # Flattened feature shapes
+    [12, 8160, 32],       # Attention head normalization
+    [12, 32640, 96],      # Large attention normalization
+    [8, 4080, 64],        # Medium attention normalization
+    [24, 1020, 48],       # Many-head attention normalization
+])
 def test_div(device, input_shape):
-    """Test div operator with various input shapes from vision models"""
+    """Test div operator with YOLOv12x ultra-high resolution (2176x3840) input shapes"""
     torch.manual_seed(0)
 
     try:

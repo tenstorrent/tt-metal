@@ -6,10 +6,22 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 @pytest.mark.parametrize(
     "input_shape",
-    [[1, 16, 4, 21000], [1, 8, 80, 27], [1, 2, 1000, 1000], [8, 1000, 1000], [1, 300, 8, 12], [8, 300, 300]],
+    [
+        # YOLOv12x ultra-high resolution (2176x3840) softmax attention shapes
+        [1, 12, 8160, 8160],   # Full attention matrix: [batch, heads, seq, seq]
+        [1, 12, 32640, 384],   # Large attention: [batch, heads, seq, features]
+        [1, 8, 4080, 4080],    # Half attention matrix: [batch, heads, half_seq, half_seq]
+        [12, 8160, 8160],      # Multi-head attention scores: [heads, seq, seq]
+        [12, 32640, 32],       # Attention over features: [heads, seq, head_dim]
+        [1, 1152, 68120],      # Channel attention: [batch, channels, spatial]
+        [8, 2040, 96],         # Medium attention: [heads, quarter_seq, features]
+        [16, 1020, 48],        # High-head attention: [heads, eighth_seq, head_dim]
+        [4, 16320, 128],       # Low-head attention: [heads, double_seq, features]
+        [24, 680, 32],         # Many-head attention: [heads, small_seq, head_dim]
+    ],
 )
 def test_softmax(device, input_shape):
-    """Test softmax operator with various input shapes from vision models"""
+    """Test softmax operator with YOLOv12x ultra-high resolution (2176x3840) attention shapes"""
     torch.manual_seed(0)
 
     try:

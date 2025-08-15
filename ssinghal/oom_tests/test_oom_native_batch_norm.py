@@ -3,7 +3,15 @@ import torch
 import ttnn
 
 
-@pytest.mark.parametrize("input_shape_memory", [([1, 64, 1280, 800], 125.0), ([1, 128, 640, 400], 65.0), ([1, 256, 320, 200], 32.5)])
+@pytest.mark.parametrize("input_shape_memory", [
+        # YOLOv12x ultra-high resolution (2176x3840) OOM test shapes for batch norm
+        ([1, 3, 2176, 3840], 450.0),    # YOLOv12x ultra-high-res input (3x memory)
+        ([1, 96, 1088, 1920], 1140.0),  # After first conv stride=2 (3x memory)
+        ([1, 192, 544, 960], 570.0),    # After second conv stride=2 (3x memory)
+        ([1, 384, 272, 480], 285.0),    # After third conv stride=2 (3x memory)
+        ([1, 768, 136, 240], 142.5),    # After fourth conv stride=2 (3x memory)
+        ([1, 1152, 68, 120], 53.4),     # Attention feature maps (3x memory)
+])
 def test_oom_native_batch_norm(device, input_shape_memory):
     """
     Test native_batch_norm operator with shapes that previously caused OOM failures.
@@ -62,7 +70,15 @@ def test_oom_native_batch_norm(device, input_shape_memory):
         pytest.fail(f"Unexpected error for {input_shape}: {str(e)}")
 
 
-@pytest.mark.parametrize("input_shape_memory", [([1, 64, 1280, 800], 125.0), ([1, 128, 640, 400], 65.0), ([1, 256, 320, 200], 32.5)])
+@pytest.mark.parametrize("input_shape_memory", [
+        # YOLOv12x ultra-high resolution (2176x3840) OOM test shapes for batch norm
+        ([1, 3, 2176, 3840], 450.0),    # YOLOv12x ultra-high-res input (3x memory)
+        ([1, 96, 1088, 1920], 1140.0),  # After first conv stride=2 (3x memory)
+        ([1, 192, 544, 960], 570.0),    # After second conv stride=2 (3x memory)
+        ([1, 384, 272, 480], 285.0),    # After third conv stride=2 (3x memory)
+        ([1, 768, 136, 240], 142.5),    # After fourth conv stride=2 (3x memory)
+        ([1, 1152, 68, 120], 53.4),     # Attention feature maps (3x memory)
+])
 def test_memory_estimation_native_batch_norm(input_shape_memory):
     """
     Test to estimate memory requirements without actually running on device.

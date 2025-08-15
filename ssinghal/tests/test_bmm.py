@@ -7,22 +7,22 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [4, 4000, 32],
-        [2, 16000, 32],
-        [8, 32, 27],
-        [8, 80, 27],
-        [8, 27, 32],
-        [4, 32, 80],
-        [8, 1000, 32],
-        [8, 32, 80],
-        [1, 1000, 512],
-        [1, 4000, 512],
-        [1, 16000, 512],
-        [2, 1000, 32],
-        [2, 32, 1000],
-        [4, 1000, 32],
-        [4, 32, 1000],
-        [1000, 1, 256],
+        # YOLOv12x ultra-high resolution (2176x3840) attention BMM shapes
+        [12, 8160, 32],     # Multi-head attention: [heads, seq_len, head_dim]
+        [12, 32, 8160],     # Attention transpose: [heads, head_dim, seq_len]
+        [12, 8160, 8160],   # Attention scores: [heads, seq_len, seq_len]
+        [12, 32640, 32],    # Full attention: [heads, full_seq, head_dim]
+        [12, 96, 32640],    # Attention keys: [heads, head_dim, full_seq]
+        [1, 8160, 768],     # Flattened features: [batch, seq_len, features]
+        [1, 32640, 384],    # Large attention: [batch, seq_len, features]
+        [1, 1152, 68120],   # Very large attention: [batch, channels, spatial]
+        [8, 4080, 64],      # Medium attention: [heads, half_seq, head_dim]
+        [8, 2040, 96],      # Smaller attention: [heads, quarter_seq, head_dim]
+        [16, 1020, 48],     # High-head attention: [heads, eighth_seq, head_dim]
+        [4, 16320, 128],    # Low-head attention: [heads, double_seq, head_dim]
+        [6, 5440, 96],      # Mixed attention: [heads, mixed_seq, head_dim]
+        [24, 680, 32],      # Many-head attention: [heads, small_seq, head_dim]
+        [1, 136240, 256]    # Ultra-large attention: [batch, ultra_seq, features],
         [8, 32, 1000],
         [8, 1000, 1000],
         [1000, 8, 32],
@@ -62,7 +62,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
     ],
 )
 def test_bmm(device, input_shape):
-    """Test bmm operator with various input shapes from vision models"""
+    """Test bmm operator with YOLOv12x ultra-high resolution (2176x3840) attention shapes"""
     torch.manual_seed(0)
 
     try:

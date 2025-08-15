@@ -3,16 +3,23 @@ import torch
 import ttnn
 
 
-@pytest.mark.parametrize("input_shape_memory", [([1, 3, 1280, 1280], 19.5), ([1, 96, 640, 640], 75.0), ([1, 192, 320, 320], 37.5)])
+@pytest.mark.parametrize("input_shape_memory", [
+    ([1, 3, 2176, 3840], 150.0),   # YOLOv12x ultra-high-res input
+    ([1, 96, 1088, 1920], 380.0),  # After first conv stride=2
+    ([1, 192, 544, 960], 190.0),   # After second conv stride=2
+    ([1, 384, 272, 480], 95.0),    # After third conv stride=2
+    ([1, 768, 136, 240], 47.5),    # After fourth conv stride=2
+    ([1, 1152, 68, 120], 17.8),    # Attention feature maps
+])
 def test_oom_ones(device, input_shape_memory):
     """
-    Test ones operator with shapes that previously caused OOM failures.
+    Test ones operator with YOLOv12x ultra-high resolution shapes that cause OOM failures.
     These tests are expected to be SKIPPED due to out-of-memory conditions.
 
     This test serves to:
-    1. Document problematic input shapes for ones
+    1. Document problematic YOLOv12x ultra-high resolution input shapes for ones
     2. Verify OOM handling works correctly
-    3. Track memory requirements for optimization
+    3. Track memory requirements for YOLOv12x optimization
     """
     input_shape, expected_memory_mb = input_shape_memory
     torch.manual_seed(0)
@@ -20,7 +27,7 @@ def test_oom_ones(device, input_shape_memory):
     print(f"Testing ones with shape {input_shape} (Expected memory: {expected_memory_mb} MB)")
 
     try:
-        # Create ones tensor for YOLOv12 shapes
+        # Create ones tensor for YOLOv12x ultra-high resolution shapes
         if len(input_shape) == 4:
             ttnn_shape = [input_shape[0], input_shape[2], input_shape[3], input_shape[1]]  # NHWC for ttnn
         else:
@@ -43,7 +50,14 @@ def test_oom_ones(device, input_shape_memory):
         pytest.fail(f"Unexpected error for {input_shape}: {str(e)}")
 
 
-@pytest.mark.parametrize("input_shape_memory", [([1, 3, 1280, 1280], 19.5), ([1, 96, 640, 640], 75.0), ([1, 192, 320, 320], 37.5)])
+@pytest.mark.parametrize("input_shape_memory", [
+    ([1, 3, 2176, 3840], 150.0),   # YOLOv12x ultra-high-res input
+    ([1, 96, 1088, 1920], 380.0),  # After first conv stride=2
+    ([1, 192, 544, 960], 190.0),   # After second conv stride=2
+    ([1, 384, 272, 480], 95.0),    # After third conv stride=2
+    ([1, 768, 136, 240], 47.5),    # After fourth conv stride=2
+    ([1, 1152, 68, 120], 17.8),    # Attention feature maps
+])
 def test_memory_estimation_ones(input_shape_memory):
     """
     Test to estimate memory requirements without actually running on device.

@@ -7,31 +7,35 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [1, 32, 1, 1],
-        [1, 96, 1, 1],
-        [1, 144, 1, 1],
-        [1, 240, 1, 1],
-        [1, 480, 1, 1],
-        [1, 672, 1, 1],
-        [1, 1152, 1, 1],
-        [1, 40, 1, 1],
-        [1, 24, 1, 1],
-        [1, 192, 1, 1],
-        [1, 288, 1, 1],
-        [1, 576, 1, 1],
-        [1, 816, 1, 1],
-        [1, 1392, 1, 1],
-        [1, 2304, 1, 1],
-        [1, 48, 1, 1],
-        [1, 336, 1, 1],
-        [1, 960, 1, 1],
-        [1, 1632, 1, 1],
-        [1, 2688, 1, 1],
-        [1, 1, 1280, 800],
+        # YOLOv12x ultra-high resolution (2176x3840) sigmoid activation shapes
+        [1, 3, 2176, 3840],   # YOLOv12x ultra-high-res input
+        [1, 96, 1088, 1920],  # After first conv stride=2
+        [1, 192, 544, 960],   # After second conv stride=2
+        [1, 384, 272, 480],   # After third conv stride=2
+        [1, 768, 136, 240],   # After fourth conv stride=2
+        [1, 768, 68, 120],    # After fifth conv stride=2
+        [1, 96, 2176, 1920],  # Ultra-high-res feature maps
+        [1, 192, 1088, 960],  # High-res feature maps
+        [1, 384, 544, 480],   # Medium-res feature maps
+        [1, 768, 272, 240],   # Lower-res feature maps
+        [1, 1152, 136, 120],  # Attention feature maps
+        [1, 384, 136, 240],   # Detection head shapes
+        [1, 768, 68, 120],    # Detection head shapes
+        [1, 1152, 34, 60],    # Detection head shapes
+        [1, 32640, 384],      # Flattened attention shapes
+        [1, 8160, 768],       # Flattened feature shapes
+        [1, 3, 1088, 1920],   # Half-res YOLOv12x input
+        [1, 96, 544, 960],    # Quarter-res feature maps
+        [1, 192, 272, 480],   # Eighth-res feature maps
+        [1, 384, 136, 240],   # Sixteenth-res feature maps
+        [1, 1152, 1, 1],      # Channel-wise sigmoid (attention gates)
+        [1, 768, 1, 1],       # Channel-wise sigmoid (attention gates)
+        [1, 384, 1, 1],       # Channel-wise sigmoid (attention gates)
+        [1, 96, 1, 1]         # Channel-wise sigmoid (attention gates),
     ],
 )
 def test_sigmoid(device, input_shape):
-    """Test Sigmoid operator with various input shapes from vision models"""
+    """Test Sigmoid operator with YOLOv12x ultra-high resolution (2176x3840) input shapes"""
     torch.manual_seed(0)
 
     try:

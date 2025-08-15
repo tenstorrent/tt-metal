@@ -3,7 +3,14 @@ import torch
 import ttnn
 
 
-@pytest.mark.parametrize("input_shape_sizes_memory", [([1, 128, 1280, 800], [64, 64], 125.0), ([1, 256, 640, 400], [128, 128], 65.0), ([1, 512, 320, 200], [256, 256], 32.5)])
+@pytest.mark.parametrize("input_shape_sizes_memory", [
+    ([1, 96, 1088, 1920], [48, 48], 380.0),     # YOLOv12x after first conv
+    ([1, 192, 544, 960], [96, 96], 190.0),      # After second conv stride=2
+    ([1, 384, 272, 480], [192, 192], 95.0),     # After third conv stride=2
+    ([1, 768, 136, 240], [384, 384], 47.5),     # After fourth conv stride=2
+    ([1, 1152, 68, 120], [576, 576], 17.8),     # Attention feature maps
+    ([1, 2304, 34, 60], [1152, 1152], 8.9),     # Very high channel splits
+])
 def test_oom_split_with_sizes(device, input_shape_sizes_memory):
     """
     Test split_with_sizes operator with shapes that previously caused OOM failures.
@@ -48,7 +55,14 @@ def test_oom_split_with_sizes(device, input_shape_sizes_memory):
         pytest.fail(f"Unexpected error for {input_shape}: {str(e)}")
 
 
-@pytest.mark.parametrize("input_shape_sizes_memory", [([1, 128, 1280, 800], [64, 64], 125.0), ([1, 256, 640, 400], [128, 128], 65.0), ([1, 512, 320, 200], [256, 256], 32.5)])
+@pytest.mark.parametrize("input_shape_sizes_memory", [
+    ([1, 96, 1088, 1920], [48, 48], 380.0),     # YOLOv12x after first conv
+    ([1, 192, 544, 960], [96, 96], 190.0),      # After second conv stride=2
+    ([1, 384, 272, 480], [192, 192], 95.0),     # After third conv stride=2
+    ([1, 768, 136, 240], [384, 384], 47.5),     # After fourth conv stride=2
+    ([1, 1152, 68, 120], [576, 576], 17.8),     # Attention feature maps
+    ([1, 2304, 34, 60], [1152, 1152], 8.9),     # Very high channel splits
+])
 def test_memory_estimation_split_with_sizes(input_shape_sizes_memory):
     """
     Test to estimate memory requirements without actually running on device.

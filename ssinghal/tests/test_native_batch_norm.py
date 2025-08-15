@@ -7,31 +7,30 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 @pytest.mark.parametrize(
     "input_shape",
     [
-        # YOLOv12 high-resolution batch norm operations
-        [1, 3, 1280, 1280],    # YOLOv12 high-res input batch norm
-        [1, 96, 640, 640],     # After first conv stride=2
-        [1, 192, 320, 320],    # After second conv stride=2
-        [1, 384, 160, 160],    # After third conv stride=2
-        [1, 768, 80, 80],      # After fourth conv stride=2
-        [1, 768, 40, 40],      # After fifth conv stride=2
-        [1, 64, 1280, 800],    # High-res feature maps
-        [1, 128, 640, 400],    # Medium-res feature maps
-        [1, 256, 320, 200],    # Lower-res feature maps
-        [1, 32, 1280, 800],    # High-res channels
-        [1, 80, 640, 400],     # Detection head shapes
-        [1, 160, 320, 200],    # Detection head shapes
-        [1, 320, 160, 100],    # Detection head shapes
-        [1, 640, 80, 50],      # Detection head shapes
-        [1, 1280, 40, 25],     # Detection head shapes
-        [1, 3, 640, 640],      # Standard YOLOv12 input
-        [1, 96, 320, 320],     # Standard feature maps
-        [1, 192, 160, 160],    # Standard feature maps
-        [1, 384, 80, 80],      # Standard feature maps
-        [1, 768, 40, 40],      # Standard feature maps
+        # YOLOv12x ultra-high resolution (2176x3840) batch norm operations
+        [1, 3, 2176, 3840],    # YOLOv12x ultra-high-res input batch norm
+        [1, 96, 1088, 1920],   # After first conv stride=2
+        [1, 192, 544, 960],    # After second conv stride=2
+        [1, 384, 272, 480],    # After third conv stride=2
+        [1, 768, 136, 240],    # After fourth conv stride=2
+        [1, 768, 68, 120],     # After fifth conv stride=2
+        [1, 96, 2176, 1920],   # Ultra-high-res feature maps
+        [1, 192, 1088, 960],   # High-res feature maps
+        [1, 384, 544, 480],    # Medium-res feature maps
+        [1, 768, 272, 240],    # Lower-res feature maps
+        [1, 1152, 136, 120],   # Attention feature maps
+        [1, 384, 136, 240],    # Detection head shapes
+        [1, 768, 68, 120],     # Detection head shapes
+        [1, 1152, 34, 60],     # Detection head shapes
+        [1, 3, 1088, 1920],    # Half-res YOLOv12x input
+        [1, 96, 544, 960],     # Quarter-res feature maps
+        [1, 192, 272, 480],    # Eighth-res feature maps
+        [1, 384, 136, 240],    # Sixteenth-res feature maps
+        [1, 768, 68, 120],     # Thirty-second-res feature maps
     ],
 )
 def test_native_batch_norm(device, input_shape):
-    """Test native_batch_norm operator with YOLOv12 high-resolution input shapes"""
+    """Test native_batch_norm operator with YOLOv12x ultra-high resolution (2176x3840) input shapes"""
     torch.manual_seed(0)
 
     try:
@@ -52,13 +51,13 @@ def test_native_batch_norm(device, input_shape):
         torch_input_ttnn = torch_input.permute(0, 2, 3, 1)
 
         ttnn_input = ttnn.from_torch(
-            torch_input_ttnn, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+            torch_input_ttnn, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
         )
         ttnn_weight = ttnn.from_torch(
-            weight, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+            weight, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
         )
         ttnn_bias = ttnn.from_torch(
-            bias, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+            bias, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
         )
 
         # Perform batch norm
