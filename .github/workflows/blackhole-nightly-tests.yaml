@@ -56,7 +56,7 @@ jobs:
       extra-tag: ${{ matrix.test-group.extra-tag }}
       num_devices: ${{ matrix.test-group.num_devices }}
   blackhole-multi-card-unit-tests:
-    needs: build-artifact
+    needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
