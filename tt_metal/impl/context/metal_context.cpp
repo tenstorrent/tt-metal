@@ -615,7 +615,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
                 log_warning(
                     tt::LogAlways,
                     "Detected dispatch kernels still running but failed to complete an early exit. This may happen "
-                    "from time to time following a reset, continuing to FW intialization...");
+                    "from time to time following a reset, continuing to FW initialization...");
             }
         }
     }

@@ -302,7 +302,7 @@ int main(int argc, char** argv) {
         if (pass) {
             log_info(LogTest, "Eltwise binary ran successfully");
         } else {
-            log_error(LogTest, "Eltwise binary did not run sucessfully!");
+            log_error(LogTest, "Eltwise binary did not run successfully!");
         }
 
         ////////////////////////////////////////////////////////////////////////////

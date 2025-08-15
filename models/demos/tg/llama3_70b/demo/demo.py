@@ -86,9 +86,9 @@ def get_prompts_for_compilation(tokenized, prompts):
     tokenized_len = [len(t) for t in tokenized]
     # pad tokenized_len to be power of 2 and 32 at least
     padded_tokenized_len = [max(32, nearest_power_of_2(l)) for l in tokenized_len]
-    # Get indexes of first occurences of each unique length
+    # Get indexes of first occurrences of each unique length
     unique_lengths = list(set(padded_tokenized_len))
-    # Get indexes of unique_lenghts in tokenized_len
+    # Get indexes of unique_lengths in tokenized_len
     indexes = [padded_tokenized_len.index(l) for l in unique_lengths]
     # Get tokenized and prompts for compilation
     return [tokenized[i] for i in indexes], [prompts[i] for i in indexes]

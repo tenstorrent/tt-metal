@@ -64,7 +64,7 @@ void MAIN {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;   // E[x^2] partial reduce
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;  // E[x^2] partials recieved from other cores
+    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;  // E[x^2] partials received from other cores
     const uint32_t cb_reduction_out = (!use_two_stage_reduce or is_second_stage_reader) ? cb_out : cb_ex2;
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow

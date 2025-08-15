@@ -159,7 +159,7 @@ in `fabric_edm_packet_header.hpp`.
 
 ## Channel structure
 
-Each EDM channel is built from one or more buffers. Each buffer is the same size and can hold atmost one packet.
+Each EDM channel is built from one or more buffers. Each buffer is the same size and can hold at most one packet.
 Neighbouring packets occupy nehighouring buffers - with the exception of the last buffer index. The next packet after a
 write into the last buffer index will wrap around to the first buffer index. Even if packets do not occupy the full
 buffer, subsequent packets will always be written into the next logical buffer. A gap will exist in memory but the EDM
@@ -2126,12 +2126,12 @@ void kernel_main() {
         tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
-    // create the local receiver channnel buffers with input array of number of buffers
+    // create the local receiver channel buffers with input array of number of buffers
     auto local_receiver_channels =
         tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
-    // create the sender channnel buffers with input array of number of buffers
+    // create the sender channel buffers with input array of number of buffers
     auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
@@ -2165,7 +2165,7 @@ void kernel_main() {
             local_sender_connection_info_addresses[i]);
         connection_worker_info_ptr->edm_read_counter = 0;
     }
-    // create the sender channnel worker interfaces with input array of number of buffers
+    // create the sender channel worker interfaces with input array of number of buffers
     auto local_sender_channel_worker_interfaces =
         tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});

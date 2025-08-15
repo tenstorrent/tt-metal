@@ -615,7 +615,7 @@ struct StreamBinaryParams : StreamUnaryBinaryCommonParams {
     std::uint32_t dropout_prob;
 
     StreamBinaryParams() :
-        // MM Feb 15 2022: Changed std::memset to this member intialization list.
+        // MM Feb 15 2022: Changed std::memset to this member initialization list.
         // If you check the assembly it does actually boil down to a memset, and
         // it's actually more efficient (in general) because it won't try to
         // default-construct each member before calling the cosntructor body.
@@ -685,7 +685,7 @@ struct BinaryOperationParams : UnaryOperationParams {
     std::uint32_t input_B_stream_id;
 
     BinaryOperationParams() :
-        // MM Feb 15 2022: Changed std::memset to this member intialization list.
+        // MM Feb 15 2022: Changed std::memset to this member initialization list.
         // If you check the assembly it does actually boil down to a memset, and
         // it's actually more efficient (in general) because it won't try to
         // default-construct each member before calling the cosntructor body.

@@ -467,8 +467,8 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
 }
 
 void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries) {
-    // Try inserting an empry vector, as that is cheap to construct
-    // and avoids an additonal move.
+    // Try inserting an empty vector, as that is cheap to construct
+    // and avoids an additional move.
     auto pair = binaries_.insert({build_key, {}});
     if (pair.second) {
         pair.first->second = std::move(binaries);

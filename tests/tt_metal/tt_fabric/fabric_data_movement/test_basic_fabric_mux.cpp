@@ -437,7 +437,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     uint8_t num_senders_per_chip = num_senders / (num_devices - 1);
     uint8_t num_receivers_per_chip = num_receivers / (num_devices - 1);
 
-    // if the sender-reciever split is uniform, i.e., same number of senders and receivers on a device,
+    // if the sender-receiver split is uniform, i.e., same number of senders and receivers on a device,
     // the number of full size and header only channels
     // will be the same across devices, else the deivces (following the 1st one
     // in the sequence) will have unequal number of full size and header only channels

@@ -43,7 +43,7 @@ using byte = std::uint8_t;
 // supported through byte enables. Register indices and contents are defined in local_regs.yaml.
 #define REGFILE_BASE 0xFFE00000  // 0xFFE00000 - 0xFFE3FFFF
 
-// PC buffer is used to pass kernel IDs and paramters from Brisc to Triscs, and also as a sync point -- a read from pc
+// PC buffer is used to pass kernel IDs and parameters from Brisc to Triscs, and also as a sync point -- a read from pc
 // buffer+1 address will not return until that thread is idle.
 #define PC_BUF_BASE 0xFFE80000   // 0xFFE80000 - 0xFFEBFFFF
 #define PC1_BUF_BASE 0xFFE90000  // 0xFFE80000 - 0xFFEBFFFF

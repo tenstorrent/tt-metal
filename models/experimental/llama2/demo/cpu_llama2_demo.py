@@ -51,6 +51,6 @@ def test_cpu_demo(prompt, num_words, model_location_generator):
 
     tokens = tokenizer.tokenize(output)
 
-    # print pytorch generated reponse ================================================
+    # print pytorch generated response ================================================
     logger.debug(f"CPU's generated tokens: {tokens}")
     logger.info(f"CPU's predicted Output: {output}")

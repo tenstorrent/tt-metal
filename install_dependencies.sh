@@ -441,7 +441,7 @@ configure_hugepages() {
         return
     fi
 
-    # Fetch the lastest tt-tools release link and name of package
+    # Fetch the latest tt-tools release link and name of package
     TT_TOOLS_LINK=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
     TT_TOOLS_NAME=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .name')
 

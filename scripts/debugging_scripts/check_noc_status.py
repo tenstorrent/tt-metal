@@ -69,7 +69,7 @@ def check_noc_status(
                 break
 
             if reg_val != var_val:
-                # Store name of register and variable where mismatch occured along side their values
+                # Store name of register and variable where mismatch occurred along side their values
                 message += f"    {reg} {var} {reg_val} {var_val}\n"
                 passed = False
 
