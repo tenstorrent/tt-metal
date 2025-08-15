@@ -121,12 +121,13 @@ FORCE_INLINE void cq_noc_async_write_init_state(
     }
     WAYPOINT("CNID");
 
-    constexpr bool posted = false;
+    constexpr enum CQNocCmdFlags cmd_flags = static_cast<enum CQNocCmdFlags>(
+        (mcast ? CQ_NOC_CMD_FLAG_MCAST : 0x0) | (linked ? CQ_NOC_CMD_FLAG_LINKED : 0x0));
     constexpr uint32_t vc = mcast ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
 
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, mcast ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
 
-    noc_write_init_state<cmd_buf, mcast, linked, posted>(noc, vc);
+    noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
     cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size);
 }
 
@@ -148,32 +149,11 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
         WAYPOINT("NISD");
     }
 
-    if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_AT_DATA, val);
-    }
-    if constexpr (flags & CQ_NOC_FLAG_DST) {
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_LO, (uint32_t)(dst_addr));
-    }
-    if constexpr (flags & CQ_NOC_FLAG_NOC) {
-#ifdef ARCH_BLACKHOLE
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_MID, (uint32_t)(dst_addr >> 32) & 0x1000000F);
-#endif
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_WR_REG_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    }
-    if constexpr (flags & CQ_NOC_INLINE_FLAG_BE) {
-        uint32_t be32 = be;
-        uint32_t be_shift = (dst_addr & (NOC_WORD_BYTES - 1));
-        be32 = (be32 << be_shift);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_AT_LEN_BE, be32);
-    }
     if constexpr (send) {
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc, NCRISC_WR_REG_CMD_BUF);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
+
+    noc_inline_dw_write_with_state<flags, wait, send>(dst_addr, val, be);
 #endif
 }
 
@@ -197,19 +177,12 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
     }
     WAYPOINT("NIID");
 
-    constexpr bool static_vc_alloc = true;
-    constexpr bool mcast = false;
-    constexpr bool posted = false;
     constexpr uint32_t static_vc = NOC_UNICAST_WRITE_VC;
+    constexpr enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp;
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(
+        noc, (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
 
-    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, mcast ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
-    constexpr uint32_t noc_cmd_field = (static_vc_alloc ? NOC_CMD_VC_STATIC : 0x0) | NOC_CMD_STATIC_VC(static_vc) |
-                                       NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_WR_INLINE |
-                                       (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
-                                       (posted ? 0x0 : NOC_CMD_RESP_MARKED);
-
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_CTRL, noc_cmd_field);
-
+    noc_inline_dw_write_init_state<cmd_flags>(noc, static_vc);
     cq_noc_inline_dw_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send>(dst_addr, val, be);
 #endif
 }
