@@ -1480,7 +1480,10 @@ class ModelArgs:
                     )
                     self.hidden_dim = padded_hidden_dim
 
-        self.layer_types = text_config.get("layer_types", None)
+        layer_types = text_config.get("layer_types", None)
+        self.layer_is_sliding = (
+            [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
+        )
 
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
