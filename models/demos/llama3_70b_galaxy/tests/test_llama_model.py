@@ -51,6 +51,8 @@ from models.utility_functions import skip_for_grayskull
         "default_attention",
     ),
 )
+@pytest.mark.parametrize("is_cur_pos_sharded", (True,))
+@pytest.mark.parametrize("is_page_table_sharded", (True,))
 @pytest.mark.parametrize(
     "page_params",
     [{"page_block_size": 64, "page_max_num_blocks": 4096}],
@@ -101,6 +103,8 @@ def test_llama_model_inference(
     mesh_device,
     reset_seeds,
     ensure_gc,
+    is_cur_pos_sharded,
+    is_page_table_sharded,
 ):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
@@ -208,7 +212,11 @@ def test_llama_model_inference(
             batch_size,
             paged_attention_config.max_num_blocks // batch_size,
         )
-        page_table = page_table.repeat(model_args.sub_core_grids.num_cores(), 1)
+        page_table_chunks = page_table.split(batch_size // model_args.cluster_shape[1], dim=0)
+        repeated_page_table_chunks = [
+            chunk.repeat(model_args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
+        ]
+        page_table = torch.cat(repeated_page_table_chunks, dim=0)
         page_table_shard_spec = ttnn.ShardSpec(
             model_args.sub_core_grids,
             (
@@ -268,8 +276,6 @@ def test_llama_model_inference(
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
-    is_cur_pos_sharded = True
-    cur_pos_mesh_shard_dim = 1 if is_cur_pos_sharded else 0
     if is_cur_pos_sharded:
         current_pos_sram = torch.tensor(
             [[generation_start_pos for _ in range(batch)]] * model_args.sub_core_grids.num_cores()
@@ -286,7 +292,7 @@ def test_llama_model_inference(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, cur_pos_mesh_shard_dim) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
         memory_config=cur_pos_memory_config,
@@ -334,17 +340,18 @@ def test_llama_model_inference(
                 ref_output = reference_model(pt_decode_input, current_pos[0])
 
             # Increment position
-            current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
-            current_pos_sram = torch.tensor(
-                [[generation_start_pos + i for _ in range(batch)]] * model_args.sub_core_grids.num_cores()
-            )
+            current_pos = torch.full((batch,), generation_start_pos + i)
+
+            current_pos_sram = torch.full((model_args.sub_core_grids.num_cores(), batch), generation_start_pos + i)
             current_pos_tensor = ttnn.from_torch(
                 current_pos_sram,
                 device=mesh_device,
                 dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device,
-                    dims=(None, cur_pos_mesh_shard_dim) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                    dims=(None, 1 if is_cur_pos_sharded else 0)
+                    if (model_args.is_galaxy and batch_size > 1)
+                    else (None, None),
                     mesh_shape=model_args.cluster_shape,
                 ),
                 memory_config=cur_pos_memory_config,

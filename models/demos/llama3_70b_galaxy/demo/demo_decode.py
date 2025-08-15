@@ -119,6 +119,8 @@ def run_llama3_demo(
     start_pos,
     enable_prefetcher_performance_mode=True,
     galaxy_type="4U",
+    is_cur_pos_sharded=False,
+    is_page_table_sharded=False,
 ):
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -196,7 +198,6 @@ def run_llama3_demo(
     profiler.end("weight_loading")
 
     page_table_tt = None
-    is_page_table_sharded = True
     if paged_attention:
         paged_cache_max_seq_len = (
             paged_attention_config.block_size
@@ -217,8 +218,16 @@ def run_llama3_demo(
             model_args.batch_size_per_device_group,
             paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
+
+        # OPTIMIZATION: We repeat the page table on each core in L1
         if is_page_table_sharded:
-            page_table = page_table.repeat(model_args.sub_core_grids.num_cores(), 1)
+            # We repeat each batch by num_cores_to_shard times then concat them back together
+            # This tensor is sharded along the height first across devices (/4) then within device (/50) on dim 0
+            page_table_chunks = page_table.split(8, dim=0)
+            repeated_page_table_chunks = [
+                chunk.repeat(model_args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
+            ]
+            page_table = torch.cat(repeated_page_table_chunks, dim=0)
             page_table_shard_spec = ttnn.ShardSpec(
                 model_args.sub_core_grids,
                 (
@@ -230,7 +239,6 @@ def run_llama3_demo(
             page_table_memory_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
             )
-
             page_table_tt = ttnn.from_torch(
                 page_table,
                 device=mesh_device,
@@ -299,11 +307,14 @@ def run_llama3_demo(
 
     # Defining core grids
     logger.info("Starting decode...")
+
     # Create initial current position tensors
-    is_cur_pos_sharded = True
     decoding_pos = [start_pos] * batch_size
-    current_pos_dram = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+    current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+
+    # OPTIMIZATION: sharding the current position tensor on each core
     if is_cur_pos_sharded:
+        # Each core will have a copy of the current position tensor in L1
         current_pos_sram = torch.tensor(
             [[decoding_pos[b] for b in range(batch_size)]] * model_args.sub_core_grids.num_cores()
         )
@@ -314,7 +325,7 @@ def run_llama3_demo(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
         )
     current_pos_tensor = ttnn.from_torch(
-        current_pos_sram if is_cur_pos_sharded else current_pos_dram,
+        current_pos_sram if is_cur_pos_sharded else current_pos,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
@@ -324,7 +335,7 @@ def run_llama3_demo(
     )
     logger.info("Current pos tensor done")
     # Get cos/sin matrices for the current position of each user
-    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos_dram, return_rot_idxs=True)
+    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     logger.info("Rot mats done")
 
@@ -416,7 +427,7 @@ def run_llama3_demo(
 
     # Reset the decoding position for the proper run of the model
     current_pos_reset = ttnn.from_torch(
-        current_pos_sram if is_cur_pos_sharded else current_pos_dram,
+        current_pos_sram if is_cur_pos_sharded else current_pos,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
@@ -435,7 +446,7 @@ def run_llama3_demo(
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos_dram, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     profiler.end(f"capture_trace")
@@ -634,7 +645,7 @@ def run_llama3_demo(
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
-    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos, is_cur_pos_sharded, is_page_table_sharded",
     [
         (  # full demo, batch 32
             "instruct",
@@ -650,6 +661,8 @@ def run_llama3_demo(
             {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # quick 1L demo
             "random",
@@ -665,6 +678,8 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # Stress test: 4*128k generation length
             "instruct",
@@ -680,6 +695,8 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},  # sampling_params
             True,  # stress_test
             0,  # start_pos
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # mini stress test
             "instruct",
@@ -695,6 +712,8 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # 10 layers for devive perf measurements
             "instruct",
@@ -710,6 +729,8 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # ND hang test
             "instruct",
@@ -725,6 +746,8 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
     ],
     ids=[
@@ -782,6 +805,8 @@ def test_llama_demo(
     reset_seeds,
     request,
     galaxy_type,
+    is_cur_pos_sharded,
+    is_page_table_sharded,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -822,4 +847,6 @@ def test_llama_demo(
         start_pos=start_pos,
         enable_prefetcher_performance_mode=enable_pf_perf_mode,
         galaxy_type=galaxy_type,
+        is_cur_pos_sharded=is_cur_pos_sharded,
+        is_page_table_sharded=is_page_table_sharded,
     )

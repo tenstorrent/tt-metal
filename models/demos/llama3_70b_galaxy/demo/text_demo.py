@@ -211,7 +211,7 @@ def create_tt_model(
             80,  # num layers
             False,  # print_outputs
             True,  # is_cur_pos_sharded
-            False,  # is_page_table_sharded
+            True,  # is_page_table_sharded
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -229,6 +229,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
@@ -246,6 +248,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
@@ -263,6 +267,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # evals-long-prompts run (Throughput) - 1 user, smaller prompts, batch repeat 12
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_very_long.json",  # input_prompts
@@ -280,8 +286,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # Repeat2 (Batch-1) run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -892,8 +898,6 @@ def test_demo_text(
         top_1_accs = []
         read_events = []
         tt_out_toks = []
-
-        breakpoint()
 
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time

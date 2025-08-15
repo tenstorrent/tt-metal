@@ -357,7 +357,7 @@ class TtTransformer(LightweightModule):
         )
         if page_table is not None:
             if is_page_table_sharded:
-                page_table_chunks = page_table.split(8, dim=0)
+                page_table_chunks = page_table.split(B // self.args.cluster_shape[1], dim=0)
                 repeated_page_table_chunks = [
                     chunk.repeat(self.args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
                 ]
