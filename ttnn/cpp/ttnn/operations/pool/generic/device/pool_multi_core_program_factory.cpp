@@ -401,7 +401,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         tile_tmp_cb_id = next_cb_index++;
         printf("tile_tmp cb_page_size: %d, tile_tmp num pages: %d\n", params.nbytes * tile_elems, 1);
-        tt::tt_metal::create_cb(tile_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.data_format);
+        tt::tt_metal::create_cb(tile_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.index_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_tmp_cb_id, params.nbytes * tile_elems, 1);
         tile_idx_tmp_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(
