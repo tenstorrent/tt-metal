@@ -13,8 +13,6 @@
 #include "tt_metal/hw/inc/compile_time_args.h"
 #include "core_config.h"
 
-// #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp"
-
 // Compile-time configuration - passed as compile_args from host
 constexpr size_t N_CHUNKS = get_compile_time_arg_val(0);
 constexpr size_t RX_N_PKTS = get_compile_time_arg_val(1);
@@ -22,6 +20,8 @@ constexpr size_t CHUNK_N_PKTS = get_compile_time_arg_val(2);
 constexpr size_t PACKET_SIZE_BYTES = get_compile_time_arg_val(3);
 constexpr bool BIDIRECTIONAL_MODE = get_compile_time_arg_val(4);
 constexpr size_t N_SRC_CHANS = get_compile_time_arg_val(5);
+
+using noc_addr_t = uint64_t;
 
 enum class WRITE_OUT_MODE {
     ALL_AT_ONCE,
@@ -89,11 +89,9 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
             ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
             1);
         while (erisc_info->channels[0].bytes_sent != 0) {
-            run_routing();
         }
     } else {
         while (erisc_info->channels[0].bytes_sent == 0) {
-            run_routing();
         }
         eth_receiver_channel_done(0);
     }
@@ -122,25 +120,9 @@ void process_send_side(
     uint32_t message_size) {
     // Process Ack
 
-    // DPRINT << "Sender\n";
-    // DPRINT << "\tsendpool empty: " << (uint32_t)send_pool.is_empty() << "\n";
-    // DPRINT << "\tcurrent chunk ptr done: " << (uint32_t)current_chunk_ptr.is_done() << "\n";
-    // DPRINT << "\topen chunks cb empty: " << (uint32_t)open_chunks_cb.is_empty() << "\n";
-
     auto n_unsent_messages = get_ptr_val(local_src_ch_flow_control_stream_id);
-    if (n_unsent_messages > 0) {
-        DPRINT << "ch " << (uint32_t)local_src_ch_flow_control_stream_id
-               << " n_unsent_messages: " << (uint32_t)n_unsent_messages << "\n";
-    }
     // Try to send from current chunk
     if (!eth_txq_is_busy() && n_unsent_messages > 0) {
-        if (current_chunk_ptr.is_done()) {
-            DPRINT << "ERROR CONDITION - CURRENT CHUNK IS EXHAUSTED BUT WE ARE TRYING TO SEND FROM IT\n";
-            DPRINT << "\tcurrent_chunk_ptr.current_ptr: " << (uint32_t)(current_chunk_ptr.current_ptr) << "\n";
-            DPRINT << "\tcurrent_chunk_ptr.end_ptr: " << (uint32_t)(current_chunk_ptr.end_ptr) << "\n";
-            // while (1) {run_routing();};
-        }
-
         ASSERT(!open_chunks_cb.is_empty()); // should not be possible to receive a message if this is false
         ASSERT(!current_chunk_ptr.is_done()); // should not be possible to receive a message if this is false
 
@@ -149,19 +131,13 @@ void process_send_side(
         // Fill packet data
         auto src_addr = current_chunk_ptr.get_current_ptr();
         reinterpret_cast<volatile uint32_t*>(src_addr)[0] = local_src_ch_ack_stream_id;
-        DPRINT << "WRITE stream id(" << (uint32_t)local_src_ch_ack_stream_id << ") to " << (uint32_t)src_addr << "\n";
         auto dest_addr = receiver_buffer_addresses[sender_view_rx_buf_wr_ptr.get_buffer_index()];
-        DPRINT << "ch " << (uint32_t)local_src_ch_flow_control_stream_id << " Sending packet from "
-               << (uint32_t)src_addr << "\n\tto " << (uint32_t)dest_addr << "\n\tof size " << (uint32_t)message_size
-               << "\n";
 
         // Send packet using the buffer's channel ID
         eth_send_bytes_over_channel_payload_only_unsafe_one_packet((uint32_t)src_addr, dest_addr, message_size);
 
-        DPRINT << "busy wait\n";
         while (eth_txq_is_busy()) {
         }
-        DPRINT << "\tdone\n";
         notify_remote_receiver_of_new_packet();
 
         current_chunk_ptr.increment();
@@ -170,7 +146,6 @@ void process_send_side(
         messages_sent++;
 
         sender_view_rx_buf_wr_ptr.increment();
-        DPRINT << "\tnew rx wrptr: " << (uint32_t)sender_view_rx_buf_wr_ptr.get_buffer_index() << "\n";
         unacked_sends++;
     }
 
@@ -182,23 +157,19 @@ void process_send_side(
         bool can_release_chunk = current_chunk_ack_index.get() == CHUNK_N_PKTS;
         uint64_t start_cycles;
         uint64_t end_cycles;
+        start_cycles = eth_read_wall_clock();
         if (can_release_chunk) {  // 22 cycles!??!?! (44 -> 22 if I don't include the branch condition in the timing)
-            DPRINT << "Releasing chunk\n";
-            start_cycles = eth_read_wall_clock();
             auto chunk = open_chunks_cb.pop();  // avg 7.3 cycles
             send_pool.return_chunk(chunk);      // 16 cycles
             current_chunk_ack_index = BufferIndex{0};
-            end_cycles = eth_read_wall_clock();
         }
+        end_cycles = eth_read_wall_clock();
         sender_mark_ack_processed(local_src_ch_ack_stream_id);
 
-        // Send completion ack (space available) to sender
-        // noc_semaphore_inc(remote_src_ch_semaphore_ack_addr, 1);
-
-        if (can_release_chunk) {
-            timing_stats->release_count++;
-            timing_stats->total_release_cycles += (end_cycles - start_cycles);
-        }
+        // if (can_release_chunk) {
+        timing_stats->release_count++;
+        timing_stats->total_release_cycles += (end_cycles - start_cycles);
+        // }
         messages_acked++;
         unacked_sends--;
     }
@@ -214,9 +185,6 @@ void process_send_side(
         size_t new_chunk_base_address = new_chunk->get_buffer_address(BufferIndex{0});
         size_t new_chunk_field_for_sender = tt::tt_fabric::FabricChunkMessageAvailableMessage::pack(new_chunk_base_address);
         // notify the worker about new chunk availability
-        DPRINT << "\tnotifying worker at " << (uint64_t)remote_src_new_chunk_noc_addr << " with new chunk value "
-               << HEX() << (uint32_t)new_chunk_field_for_sender << " base addr " << (uint32_t)new_chunk_base_address
-               << DEC() << "\n";
         noc_inline_dw_write(remote_src_new_chunk_noc_addr, new_chunk_field_for_sender);
 
         current_chunk_ptr.reset_to(reinterpret_cast<uint32_t*>(new_chunk_base_address));
@@ -230,116 +198,18 @@ void process_send_side(
     DPRINT << "end func\n";
 }
 
-void kernel_main() {
-    // DPRINT << "Start\n";
-    init_ptr_val(pkts_received_stream_id, 0);
-
-    for (size_t i = 0; i < N_SRC_CHANS; i++) {
-        init_ptr_val(i, 0);
-        init_ptr_val(N_SRC_CHANS + i, 0);
-    }
-
-    DPRINT << "my_x: " << (uint32_t)my_x[0] << "\n";
-    DPRINT << "my_y: " << (uint32_t)my_y[0] << "\n";
-
-    uint32_t arg_idx = 0;
-    const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t total_messages = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t message_size = get_arg_val<uint32_t>(arg_idx++);
-    bool is_sender_offset_0 = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const uint32_t send_buffer_base = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t recv_buffer_base = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t timing_stats_addr = get_arg_val<uint32_t>(arg_idx++);
-
-    // Where receiver will write to
-    uint32_t receiver_channel_write_out_l1_bank_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t fabric_mcast_factor = get_arg_val<uint32_t>(arg_idx++);
-
-    // DPRINT << "Checkpoint 2\n";
-    auto remote_src_noc_x_ords = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
-    arg_idx += N_SRC_CHANS;
-    auto remote_src_noc_y_ords = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
-    arg_idx += N_SRC_CHANS;
-    auto remote_src_semaphore_ack_addrs = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
-    arg_idx += N_SRC_CHANS;
-    auto remote_src_new_chunk_addrs = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
-    arg_idx += N_SRC_CHANS;
-    auto dest_noc_buffer_addrs = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
-    arg_idx += N_SRC_CHANS;
-
-    // DELETE ARGS
-    // auto local_src_ch_semaphores = get_arg_val<uint32_t*>(arg_idx);
-    // arg_idx += N_SRC_CHANS;
-
-    // DPRINT << "Checkpoint 3 N_SRC_CHANS: " << (uint32_t)N_SRC_CHANS << "\n";
-    using noc_addr_t = uint64_t;
-    std::array<noc_addr_t, N_SRC_CHANS> remote_src_ch_semaphore_ack_addrs;
-    std::array<noc_addr_t, N_SRC_CHANS> src_ch_new_chunk_addrs;
-    std::array<noc_addr_t, N_SRC_CHANS> dest_noc_write_addrs;
-    std::array<noc_addr_t, 10> fabric_fwd_addrs;
-    for (size_t i = 0; i < N_SRC_CHANS; i++) {
-        remote_src_ch_semaphore_ack_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_semaphore_ack_addrs[i]));
-        src_ch_new_chunk_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_new_chunk_addrs[i]));
-        dest_noc_write_addrs[i] = get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], dest_noc_buffer_addrs[i]);
-    }
-    for (size_t i = 0; i < fabric_mcast_factor; i++) {
-        fabric_fwd_addrs[i] = get_noc_addr(
-            remote_src_noc_x_ords[i % N_SRC_CHANS],
-            remote_src_noc_y_ords[i % N_SRC_CHANS],
-            receiver_channel_write_out_l1_bank_addr);
-    }
-
-    // DPRINT << "Checkpoint 4\n";
-    // Initialize timing stats at address provided by host
-    timing_stats = reinterpret_cast<volatile TimingStats*>(timing_stats_addr);
-    timing_stats->total_acquire_cycles = 0;
-    timing_stats->total_release_cycles = 0;
-    timing_stats->acquire_count = 0;
-    timing_stats->release_count = 0;
-
-    // Initialize separate channel buffer pools for send and receive
-
-    // DPRINT << "Checkpoint 5\n";
-    // Initialize pools dynamically based on N_CHUNKS
-    std::array<size_t, N_CHUNKS> send_chunk_base_addresses;
-    std::array<chunk_forward_iterator_t, N_SRC_CHANS> sender_channel_wrptrs;
-    std::array<size_t, RX_N_PKTS> recv_buffer_addresses;
-
-    for (uint32_t i = 0; i < N_CHUNKS; i++) {
-        send_chunk_base_addresses[i] = send_buffer_base + i * PACKET_SIZE_BYTES * CHUNK_N_PKTS;
-        DPRINT << "send_chunk_base_addresses[" << (uint32_t)i << "]: " << (uint32_t)send_chunk_base_addresses[i]
-               << "\n";
-        DPRINT << "\tPACKET_SIZE_BYTES: " << (uint32_t)PACKET_SIZE_BYTES << "\n";
-        DPRINT << "\tCHUNK_N_PKTS: " << (uint32_t)CHUNK_N_PKTS << "\n";
-        DPRINT << "\tsend_buffer_base: " << (uint32_t)send_buffer_base << "\n";
-    }
-    for (uint32_t i = 0; i < RX_N_PKTS; i++) {
-        recv_buffer_addresses[i] = recv_buffer_base + i * PACKET_SIZE_BYTES;
-        DPRINT << "recv_buffer_addresses[" << (uint32_t)i << "]: " << (uint32_t)recv_buffer_addresses[i] << "\n";
-        DPRINT << "\tPACKET_SIZE_BYTES: " << (uint32_t)PACKET_SIZE_BYTES << "\n";
-        DPRINT << "\trecv_buffer_base: " << (uint32_t)recv_buffer_base << "\n";
-    }
-
-    tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS> send_pool;
-    send_pool.init(send_chunk_base_addresses, PACKET_SIZE_BYTES, sizeof(eth_channel_sync_t));
-
-    // Set up channels for bidirectional communication if enabled
-    const uint32_t messages_per_direction = N_SRC_CHANS == 0 ? total_messages : total_messages * N_SRC_CHANS;
-
-    // Setup handshake
-    // DPRINT << "Setup handshake\n";
-    eth_setup_handshake(handshake_addr, is_sender_offset_0);
-    // DPRINT << "Handshake done\n";
-
-    uint32_t messages_acked = 0;
-    uint32_t messages_sent = 0;
-    uint32_t messages_received = 0;
-    uint32_t total_messages_target = messages_per_direction;
-    DPRINT << "total_messages_target: " << (uint32_t)total_messages_target << "\n";
-
-    uint32_t idle_count = 0;
-    const uint32_t idle_max = 100000;
-
+void main_loop(
+    volatile TimingStats* timing_stats,
+    size_t fabric_mcast_factor,
+    bool is_sender_offset_0,
+    uint32_t total_messages_target,
+    std::array<size_t, RX_N_PKTS>& recv_buffer_addresses,
+    uint32_t message_size,
+    std::array<noc_addr_t, N_SRC_CHANS>& remote_src_ch_semaphore_ack_addrs,
+    std::array<noc_addr_t, N_SRC_CHANS>& src_ch_new_chunk_addrs,
+    std::array<noc_addr_t, N_SRC_CHANS>& dest_noc_write_addrs,
+    std::array<noc_addr_t, 10>& fabric_fwd_addrs,
+    tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>& send_pool) {
 #if defined(ARCH_WORMHOLE)
     // acq: 6.00
     // rel: 9.5
@@ -356,12 +226,17 @@ void kernel_main() {
         open_chunks_cbs;
 #endif
 
-
+    uint32_t messages_acked = 0;
+    uint32_t messages_sent = 0;
+    uint32_t messages_received = 0;
+    uint32_t unacked_sends = 0;
+    uint32_t n_sender_channels_done = 0;
+    uint32_t idle_count = 0;
+    const uint32_t idle_max = 100000;
+    std::array<chunk_forward_iterator_t, N_SRC_CHANS> sender_channel_wrptrs;
     tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> sender_view_rx_buf_wr_ptr;
     tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> receiver_rd_ptr;
     tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> receiver_wr_ptr;
-    uint32_t unacked_sends = 0;
-    uint32_t n_sender_channels_done = 0;
     std::array<bool, N_SRC_CHANS> completed_sender_channels;
     std::array<size_t, N_SRC_CHANS> sender_channels_acks_received;
     std::array<BufferIndex, N_SRC_CHANS> current_chunk_ack_indices;
@@ -371,20 +246,13 @@ void kernel_main() {
         sender_channels_acks_received[i] = 0;
         current_chunk_ack_indices[i] = BufferIndex{0};
     }
-    {
-        DeviceZoneScopedN("FABRIC-ELASTIC-CHANNELS-TEST");
+    size_t write_outs_remaining = 0;
+    bool send_ack = false;
 
-        auto test_start_cycles = eth_read_wall_clock();
-
-        // DPRINT << "Main loop\n";
-
-        size_t write_outs_remaining = 0;
-        bool send_ack = false;
-
-        while (n_sender_channels_done < N_SRC_CHANS || messages_received < total_messages_target) {
-            bool made_progress = false;
+    while (n_sender_channels_done < N_SRC_CHANS || messages_received < total_messages_target) {
+        bool made_progress = false;
+        for (size_t l = 0; l < 32; l++) {
             for (size_t i = 0; i < N_SRC_CHANS; i++) {
-                // DPRINT << "loop\n";
                 if (!completed_sender_channels[i]) {
                     process_send_side(
                         timing_stats,
@@ -423,15 +291,7 @@ void kernel_main() {
                     }
                     if (start_sends) {
                         size_t packet_src_addr = recv_buffer_addresses[receiver_wr_ptr.get_buffer_index()];
-                        DPRINT << "Receiving packet at " << (uint32_t)packet_src_addr << "\n";
                         auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
-                        if (remote_src_ack_stream_id < N_SRC_CHANS || remote_src_ack_stream_id >= 2 * N_SRC_CHANS) {
-                            DPRINT << "ERROR CONDITION - REMOTE SRC ACK STREAM ID IS OUT OF BOUNDS\n";
-                            DPRINT << "\tremote_src_ack_stream_id: " << (uint32_t)remote_src_ack_stream_id << "\n";
-                            while (1) {
-                                run_routing();
-                            };
-                        }
                         receiver_mark_packet_processed();
 
                         if constexpr (
@@ -441,16 +301,12 @@ void kernel_main() {
                             size_t packet_src_addr = recv_buffer_addresses[buffer_index];
                             auto trid = buffer_index;
                             for (size_t i = 0; i < fabric_mcast_factor; i++) {
-                                // noc_async_write_one_packet(packet_src_addr, fabric_fwd_addrs[i], message_size);
                                 noc_async_write_one_packet_with_trid(
                                     packet_src_addr, fabric_fwd_addrs[i], message_size, trid);
                             }
-                            DPRINT << "\tSending ack to stream id(" << (uint32_t)remote_src_ack_stream_id << ")\n";
                             if constexpr (write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
                                 send_ack = true;
                             } else {
-                                // ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
-                                // noc_async_writes_flushed();
                                 send_ack_to_sender(remote_src_ack_stream_id);
                                 receiver_wr_ptr.increment();
                                 messages_received++;
@@ -458,7 +314,6 @@ void kernel_main() {
                         } else {
                             write_outs_remaining = fabric_mcast_factor;
                             send_ack = write_outs_remaining == 0;
-                            DPRINT << "WRITE OUTS REMAINING: " << (uint32_t)write_outs_remaining << "\n";
                             if (send_ack) {
                                 receiver_wr_ptr.increment();
                             }
@@ -472,9 +327,7 @@ void kernel_main() {
                             ncrisc_noc_nonposted_write_with_transaction_id_sent(
                                 noc_index, receiver_rd_ptr.get_buffer_index())) {
                             size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
-                            DPRINT << "Receiving packet at " << (uint32_t)packet_src_addr << "\n";
                             auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
-                            DPRINT << "SEND ACK\n";
                             send_ack_to_sender(remote_src_ack_stream_id);
                             receiver_rd_ptr.increment();
                             send_ack = false;
@@ -483,9 +336,8 @@ void kernel_main() {
                     }
 
                     if constexpr (write_out_mode == WRITE_OUT_MODE::ONE_AT_A_TIME) {
-                        if (write_outs_remaining > 0
-                            // && noc_cmd_buf_ready(noc_index, write_cmd_buf)
-                            // && ncrisc_noc_posted_writes_sent(noc_index)
+                        while (write_outs_remaining > 0 && noc_cmd_buf_ready(noc_index, write_cmd_buf)
+                               // && ncrisc_noc_posted_writes_sent(noc_index)
                         ) {
                             auto buffer_index = receiver_wr_ptr.get_buffer_index();
                             size_t packet_src_addr = recv_buffer_addresses[buffer_index];
@@ -527,21 +379,128 @@ void kernel_main() {
                     invalidate_l1_cache();
                 }
             }
-
-            // Idle management
-            if (made_progress) {
-                idle_count = 0;
-            } else {
-                idle_count++;
-                if (idle_count > idle_max) {
-                    DPRINT << "Idle\n";
-                    run_routing();
-                    DPRINT << "Idle done\n";
-                    idle_count = 0;
-                }
-            }
         }
 
+        // Idle management
+        if (made_progress) {
+            idle_count = 0;
+        } else {
+            idle_count++;
+            if (idle_count > idle_max) {
+                run_routing();
+                idle_count = 0;
+            }
+        }
+    }
+}
+
+void init_stream_regs() {
+    init_ptr_val(pkts_received_stream_id, 0);
+
+    for (size_t i = 0; i < N_SRC_CHANS; i++) {
+        init_ptr_val(i, 0);
+        init_ptr_val(N_SRC_CHANS + i, 0);
+    }
+
+    eth_txq_reg_write(0, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, 32);
+}
+
+void kernel_main() {
+    init_stream_regs();
+
+    uint32_t arg_idx = 0;
+    const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t total_messages = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t message_size = get_arg_val<uint32_t>(arg_idx++);
+    bool is_sender_offset_0 = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t send_buffer_base = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t recv_buffer_base = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t timing_stats_addr = get_arg_val<uint32_t>(arg_idx++);
+
+    // Where receiver will write to
+    uint32_t receiver_channel_write_out_l1_bank_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t fabric_mcast_factor = get_arg_val<uint32_t>(arg_idx++);
+
+    // DPRINT << "Checkpoint 2\n";
+    auto remote_src_noc_x_ords = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
+    arg_idx += N_SRC_CHANS;
+    auto remote_src_noc_y_ords = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
+    arg_idx += N_SRC_CHANS;
+    auto remote_src_semaphore_ack_addrs = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
+    arg_idx += N_SRC_CHANS;
+    auto remote_src_new_chunk_addrs = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
+    arg_idx += N_SRC_CHANS;
+    auto dest_noc_buffer_addrs = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
+    arg_idx += N_SRC_CHANS;
+
+    std::array<noc_addr_t, N_SRC_CHANS> remote_src_ch_semaphore_ack_addrs;
+    std::array<noc_addr_t, N_SRC_CHANS> src_ch_new_chunk_addrs;
+    std::array<noc_addr_t, N_SRC_CHANS> dest_noc_write_addrs;
+    std::array<noc_addr_t, 10> fabric_fwd_addrs;
+    for (size_t i = 0; i < N_SRC_CHANS; i++) {
+        remote_src_ch_semaphore_ack_addrs[i] = get_noc_addr(
+            remote_src_noc_x_ords[i],
+            remote_src_noc_y_ords[i],
+            get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_semaphore_ack_addrs[i]));
+        src_ch_new_chunk_addrs[i] = get_noc_addr(
+            remote_src_noc_x_ords[i],
+            remote_src_noc_y_ords[i],
+            get_semaphore<ProgrammableCoreType::TENSIX>(remote_src_new_chunk_addrs[i]));
+        dest_noc_write_addrs[i] =
+            get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], dest_noc_buffer_addrs[i]);
+    }
+    for (size_t i = 0; i < fabric_mcast_factor; i++) {
+        fabric_fwd_addrs[i] = get_noc_addr(
+            remote_src_noc_x_ords[i % N_SRC_CHANS],
+            remote_src_noc_y_ords[i % N_SRC_CHANS],
+            receiver_channel_write_out_l1_bank_addr);
+    }
+
+    // Initialize timing stats at address provided by host
+    timing_stats = reinterpret_cast<volatile TimingStats*>(timing_stats_addr);
+    timing_stats->total_acquire_cycles = 0;
+    timing_stats->total_release_cycles = 0;
+    timing_stats->acquire_count = 0;
+    timing_stats->release_count = 0;
+
+    // Initialize pools dynamically based on N_CHUNKS
+    std::array<size_t, N_CHUNKS> send_chunk_base_addresses;
+    for (uint32_t i = 0; i < N_CHUNKS; i++) {
+        send_chunk_base_addresses[i] = send_buffer_base + i * PACKET_SIZE_BYTES * CHUNK_N_PKTS;
+    }
+
+    std::array<size_t, RX_N_PKTS> recv_buffer_addresses;
+    for (uint32_t i = 0; i < RX_N_PKTS; i++) {
+        recv_buffer_addresses[i] = recv_buffer_base + i * PACKET_SIZE_BYTES;
+    }
+
+    tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS> send_pool;
+    send_pool.init(send_chunk_base_addresses, PACKET_SIZE_BYTES, sizeof(eth_channel_sync_t));
+
+    // Set up channels for bidirectional communication if enabled
+    const uint32_t messages_per_direction = N_SRC_CHANS == 0 ? total_messages : total_messages * N_SRC_CHANS;
+
+    // Setup handshake between both ethernet cores - mandatory step before main test loop
+    eth_setup_handshake(handshake_addr, is_sender_offset_0);
+
+    uint32_t total_messages_target = messages_per_direction;
+    {
+        DeviceZoneScopedN("FABRIC-ELASTIC-CHANNELS-TEST");
+
+        auto test_start_cycles = eth_read_wall_clock();
+
+        main_loop(
+            timing_stats,
+            fabric_mcast_factor,
+            is_sender_offset_0,
+            total_messages_target,
+            recv_buffer_addresses,
+            message_size,
+            remote_src_ch_semaphore_ack_addrs,
+            src_ch_new_chunk_addrs,
+            dest_noc_write_addrs,
+            fabric_fwd_addrs,
+            send_pool);
 
         auto test_end_cycles = eth_read_wall_clock();
         timing_stats->total_test_cycles = test_end_cycles - test_start_cycles;
