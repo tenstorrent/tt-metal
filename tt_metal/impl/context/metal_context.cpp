@@ -2,27 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <filesystem>
+
 #include <enchantum/enchantum.hpp>
+#include <tracy/Tracy.hpp>
+
 #include "metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/debug/debug_helpers.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/debug/inspector_impl.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/debug/debug_helpers.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/llrt/get_platform_architecture.hpp"
+#include "tt_metal/llrt/llrt.hpp"
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include "tt_metal/fabric/fabric_host_utils.hpp"
-#include <filesystem>
-#include <tt-metalium/device_pool.hpp>
 
 namespace tt::tt_metal {
 
