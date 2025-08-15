@@ -141,7 +141,7 @@ void MAIN {
 
                     // if (n == 0) {
                     //     UNPACK(DPRINT << "IN CB " << ENDL());
-                    //     UNPACK(tt::compute::common::print_full_tile(curr_in_idx_cb_id, 0));
+                    //     UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id, 0));
                     // }
 
                     tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
@@ -166,20 +166,21 @@ void MAIN {
                     cb_wait_front(tile_idx_tmp_cb_id, topk_output_tiles);
 
                     // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
-                    //  if (n == 0) {
-                    //      PACK(DPRINT << "TILE CB " << ENDL());
-                    //      PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id, 0));
-                    //  }
+                    // if (n == 0) {
+                    //     PACK(DPRINT << "TILE CB " << ENDL());
+                    //     PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
+                    // }
 
                     tile_regs_acquire();
 
+                    pack_reconfig_data_format(tile_tmp_cb_id);
                     copy_tile_init(tile_tmp_cb_id);
                     copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
 
                     copy_tile_to_dst_init_short_with_dt(tile_tmp_cb_id, tile_idx_tmp_cb_id);
                     copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
 
-                    // dprint_tensix_dest_reg(0);
+                    dprint_tensix_dest_reg(0);
                     // dprint_tensix_dest_reg(2);
 
                     // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
@@ -217,11 +218,19 @@ void MAIN {
 
                 pack_untilize_dest<topk_output_tiles>(
                     out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, data_dst_idx);
+                if (n == 0) {
+                    PACK(DPRINT << "OUT CB " << ENDL());
+                    PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
+                }
                 cb_push_back(out_cb_id, topk_output_tiles);
 
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_untilize_dest<topk_output_tiles>(
                     out_idx_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, index_dst_idx);
+                if (n == 0) {
+                    PACK(DPRINT << "OUT CB " << ENDL());
+                    PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
+                }
                 cb_push_back(out_idx_cb_id, topk_output_tiles);
 
                 pack_untilize_uninit(out_cb_id);
