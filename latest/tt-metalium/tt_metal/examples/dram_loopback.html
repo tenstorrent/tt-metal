@@ -331,7 +331,7 @@
 <h2>Download the result and verify output<a class="headerlink" href="#download-the-result-and-verify-output" title="Permalink to this heading"></a>
 </h2>
 <p>Then we can finally read back the data from the output buffer and assert that
-it matches what we sent. Again the final <code class="docutils literal notranslate"><span class="pre">true</span></code> argument causes the data transfer to be blocking. Thus we know that the data is fully avaliable when the function returns.</p>
+it matches what we sent. Again the final <code class="docutils literal notranslate"><span class="pre">true</span></code> argument causes the data transfer to be blocking. Thus we know that the data is fully available when the function returns.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">;</span>
 <span class="n">EnqueueReadBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="n">output_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
