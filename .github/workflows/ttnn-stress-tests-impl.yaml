@@ -52,6 +52,7 @@ jobs:
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
 
       - name: Ensure BH Eth links online
         if: ${{ contains(inputs.runner-label, 'BH-') }}
