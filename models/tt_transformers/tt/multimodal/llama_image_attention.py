@@ -52,21 +52,15 @@ class TtLlamaImageAttention(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (f"{state_dict_prefix}{name}")
 
-        if f"{state_dict_prefix}wq.weight" in state_dict:
-            wq_str = f"{state_dict_prefix}wq.weight"
-            wk_str = f"{state_dict_prefix}wk.weight"
-            wv_str = f"{state_dict_prefix}wv.weight"
-            wo_str = f"{state_dict_prefix}wo.weight"
-        else:
-            wq_str = f"{state_dict_prefix}q_proj.weight"
-            wk_str = f"{state_dict_prefix}k_proj.weight"
-            wv_str = f"{state_dict_prefix}v_proj.weight"
-            wo_str = f"{state_dict_prefix}out_proj.weight"
+        wq_str = f"{state_dict_prefix}wq.weight"
+        wk_str = f"{state_dict_prefix}wk.weight"
+        wv_str = f"{state_dict_prefix}wv.weight"
+        wo_str = f"{state_dict_prefix}wo.weight"
 
-            bq_str = f"{state_dict_prefix}q_proj.bias"
-            bk_str = f"{state_dict_prefix}k_proj.bias"
-            bv_str = f"{state_dict_prefix}v_proj.bias"
-            bo_str = f"{state_dict_prefix}out_proj.bias"
+        bq_str = f"{state_dict_prefix}wq.bias"
+        bk_str = f"{state_dict_prefix}wk.bias"
+        bv_str = f"{state_dict_prefix}wv.bias"
+        bo_str = f"{state_dict_prefix}wo.bias"
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % configuration.num_devices == 0
