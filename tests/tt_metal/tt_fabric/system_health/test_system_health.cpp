@@ -205,6 +205,7 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
             asic_node["asic_id"] = asic.unique_id;
             asic_node["tray_id"] = asic.tray_id;
             asic_node["nid"] = asic.n_id;
+            asic_node["board_type"] = enchantum::to_string(asic.board_type);
             asic_info.push_back(asic_node);
         }
         asic_info_node["asic_info"] = asic_info;
@@ -215,7 +216,7 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
     root["asic_info"] = asic_info_map;
 
     YAML::Node local_eth_connections(YAML::NodeType::Sequence);
-    ;
+
     for (const auto& conn_desc : descriptor.eth_connectivity_descs) {
         const auto& local_host_name = conn_desc.host_name;
         std::set<std::pair<std::string, std::string>> processed_connections;
@@ -333,12 +334,20 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     std::vector<tt::tt_fabric::ASICDescriptor> asic_descriptors;
 
     eth_connectivity_desc.host_name = hostname_str;
+    std::set<uint32_t> sorted_pcie_slots = {};
+
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        sorted_pcie_slots.insert(cluster.get_physical_slot(chip_id).value());
+    }
+
     // Populate local ethernet connections and ASIC descriptors
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = chip_unique_ids.at(src);
         uint32_t n_id = cluster_desc->is_chip_mmio_capable(src) ? 1 : 2;
+        uint32_t tray_id =
+            std::distance(sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(src).value()));
         asic_descriptors.push_back(
-            tt::tt_fabric::ASICDescriptor(src_unique_id, cluster.get_physical_slot(src).value(), n_id));
+            tt::tt_fabric::ASICDescriptor(src_unique_id, tray_id, n_id, cluster_desc->get_board_type(src)));
         for (auto& [chan, dst] : conn) {
             eth_connectivity_desc
                 .local_eth_connections[tt::tt_fabric::EthChanDescriptor{.board_id = src_unique_id, .chan_id = chan}] =

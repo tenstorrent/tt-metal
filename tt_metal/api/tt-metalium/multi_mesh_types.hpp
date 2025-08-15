@@ -6,6 +6,7 @@
 
 #include <map>
 #include <tt-metalium/fabric_types.hpp>
+#include <umd/device/tt_cluster_descriptor.h>
 
 namespace tt::tt_fabric {
 
@@ -49,6 +50,7 @@ struct ASICDescriptor {
     uint64_t unique_id;
     uint32_t tray_id;
     uint32_t n_id;
+    BoardType board_type;
 
     bool operator==(const ASICDescriptor& other) const {
         return unique_id == other.unique_id && tray_id == other.tray_id;
