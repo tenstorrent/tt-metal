@@ -973,6 +973,16 @@ uint32_t stream_wrap_ge(uint32_t a, uint32_t b) {
     return (diff << shift) >= 0;
 }
 
+FORCE_INLINE
+uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
+    constexpr uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
+    // Careful below: have to take the signed diff for 2s complement to handle the wrap
+    // Below relies on taking the diff first then the compare to move the wrap
+    // to 2^31 away
+    int32_t diff = a - b;
+    return (diff << shift) > 0;
+}
+
 static void process_wait() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     auto flags = cmd->wait.flags;
@@ -1057,6 +1067,7 @@ void process_go_signal_mcast_cmd() {
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
     uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
     uint32_t wait_count = cmd->mcast.wait_count;
+    uint32_t wait_stream = cmd->mcast.wait_stream;
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         uint32_t dst_noc = worker_mcast_grid;
         uint32_t num_dests = num_worker_cores_to_mcast;
@@ -1081,7 +1092,6 @@ void process_go_signal_mcast_cmd() {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
             get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
-        uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
         aligned_go_signal_storage[storage_offset] = go_signal_value;

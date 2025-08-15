@@ -235,8 +235,8 @@ void process_go_signal_mcast_cmd() {
         volatile uint32_t* worker_sem =
             (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
         // Check if we're currently waiting for workers.  Also if we're on the same core as cq_dispatch.cpp, check if
-        // the next kernel (after this) is already ready to go, as the lock around NCRISC_AT_CMD_BUF can slow down dispatching
-        // future kernels.
+        // the next kernel (after this) is already ready to go, as the lock around NCRISC_AT_CMD_BUF can slow down
+        // dispatching future kernels.
         if (stream_wrap_gt(wait_count, *worker_sem) &&
             (distributed_dispatcher || !wrap_ge(mcasts_sent, *sync_sem_addr))) {
             // We're currently waiting for workers. Send a linked multicast to the workers so the first multicast once
@@ -249,8 +249,8 @@ void process_go_signal_mcast_cmd() {
                 ((uint32_t)aligned_go_signal_storage) + MEM_DISPATCH_NOOP, fake_noc_addr_multicast, sizeof(uint32_t));
 
             if constexpr (!distributed_dispatcher) {
-                // Prevent dispatch_d from submitting commands to NCRISC_AT_CMD_BUF while we have a path reservation, as a
-                // hardware issue would cause both those commands and the later multicast to hang.
+                // Prevent dispatch_d from submitting commands to NCRISC_AT_CMD_BUF while we have a path reservation, as
+                // a hardware issue would cause both those commands and the later multicast to hang.
                 lock_no_atomic(noc_atomic_ptr, dispatch_s_lock_index);
             }
             cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
