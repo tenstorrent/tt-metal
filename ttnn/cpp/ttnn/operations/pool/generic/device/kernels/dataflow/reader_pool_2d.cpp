@@ -298,6 +298,8 @@ void kernel_main() {
                            interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
+    fill_with_val(get_write_ptr(in_idx_cb_id), TILE_HEIGHT * TILE_WIDTH, 0);
+
     // fill the clear cb
     if constexpr (is_avg_pool || need_to_initialize_in_cb) {
         if constexpr (reader_id == 0) {
