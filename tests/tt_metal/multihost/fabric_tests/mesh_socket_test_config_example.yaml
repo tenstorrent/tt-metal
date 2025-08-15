@@ -1,0 +1,146 @@
+# MeshSocket Test Configuration Example
+# This file demonstrates a basic test configuration with explicit socket definitions for multiprocess 2x2 T3k
+# use command to run:
+# tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_test_config_example.yaml
+
+# Physical mesh configuration (optional)
+physical_mesh:
+   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml"
+   eth_coord_mapping: [
+    [[0, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 1, 1, 0, 0]],
+    [[0, 2, 0, 0, 0], [0, 3, 0, 0, 0], [0, 2, 1, 0, 0], [0, 3, 1, 0, 0]]
+    ]
+
+# Fabric configuration (required)
+fabric_config:
+  topology: Mesh
+  routing_type: Dynamic
+
+# Test definitions (required)
+tests:
+  - name: "basic_point_to_point"
+    num_iterations: 5
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 4096
+      num_transactions: 20
+    sockets:
+      - sender_rank: 0
+        receiver_rank: 1
+        connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [0, 1]
+              core_coord: [0, 0]
+      - sender_rank: 1
+        receiver_rank: 0
+        connections:
+          - sender:
+              mesh_coord: [1, 0]
+              core_coord: [1, 1]
+            receiver:
+              mesh_coord: [1, 1]
+              core_coord: [1, 1]
+  #parameterized memory config. Num transactions cannot be parameterized.
+  - name: "parameterized_test"
+    num_iterations: 5
+    memory_config:
+      fifo_size: [1024, 2048, 4096]
+      page_size: [256, 512, 1024]
+      data_size: [4096, 8192]
+      num_transactions: 20
+    sockets:
+      - sender_rank: 0
+        receiver_rank: 1
+        connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [0, 1]
+              core_coord: [0, 0]
+      - sender_rank: 1
+        receiver_rank: 0
+        connections:
+          - sender:
+              mesh_coord: [1, 0]
+              core_coord: [1, 1]
+            receiver:
+              mesh_coord: [1, 1]
+              core_coord: [1, 1]
+  - name: "multi_connection_socket"
+    num_iterations: 10
+    memory_config:
+      fifo_size: 2048
+      page_size: 512
+      data_size: 4096
+      num_transactions: 25
+    sockets:
+      - sender_rank: 0
+        receiver_rank: 1
+        connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [1, 0]
+            receiver:
+              mesh_coord: [0, 0]
+              core_coord: [1, 0]
+          - sender:
+              mesh_coord: [1, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [1, 0]
+              core_coord: [0, 0]
+          - sender:
+              mesh_coord: [0, 1]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [1, 1]
+              core_coord: [0, 0]
+      - sender_rank: 0
+        receiver_rank: 1
+        connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [1, 1]
+            receiver:
+              mesh_coord: [0, 0]
+              core_coord: [1, 1]
+          - sender:
+              mesh_coord: [1, 0]
+              core_coord: [1, 1]
+            receiver:
+              mesh_coord: [1, 0]
+              core_coord: [1, 1]
+          - sender:
+              mesh_coord: [0, 1]
+              core_coord: [1, 1]
+            receiver:
+              mesh_coord: [1, 1]
+              core_coord: [1, 1]
+  - name: "all_to_all_pattern_test"
+    num_iterations: 3
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 2048
+      num_transactions: 10
+    pattern_expansions:
+      - type: "all_to_all_devices"
+        core_coord: [0, 0]
+      - type: "all_to_all_devices"
+        core_coord: [0, 1]
+  - name: "all_hosts_random_sockets_pattern_test"
+    num_iterations: 3
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 2048
+      num_transactions: 10
+    pattern_expansions:
+      - type: "all_hosts_random_sockets"
+        core_coord: [0, 0]
+        num_sockets: 4

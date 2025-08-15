@@ -430,13 +430,14 @@ def test_demo(
         )
         # Get user-specific rotary position embeddings
         cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id)
-        model.rope_setup.set_cos_sin(cos, sin)
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
+        # [INFO] prefill_forward_text is read-only of the cos/sin matrices
         logits = generator.prefill_forward_text(
             input_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
+            rot_mats=(cos, sin),
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
@@ -448,10 +449,13 @@ def test_demo(
         profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
             input_prefill_pt,
+            rot_mats=(cos, sin),
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
         )
+        # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
+        generator.update_cos_sin(cos_matrix_pt=cos, sin_matrix_pt=sin)
         # torch.save(logits, f"ttnn_logits.pt")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)

@@ -16,7 +16,7 @@ public:
     // Each element in the schedulers vector is a (scheduler, steps) pair.
     // The scheduler runs for 'steps' times, then we move on to the next one.
     // A little bit different from the PyTorch implementation, where the milestones might be less then the number of
-    // schedulers which is missleading
+    // schedulers which is misleading
     SequentialScheduler(
         optimizers::OptimizerBase *optimizer,
         std::vector<std::unique_ptr<LRSchedulerBase>> schedulers,
