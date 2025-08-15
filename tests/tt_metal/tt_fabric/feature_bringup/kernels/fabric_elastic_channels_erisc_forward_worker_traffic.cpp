@@ -25,12 +25,10 @@ using noc_addr_t = uint64_t;
 
 enum class WRITE_OUT_MODE {
     ALL_AT_ONCE,
-    ALL_AT_ONCE_WITH_SEPARATE_FLUSH,
     ONE_AT_A_TIME,
 };
 
 constexpr WRITE_OUT_MODE write_out_mode = WRITE_OUT_MODE::ALL_AT_ONCE;
-// constexpr WRITE_OUT_MODE write_out_mode = WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH;
 // constexpr WRITE_OUT_MODE write_out_mode = WRITE_OUT_MODE::ONE_AT_A_TIME;
 
 // pkts received (from worker) stream IDs are [0, N_SRC_CHANS-1]
@@ -52,11 +50,19 @@ struct TimingStats {
     uint64_t total_acquire_cycles;
     uint64_t total_release_cycles;
     uint64_t total_test_cycles;
+    uint64_t total_misc_cycles;
     uint32_t acquire_count;
     uint32_t release_count;
+    uint32_t misc_count;
 
     TimingStats() :
-        total_acquire_cycles(0), total_release_cycles(0), total_test_cycles(0), acquire_count(0), release_count(0) {}
+        total_acquire_cycles(0),
+        total_release_cycles(0),
+        total_test_cycles(0),
+        total_misc_cycles(0),
+        acquire_count(0),
+        release_count(0),
+        misc_count(0) {}
 };
 
 // Global timing stats stored in L1 - will be initialized in kernel_main
@@ -149,21 +155,17 @@ void process_send_side(
         unacked_sends++;
     }
 
-    // DPRINT << "chkpt 0\n";
     auto num_unprocessed_acks = get_sender_num_unprocessed_acks(local_src_ch_ack_stream_id);
     if (num_unprocessed_acks > 0) {
-        DPRINT << "unprocessed acks\n";
         current_chunk_ack_index = BufferIndex{static_cast<uint8_t>(current_chunk_ack_index.get() + 1)};
         bool can_release_chunk = current_chunk_ack_index.get() == CHUNK_N_PKTS;
-        uint64_t start_cycles;
-        uint64_t end_cycles;
-        start_cycles = eth_read_wall_clock();
+        uint64_t start_cycles = eth_read_wall_clock();
         if (can_release_chunk) {  // 22 cycles!??!?! (44 -> 22 if I don't include the branch condition in the timing)
             auto chunk = open_chunks_cb.pop();  // avg 7.3 cycles
             send_pool.return_chunk(chunk);      // 16 cycles
             current_chunk_ack_index = BufferIndex{0};
         }
-        end_cycles = eth_read_wall_clock();
+        uint64_t end_cycles = eth_read_wall_clock();
         sender_mark_ack_processed(local_src_ch_ack_stream_id);
 
         // if (can_release_chunk) {
@@ -294,9 +296,7 @@ void main_loop(
                         auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
                         receiver_mark_packet_processed();
 
-                        if constexpr (
-                            write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE ||
-                            write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
+                        if constexpr (write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE) {
                             auto buffer_index = receiver_wr_ptr.get_buffer_index();
                             size_t packet_src_addr = recv_buffer_addresses[buffer_index];
                             auto trid = buffer_index;
@@ -304,13 +304,9 @@ void main_loop(
                                 noc_async_write_one_packet_with_trid(
                                     packet_src_addr, fabric_fwd_addrs[i], message_size, trid);
                             }
-                            if constexpr (write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
-                                send_ack = true;
-                            } else {
-                                send_ack_to_sender(remote_src_ack_stream_id);
-                                receiver_wr_ptr.increment();
-                                messages_received++;
-                            }
+                            send_ack_to_sender(remote_src_ack_stream_id);
+                            receiver_wr_ptr.increment();
+                            messages_received++;
                         } else {
                             write_outs_remaining = fabric_mcast_factor;
                             send_ack = write_outs_remaining == 0;
@@ -331,21 +327,16 @@ void main_loop(
                             send_ack_to_sender(remote_src_ack_stream_id);
                             receiver_rd_ptr.increment();
                             send_ack = false;
-                            // messages_received++;
                         }
                     }
 
                     if constexpr (write_out_mode == WRITE_OUT_MODE::ONE_AT_A_TIME) {
-                        while (write_outs_remaining > 0 && noc_cmd_buf_ready(noc_index, write_cmd_buf)
-                               // && ncrisc_noc_posted_writes_sent(noc_index)
-                        ) {
+                        while (write_outs_remaining > 0 && noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
                             auto buffer_index = receiver_wr_ptr.get_buffer_index();
                             size_t packet_src_addr = recv_buffer_addresses[buffer_index];
                             auto trid = buffer_index;
-                            // noc_async_write_one_packet(packet_src_addr, fabric_fwd_addrs[0], message_size);
                             noc_async_write_one_packet_with_trid(
                                 packet_src_addr, fabric_fwd_addrs[0], message_size, trid);
-                            // noc_async_write(packet_src_addr, fabric_fwd_addrs[write_outs_remaining], message_size);
                             DPRINT << "WRITE OUT\n";
 
                             write_outs_remaining--;
@@ -356,13 +347,10 @@ void main_loop(
                             }
                         }
                     }
-                    if constexpr (
-                        write_out_mode == WRITE_OUT_MODE::ONE_AT_A_TIME ||
-                        write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
+                    if constexpr (write_out_mode == WRITE_OUT_MODE::ONE_AT_A_TIME) {
                         if (send_ack && !eth_txq_is_busy()) {
                             auto buffer_index = receiver_rd_ptr.get_buffer_index();
                             auto trid = buffer_index;
-                            // noc_async_writes_flushed();
                             if (ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid)) {
                                 DPRINT << "SEND ACK\n";
 
@@ -376,7 +364,6 @@ void main_loop(
                             }
                         }
                     }
-                    invalidate_l1_cache();
                 }
             }
         }

@@ -47,8 +47,10 @@ struct TimingStats {
     uint64_t total_acquire_cycles = 0;
     uint64_t total_release_cycles = 0;
     uint64_t total_test_cycles = 0;
+    uint32_t total_misc_cycles = 0;
     uint32_t acquire_count = 0;
     uint32_t release_count = 0;
+    uint32_t misc_count = 0;
 };
 
 class N300TestDevice {
@@ -384,6 +386,12 @@ void run_test(
         tt::LogTest,
         "  Average release cycles: {:.2f}",
         stats0.release_count > 0 ? (double)stats0.total_release_cycles / stats0.release_count : 0.0);
+    log_info(tt::LogAlways, "  Misc operations: {}", stats0.misc_count);
+    log_info(tt::LogAlways, "  Total misc cycles: {}", stats0.total_misc_cycles);
+    log_info(
+        tt::LogTest,
+        "  Average misc cycles: {:.2f}",
+        stats0.misc_count > 0 ? (double)stats0.total_misc_cycles / stats0.misc_count : 0.0);
 
     if (config.bidirectional_mode) {
         log_info(tt::LogAlways, "Device 1 (Receiver) Timing Stats:");
@@ -399,6 +407,12 @@ void run_test(
             tt::LogTest,
             "  Average release cycles: {:.2f}",
             stats1.release_count > 0 ? (double)stats1.total_release_cycles / stats1.release_count : 0.0);
+        log_info(tt::LogAlways, "  Misc operations: {}", stats1.misc_count);
+        log_info(tt::LogAlways, "  Total misc cycles: {}", stats1.total_misc_cycles);
+        log_info(
+            tt::LogTest,
+            "  Average misc cycles: {:.2f}",
+            stats1.misc_count > 0 ? (double)stats1.total_misc_cycles / stats1.misc_count : 0.0);
     }
 
     // Calculate throughput metrics

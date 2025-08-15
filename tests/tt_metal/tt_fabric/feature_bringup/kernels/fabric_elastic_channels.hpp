@@ -89,17 +89,13 @@ struct WormholeEfficientStack {
 
     FORCE_INLINE void push(T value) {
         ASSERT(!is_full());
-        DPRINT << "WormholeEfficientStack::push\n";
-        DPRINT << "\t" << (uint32_t)top << " " << (uint32_t)value << "\n";
         *top = value;
         top++;
     }
 
     FORCE_INLINE T pop() {
         ASSERT(!is_empty());
-        DPRINT << "WormholeEfficientStack::pop\n";
         --top;
-        DPRINT << "\t" << (uint32_t)top << " " << (uint32_t)*top << "\n";
         T value = *top;
         return value;
     }
@@ -186,12 +182,10 @@ struct ChannelBuffersPool {
 
     void init(const chunk_base_address_t& buffer_regions, size_t buffer_size_bytes, size_t header_size_bytes) {
         size_t idx = 0;
-        DPRINT << "ChannelBuffersPool::init\n";
         for (const auto& chunk_base_address : buffer_regions) {
             ASSERT(idx < N_CHUNKS);
             new (&all_buffers[idx]) chunk_t(chunk_base_address, buffer_size_bytes, header_size_bytes, idx);
             free_chunks.push(&all_buffers[idx]);
-            DPRINT << "pool[" << (uint32_t)idx << "] = " << (uint32_t)&all_buffers[idx] << "\n";
             idx++;
         }
     }
@@ -203,10 +197,7 @@ struct ChannelBuffersPool {
 
     FORCE_INLINE void return_chunk(chunk_t* chunk) { free_chunks.push(chunk); }
 
-    FORCE_INLINE bool is_empty() const {
-        auto empty = free_chunks.is_empty();
-        return empty;
-    }
+    FORCE_INLINE bool is_empty() const { return free_chunks.is_empty(); }
 
     FORCE_INLINE bool is_full() const { return free_chunks.is_full(); }
 };
