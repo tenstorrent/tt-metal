@@ -5,6 +5,7 @@
 #include "moreh_dot_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_dot {
 MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::create(
@@ -62,12 +63,12 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
             {CBIndex::c_25, im1_t},
         });
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)is_dram(src0_buffer),
-        (std::uint32_t)is_dram(src1_buffer),
-        *reinterpret_cast<uint32_t*>(&scaler)};
+    std::vector<uint32_t> reader_compile_time_args = {*reinterpret_cast<uint32_t*>(&scaler)};
+    TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CBIndex::c_16, (std::uint32_t)is_dram(dst_buffer)};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CBIndex::c_16};
+    TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
 
