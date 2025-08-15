@@ -50,8 +50,6 @@ uint32_t prod(vector<uint32_t>& shape) {
 }
 
 inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec, vector<uint32_t> shape) {
-    int numel_in_tensor = prod(shape) / 2;
-    int idx = 0;
     std::vector<uint32_t> expected_dst_vec;
 
     uint32_t num_tile_rows = shape.at(shape.size() - 2) / 32;
@@ -65,7 +63,6 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
             for (uint32_t k = 0; k < num_tile_cols; k++) {
                 // Copy a row
                 for (uint32_t l = 0; l < 16; l++) {
-                    uint32_t src_addr = src_addr_ + l;
                     expected_dst_vec.push_back(src_vec.at(src_addr_ + l));
                 }
 
@@ -94,8 +91,6 @@ bool flatten(
     uint32_t num_tiles_c = 5) {
     bool pass = true;
 
-    auto device = mesh_device->get_devices()[0];
-
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -109,7 +104,6 @@ bool flatten(
 
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
     uint32_t num_bytes_per_tensor_row = num_tiles_c * 64;
-    uint32_t num_bytes_per_tile = num_tiles * single_tile_size;
 
     uint32_t dram_buffer_size =
         single_tile_size * num_tiles * 32;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -131,7 +125,7 @@ bool flatten(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 1;
@@ -139,7 +133,7 @@ bool flatten(
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     auto flatten_kernel = tt_metal::CreateKernel(
         program_,
@@ -159,7 +153,7 @@ bool flatten(
         num_tiles * 32  // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,
@@ -221,7 +215,6 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
 
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
     uint32_t num_bytes_per_tensor_row = num_tiles_c * 64;
-    uint32_t num_bytes_per_tile = num_tiles * single_tile_size;
 
     uint32_t dram_buffer_size = single_tile_size * num_tiles * 32;
 
@@ -235,7 +228,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = CreateCircularBuffer(program, core, cb_src0_config);
+    CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = 16;
     uint32_t num_output_tiles = 1;
@@ -243,7 +236,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = CreateCircularBuffer(program, core, cb_output_config);
+    CreateCircularBuffer(program, core, cb_output_config);
 
     auto flatten_kernel = CreateKernel(
         program,
@@ -261,7 +254,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
 
     vector<uint32_t> compute_kernel_args = {num_tiles * 32};
 
-    auto eltwise_unary_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,

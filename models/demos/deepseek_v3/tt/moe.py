@@ -91,10 +91,12 @@ class MoE(SharedStateAddOn, AbstractModule):
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
                 "global_semaphore": ccl.get_semaphore(0),
+                "init_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "all_to_all_combine": {
                 "global_semaphore": ccl.get_semaphore(0),
+                "init_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "final_output_reduce_scatter": {
