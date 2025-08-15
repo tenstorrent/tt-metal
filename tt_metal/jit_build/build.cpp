@@ -489,18 +489,18 @@ void JitBuildState::extract_zone_src_locations(const string& log_file) const {
     // ZoneScoped;
     static std::atomic<bool> new_log = true;
     if (tt::tt_metal::getDeviceProfilerState()) {
-        if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
-            std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
+        if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_MARKER_SRC_LOCATIONS_LOG)) {
+            std::remove(tt::tt_metal::NEW_PROFILER_MARKER_SRC_LOCATIONS_LOG.c_str());
         }
 
-        if (!std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
-            tt::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
+        if (!std::filesystem::exists(tt::tt_metal::NEW_PROFILER_MARKER_SRC_LOCATIONS_LOG)) {
+            tt::utils::create_file(tt::tt_metal::NEW_PROFILER_MARKER_SRC_LOCATIONS_LOG);
         }
 
         // Only interested in log entries with KERNEL_PROFILER inside them as device code
         // tags source location info with it using pragma messages
         string cmd = "cat " + log_file + " | grep KERNEL_PROFILER";
-        tt::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
+        tt::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_MARKER_SRC_LOCATIONS_LOG, false);
     }
 }
 
