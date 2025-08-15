@@ -23,7 +23,7 @@ detect_os() {
         . /etc/os-release
         OS_ID="$ID"
         OS_VERSION="$VERSION_ID"
-        OS_CODENAME="${UBUNTU_CODENAME:VERSION_CODENAME}"
+        OS_CODENAME="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
         OS_ID_LIKE="$ID_LIKE"
     else
         echo "Error: /etc/os-release not found. Unsupported system."
@@ -256,7 +256,6 @@ prep_system() {
             ;;
     esac
 }
-
 prep_ubuntu_system() {
     echo "[INFO] Preparing Ubuntu/Debian system..."
     # Update package lists and install basic tools
@@ -270,8 +269,13 @@ prep_ubuntu_system() {
     echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
 
     # Add Kitware repository for latest CMake
-    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    if [[ "$OS_ID" == "debian" ]]; then
+        echo "[INFO] Skipping Kitware repo for Debian ($OS_CODENAME) — using Debian's cmake package."
+    else
+        # Add Kitware repository for latest CMake (Ubuntu only)
+        wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+        echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    fi
 
     # Add GCC toolchain repository for specific g++ versions if needed
     if [[ "$OS_ID" == "ubuntu" ]]; then
