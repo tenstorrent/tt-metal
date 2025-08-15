@@ -334,7 +334,7 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     std::vector<tt::tt_fabric::ASICDescriptor> asic_descriptors;
 
     eth_connectivity_desc.host_name = hostname_str;
-    std::set<uint32_t> sorted_pcie_slots = {};
+    std::set<uint32_t, std::greater<uint32_t>> sorted_pcie_slots = {};
 
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {
         sorted_pcie_slots.insert(cluster.get_physical_slot(chip_id).value());
@@ -345,6 +345,7 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
         auto src_unique_id = chip_unique_ids.at(src);
         uint32_t n_id = cluster_desc->is_chip_mmio_capable(src) ? 1 : 2;
         uint32_t tray_id =
+            1 +
             std::distance(sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(src).value()));
         asic_descriptors.push_back(
             tt::tt_fabric::ASICDescriptor(src_unique_id, tray_id, n_id, cluster_desc->get_board_type(src)));
