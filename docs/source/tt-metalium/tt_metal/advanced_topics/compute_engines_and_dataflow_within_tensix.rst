@@ -3,9 +3,9 @@
 Compute Engines and Data Flow within Tensix
 ===========================================
 
-The matrix and vector engines (FPU and SFPU) are integral to Tensix's compute capabilities. They are designed to efficiently handle a wide range of mathematical operations, particularly those common in machine learning. However, they are also highly specialized and do not work like traditional attached-to-CPU vector and matrix units. Instead of having direct access to the CPU's registers and memory, these engines operate on their own registers and rely on the unpacker and packer to manage data movement between the CPU and the engines.
+The matrix and vector engines (FPU and SFPU) are integral to Tensix's compute capabilities. They are designed to efficiently handle a wide range of mathematical operations, particularly those common in machine learning. However, they are highly specialized and do not operate like traditional CPU-attached vector and matrix units. Instead of having direct access to CPU registers and memory, these engines use their own registers and rely on the unpacker and packer to move data between SRAM and the compute engines.
 
-Understanding the data flow between the different register sets, (un)packer, and the engines is critical to achieving optimal performance and resource utilization. Please refer to the relevant hardware and ISA documentation for more details.
+Understanding the data flow between the register sets, the unpacker and packer, and the engines is critical for achieving optimal performance and resource utilization. Please refer to the relevant hardware and ISA documentation for more details.
 
 * `SFPU on Wormhole <https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/VectorUnit.md>`_
 * `FPU on Wormhole <https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/MatrixUnit.md>`_
@@ -13,14 +13,14 @@ Understanding the data flow between the different register sets, (un)packer, and
 Component introduction
 ----------------------
 
-A critical design aspect to understand is that **all registers are viewed to have a fixed element count**. Each vector register holds exactly N elements, where N depends on the kernel configuration and the specific register set. This differs from x86 SSE/AVX or ARM NEON and is more similar to some GPU warp/wavefront designs. The size of the registers also may change between generations of hardware. Thus, a program that depends on the specific dimension of a register must be rewritten to work across generations. Compute APIs provided by the Metalium kernel library like ``matmul_tiles`` and ``sin_tiles`` abstract away these details, allowing you to focus on the algorithm rather than the underlying hardware specifics.
+A critical design aspect to understand is that **all registers have a fixed element count**. Each vector register holds exactly N elements, where N depends on the kernel configuration and the specific register set. This differs from x86 SSE/AVX or ARM NEON and is more similar to some GPU warp/wavefront designs. The size of the registers may also change between hardware generations. Thus, a program that depends on a specific register dimension must be rewritten to work across generations. Compute APIs provided by the Metalium kernel library, like ``matmul_tiles`` and ``sin_tiles``, abstract away these details, allowing you to focus on the algorithm rather than the underlying hardware specifics.
 
-For example, the SFPU ``LReg`` (SFPU's vector register) on Wormhole is 32 elements wide, with each element being 32 bits. A conventional SIMD register design would imply a capacity of 1024 bits per register. Thus, if int8 data were loaded into such a register, it could hold 128 elements. However, the SFPU treats the register as holding 32 elements of at most 32 bits each, regardless of the actual data type.
+For example, the SFPU ``LReg`` (the SFPU's internal vector register) on Wormhole is 32 elements wide, with each element being 32 bits. A conventional SIMD register design would imply a capacity of 1024 bits per register, which could hold 128 elements of int8 data. However, the SFPU treats the register as holding 32 elements of at most 32 bits each, regardless of the actual data type.
 
 Several key components work together to perform computations within Tensix:
 
-* **Unpacker**: Reads data from L1 memory and converts it into the format required by the compute engines. Into registers ``SrcA``, ``SrcB`` or ``Dst``.
-* **Packer**: Takes results produced by the compute engines (from the ``Dst`` registers), formats them, and moves them back into L1.
+* **Unpacker**: Reads data from L1 memory and converts it into the format required by the compute engines, placing it into the ``SrcA``, ``SrcB``, or ``Dst`` registers.
+* **Packer**: Takes results from the compute engines (from the ``Dst`` registers), formats them, and moves them back into L1.
 * **Vector engine (SFPU)**: Executes complex vector operations, handling data in parallel for efficient computation.
 * **Matrix engine (FPU)**: Specializes in large-scale matrix operations, optimized for high throughput.
 
@@ -28,35 +28,35 @@ The compute engines rely on four main register sets:
 
 1. **SrcA**: The first source register set for the matrix engine.
 2. **SrcB**: The second source register set for the matrix engine.
-3. **Dst**: The destination register set for the matrix engine, also used by the vector engine to hold results. This register set is exposed in the higher-level API.
+3. **Dst**: The destination register set for the matrix engine, also used by the vector engine. This register set is exposed in the higher-level API.
 4. **LReg**: Internal registers within the SFPU for holding vector data during computation.
 
-The following image illustrates the connection between the different components and the registers they have access to.
+The following image illustrates the connection between the different components and the registers they can access.
 
 .. note::
 
-    It is important to keep in mind that, although the compute kernel is a single piece of code, it is actually split and compiled into three separate binaries, each running on a different RISC-V (T0-2) core within the Tensix. Synchronization is needed to ensure correct data flow and to avoid race conditions between these components.
+    Although a compute kernel is written as a single piece of code, it is compiled into three separate binaries, each running on a different RISC-V core (T0-2) within the Tensix. Synchronization is required to ensure correct data flow and avoid race conditions between these components.
 
-    Also, each of the components - including the unpacker, packer, SFPU, and FPU - is not a processing core and cannot make control flow decisions on its own. The RISC-V cores issue commands to the compute engines and manage data flow between them. Explicit synchronization may be needed to ensure the engines have finished their work before the RISC-V cores continue.
+    Furthermore, the unpacker, packer, SFPU, and FPU are not processing cores and cannot make control flow decisions on their own. The RISC-V cores issue commands to the compute engines and manage data flow between them. Explicit synchronization may be needed to ensure the engines have finished their work before the RISC-V cores proceed.
 
 .. figure:: /images/tenstorrent-sfpu-fpu-dst-register-diagram-and-dataflow.webp
     :scale: 45%
-    :alt: SFPU and FPU register diagram and data flow
+    :alt: Diagram of the dataflow, registers and engines that the compute kernel have access to
     :align: center
 
     The connection between the unpacker, packer, SFPU, FPU, and the various registers is crucial for efficient data processing within the Tensix architecture.
 
-Register data formats often differ from the SRAM storage format, so the unpacker and packer handle format conversion. This conversion enables efficient block floating-point computation since the matrix and vector engines support standard floating-point and integer arithmetic. This design allows a single kernel to operate on different data formats without modification.
+The data format within the compute registers can differ from the format used for storage in SRAM. The unpacker and packer are responsible for converting between these formats in hardware. This allows compute kernels to work with standard data types, like floating-point or integers, while data in SRAM can remain in a more compact representation, such as a block floating-point format.
 
-The unpacker/packer pair provides hardware-accelerated type casting. Rather than using compute engines to expand block floating-point data (such as quantized model weights) into individual floating-point values before computation, the unpacker performs this expansion directly in hardware. This approach reduces both execution time and power consumption compared to software-based conversion on traditional processors.
+This hardware-accelerated type conversion is more efficient than performing it in software. For example, instead of using the compute engines to decompress quantized data, the unpacker can perform this conversion directly. This design makes compute kernels independent of the storage data format and reduces execution time and power consumption.
 
-Due to the separation of concerns, invoking the matrix and vector engine often comes with an initialization call to set up the pack and unpacker and configure the width of the ``Dst`` registers - in order to ensure the correctness of the result and performance optimizations.
+The separation of data movement (unpacker/packer) and computation (FPU/SFPU) requires an initialization step. Before invoking a compute operation, the unpacker and packer must be configured to handle the correct input and output data formats. This is critical for ensuring correct results and enabling hardware performance optimizations.
 
 Dst register
 ------------
 The ``Dst`` register set is the primary workspace for compute kernels and the only register set directly exposed through the compute APIs. It serves as the destination for the matrix engine and as both a source and destination for the vector engine.
 
-Moving data between L1 memory and the ``Dst`` registers is handled by the unpacker and packer, respectively. The kernel library provides functions for these operations:
+The unpacker and packer handle data movement between L1 memory and the ``Dst`` registers. The kernel library provides functions for these operations:
 
 .. code-block:: c++
 
@@ -74,11 +74,11 @@ A typical compute loop follows this synchronization pattern:
 
 .. code-block:: c++
 
-    // 0. Wait for input data to be available in the input circular buffers
+    // 0. Wait for input data to be available in the input circular buffers.
     // e.g. cb_wait_front(...)
 
     // 1. Acquire Dst registers for the unpacker and math core.
-    //    This must happen after waiting for input data to be available.
+    //    This must happen after waiting for input data.
     tile_regs_acquire();
 
     // Unpack data and perform math operations.
@@ -105,7 +105,7 @@ A typical compute loop follows this synchronization pattern:
 
 .. note::
 
-    The ordering of circular buffer operations (``cb_wait_front``, ``cb_pop_front``, ``cb_reserve_back``, ``cb_push_back``) is flexible but constrained by data dependencies. The pattern shown in the example minimizes stalls by overlapping communication with the packer's computation. Unpacking from a circular buffer requires that the ``Dst`` registers are first acquired, and packing can only begin after waiting for the packer to be ready.
+    The ordering of circular buffer operations (``cb_wait_front``, ``cb_pop_front``, ``cb_reserve_back``, ``cb_push_back``) is flexible but constrained by data dependencies. The pattern shown in the example minimizes stalls by overlapping communication with the packer's work. Unpacking into ``Dst`` registers requires first acquiring them, and packing can only begin after waiting for the packer to be ready. However, by no means it is the only correct ordering.
 
     The ``acquire_dst`` and ``release_dst`` functions are deprecated. The ``tile_regs_*`` family of functions provides more explicit control and should be used instead.
 
@@ -164,96 +164,92 @@ The number of available tiles is determined by the combination of these two sett
 Matrix engine/FPU
 -----------------
 
-The matrix engine, or the FPU, performs the bulk of computation for most AI and machine learning workloads. Operations on the matrix engine take in data from ``SrcA`` and ``SrcB`` (if needed) and output or write back or even accumulate results to ``Dst``. The FPU also supports common matrix operations such as element-wise multiplication/addition/subtraction and pooling.
+The matrix engine, or FPU, performs the bulk of computation for most AI and machine learning workloads. FPU operations take data from ``SrcA`` and ``SrcB`` (if needed) and write or accumulate results into ``Dst``. The FPU also supports common matrix operations such as element-wise multiplication, addition, subtraction, and pooling.
 
 FPU operations require initialization before execution. This setup configures the unpacker, packer, and FPU for the specific operation (e.g., matrix multiplication). Re-initialization is not required for repeated operations with the same source, destination, and data type parameters.
 
-The FPU has dedicated registers for each operand, and the unpacker can write directly to these registers. The API lets you specify the circular buffer index and tile offset for each operand. Since the FPU writes results to the ``Dst`` registers, you can also specify the output tile offset. It is up to the user to avoid register conflicts. Compute functions using the FPU take the following parameters, depending on the number of operands:
+The FPU uses dedicated registers for each operand, and the unpacker can directly write to these registers. The API requires specifying the circular buffer and tile index for each operand. Because the FPU writes results to the ``Dst`` registers, the output tile index must also be specified. FPU compute functions often takes the following parameters, depending on the number of operands:
 
-* Circular buffer index for the first operand and tile offset from the buffer's read head
-* (If applicable) Circular buffer index for the second operand and tile offset from the buffer's read head
-* Offset (in number of tiles) to write the result to the ``Dst`` registers
+* Index of the circular buffer for the first operand, and the offset of the tile from the buffer's read head.
+* (If applicable) Index of the circular buffer for the second operand, and the offset of the tile from the buffer's read head.
+* Offset, in number of tiles, within the ``Dst`` registers to write the result.
 
-For example, to perform matrix multiplication pairwise:
+For example, to perform matrix multiplication:
 
 .. code-block:: c++
 
-    // Configure (un)packer and FPU into matmul mode
-    //      cb_in0        cb_in1        cb_out
+    // Configure (un)packer and FPU for matmul mode.
+    // The unpacker is configured based on cb_in0 and cb_in1.
+    // The packer is configured based on cb_out.
     mm_init(CBIndex::c_0, CBIndex::c_1, CBIndex::c_16);
 
-    // Repeated computation can be performed without re-initialization
-    for(int i=0;i<8;i++) {
-        // Wait for data to be available in the input circular buffers
+    // Repeated computation can be performed without re-initialization.
+    for(int i=0; i < 8; i++) {
+        // Wait for data to be available in the input circular buffers.
         cb_wait_front(CBIndex::c_0, 1); cb_wait_front(CBIndex::c_1, 1);
 
-        // Make sure dst registers are available for the math core
+        // Acquire Dst registers for the math core.
         tile_regs_acquire();
 
-        // Perform matrix multiplication by taking tile 0 from CB 0, tile 0 from CB 1
-        // and put into Dst tile 0.
+        // Perform matrix multiplication:
+        // - Take tile 0 from CB 0 and tile 0 from CB 1.
+        // - Place the result into Dst tile 0.
         //              cb_in0     cb_in1        in0_offset  in1_offset  dst_idx   transp
         matmul_tiles(CBIndex::c_0, CBIndex::c_1, 0         , 0         , 0      , false);
 
-        // We are done doing math. Transfer ownership of the dst registers to the unpacker
+        // Commit the results, transferring ownership of Dst registers to the packer.
         tile_regs_commit();
 
-        // We are not using the tile in the input CBs anymore
+        // Pop tiles from input CBs and reserve space in the output CB.
         cb_pop_front(CBIndex::c_0, 1); cb_pop_front(CBIndex::c_1, 1);
-        // Wait for space in the output circular buffer
         cb_reserve_back(CBIndex::c_16, 1);
 
-        // Now we can start packing the output
+        // Wait for the packer to be ready.
         tile_regs_wait();
 
-        // Copy tile from dst tile 0 into the output CB. This 0 is the same as
-        // the Dst tile index used in matmul_tiles
+        // Pack the result from Dst tile 0 into the output CB.
         pack_tile(/*src_dst_idx*/0, CBIndex::c_16, /*tile_offset_in_cb*/0);
-        // We have written the data to CB. Announce it to be done
+
+        // Announce that data has been written to the output CB.
         cb_push_back(CBIndex::c_16, 1);
 
-        // Unpacker is done with the dst registers. Release for the next round
+        // Release Dst registers for the next iteration.
         tile_regs_release();
     }
 
 .. warning::
-    Note that the same input circular buffers (``cb_in0`` and ``cb_in1``) must be specified in both ``mm_init`` and ``matmul_tiles``. Using different circular buffers between these calls results in undefined behavior, as the unpacker may be interpreting the data differently or reading into invalid/undefined memory.
+    The same input circular buffers (e.g., ``cb_in0`` and ``cb_in1``) must be specified in both ``mm_init`` and ``matmul_tiles``. Using different circular buffers between these calls results in undefined behavior, as the unpacker may interpret the data incorrectly or read from invalid memory.
 
-The information to configure the unpacker and packer is taken from the circular buffer metadata. In the above example, circular buffer 0 and 1 are used to configure the unpacker to unpack their data into ``SrcA`` and ``SrcB``. And the packer is configured to pack into the format of what circular buffer 16 is expecting.
+The configuration information for the unpacker and packer is derived from the circular buffer metadata. In the example above, circular buffers 0 and 1 are used to configure the unpacker to place their data into ``SrcA`` and ``SrcB``, respectively. The packer is configured to pack data into the format expected by circular buffer 16.
 
 Vector engine/SFPU
 ------------------
 
-The vector engine, or the SFPU, is designed for high-throughput processing of vector data. Unlike APIs using the matrix engine, APIs using the vector engine ask the user to explicitly unpack data onto the ``Dst`` registers before performing computations and packing the results back into L1 memory. This design enables easier chaining of operations.
+The vector engine, or SFPU, is designed for high-throughput processing of vector data. Unlike matrix engine APIs, SFPU APIs require the user to explicitly unpack data into the ``Dst`` registers before performing computations and then pack the results back into L1 memory. This design enables easier chaining of operations.
 
-An initialization phase is also required. A generic ``init_sfpu`` is needed to configure the unpacker and packer to consume and produce data in the type the input and output circular buffer needed. Due to hardware limitations, there is no support for setting up the unpacker for the second operand like operations using the FPU do. Like the matrix engine, if parameters are duplicated between the initialization and computation calls, they must be the same. Otherwise, it may lead to undefined behavior.
+The vector engine APIs also require an initialization phase. The ``init_sfpu`` function configures the unpacker and packer to handle the data types of the input and output circular buffers. Unlike the matrix engine, the unpacker cannot be configured for a second operand; it assumes that all input circular buffers contain the same underlying data type. As with the matrix engine, ensure that parameters are consistent between initialization and computation calls to avoid undefined behavior.
 
-For example, to compute the sine of a tile (duplicated comments from the above example are ignored):
+For example, to compute the element-wise sum of two tiles:
 
 .. code-block:: c++
 
-    // Configure the (un)packer to expect data formats held by the CBs
+    // Configure the (un)packer based on the data formats of the CBs.
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
     add_binary_tile_init();
 
-    for(int i=0;i<8;i++) {
+    for(int i=0; i < 8; i++) {
         cb_wait_front(CBIndex::c_0, 1); cb_wait_front(CBIndex::c_1, 1);
         tile_regs_acquire();
 
-        // Unpack the first tile from the CB into the first tile in DST
-        // This function involves both the unpacker and math core to ensure
-        // synchronization
+        // Unpack the first tile from CB 0 into Dst tile 0.
         copy_tile(CBIndex::c_0, /*tile_offset_in_cb*/0, /*dst_idx*/0);
-        // Same as above but into the second tile in Dst
+        // Unpack the first tile from CB 1 into Dst tile 1.
         copy_tile(CBIndex::c_1, /*tile_offset_in_cb*/0, /*dst_idx*/1);
 
-        // Add tile 0 and 1 in the dst registers together. Store result back
-        // into (the first argument) tile 0. Pseudo code:
-        // dst_tile[0] = dst_tile[0] + dst_tile[1]
+        // Add Dst tiles 0 and 1 together. Store the result back into Dst tile 0.
+        // Pseudocode: dst_tile[0] = dst_tile[0] + dst_tile[1]
         add_binary_tile(/*dst_idx_a*/0, /*dst_idx_b*/1);
-        // More operations can be chained and performed, if desired. e.g.,
-        // applying sigmoid.
-        // Applies sigmoid on dst register tile 0 and writes to dst register tile 0
+        // More operations can be chained here, e.g., applying sigmoid.
         // sigmoid_tile(0);
 
         tile_regs_commit();
@@ -262,12 +258,11 @@ For example, to compute the sine of a tile (duplicated comments from the above e
         tile_regs_wait();
         pack_tile(/*dst_idx*/0, CBIndex::c_16, /*tile_offset_in_cb*/0);
         cb_push_back(CBIndex::c_16, 1);
-
         tile_regs_release();
     }
 
 .. note::
-    ``copy_tile_init`` can be used to re-configure the unpacker to consume different data formats from circular buffers. If ``CBIndex::c_0`` and ``CBIndex::c_1`` contain different data types, the unpacking part of the above example can be rewritten to the following:
+    ``copy_tile_init`` can be used to re-configure the unpacker to consume different data formats from circular buffers. If ``CBIndex::c_0`` and ``CBIndex::c_1`` contain different data types, the unpacking part of the above example can be rewritten as follows:
 
     .. code-block:: c++
 
@@ -276,9 +271,9 @@ For example, to compute the sine of a tile (duplicated comments from the above e
         copy_tile_init(CBIndex::c_1);
         copy_tile(CBIndex::c_1, /*tile_offset_in_cb*/0, /*dst_offset_tiles*/1);
 
-    Also note that ``copy_tile_init`` is always needed if you are unpacking FP32 values into 32-bit ``Dst`` registers. As ``init_sfpu`` assumes a 16-bit storage size and sets up the unpacker to unpack as bfloat16. Some accuracy will be lost if an explicit extra initialization is not done.
+    Note that ``copy_tile_init`` is always needed when unpacking FP32 values into 32-bit ``Dst`` registers. ``init_sfpu`` assumes a 16-bit storage size and sets up the unpacker for bfloat16, which would cause a loss of precision if an explicit initialization is not performed.
 
-    Similarly, the ``pack_reconfig_data_format`` function and its variants are used to change the packer's output data format. This is necessary when a computation produces multiple tiles that must be written to circular buffers with different data formats. For example, to pack two tiles into two separate circular buffers, each with a unique data format:
+    Similarly, the ``pack_reconfig_data_format`` function and its variants can be used to change the packer's output data format. This is necessary when a computation produces multiple tiles that must be written to circular buffers with different data formats. For example, to pack two tiles into two separate circular buffers, each with a unique data format:
 
     .. code-block:: c++
 
@@ -287,16 +282,19 @@ For example, to compute the sine of a tile (duplicated comments from the above e
         pack_reconfig_data_format(CBIndex::c_17);
         pack_tile(/*src_idx*/1, CBIndex::c_17, /*tile_offset_in_cb*/0);
 
-After data is unpacked into the ``Dst`` registers, the vector engine can load data from ``Dst`` into ``LReg`` directly, without involving other hardware blocks. For more details on programming the SFPU, see the :ref:`Low Level Kernels programming guide <llk>`. The ``dst_reg`` variable provides an ``LReg``-sized view into the ``Dst`` registers. For example, on Wormhole and Blackhole, ``LReg`` is 32 elements wide, so the first ``Dst`` tile corresponds to ``dst_reg[0:31]``. To illustrate:
+After data is unpacked into the ``Dst`` registers, the vector engine can load data from ``Dst`` into its internal ``LReg`` registers directly, without involving other hardware blocks. For more details on programming the SFPU, see the :ref:`Low Level Kernels programming guide <llk>`. The ``dst_reg`` variable provides an ``LReg``-sized view into the ``Dst`` registers. For example, on Wormhole and Blackhole, ``LReg`` is 32 elements wide, so the first ``Dst`` tile corresponds to ``dst_reg[0:31]``. To illustrate:
 
 .. code-block:: c++
 
     void sfpu_example_function() {
-        vFloat vec1 = dst_reg[0]; // Load the first 32 elements of the 1st tile into LReg
-        vFloat vec2 = dst_reg[32]; // Load the first 32 elements of the 2nd tile into LReg
+        // Load the first 32 elements of the 1st tile into an LReg.
+        vFloat vec1 = dst_reg[0];
+        // Load the first 32 elements of the 2nd tile into another LReg.
+        vFloat vec2 = dst_reg[32];
 
-        dst_reg[0] = vec1; // Store the result back into the 1st tile
-        dst_reg[32] = vec2; // Store the result back into the 2nd tile
+        // Store the results back into the Dst registers.
+        dst_reg[0] = vec1;
+        dst_reg[32] = vec2;
     }
 
-Due to the :ref:`internal structure of tiles<internal_structure_of_a_tile>`, typically ``dst_reg[0:3]`` contains the first face of the tile. Similarly, ``dst_reg[4:7]`` contains the second face, and so on.
+Due to the :ref:`internal structure of tiles<internal_structure_of_a_tile>`, ``dst_reg[0:3]`` typically contains the first face of the tile, ``dst_reg[4:7]`` contains the second face, and so on.
