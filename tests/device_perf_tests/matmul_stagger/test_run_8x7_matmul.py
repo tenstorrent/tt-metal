@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 import ttnn
 from tests.device_perf_tests.matmul_stagger.test_matmul_stagger import MATMUL_VARIANTS
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (

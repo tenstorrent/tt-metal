@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from loguru import logger
 from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor
 from models.experimental.vovnet.tt.vovnet import TtVoVNet
-from models.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.vovnet.common import load_torch_model
 

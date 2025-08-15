@@ -13,7 +13,7 @@ import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_TRACE_REGION_SIZE
 import json
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"

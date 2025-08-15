@@ -9,11 +9,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()

@@ -10,7 +10,7 @@ import ttnn
 import itertools
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import is_blackhole, skip_for_wormhole_b0
 
 
 def random_torch_tensor(dtype, shape):

@@ -12,10 +12,10 @@ from skimage.io import imsave
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vanilla_unet.common import load_torch_model
 from models.demos.vanilla_unet.demo import demo_utils
 from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
-from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()

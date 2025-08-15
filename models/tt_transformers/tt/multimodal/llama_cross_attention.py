@@ -5,7 +5,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole
 
 
 class TtLlamaCrossAttention(LightweightModule):

@@ -6,8 +6,8 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
-from models.utility_functions import is_blackhole
 
 
 class TtLlamaCrossAttentionTransformerVision(LightweightModule):

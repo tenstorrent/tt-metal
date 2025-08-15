@@ -4,7 +4,7 @@
 
 import pytest
 from loguru import logger
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
 

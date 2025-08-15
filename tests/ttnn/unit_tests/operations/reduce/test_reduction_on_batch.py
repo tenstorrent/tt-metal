@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(

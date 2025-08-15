@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from models.utility_functions import comp_pcc, skip_for_blackhole, run_for_wormhole_b0
+from models.common.utility_functions import comp_pcc, skip_for_blackhole, run_for_wormhole_b0
 
 
 @skip_for_blackhole()

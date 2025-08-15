@@ -10,7 +10,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 

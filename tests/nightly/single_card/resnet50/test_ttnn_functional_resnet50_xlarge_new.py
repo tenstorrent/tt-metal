@@ -16,7 +16,7 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
+from models.common.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
     enable_memory_reports,
     is_wormhole_b0,

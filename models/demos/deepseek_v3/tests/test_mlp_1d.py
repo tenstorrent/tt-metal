@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
 from models.demos.deepseek_v3.tt.mlp.mlp_1d import MLP1D
 from models.demos.deepseek_v3.tt.mlp.mlp_1d_dequant import MLP1DDequant
@@ -21,7 +22,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_state_dict,
     run_module_forward,
 )
-from models.utility_functions import comp_pcc
 
 DEVICE_SHAPE = ttnn.MeshShape(2, min(ttnn.get_num_devices() // 2, 8))
 

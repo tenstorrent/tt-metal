@@ -13,7 +13,7 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
     run_rms_trace,

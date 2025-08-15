@@ -11,8 +11,8 @@ from torch import nn
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
-from models.utility_functions import nearest_32
 from ttnn import ShardTensor2dMesh, replicate_tensor_to_mesh_mapper
 
 

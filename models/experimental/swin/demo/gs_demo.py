@@ -8,7 +8,7 @@ from loguru import logger
 from torchvision.utils import save_image
 
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )

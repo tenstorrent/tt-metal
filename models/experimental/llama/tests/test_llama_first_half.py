@@ -11,7 +11,7 @@ from models.llama.llama_utils import (
     prepare_llama_input,
     gen_position_ids,
 )
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
     comp_allclose_and_pcc,

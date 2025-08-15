@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.efficientnetb0.runner.performant_runner import EfficientNetb0PerformantRunner
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.efficientnetb0.common import EFFICIENTNETB0_L1_SMALL_SIZE
 
 

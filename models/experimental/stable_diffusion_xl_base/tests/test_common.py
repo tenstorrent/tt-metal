@@ -8,7 +8,7 @@ import ttnn
 import torch
 import inspect
 from typing import List, Optional, Union
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 
 from tqdm import tqdm
 import ttnn

@@ -20,7 +20,7 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
 )
 

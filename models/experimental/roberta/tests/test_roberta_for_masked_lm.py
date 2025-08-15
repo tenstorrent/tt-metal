@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, RobertaForMaskedLM
 import pytest
 
 from models.experimental.roberta.tt.roberta_for_masked_lm import TtRobertaForMaskedLM
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,

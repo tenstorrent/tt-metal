@@ -7,10 +7,10 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import divup, is_wormhole_b0
 from models.demos.yolov8s.common import load_torch_model
 from models.demos.yolov8s.tt.tt_yolov8s_utils import create_custom_mesh_preprocessor
 from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
-from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

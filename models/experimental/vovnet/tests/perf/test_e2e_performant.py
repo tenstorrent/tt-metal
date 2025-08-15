@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from models.experimental.vovnet.runner.performant_runner import VovnetPerformantRunner
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.vovnet.common import VOVNET_L1_SMALL_SIZE
 
 

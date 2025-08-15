@@ -10,8 +10,8 @@ import ttnn
 from typing import Optional, Tuple
 from loguru import logger
 
-from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import (
+from models.common.helper_funcs import Linear as TTLinear
+from models.common.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
     pad_by_zero,

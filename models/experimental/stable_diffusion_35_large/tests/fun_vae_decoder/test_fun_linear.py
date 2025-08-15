@@ -9,7 +9,7 @@ from loguru import logger
 
 from ...tt.fun_vae_decoder.fun_linear import vae_linear, TtLinearParameters
 from ...tt.utils import assert_quality, to_torch
-from models.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc
 from ...tt.parallel_config import StableDiffusionParallelManager
 
 

@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import run_for_grayskull
 from models.demos.ttnn_resnet.tests.perf_device_resnet50 import run_perf_device
-from models.utility_functions import run_for_grayskull
 
 
 @run_for_grayskull()

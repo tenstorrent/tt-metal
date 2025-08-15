@@ -19,7 +19,7 @@ from models.experimental.t5.tt.t5_attention import (
     t5_shape_pt,
 )
 from tt_lib.fused_ops.softmax import softmax as tt_softmax
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,

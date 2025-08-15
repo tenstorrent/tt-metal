@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from models.utility_functions import tilize
+from models.common.utility_functions import tilize
 
 
 @pytest.mark.parametrize(

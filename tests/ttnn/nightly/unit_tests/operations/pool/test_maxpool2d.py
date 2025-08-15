@@ -9,7 +9,7 @@ import ttnn
 import pytest
 import math
 
-from models.utility_functions import is_wormhole_b0, is_x2_harvested
+from models.common.utility_functions import is_wormhole_b0, is_x2_harvested
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

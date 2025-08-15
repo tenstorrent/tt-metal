@@ -8,8 +8,8 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
-from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()

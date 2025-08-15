@@ -7,6 +7,7 @@ import torch
 from diffusers import AutoencoderKL
 
 import ttnn
+from models.common.utility_functions import skip_for_blackhole
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
@@ -14,7 +15,6 @@ from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     UPBLOCK_RESNET_NORM_NUM_BLOCKS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_resnet import ResnetBlock
-from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

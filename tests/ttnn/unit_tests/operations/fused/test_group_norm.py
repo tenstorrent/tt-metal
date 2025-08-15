@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.utility_functions import skip_for_wormhole_b0, comp_pcc
+from models.common.utility_functions import skip_for_wormhole_b0, comp_pcc
 
 
 # for debug purpose

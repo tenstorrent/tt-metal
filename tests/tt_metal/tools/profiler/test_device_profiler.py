@@ -23,7 +23,7 @@ from tt_metal.tools.profiler.common import (
     clear_profiler_runtime_artifacts,
 )
 
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"

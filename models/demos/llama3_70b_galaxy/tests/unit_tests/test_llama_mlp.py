@@ -9,11 +9,11 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 

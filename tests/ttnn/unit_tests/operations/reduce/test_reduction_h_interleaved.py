@@ -9,7 +9,7 @@ from functools import partial
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 

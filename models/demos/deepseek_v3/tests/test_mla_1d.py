@@ -10,13 +10,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_mla as reference_forward
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import MAX_START_POS
-from models.utility_functions import comp_pcc
 
 
 @pytest.fixture

@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, skip_for_grayskull
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.utility_functions import is_blackhole, is_wormhole_b0, skip_for_grayskull
 
 
 def run_bert_perf(batch_size, test, expected_perf):

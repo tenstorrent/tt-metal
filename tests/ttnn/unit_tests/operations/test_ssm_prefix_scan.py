@@ -7,7 +7,7 @@ import torch
 import ttnn
 import pytest
 from loguru import logger
-from models.utility_functions import tt2torch_tensor, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import tt2torch_tensor, comp_pcc, skip_for_grayskull
 
 
 def sequential_prefix_scan(a, bx, h_prev):

@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 class TtUpsample(torch.nn.Module):

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import copy
 
 import ttnn
-from models.utility_functions import comp_allclose
+from models.common.utility_functions import comp_allclose
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -20,7 +20,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_torch,
     to_ttnn,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
 def torch_layer_norm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):

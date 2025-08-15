@@ -10,7 +10,7 @@ import ttnn
 
 from math import pi
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, pcc=0.9999):

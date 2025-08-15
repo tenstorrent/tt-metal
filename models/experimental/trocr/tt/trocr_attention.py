@@ -10,8 +10,8 @@ from typing import Optional, Tuple
 import ttnn
 from tt_lib import fallback_ops
 
-from models.helper_funcs import Linear
-from models.utility_functions import torch_to_tt_tensor_rm
+from models.common.helper_funcs import Linear
+from models.common.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtTrOCRAttention(nn.Module):

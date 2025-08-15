@@ -7,7 +7,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.utility_functions import is_wormhole_b0, is_blackhole, skip_for_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_blackhole, skip_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 
 

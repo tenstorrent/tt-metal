@@ -9,8 +9,8 @@ from torchvision.models.detection import (
     SSDLite320_MobileNet_V3_Large_Weights,
     ssdlite320_mobilenet_v3_large as pretrained,
 )
-from models.utility_functions import torch_to_tt_tensor_rm
-from models.utility_functions import (
+from models.common.utility_functions import torch_to_tt_tensor_rm
+from models.common.utility_functions import (
     comp_allclose,
     comp_pcc,
 )

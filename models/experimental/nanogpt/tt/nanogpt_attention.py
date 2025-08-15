@@ -5,9 +5,9 @@
 import torch.nn as nn
 import ttnn
 import math
-from models.helper_funcs import Linear
+from models.common.helper_funcs import Linear
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )

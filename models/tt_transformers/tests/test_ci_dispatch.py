@@ -6,7 +6,7 @@ import os
 import pytest
 from loguru import logger
 
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 
 
 # This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]

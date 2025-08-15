@@ -22,7 +22,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     create_user_tensors,
 )
 import os
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 
 
 @torch.no_grad()
