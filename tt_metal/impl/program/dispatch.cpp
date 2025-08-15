@@ -109,12 +109,11 @@ CoreCoord get_sub_device_worker_origin(
     return grid.bounding_box().start_coord;
 }
 
-DispatchWriteOffsets get_dispatch_write_offset(CoreType core_type, bool prefer_zero = false) {
+DispatchWriteOffsets get_dispatch_write_offset(HalProgrammableCoreType core_type, bool prefer_zero = false) {
     switch (core_type) {
-        case CoreType::ETH:
-        case CoreType::ACTIVE_ETH:
-        case CoreType::IDLE_ETH: return DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE;
-        case CoreType::WORKER:
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH: return DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE;
+        case HalProgrammableCoreType::TENSIX:
             return prefer_zero ? DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ZERO
                                : DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE;
         default: TT_THROW("Invalid core type get_dispatch_write_offset {}", enchantum::to_string(core_type));
@@ -715,7 +714,8 @@ BatchedTransfers assemble_runtime_args_commands(
     }
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        if (hal.get_programmable_core_type(index) == HalProgrammableCoreType::IDLE_ETH) {
+        auto programmable_core_type = hal.get_programmable_core_type(index);
+        if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Fast dispatch not supported on IDLE_ETH yet
             // TODO: can't just loop here as code below confuses ACTIVE/IDLE
             continue;
@@ -771,7 +771,7 @@ BatchedTransfers assemble_runtime_args_commands(
                     unique_rt_args_data,
                     constants,
                     false,
-                    get_dispatch_write_offset(core_type));
+                    get_dispatch_write_offset(programmable_core_type));
                 for (auto& data_per_kernel : unique_rt_data_and_sizes) {
                     for (auto& data_and_sizes : data_per_kernel) {
                         RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
@@ -868,7 +868,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                 common_rt_args_data,
                                 constants,
                                 true,
-                                get_dispatch_write_offset(core_type));
+                                get_dispatch_write_offset(programmable_core_type));
                             sub_cmds.clear();
                         },
                         common_sub_cmds);
@@ -1112,10 +1112,8 @@ public:
 
                     // Set write offset if required
                     auto write_offset = DISPATCH_WRITE_OFFSET_ZERO;
-                    if (hal.get_core_has_kernel_config_buffer(
-                            get_programmable_core_type_from_riscv(kg_transfer_info.riscvs[kernel_idx]))) {
-                        write_offset = get_dispatch_write_offset(
-                            get_core_type_from_riscv(kg_transfer_info.riscvs[kernel_idx]), true);
+                    if (hal.get_core_has_kernel_config_buffer(kg_transfer_info.core_type)) {
+                        write_offset = get_dispatch_write_offset(kg_transfer_info.core_type, true);
                     }
                     kernel_bins_unicast_cmds.back().add_dispatch_write_linear<flush_prefetch>(
                         num_mcast_dests,  // num_mcast_dests

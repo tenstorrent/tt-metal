@@ -108,14 +108,6 @@ inline void initialize_local_memory() {
     l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
 }
 
-inline void overwrite_host_mailbox_to_done() {
-    // BH-104 / https://github.com/tenstorrent/tt-metal/issues/25427
-    // Set the host mailbox to done to be safe
-    invalidate_l1_cache();
-    all_eth_mailbox_t* mailbox = reinterpret_cast<all_eth_mailbox_t*>(MEM_SYSENG_ETH_MAILBOX_ADDR);
-    mailbox->mailbox[0].msg = MEM_SYSENG_ETH_MSG_DONE | (mailbox->mailbox[0].msg & MEM_SYSENG_ETH_MSG_TYPE_MASK);
-}
-
 void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
     configure_csr();
@@ -127,12 +119,6 @@ void __attribute__((noinline)) Application(void) {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     risc_init();
-
-    // BH-104 Workaround: ignore a duplicate host disable (0) from a previous run until
-    // the first GO of this instance, but only for a short grace window so that
-    // a legitimate immediate close (without GO) can still succeed.
-    bool ignore_disable_until_first_go = true;
-    uint32_t ignore_disable_spin_budget = 30000;  // small fence-spins budget
 
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
@@ -166,7 +152,7 @@ void __attribute__((noinline)) Application(void) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (!ignore_disable_until_first_go && gEnableFwFlag[0] != 1) {
+            if (gEnableFwFlag[0] != 1) {
                 return;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
@@ -181,24 +167,8 @@ void __attribute__((noinline)) Application(void) {
             } else {
                 service_base_fw();
             }
-
-            // Expire the grace window to honor legitimate immediate exit without GO
-            // No writes expected into any mailbox slot while metal is running
-            if (ignore_disable_until_first_go && ignore_disable_spin_budget > 0) {
-                ignore_disable_spin_budget--;
-                overwrite_host_mailbox_to_done();
-                if (ignore_disable_spin_budget == 0) {
-                    ignore_disable_until_first_go = false;
-                }
-            }
         }
         WAYPOINT("GD");
-        // First valid GO observed; re-arm normal exit behavior and clear any stale disable
-        // overwrite_host_mailbox_to_done() not needed because host is not checking this value at this point
-        if (ignore_disable_until_first_go) {
-            ignore_disable_until_first_go = false;
-            gEnableFwFlag[0] = 1;
-        }
 
         {
             // Only include this iteration in the device profile if the launch message is valid. This is because all

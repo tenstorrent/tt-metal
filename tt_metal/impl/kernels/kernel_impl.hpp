@@ -18,12 +18,6 @@
 
 namespace tt::tt_metal {
 
-// Utility function to get the programmable core type from a RISCV processor
-HalProgrammableCoreType get_programmable_core_type_from_riscv(tt::RISCV riscv_processor, bool is_idle_eth = false);
-
-// Utility function to get the core type from a RISCV processor
-CoreType get_core_type_from_riscv(tt::RISCV riscv_processor);
-
 class KernelImpl : public Kernel, public JitBuildSettings {
 public:
     const std::vector<const ll_api::memory*>& binaries(uint32_t build_key) const;

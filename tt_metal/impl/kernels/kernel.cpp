@@ -85,38 +85,6 @@ KernelSource::KernelSource(const std::string& source, const SourceType& source_t
     }
 };
 
-HalProgrammableCoreType get_programmable_core_type_from_riscv(RISCV riscv_processor, bool is_idle_eth) {
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: {
-            return HalProgrammableCoreType::TENSIX;
-        }
-        case RISCV::ERISC0:
-        case RISCV::ERISC1: {
-            return is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-        }
-        default: TT_ASSERT(false, "Unsupported kernel processor {}", enchantum::to_string(riscv_processor));
-    }
-    return HalProgrammableCoreType::TENSIX;
-}
-
-CoreType get_core_type_from_riscv(RISCV riscv_processor) {
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: {
-            return CoreType::WORKER;
-        }
-        case RISCV::ERISC0:
-        case RISCV::ERISC1: {
-            return CoreType::ETH;
-        }
-        default: TT_ASSERT(false, "Unsupported kernel processor {}", enchantum::to_string(riscv_processor));
-    }
-    return CoreType::WORKER;
-}
-
 Kernel::Kernel(
     HalProgrammableCoreType programmable_core_type,
     HalProcessorClassType processor_class,
