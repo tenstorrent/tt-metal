@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <enchantum/enchantum.hpp>
+
 #include <stdint.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
@@ -106,7 +108,7 @@ static void configure_risc_settings(
             }
         }
     } else {
-        TT_THROW("Unsupported architecture for RISC configuration: {}", magic_enum::enum_name(arch));
+        TT_THROW("Unsupported architecture for RISC configuration: {}", enchantum::to_string(arch));
     }
 }
 
@@ -149,6 +151,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     uint32_t num_downstream_edms = get_downstream_edm_count(topology);
     // Global
     size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+
+    // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
+    // memory for the telemetry buffer in Blackhole
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry() || tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        // Avoid a bug on BH, always allocate the space for the telemetry buffer
+        this->perf_telemetry_buffer_address = next_l1_addr;
+        next_l1_addr += 32;
+    }
+
     this->handshake_addr = next_l1_addr;
     next_l1_addr += eth_channel_sync_size;
 
@@ -255,9 +266,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
     std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots) {
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> linear_buffer_slot_options = {
-        {{8, 16}}, {{8, 16}}};
-
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
         {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
 
@@ -271,6 +279,30 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     static const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>
         ring_buffer_slot_options_dateline_upstream_adjcent = {
             {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}, {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}};
+
+    auto get_num_buffer_slots = [](Topology topology,
+                                   size_t arch_index) -> const std::vector<std::pair<size_t, size_t>>& {
+        // Architecture-specific buffer slot configurations
+        static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {
+            {{7, 11}, {4, 8}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
+            {{8, 16}, {4, 8}}   // BLACKHOLE: {sender_slots, receiver_slots}
+        };
+        static const std::vector<std::vector<std::pair<size_t, size_t>>> other_buffer_slot_options = {
+            {{8, 16}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
+            {{8, 16}}   // BLACKHOLE: {sender_slots, receiver_slots}
+        };
+
+        static tt::stl::Indestructible<std::vector<std::vector<std::pair<size_t, size_t>>>> mesh_slots(
+            mesh_buffer_slot_options);
+        static tt::stl::Indestructible<std::vector<std::vector<std::pair<size_t, size_t>>>> other_slots(
+            other_buffer_slot_options);
+
+        if (topology == Topology::Mesh) {
+            return mesh_slots.get()[arch_index];
+        } else {
+            return other_slots.get()[arch_index];
+        }
+    };
 
     auto get_optimal_num_slots = [this](
                                      auto& buffer_slot_options,
@@ -329,7 +361,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     } else if (arch == tt::ARCH::BLACKHOLE) {
         arch_index = 1;
     } else {
-        TT_THROW("Unsupported architecture: {}", magic_enum::enum_name(arch));
+        TT_THROW("Unsupported architecture: {}", enchantum::to_string(arch));
     }
 
     if (topology == Topology::Ring) {
@@ -475,7 +507,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            linear_buffer_slot_options[arch_index],
+            get_num_buffer_slots(topology, arch_index),
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
@@ -807,9 +839,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
     // because this function is called several times for same device which overwrites info written by previous calls
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
-    auto& connection_info = fabric_connections.connections[eth_channel];
+    auto& connection_info = fabric_connections.read_only[eth_channel];
     connection_info.edm_direction = connection.edm_direction;
-    connection_info.edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y).to_uint32();
+    connection_info.edm_noc_x = connection.edm_noc_x;
+    connection_info.edm_noc_y = connection.edm_noc_y;
     connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
     connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
     connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;
@@ -822,7 +855,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     //       we want to reduce the number of write_core calls
     fabric_connections.valid_connections_mask |= (1u << eth_channel);
 
-    size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, connections) +
+    size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, read_only) +
                                eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t);
     // Write to Tensix cores
     std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
@@ -925,6 +958,16 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         false);
 }
 
+void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const {
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    uint32_t telemetry_mode = static_cast<uint32_t>(
+        rtoptions.get_enable_fabric_telemetry() ? 1 : 0);
+    ct_args.push_back(telemetry_mode);
+
+    // Add telemetry buffer address (16B aligned)
+    ct_args.push_back(static_cast<uint32_t>(config.perf_telemetry_buffer_address));
+}
+
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
     TT_ASSERT(this->local_fabric_node_id != this->peer_fabric_node_id);
 
@@ -969,7 +1012,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         } else if (dispatch_core_type == CoreType::ETH) {
             return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
         } else {
-            TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(dispatch_core_type));
+            TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
         }
     }();
 
@@ -1155,6 +1198,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);
 
+    get_telemetry_compile_time_args(ct_args);
+
+    // Special marker 2
+    ct_args.push_back(0x20c0ffee);
+
     bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
     if (multi_txq_enabled) {
         for (size_t i = 0; i < num_sender_channels; i++) {
@@ -1171,7 +1219,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         }
     }
 
-    ct_args.push_back(0x20c0ffee);
+    ct_args.push_back(0x30c0ffee);
     return ct_args;
 }
 
@@ -1287,57 +1335,24 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         // 1D has 1 downstream edm. 2D has 3 downstream EDMs
         // 2D uses the reserved addresses in L1 from FabricEriscDatamoverConfig
         for (uint32_t i = 0; i < num_vc0_downstream_edms; i++) {
-            if (mesh) {
-                receiver_channels_downstream_flow_control_semaphore_id[i] =
-                    config.receiver_channels_downstream_flow_control_semaphore_address[i];
-                receiver_channels_downstream_teardown_semaphore_id[i] =
-                    config.receiver_channels_downstream_teardown_semaphore_address[i];
-            } else {
-                receiver_channels_downstream_flow_control_semaphore_id[i] =
-                    tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                receiver_channels_downstream_teardown_semaphore_id[i] =
-                    tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-            }
+            receiver_channels_downstream_flow_control_semaphore_id[i] =
+                config.receiver_channels_downstream_flow_control_semaphore_address[i];
+            receiver_channels_downstream_teardown_semaphore_id[i] =
+                config.receiver_channels_downstream_teardown_semaphore_address[i];
         }
         // Setup VC1 downstream edm
         // 1D and 2D have 1 downstream edm for VC1 in the diretion of respective axis
-        if (mesh) {
-            receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms] =
-                config.receiver_channels_downstream_flow_control_semaphore_address[num_vc0_downstream_edms];
-            receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms] =
-                config.receiver_channels_downstream_teardown_semaphore_address[num_vc0_downstream_edms];
-
-        } else {
-            receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms] =
-                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-            receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms] =
-                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        }
+        receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms] =
+            config.receiver_channels_downstream_flow_control_semaphore_address[num_vc0_downstream_edms];
+        receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms] =
+            config.receiver_channels_downstream_teardown_semaphore_address[num_vc0_downstream_edms];
         uint32_t num_sender_channels = mesh ? FabricEriscDatamoverConfig::num_sender_channels_2d
                                             : FabricEriscDatamoverConfig::num_sender_channels_1d;
         for (uint32_t i = 0; i < num_sender_channels; i++) {
-            if (mesh) {
-                sender_channels_buffer_index_semaphore_id[i] = config.sender_channels_buffer_index_semaphore_address[i];
-                sender_channels_flow_control_semaphore_id[i] =
-                    config.sender_channels_local_flow_control_semaphore_address[i];
-                sender_channels_connection_semaphore_id[i] = config.sender_channels_connection_semaphore_address[i];
-            } else {
-                if (i == 0) {
-                    // Sender channel 0 uses addresses instead of ids in persistent mode
-                    sender_channels_buffer_index_semaphore_id[i] =
-                        config.sender_channels_buffer_index_semaphore_address[i];
-                    sender_channels_flow_control_semaphore_id[i] =
-                        config.sender_channels_local_flow_control_semaphore_address[i];
-                    sender_channels_connection_semaphore_id[i] = config.sender_channels_connection_semaphore_address[i];
-                } else {
-                    sender_channels_flow_control_semaphore_id[i] =
-                        tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                    sender_channels_connection_semaphore_id[i] =
-                        tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                    sender_channels_buffer_index_semaphore_id[i] =
-                        tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                }
-            }
+            sender_channels_buffer_index_semaphore_id[i] = config.sender_channels_buffer_index_semaphore_address[i];
+            sender_channels_flow_control_semaphore_id[i] =
+                config.sender_channels_local_flow_control_semaphore_address[i];
+            sender_channels_connection_semaphore_id[i] = config.sender_channels_connection_semaphore_address[i];
         }
     }
     return FabricEriscDatamoverBuilder(

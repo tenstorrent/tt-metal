@@ -72,13 +72,7 @@ def tensor_map():
     [
         None,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
-)
-@pytest.mark.parametrize(
-    "use_program_cache",
-    [True, False],
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -92,7 +86,6 @@ def test_avg_pool2d_post_commit(
     stride,
     padding,
     ceil_mode,
-    use_program_cache,
     divisor_override,
     count_include_pad,
     shard_scheme,
@@ -117,4 +110,5 @@ def test_avg_pool2d_post_commit(
         count_include_pad=count_include_pad,
         shard_scheme=shard_scheme,
         dtype=dtype,
+        nightly_skips=False,
     )

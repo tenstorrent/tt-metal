@@ -34,22 +34,35 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [
-          {name: All C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
-          {name: tools, cmd: ./tests/scripts/run_tools_tests.sh},
-
-          {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools"},
-          {name: dispatch, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch"},
-          {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
-          {name: misc, cmd: "./build/test/tt_metal/unit_tests_misc"},
-          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests"},
-          {name: distributed_multiprocess, cmd: "./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh"},
-          {name: dispatch multicmd queue fixture, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*"},
-          {name: dispatch unit mesh multicmd queue fixture, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*"},
-          {name: ttnn cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
-          {name: ttnn ccl cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl},
-          {name: ttnn ccl ops cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl_ops},
-        ]
+        test-group:
+          - name: All C++
+            cmd: ./tests/scripts/run_cpp_unit_tests.sh # 15 minutes
+          - name: CCL
+            cmd: |
+              ./build/test/ttnn/unit_tests_ttnn_ccl
+              ./build/test/ttnn/unit_tests_ttnn_ccl_ops
+          - name: dispatch
+            cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch" # 15 minutes
+          - name: dispatch multicmd queue
+            cmd: |
+              TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
+          - name: distributed
+            cmd: |
+              ./build/test/tt_metal/distributed/distributed_unit_tests
+              ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh
+          - name: eth, misc, and user kernel path
+            cmd: |
+              ./build/test/tt_metal/unit_tests_eth
+              ./build/test/tt_metal/unit_tests_misc
+              rm -rf /tmp/kernels
+              mkdir -p /tmp/kernels
+              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
+          - name: tools
+            cmd: |
+              ./tests/scripts/run_tools_tests.sh
+              ./build/test/tt_metal/unit_tests_debug_tools
+          - name: ttnn tensor accessor
+            cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
@@ -71,7 +84,7 @@ jobs:
     runs-on: >-
       ${{
         (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
-        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        || (github.event.pull_request.head.repo.fork == true || inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:

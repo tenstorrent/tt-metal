@@ -7,7 +7,7 @@
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
 #include <persistent_kernel_cache.hpp>
 #include <semaphore.hpp>
@@ -569,7 +569,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
                 grid[core_index].valid = true;
-                grid[core_index].update(magic_enum::enum_cast<dispatch_core_processor_classes>(kernel->dispatch_class()).value(), id);
+                grid[core_index].update(enchantum::cast<dispatch_core_processor_classes>(kernel->dispatch_class()).value(), id);
             }
         }
 
@@ -1292,7 +1292,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                 }
                 TT_FATAL(num_intersections == num_cores,
                          "Kernel group cores do not match sub device cores for programmable core type {}",
-                         magic_enum::enum_name(core_type));
+                         enchantum::to_string(core_type));
             };
             find_sub_device_ids(HalProgrammableCoreType::TENSIX);
             find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
@@ -1792,7 +1792,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             "Program size ({}) too large for kernel config buffer ({}) on {}",
             state.offset,
             max_size,
-            magic_enum::enum_name(programmable_core_type));
+            enchantum::to_string(programmable_core_type));
 
         for (auto& program : programs) {
             program->set_program_offsets_and_sizes(index, state);

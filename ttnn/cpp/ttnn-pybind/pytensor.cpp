@@ -36,6 +36,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -952,34 +953,6 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<IDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
-            py::arg("device").noconvert(),
-            py::arg("mem_config").noconvert() = MemoryConfig{},
-            py::arg("cq_id") = ttnn::DefaultQueueId,
-            py::keep_alive<0, 2>(),
-            R"doc(
-            Move TT Tensor from host device to TT accelerator device.
-
-            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
-
-            If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
-
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | Argument  | Description                                     | Data type                  | Valid range           | Required |
-            +===========+=================================================+============================+=======================+==========+
-            | arg0      | Device to which tensor will be moved            | ttnn.Device                | TT accelerator device | Yes      |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | arg1      | MemoryConfig of tensor of TT accelerator device | ttnn.MemoryConfig          |                       | No       |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | arg2      | CQ ID of TT accelerator device to use           | uint8_t                    |                       | No       |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-
-            .. code-block:: python
-
-                tt_tensor = tt_tensor.to(tt_device)
-        )doc")
-        .def(
-            "to",
             py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{},
@@ -1514,36 +1487,19 @@ void pytensor_module(py::module& m_tensor) {
 
         )doc")
         .def(
-            "buffer",
-            [](const Tensor& self) -> HostBuffer {
-                return std::visit(
-                    tt::stl::overloaded{
-                        [](const HostStorage& s) -> HostBuffer {
-                            std::vector<HostBuffer> buffers;
-                            s.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                            TT_FATAL(
-                                buffers.size() == 1,
-                                "Can't get a single buffer from host storage distributed over mesh shape {}. Did you "
-                                "forget to use mesh composer to concatenate tensor shards?",
-                                s.buffer().shape());
-                            return buffers.front();
-                        },
-                        [&](const DeviceStorage& s) -> HostBuffer {
-                            TT_THROW(
-                                "{} doesn't support buffer method",
-                                tt::stl::get_active_type_name_in_variant(self.storage()));
-                        },
-                    },
-                    self.storage());
+            "host_buffer",
+            [](Tensor& self) -> DistributedHostBuffer {
+                TT_FATAL(self.storage_type() == StorageType::HOST, "Tensor must be on host to access host_buffer");
+                return self.host_storage().buffer();
             },
             R"doc(
-            Get the underlying buffer.
+            Get the underlying host buffer.
 
             The tensor must be on the cpu when calling this function.
 
             .. code-block:: python
 
-                buffer = tt_tensor.cpu().buffer() # move TT Tensor to host and get the buffer
+                buffer = tt_tensor.cpu().host_buffer() # move TT Tensor to host and get the buffer
 
         )doc")
         .def(

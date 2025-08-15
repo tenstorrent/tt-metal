@@ -23,20 +23,19 @@ namespace utils {
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::SUB:
+        case BinaryOpType::MUL:
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT16 && b == DataType::UINT16));
-        case BinaryOpType::MUL:
-            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
-        case BinaryOpType::SQUARED_DIFFERENCE:
-        case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::BIAS_GELU: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
+        case BinaryOpType::SQUARED_DIFFERENCE:
         case BinaryOpType::GT:
         case BinaryOpType::LT:
         case BinaryOpType::GE:
@@ -53,6 +52,7 @@ namespace utils {
         case BinaryOpType::BITWISE_AND: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
+        case BinaryOpType::XLOGY:
         case BinaryOpType::POWER: return true;
         default: return false;
     }
@@ -116,7 +116,6 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
     using namespace tt::constants;
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
-    const auto& output_tensor = tensor_args.output_tensor;
 
     TT_FATAL(input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
 
@@ -177,7 +176,6 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
 void BinaryDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& output_tensor = tensor_args.output_tensor;
 
     const auto& input_shape_a = input_tensor_a.logical_shape();
 

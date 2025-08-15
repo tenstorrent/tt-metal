@@ -22,11 +22,13 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // param_out
-    auto param_out = InterleavedAddrGenFastHelper(param_out_addr, cb_param_out, 0);
+    constexpr auto param_out_args = TensorAccessorArgs<0>();
+    auto param_out = TensorAccessor(param_out_args, param_out_addr, get_tile_size(cb_param_out));
 
 // param_out
 #if defined(MOMENTUM)
-    auto momentum_out = InterleavedAddrGenFastHelper(momentum_out_addr, cb_momentum_out, 1);
+    constexpr auto momentum_out_args = TensorAccessorArgs<param_out_args.next_compile_time_args_offset()>();
+    auto momentum_out = TensorAccessor(momentum_out_args, momentum_out_addr, get_tile_size(cb_momentum_out));
 #endif
 
     uint32_t l1_read_addr;

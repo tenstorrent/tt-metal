@@ -50,9 +50,9 @@ There's in total 3 buffers to be created:
 * A DRAM buffer that will house input data
 * A DRAM buffer that will be written to with output data
 
-Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won't touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in each buffer.
-
 There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MB.
+
+Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won't touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in for each (input and output) DRAM buffer. Thus the total size of each DRAM buffer is 50 * 2048 = 102400 bytes. And a single tile worth of buffer on the L1 is 2048 bytes as well. So that we can copy a single tile at a time.
 
 Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enabels easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.
 
@@ -115,12 +115,15 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 .. code-block:: cpp
 
     constexpr CoreCoord core = {0, 0};
+    std::vector<uint32_t> compile_args;
+    TensorAccessorArgs(*input_dram_buffer).append_to(compile_args);
+    TensorAccessorArgs(*output_dram_buffer).append_to(compile_args);
 
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
         "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = compile_args}
     );
 
 .. note::
@@ -135,7 +138,7 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
 The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
 
-The ``InterleavedAddrGenFast`` object handles bank addressing and page size automatically, simplifying interleaved buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use ``noc_async_read_barrier()`` and ``noc_async_write_barrier()`` after each operation to ensure data integrity before proceeding to the next loop iteration.
+The ``TensorAccessor`` object handles bank addressing and page size automatically, simplifying interleaved or sharded buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use ``noc_async_read_barrier()`` and ``noc_async_write_barrier()`` after each operation to ensure data integrity before proceeding to the next loop iteration.
 
 .. code-block:: cpp
 
@@ -147,17 +150,12 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
         std::uint32_t num_tiles             = get_arg_val<uint32_t>(3);
 
         const uint32_t tile_size_bytes = 32 * 32 * 2; // same tile size as in the host code
-        const InterleavedAddrGenFast<true> in0 = {
-            .bank_base_address = dram_buffer_src_addr, // The base address of the buffer
-            .page_size = tile_size_bytes,              // The size of a buffer page
-            .data_format = DataFormat::Float16_b,      // The data format of the buffer
-        };
 
-        const InterleavedAddrGenFast<true> out0 = {
-            .bank_base_address = dram_buffer_dst_addr,
-            .page_size = tile_size_bytes,
-            .data_format = DataFormat::Float16_b,
-        };
+        constexpr auto in0_args = TensorAccessorArgs<0>();
+        const auto in0 = TensorAccessor(in0_args, dram_buffer_src_addr, tile_size_bytes);
+
+        constexpr auto out0_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+        const auto out0 = TensorAccessor(out0_args, dram_buffer_dst_addr, tile_size_bytes);
 
         for(uint32_t i=0;i<num_tiles;i++) {
             noc_async_read_tile(i, in0, l1_buffer_addr);
@@ -169,7 +167,7 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
     }
 
 .. note::
-  ``InterleavedAddrGenFast`` handles address generation for tiled interleaved buffers automatically. For none tiled layouts or when manual address control is needed, use ``InterleavedAddrGen`` or calculate addresses manually. Without the helper, the kernel implementation would be:
+  ``TensorAccessor`` handles address generation for all kinds of buffers automatically. Without the helper, the kernel implementation would be:
 
   .. code-block:: cpp
 
@@ -234,7 +232,7 @@ Download the result and verify output
 -------------------------------------
 
 Then we can finally read back the data from the output buffer and assert that
-it matches what we sent. Again the final ``true`` argument causes the data transfer to be blocking. Thus we know that the data is fully avaliable when the function returns.
+it matches what we sent. Again the final ``true`` argument causes the data transfer to be blocking. Thus we know that the data is fully available when the function returns.
 
 .. code-block:: cpp
 

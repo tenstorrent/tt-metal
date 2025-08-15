@@ -67,7 +67,6 @@ class TtMobileNetV2Conv2D:
             enable_split_reader=True
             if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             else self.enable_split_reader,
-            enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
@@ -159,6 +158,7 @@ class TtInvertedResidual:
             block_shard=self.block_shard,
             deallocate_activation=True,
             activation_function="relu6",
+            enable_act_double_buffer=True if self.block_shard else False,
         )
         self.conv3 = TtMobileNetV2Conv2D(
             [1, 1, 0, out_channels],

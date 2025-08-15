@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax {
@@ -32,7 +33,6 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     auto num = input.physical_volume() / H / W;
 
     uint32_t num_kernel_rows = num * Ht;
-    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -65,23 +65,25 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
         });
 
     // create read/wrtie kernel
-    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
 
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_w_large.cpp",
         all_cores,
-        {src_is_dram},
+        reader_ct_args,
         reader_defines);
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_w_large.cpp",
         all_cores,
-        {dst_is_dram},
+        writer_ct_args,
         writer_defines);
 
     std::map<std::string, std::string> compute_defines;

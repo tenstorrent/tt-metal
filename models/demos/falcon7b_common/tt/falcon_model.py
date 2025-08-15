@@ -11,8 +11,8 @@ from tqdm import tqdm
 import ttnn
 from models.demos.falcon7b_common.tests.test_utils import (
     create_prefill_attn_mask_for_sharded_softmax,
-    dump_device_profiler,
     get_num_devices,
+    read_device_profiler,
     tt_from_torch,
 )
 from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
@@ -271,7 +271,7 @@ class TtFalconModelShared(torch.nn.Module):
             layer_output = layer_output[0]
 
             if device_perf_run and idx % 8 == 0:
-                dump_device_profiler(self.mesh_device)
+                read_device_profiler(self.mesh_device)
 
         # apply final norm layer
         layer_output = layernorm(

@@ -82,7 +82,6 @@ class TtYOLOv9cConv2D:
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
@@ -348,7 +347,7 @@ class TtnnSPPELAN:
             x = ttnn.sharded_to_interleaved(x)
 
         TILE_WIDTH = 32
-        in_c = self.parameter.cv5.conv.in_channels
+        in_c = self.parameter.cv1.conv.out_channels
         in_c_padded = in_c
         if in_c % TILE_WIDTH != 0 and in_c != 16:
             in_c_padded = in_c + (TILE_WIDTH - in_c % TILE_WIDTH)

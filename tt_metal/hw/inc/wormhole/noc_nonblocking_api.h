@@ -134,13 +134,18 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
-    uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint64_t src_addr,
+    uint32_t dest_addr,
+    uint32_t len_bytes,
+    uint32_t read_req_vc = 1) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(read_req_vc);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
@@ -169,7 +174,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_f
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -183,7 +188,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     bool multicast_path_reserve,
     bool posted = false,
     uint32_t trid = 0) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         } else {
@@ -207,7 +212,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
             noc_posted_writes_num_issued[noc] += 1;
         } else {
@@ -471,16 +476,21 @@ inline __attribute__((always_inline)) void ncrisc_noc_full_sync() {
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
-    uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint64_t src_addr,
+    uint32_t dest_addr,
+    uint32_t len_bytes,
+    uint32_t read_req_vc = 1) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE);
+        ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, read_req_vc);
         src_addr += NOC_MAX_BURST_SIZE;
         dest_addr += NOC_MAX_BURST_SIZE;
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes);
+    ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
@@ -568,7 +578,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+// `dst_type` is "Don't care" on Wormhole, it's required on Blackhole to workaround bug that manifests with noc
+// transactions using all 4 memory ports. Issuing inline writes and atomics requires all 4 memory ports to accept the
+// transaction at the same time. If one port on the receipient has no back-pressure then the transaction will hang
+// because there is no mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate
+// inline writes on Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -682,7 +697,19 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     }
 }
 
-// set transaction id for a noc read
+// clang-format off
+/**
+ * Sets the transaction id for a noc transaction.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Which command buffer to use for the transaction    | uint32_t  | 0 - 3       | True     |
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | True     |
+ */
+// clang-format on
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
@@ -816,4 +843,261 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
 
     // left-over packet
     ncrisc_noc_read_with_state<noc_mode, inc_num_issued>(noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
+}
+
+// clang-format off
+/**
+ * Sets the stateful registers for an asynchronous write to a specified destination node located at
+ * NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function is used to set up the state for
+ * \a ncrisc_noc_write_with_state, which will issue the actual
+ * write request.
+ *
+ * The destination node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument                        | Description                                              | Data type | Valid range                      | required |
+ * |---------------------------------|----------------------------------------------------------|-----------|----------------------------------|----------|
+ * | noc                             | NOC to use for the transaction                           | uint32_t  | 0 or 1                           | True     |
+ * | cmd_buf                         | Command buffer to use for the transaction                | uint32_t  | 0 - 3                            | True     |
+ * | dst_noc_addr                    | Encoding of the destination NOC location (x,y)+address   | uint64_t  | Results of \a get_noc_addr calls | True     |
+ * | len_bytes                       | Size of the transaction in bytes.                        | uint32_t  | 0..1 MB                          | False    |
+ * | vc                              | Which VC to use for the transaction                      | uint32_t  | 0 - 3                            | False    |
+ * | non_posted (template parameter) | Whether the transaction is nonposted (i.e. requires ack) | bool      | true or false                    | False    |
+ * | one_packet (template parameter) | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                    | False    |
+ */
+// clang-format on
+template <bool non_posted = true, bool one_packet = false>
+inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
+    uint32_t noc, uint32_t cmd_buf, uint64_t dst_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+                             (non_posted ? NOC_CMD_RESP_MARKED : 0x0);
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+
+    // If one packet, set data size
+    if constexpr (one_packet) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    }
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous write to a specified destination node located at
+ * NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function must be preceded by a call to
+ * \a ncrisc_noc_write_set_state. This function is used to issue the actual
+ * write request after the state has been set up.
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                              | Data type | Valid range                                              | required |
+ * |-------------------------------------|----------------------------------------------------------|-----------|----------------------------------------------------------|----------|
+ * | noc                                 | NOC to use for the transaction                           | uint32_t  | 0 or 1                                                   | True     |
+ * | cmd_buf                             | Command buffer to use for the transaction                | uint32_t  | 0 - 3                                                    | True     |
+ * | src_local_addr                      | Address in local L1 memory on source core                | uint32_t  | 0..1 MB                                                  | True     |
+ * | dst_local_addr                      | Address in local L1 memory on destination core           | uint32_t  | 0..1 MB                                                  | True     |
+ * | len_bytes                           | Size of transaction in bytes                             | uint32_t  | 0..1 MB                                                  | False    |
+ * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
+ * | non_posted (template parameter)     | Whether the transaction is nonposted (i.e. requires ack) | bool      | true or false                                            | False    |
+ * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
+ * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                                            | False    |
+ */
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool non_posted = true,
+    bool update_counter = true,
+    bool one_packet = false>
+inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
+    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (non_posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+        } else {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        }
+    }
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+    if constexpr (!one_packet) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (non_posted) {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += 1;
+        } else {
+            noc_posted_writes_num_issued[noc] += 1;
+        }
+    }
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous write for all transaction sizes.
+ * Refer to \a ncrisc_noc_write_with_state for more details.
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                              | Data type | Valid range                                              | required |
+ * |-------------------------------------|----------------------------------------------------------|-----------|----------------------------------------------------------|----------|
+ * | noc                                 | NOC to use for the transaction                           | uint32_t  | 0 or 1                                                   | True     |
+ * | cmd_buf                             | Command buffer to use for the transaction                | uint32_t  | 0 - 3                                                    | True     |
+ * | src_local_addr                      | Address in local L1 memory on source core                | uint32_t  | 0..1 MB                                                  | True     |
+ * | dst_local_addr                      | Address in local L1 memory on destination core           | uint32_t  | 0..1 MB                                                  | True     |
+ * | len_bytes                           | Size of transaction in bytes                             | uint32_t  | 0..1 MB                                                  | True     |
+ * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
+ * | non_posted (template parameter)     | Whether the transaction is nonposted (i.e. requires ack) | bool      | true or false                                            | False    |
+ * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
+ */
+// clang-format on
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool non_posted = true, bool update_counter = true>
+inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
+    if (len_bytes > NOC_MAX_BURST_SIZE) {
+        // Set data size for while loop
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+
+        while (len_bytes > NOC_MAX_BURST_SIZE) {
+            ncrisc_noc_write_with_state<noc_mode, non_posted, update_counter, true /* one_packet */>(
+                noc, cmd_buf, src_local_addr, dst_local_addr);
+
+            len_bytes -= NOC_MAX_BURST_SIZE;
+            src_local_addr += NOC_MAX_BURST_SIZE;
+            dst_local_addr += NOC_MAX_BURST_SIZE;
+        }
+    }
+
+    // left-over packet
+    ncrisc_noc_write_with_state<noc_mode, non_posted, update_counter>(
+        noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
+}
+
+// clang-format off
+/**
+ * Sets the stateful registers for an inline write of a 32-bit value to a NOC destination.
+ * This function is used to set up the state for \a noc_fast_write_dw_inline_with_state, which will issue the actual
+ * write request. The 32-bit value and part of the destination address can be set later in \a noc_fast_write_dw_inline_with_state.
+ *
+ * The destination node can be either a Tensix core+L1 memory
+ * address or a PCIe controller; This API does not support DRAM addresses.
+ *
+ * Note: On Blackhole, this API can only write to stream registers, writing to L1 will cause hangs!
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                                            | Type     | Valid Range                      | Required |
+ * |------------------------------|--------------------------------------------------------|----------|----------------------------------|----------|
+ * | noc                          | NOC to use for the transaction                         | uint32_t | 0 or 1                           | True     |
+ * | cmd_buf                      | Command buffer to use for the transaction              | uint32_t | 0 - 3                            | True     |
+ * | dest_addr                    | Encoding of the destination NOC location (x,y)+address | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | be                           | Byte-enable                                            | uint32_t | 0x1-0xF                          | True     |
+ * | static_vc                    | VC to use for the transaction                          | uint32_t | 0 - 3 (Unicast VCs)              | True     |
+ * | val                          | The value to be written                                | uint32_t | Any uint32_t value               | False    |
+ * | posted (template parameter)  | Whether the call is posted (i.e. ack requirement)      | bool     | true or false                    | False    |
+ * | set_val (template parameter) | Whether to set the value for the write here            | bool     | true or false                    | False    |
+ */
+// clang-format on
+template <bool posted = false, bool set_val = false>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
+    uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    if constexpr (set_val) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+    }
+
+    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(static_vc) | NOC_CMD_CPY | NOC_CMD_WR |
+                             NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)dest_addr);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+
+    // If we're given a misaligned address, don't write to the bytes in the word below the address
+    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+}
+
+// clang-format off
+/**
+ * Initiates an inline write of a 32-bit value to a NOC destination.
+ * This function must be preceded by a call to \a noc_fast_write_dw_inline_set_state.
+ * This function is used to issue the actual write request after the state has been set up.
+ * The 32-bit value and part of the destination address can also be set in this API
+ * (Either hi or lo address should be getting updated).
+ *
+ * The destination node can be either a Tensix core+L1 memory
+ * address or a PCIe controller; This API does not support DRAM addresses.
+ *
+ * Note: On Blackhole, this API can only write to stream registers, writing to L1 will cause hangs!
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                            | Type     | Valid Range                      | Required |
+ * |-------------------------------------|--------------------------------------------------------|----------|----------------------------------|----------|
+ * | noc                                 | NOC to use for the transaction                         | uint32_t | 0 or 1                           | True     |
+ * | cmd_buf                             | Command buffer to use for the transaction              | uint32_t | 0 - 3                            | True     |
+ * | val                                 | The value to be written                                | uint32_t | Any uint32_t value               | False    |
+ * | dest_addr                           | Encoding of the destination NOC location (x,y)+address | uint64_t | Results of \a get_noc_addr calls | False    |
+ * | update_addr_lo (template parameter) | Whether to update the lower 32 bits of the address     | bool     | true or false                    | False    |
+ * | update_addr_hi (template parameter) | Whether to update the upper 32 bits of the address     | bool     | true or false                    | False    |
+ * | update_val (template parameter)     | Whether to set the value to be written                 | bool     | true or false                    | False    |
+ * | posted (template parameter)         | Whether the call is posted (i.e. ack requirement)      | bool     | true or false                    | False    |
+ * | update_counter (template parameter) | Whether to update the write counters                   | bool     | true or false                    | False    |
+ */
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool update_addr_lo = false,
+    bool update_addr_hi = false,
+    bool update_val = false,
+    bool posted = false,
+    bool update_counter = true>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
+    static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
+    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+        }
+    }
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    if constexpr (update_addr_lo) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);
+    } else if constexpr (update_addr_hi) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, dest_addr);
+    }
+    if constexpr (update_val) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += 1;
+        }
+    }
 }

@@ -20,7 +20,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         indices_tensor_torch = torch.zeros(shape, dtype=torch.int32)
         for i in range(W):
             indices_tensor_torch[:, :, :, i] = i
-        indices_tensor = ttnn.from_torch(indices_tensor, ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
+        indices_tensor = ttnn.from_torch(indices_tensor_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
     else:
         indices_tensor = None
 
@@ -147,7 +147,7 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
 @pytest.mark.parametrize(
     "pass_indices_tensor",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize(
@@ -204,6 +204,13 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     "sub_core_grids",
     [
         None,
+    ],
+)
+@pytest.mark.parametrize(
+    "pass_indices_tensor",
+    [
+        True,
+        False,
     ],
 )
 def test_topk_large_2d_shapes(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids, pass_indices_tensor):

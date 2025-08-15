@@ -17,18 +17,18 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
             return (
                 (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
                 (a == UINT16 && b == UINT16));
-        case SUB: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
-        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == UINT16 && b == UINT16));
+        case SUB:
+        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
         case DIV:
         case RSUB:
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
-        case SQUARED_DIFFERENCE:
-        case LOGICAL_AND:
         case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
+        case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
+        case SQUARED_DIFFERENCE:
         case GT:
         case LT:
         case GE:
@@ -48,6 +48,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case DEQUANT:
         case MAXIMUM:
         case MINIMUM:
+        case XLOGY:
         case POWER: return true;
         default: return false;
     }
@@ -470,7 +471,8 @@ BinaryNgDeviceOperation::invoke(
             std::nullopt,
             memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
-            input_tensor_a.dtype(),
+            input_tensor_a.dtype(),  // TODO: For mixed dtypes we need to set this value to the appropriate dtype
+                                     // depending on which LLK is meant to be used.
             output_dtype,
             get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
             std::nullopt,

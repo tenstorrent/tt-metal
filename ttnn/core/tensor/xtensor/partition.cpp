@@ -86,8 +86,8 @@ StridedViews<Expression> chunk_ndim(
         dim_ranges.push_back(std::move(ranges));
     }
 
-    const size_t total_chunks =
-        std::accumulate(num_chunks_per_dim.begin(), num_chunks_per_dim.end(), 1, std::multiplies<size_t>());
+    const size_t total_chunks = std::accumulate(
+        num_chunks_per_dim.begin(), num_chunks_per_dim.end(), static_cast<size_t>(1), std::multiplies<size_t>());
 
     StridedViews<Expression> chunk_views;
     tt::stl::SmallVector<size_t> current_indices(dims_size, 0);
@@ -167,7 +167,7 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         result_shape[dim] *= num_chunks[i];
     }
     const size_t result_volume =
-        std::accumulate(result_shape.begin(), result_shape.end(), 1, std::multiplies<size_t>());
+        std::accumulate(result_shape.begin(), result_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
     XtensorAdapter<DataType> result(std::vector<DataType>(result_volume), std::move(result_shape));
 
     // An optimization for concatenating along the outer dimension.
@@ -183,8 +183,8 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
 
         if (can_use_memcpy) {
             DataType* result_ptr = result.data().data();
-            const size_t chunk_size =
-                std::accumulate(expected_shape.begin(), expected_shape.end(), 1, std::multiplies<size_t>());
+            const size_t chunk_size = std::accumulate(
+                expected_shape.begin(), expected_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
             size_t offset = 0;
             for (const auto& expr : expressions) {
                 std::memcpy(result_ptr + offset, expr.data(), chunk_size * sizeof(DataType));

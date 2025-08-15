@@ -591,9 +591,17 @@ struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacket
 };
 
 struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
-    uint16_t dst_start_chip_id;
-    uint16_t dst_start_mesh_id;
-    uint16_t mcast_params[4];
+    union {
+        struct {
+            uint16_t dst_start_chip_id;
+            uint16_t dst_start_mesh_id;
+        };
+        uint32_t dst_start_node_id;  // Used for efficiently writing the dst info
+    };
+    union {
+        uint16_t mcast_params[4];  // Array representing the hops in each direction
+        uint64_t mcast_params_64;  // Used for efficiently writing to the mcast_params array
+    };
     uint8_t is_mcast_active;
     uint8_t reserved[7];
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
@@ -638,9 +646,6 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #elif (                                                              \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
-#if (ROUTING_MODE & ROUTING_MODE_PULL) != 0
-#define PACKET_HEADER_TYPE packet_header_t
-#else  // ROUTING_MODE_PUSH as default
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
@@ -650,7 +655,6 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else
 #define PACKET_HEADER_TYPE packet_header_t
-#endif
 #endif
 #else
 static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));

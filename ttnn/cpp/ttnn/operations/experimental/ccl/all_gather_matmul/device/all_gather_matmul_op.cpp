@@ -55,7 +55,6 @@ void AllGatherMatmul::validate(
 
     const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
     if (all_gather_output_tensor_shard_spec.has_value()) {
-        const auto& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
         const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
         TT_FATAL(
             this->all_gather_struct.ring_size == num_all_gather_output_shards,
@@ -108,7 +107,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     auto mesh_device = input_tensors[0].mesh_device();
-    ttnn::ccl::SenderRecieverConfig config = ::ttnn::ccl::get_device_sender_receiver_config(
+    ttnn::ccl::SenderReceiverConfig config = ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord), this->devices, this->all_gather_struct.topology);
     chip_id_t target_device_id = mesh_device->get_device(mesh_coord)->id();
     // Return the AllGatherMatmul program with callbacks
@@ -287,11 +286,6 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
-    std::vector<IDevice*> devices;
-    devices.reserve(input_tensors.size());
-    for (const auto& input_tensor : input_tensors) {
-        devices.push_back(input_tensor.device());
-    }
     std::vector<ttnn::Tensor> output_tensors;
     for (size_t i = 0; i < input_tensors.size(); i++) {
         auto results = all_gather_matmul_impl(
@@ -312,7 +306,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
             activation,
             compute_kernel_config,
             core_grid,
-            devices);
+            ttnn::ccl::get_active_physical_devices(input_tensors));
         for (auto& result : results) {
             output_tensors.push_back(std::move(result));
         }

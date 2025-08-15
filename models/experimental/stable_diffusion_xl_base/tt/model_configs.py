@@ -32,7 +32,6 @@ class ModelOptimisations:
             reallocate_halo_output=False,
             enable_act_double_buffer=True,
             enable_split_reader=True,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
@@ -44,13 +43,50 @@ class ModelOptimisations:
             reallocate_halo_output=False,
             enable_act_double_buffer=False,
             enable_split_reader=True,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
         )
 
         # BLOCK SHARDED
+        self.conv_configs["ABH_0_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=0,
+        )
+
+        self.conv_configs["ABH_0_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=0,
+        )
+
+        self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=0,
+        )
         self.conv_configs["ABH_32_NO_ADB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -58,7 +94,6 @@ class ModelOptimisations:
             reallocate_halo_output=True,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=32,
@@ -70,7 +105,6 @@ class ModelOptimisations:
             reallocate_halo_output=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
@@ -83,7 +117,6 @@ class ModelOptimisations:
             enable_act_double_buffer=False,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
@@ -96,7 +129,6 @@ class ModelOptimisations:
             enable_act_double_buffer=False,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
@@ -109,23 +141,21 @@ class ModelOptimisations:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
         )
 
-        self.conv_configs["ABH_64_NO_ADB_BS_BF16"] = ttnn.Conv2dConfig(
+        self.conv_configs["ABH_0_ADB_WDB_BS_BF16"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=False,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
-            enable_subblock_padding=False,
+            enable_act_double_buffer=True,
+            enable_split_reader=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=64,
+            act_block_h_override=0,
         )
 
         self.conv_configs["ABH_128_ADB_BS"] = ttnn.Conv2dConfig(
@@ -135,7 +165,6 @@ class ModelOptimisations:
             reallocate_halo_output=False,
             enable_act_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
@@ -148,7 +177,6 @@ class ModelOptimisations:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
@@ -160,7 +188,6 @@ class ModelOptimisations:
             reallocate_halo_output=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
@@ -173,7 +200,6 @@ class ModelOptimisations:
             enable_act_double_buffer=False,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
@@ -186,7 +212,6 @@ class ModelOptimisations:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
@@ -199,7 +224,18 @@ class ModelOptimisations:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
+        self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
@@ -211,7 +247,6 @@ class ModelOptimisations:
             reallocate_halo_output=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
@@ -224,7 +259,6 @@ class ModelOptimisations:
             enable_act_double_buffer=False,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
@@ -237,10 +271,74 @@ class ModelOptimisations:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
+        )
+
+        self.conv_configs["ABH_256_ADB_WDB_BS_NO_MOVE"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+
+        self.conv_configs["ABH_256_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+
+        self.conv_configs["ABH_512_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
+        )
+
+        self.conv_configs["ABH_512_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
+        )
+
+        self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
         )
 
         # WIDTH SHARDED
@@ -252,7 +350,6 @@ class ModelOptimisations:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
@@ -265,7 +362,6 @@ class ModelOptimisations:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=512,
@@ -278,7 +374,6 @@ class ModelOptimisations:
             deallocate_activation=True,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
@@ -291,7 +386,6 @@ class ModelOptimisations:
             deallocate_activation=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
@@ -303,7 +397,6 @@ class ModelOptimisations:
             deallocate_activation=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
@@ -315,7 +408,6 @@ class ModelOptimisations:
             deallocate_activation=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=512,
@@ -327,7 +419,6 @@ class ModelOptimisations:
             deallocate_activation=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
@@ -340,7 +431,6 @@ class ModelOptimisations:
             reallocate_halo_output=False,
             enable_act_double_buffer=False,
             enable_split_reader=True,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
@@ -666,6 +756,34 @@ class ModelOptimisations:
             packer_l1_acc=True,
         )
 
+        self.compute_configs["CONV_LOFI_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
     def get_matmul_config(self, matmul_path):
         if matmul_path is None:
             return None
@@ -742,7 +860,7 @@ class ModelOptimisations:
                 r"down_blocks\.1\.attentions\.[01]\.transformer_blocks\.[01]\.attn[12]\.dense_out"
             )
 
-            # 8 occurences
+            # 8 occurrences
             if pattern_downn_block_1_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"]
 
@@ -750,7 +868,7 @@ class ModelOptimisations:
                 r"down_blocks\.1\.attentions\.[01]\.transformer_blocks\.[01]\.ff\.net\.2"
             )
 
-            # 4 occurences
+            # 4 occurrences
             if pattern_down_blocks_1_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
 
@@ -759,7 +877,7 @@ class ModelOptimisations:
                 r"down_blocks\.2\.attentions\.[01]\.transformer_blocks\.[0123456789]\.attn[12]\.dense_out"
             )
 
-            # 40 occurences
+            # 40 occurrences
             if pattern_down_blocks_2_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"]
 
@@ -767,7 +885,7 @@ class ModelOptimisations:
                 r"down_blocks\.2\.attentions\.[01]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
             )
 
-            # 20 occurences
+            # 20 occurrences
             if pattern_down_blockcs_2_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
 
@@ -776,7 +894,7 @@ class ModelOptimisations:
                 r"mid_block\.attentions\.0\.transformer_blocks\.[0123456789]\.ff\.net\.2"
             )
 
-            # 10 occurences
+            # 10 occurrences
             if pattern_mid_block_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
 
@@ -784,7 +902,7 @@ class ModelOptimisations:
                 r"mid_block\.attentions\.0\.transformer_blocks\.[0123456789]\.attn[12]\.dense_out"
             )
 
-            # 20 occurences
+            # 20 occurrences
             if pattern_mid_block_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"]
 
@@ -793,7 +911,7 @@ class ModelOptimisations:
                 r"up_blocks\.0\.attentions\.[012]\.transformer_blocks\.[0123456789]\.attn[12]\.dense_out"
             )
 
-            # 60 occurences
+            # 60 occurrences
             if pattern_up_blocks_0_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"]
 
@@ -801,7 +919,7 @@ class ModelOptimisations:
                 r"up_blocks\.0\.attentions\.[012]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
             )
 
-            # 30 occurences
+            # 30 occurrences
             if pattern_up_blocks_0_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
 
@@ -810,7 +928,7 @@ class ModelOptimisations:
                 r"up_blocks\.1\.attentions\.[012]\.transformer_blocks\.[01]\.attn[12]\.dense_out"
             )
 
-            # 12 occurences
+            # 12 occurrences
             if pattern_up_blocks_1_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"]
 
@@ -818,7 +936,7 @@ class ModelOptimisations:
                 r"up_blocks\.1\.attentions\.[012]\.transformer_blocks\.[01]\.ff\.net\.2"
             )
 
-            # 6 occurences
+            # 6 occurrences
             if pattern_up_blocks_1_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
 
@@ -845,60 +963,62 @@ class ModelOptimisations:
                 return self.conv_configs["ABH_256_ADB"]
 
             # DOWN BLOCK 0
+            elif ("down_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
+                return self.conv_configs["ABH_512_ADB_WDB_BS"]
             elif "down_blocks.0.resnets" in conv_path:
-                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+                return self.conv_configs["ABH_256_ADB_WDB_BS_NO_MOVE"]
             elif "down_blocks.0.downsamplers.0" == conv_path:
-                return self.conv_configs["ABH_256_ADB_WDB_NO_DEALLOC_BS"]
+                return self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"]
 
             # DOWN BLOCK 1
             elif "down_blocks.1.resnets.0.conv1" == conv_path:
-                return self.conv_configs["ABH_256_NO_ADB_WDB_BS"]  # Note: ABH should be 256 with no ABD/WDB (OOM)
+                return self.conv_configs["ABH_512_ADB_WDB_BS"]
             elif ("down_blocks.1.resnets.0.conv2" == conv_path) or ("down_blocks.1.resnets.1" in conv_path):
-                return self.conv_configs["ABH_128_ADB_WDB_BS"]  # Note: should have ADB
+                return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "down_blocks.1.downsamplers.0" == conv_path:
-                return self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"]
+                return self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"]
 
             # DOWN BLOCK 2
             elif "down_blocks.2.resnets.1.conv1" == conv_path:
-                return self.conv_configs["ABH_64_ADB_WDB_BS"]  # Note: should be 128 with ADB/WDB
+                return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "down_blocks.2.resnets.0.conv1" == conv_path:
-                return self.conv_configs["ABH_128_NO_ADB_WDB_BS"]
+                return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif ("down_blocks.2.resnets.0.conv2" == conv_path) or ("down_blocks.2.resnets.1.conv2" == conv_path):
-                return self.conv_configs["ABH_64_ADB_WDB_BS"]
+                return self.conv_configs["ABH_0_ADB_WDB_BS"]
 
             # MID BLOCK
             elif "mid_block" in conv_path:
-                return self.conv_configs["ABH_64_ADB_WDB_BS"]
+                return self.conv_configs["ABH_0_ADB_WDB_BS"]
 
             # UP BLOCK 0
             elif ("up_blocks.0.resnets.0.conv1" == conv_path) or ("up_blocks.0.resnets.1.conv1" == conv_path):
-                return self.conv_configs["ABH_32_NO_ADB_BS"]
+                return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "up_blocks.0.upsamplers.0" == conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_WDB_BS"]
+                return self.conv_configs["ABH_256_ADB_WDB_BS"]
             elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
-                return self.conv_configs["ABH_64_NO_ADB_BS_BF16"]  # Note: pcc drop if bf16 is removed
+                return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "up_blocks.0.resnets.2.conv1" == conv_path:
-                return self.conv_configs["ABH_512_NO_ADB_WS"]
+                return self.conv_configs["ABH_0_ADB_WDB_BS"]
 
             # UP BLOCK 1
             elif "up_blocks.1.resnets.0.conv1" == conv_path:
-                return self.conv_configs["ABH_32_NO_ADB_BS"]
+                return self.conv_configs["ABH_64_ADB_WDB_BS"]
             elif "up_blocks.1.resnets.1.conv1" == conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_WDB_BS"]
-            elif "up_blocks.1.resnets.2.conv1" == conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_WDB_MOVE_BS"]
-            elif ("up_blocks.1.resnets" in conv_path) and ("conv2" in conv_path):
                 return self.conv_configs["ABH_128_ADB_WDB_BS"]
+            elif "up_blocks.1.resnets.2.conv1" == conv_path:
+                return self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"]
+            elif ("up_blocks.1.resnets" in conv_path) and ("conv2" in conv_path):
+                return self.conv_configs["ABH_0_ADB_WDB_BS"]
             elif "up_blocks.1.upsamplers.0" == conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_WDB_BS"]
+                return self.conv_configs["ABH_128_ADB_WDB_BS"]
 
             # UP BLOCK 2
             elif "up_blocks.2.resnets.0.conv1" == conv_path:
-                return self.conv_configs["ABH_64_ADB_WDB_BS"]
+                return self.conv_configs["ABH_256_ADB_WDB_BS"]
             elif ("up_blocks.2.resnets" in conv_path) and ("conv2" in conv_path):
-                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+                return self.conv_configs["ABH_512_ADB_WDB_BS"]
             elif ("up_blocks.2.resnets.1.conv1" == conv_path) or ("up_blocks.2.resnets.2.conv1" == conv_path):
-                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+                return self.conv_configs["ABH_64_ADB_WDB_BS"]
 
             elif "conv_out" == conv_path:
                 return self.conv_configs["ABH_128_NO_ADB_HS"]
@@ -920,6 +1040,36 @@ class ModelOptimisations:
                 return self.conv_configs["ABH_512_NO_ADB_DRAM"]
             else:
                 return self.conv_configs["DEFAULT_DRAM"]
+
+    def get_conv_compute_config(self, module_path):
+        if not ("decoder" in module_path):
+            if "conv_in" in module_path or "conv_out" in module_path:
+                return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
+            if "resnets" in module_path:
+                conv1_no_fp32 = {
+                    "down_blocks.2.resnets",
+                    "down_blocks.0",
+                    "down_blocks.1.resnets.0",
+                    "up_blocks.0",
+                    "mid_block",
+                }
+                conv2_no_fp32 = {"down_blocks.2.resnets", "down_blocks.0", "up_blocks.0", "mid_block"}
+
+                if "conv1" in module_path and any(s in module_path for s in conv1_no_fp32):
+                    return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+                if "conv2" in module_path and any(s in module_path for s in conv2_no_fp32):
+                    return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+
+                return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+            if "upsamplers" in module_path:
+                if "up_blocks.0" in module_path:
+                    return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+                else:
+                    return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+
+            return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+        else:
+            return self.compute_configs["CONV_LOFI_FP32_COMPUTE_CONFIG"]
 
     def get_conv_output_dtype(self):
         return self.conv_output_dtype

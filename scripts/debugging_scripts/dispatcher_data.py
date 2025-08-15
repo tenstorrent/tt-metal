@@ -70,7 +70,7 @@ class DispatcherData:
                 f"Failed to extract DWARF info from ELF file {idle_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
             )
 
-        # Acces the value of enumerator for supported blocks
+        # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
 
@@ -130,7 +130,7 @@ class DispatcherData:
             pass
 
     def get_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
-        loc_mem_reader = ELF.get_mem_reader(location._device._context, location._device._id, location)
+        loc_mem_reader = ELF.get_mem_reader(location)
         if location._device.get_block_type(location) == "functional_workers":
             # For tensix, use the brisc elf
             fw_elf = self._brisc_elf

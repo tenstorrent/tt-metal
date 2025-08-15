@@ -5,13 +5,15 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
+#include "assert.hpp"
 #include "dev_msgs.h"
+#include <cstdint>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <kernel.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <sub_device_types.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -28,6 +30,10 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "data_types.hpp"
+#include "llrt/tt_cluster.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "kernels/kernel_impl.hpp"
@@ -50,6 +56,8 @@
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt_stl/overloaded.hpp>
 
 namespace tt {
 
@@ -63,15 +71,10 @@ namespace {
 CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet>& specified_core_spec) {
     ZoneScoped;
     return std::visit(
-        [](auto&& core_spec) -> CoreRangeSet {
-            using T = std::decay_t<decltype(core_spec)>;
-            if constexpr (std::is_same_v<T, CoreCoord>) {
-                return CoreRangeSet(CoreRange(core_spec, core_spec));
-            } else if constexpr (std::is_same_v<T, CoreRange>) {
-                return CoreRangeSet(core_spec);
-            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
-                return core_spec;
-            }
+        ttsl::overloaded{
+            [](const CoreCoord& core_spec) { return CoreRangeSet(CoreRange(core_spec, core_spec)); },
+            [](const CoreRange& core_spec) { return CoreRangeSet(core_spec); },
+            [](const CoreRangeSet& core_spec) { return core_spec; },
         },
         specified_core_spec);
 }
@@ -93,16 +96,16 @@ DataMovementConfigStatus CheckDataMovementConfig(
         int noc_value;
         switch (programmable_core) {
             case HalProgrammableCoreType::TENSIX:
-                noc_value = magic_enum::enum_integer(std::get<DataMovementConfig>(kernel->config()).noc);
+                noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
             case HalProgrammableCoreType::IDLE_ETH:
-                noc_value = magic_enum::enum_integer(std::get<EthernetConfig>(kernel->config()).noc);
+                noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
                 break;
             default:
                 TT_THROW(
                     "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                    magic_enum::enum_name(programmable_core));
+                    enchantum::to_string(programmable_core));
         }
         local_noc0_usage = noc_value == 0;
         local_noc1_usage = noc_value == 1;
@@ -168,7 +171,7 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange& core_range, CoreType core_type) {
+std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range, CoreType core_type) {
     std::optional<uint32_t> semaphore_id = std::nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -253,16 +256,13 @@ void SetRuntimeArgsImpl(
     resolved_runtime_args.reserve(runtime_args_ptr->size());
 
     for (const auto& arg : *(runtime_args_ptr)) {
-        std::visit(
-            [&resolved_runtime_args](auto&& a) {
-                using T = std::decay_t<decltype(a)>;
-                if constexpr (std::is_same_v<T, Buffer*>) {
-                    resolved_runtime_args.push_back(a->address());
-                } else {
-                    resolved_runtime_args.push_back(a);
-                }
+        const auto resolved = std::visit(
+            ttsl::overloaded{
+                [](Buffer* buffer) { return buffer->address(); },
+                [](uint32_t address) { return address; },
             },
             arg);
+        resolved_runtime_args.push_back(resolved);
     }
     kernel->set_runtime_args(core_coord, resolved_runtime_args);
 }
@@ -274,17 +274,16 @@ inline void SetRuntimeArgsImpl(
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode
     std::visit(
-        [&](auto&& core_spec) {
-            using T = std::decay_t<decltype(core_spec)>;
-            if constexpr (std::is_same_v<T, CoreCoord>) {
-                SetRuntimeArgsImpl(kernel, core_spec, runtime_args, blocking);
-            } else if constexpr (std::is_same_v<T, CoreRange>) {
+        ttsl::overloaded{
+            [&](const CoreCoord& core_spec) { SetRuntimeArgsImpl(kernel, core_spec, runtime_args, blocking); },
+            [&](const CoreRange& core_spec) {
                 for (auto x = core_spec.start_coord.x; x <= core_spec.end_coord.x; x++) {
                     for (auto y = core_spec.start_coord.y; y <= core_spec.end_coord.y; y++) {
                         SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args, blocking);
                     }
                 }
-            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+            },
+            [&](const CoreRangeSet& core_spec) {
                 for (const auto& core_range : core_spec.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -292,7 +291,7 @@ inline void SetRuntimeArgsImpl(
                         }
                     }
                 }
-            }
+            },
         },
         core_spec);
 }
@@ -497,6 +496,10 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     size_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
@@ -760,11 +763,11 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
-        detail::DumpDeviceProfileResults(device);
+        detail::ReadDeviceProfilerResults(device);
     }
 }
 
-void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results) {
+void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
     std::unordered_set<CoreCoord> not_done_cores;
@@ -778,8 +781,8 @@ void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile
         }
     }
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
-    if (dump_device_profile_results) {
-        detail::DumpDeviceProfileResults(device);
+    if (read_device_profiler_results) {
+        detail::ReadDeviceProfilerResults(device);
     }
 }
 
@@ -942,6 +945,13 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
+ClusterType GetClusterType() { return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type(); }
+
+std::string SerializeClusterDescriptor() {
+    std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
+    return path.string();
+}
+
 IDevice* CreateDevice(
     chip_id_t device_id,
     const uint8_t num_hw_cqs,
@@ -962,6 +972,15 @@ IDevice* CreateDevice(
             "devices for dispatch.");
     }
 
+    // This API may not be used to create single remote device or multi chip clusters
+    // CreateDevices should be used instead to ensure proper init/teardown
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
+        "CreateDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
+        "must use "
+        "CreateDevices().",
+        device_id);
+
     tt::DevicePool::initialize(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
@@ -981,6 +1000,16 @@ IDevice* CreateDeviceMinimal(
 bool CloseDevice(IDevice* device) {
     ZoneScoped;
     auto device_id = device->id();
+
+    // This API may not be used to close single remote device or multi chip clusters
+    // CloseDevices should be used instead to ensure proper init/teardown
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
+        "CloseDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
+        "must use "
+        "CloseDevices().",
+        device_id);
+
     return tt::DevicePool::instance().close_device(device_id);
 }
 
@@ -1058,7 +1087,7 @@ KernelHandle CreateEthernetKernel(
         "processors. "
         "Update DataMovementProcessor in the config.",
         kernel->name(),
-        magic_enum::enum_name(config.processor),
+        enchantum::to_string(config.processor),
         MetalContext::instance().hal().get_processor_classes_count(eth_core_type));
     TT_FATAL(
         !(are_both_riscv_in_use),
@@ -1080,18 +1109,15 @@ KernelHandle CreateKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     KernelHandle kernel = std::visit(
-        [&](auto&& cfg) -> KernelHandle {
-            CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-            KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
-            using T = std::decay_t<decltype(cfg)>;
-            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+        ttsl::overloaded{
+            [&](const DataMovementConfig& cfg) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            } else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
-            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
-                return CreateEthernetKernel(program, kernel_src, core_ranges, cfg);
-            }
+            },
+            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
+            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
         },
         config);
 
@@ -1104,18 +1130,15 @@ KernelHandle CreateKernelFromString(
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
     return std::visit(
-        [&](auto&& cfg) -> KernelHandle {
-            CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-            KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
-            using T = std::decay_t<decltype(cfg)>;
-            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+        ttsl::overloaded{
+            [&](const DataMovementConfig& cfg) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            } else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
-            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
-                return CreateEthernetKernel(program, kernel_src, core_ranges, cfg);
-            }
+            },
+            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
+            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
         },
         config);
 }
@@ -1166,33 +1189,30 @@ uint32_t CreateSemaphore(
     const std::variant<CoreRange, CoreRangeSet>& core_spec,
     uint32_t initial_value,
     CoreType core_type) {
-    return std::visit(
-        [&](auto&& c) -> uint32_t {
-            using T = std::decay_t<decltype(c)>;
-            CoreRangeSet crs;
-            if constexpr (std::is_same_v<T, CoreRange>) {
-                crs = CoreRangeSet(c);
-            } else {
+    CoreRangeSet crs = std::visit(
+        ttsl::overloaded{
+            [](const CoreRange& c) { return CoreRangeSet(c); },
+            [](const CoreRangeSet& c) {
                 // Merge ranges to reduce the number of multicasts needed to initialize semaphores.
-                crs = c.merge_ranges();
-            }
-            std::optional<uint32_t> semaphore_id;
-            TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
-            for (const auto& core_range : crs.ranges()) {
-                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
-                if (!semaphore_id.has_value()) {
-                    semaphore_id = semaphore_id_candidate;
-                } else {
-                    semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
-                }
-            }
-            TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
-
-            program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
-
-            return semaphore_id.value();
+                return c.merge_ranges();
+            },
         },
         core_spec);
+    std::optional<uint32_t> semaphore_id;
+    TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+    for (const auto& core_range : crs.ranges()) {
+        std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
+        if (!semaphore_id.has_value()) {
+            semaphore_id = semaphore_id_candidate;
+        } else {
+            semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
+        }
+    }
+    TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
+
+    program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
+
+    return semaphore_id.value();
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
@@ -1263,6 +1283,17 @@ void SetRuntimeArgs(
 
 void SetRuntimeArgs(
     const Program& program,
+    KernelHandle kernel_id,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    std::initializer_list<const uint32_t> runtime_args) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
+    ZoneScoped;
+    std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
+}
+
+void SetRuntimeArgs(
+    const Program& program,
     KernelHandle kernel,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args) {
@@ -1312,6 +1343,14 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
     }
 }
 
+void SetCommonRuntimeArgs(
+    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args) {
+    ZoneScoped;
+    if (runtime_args.size() != 0) {
+        detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
+    }
+}
+
 RuntimeArgsData& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, const CoreCoord& logical_core) {
     return detail::GetKernel(program, kernel_id)->runtime_args_data(logical_core);
 }
@@ -1322,33 +1361,6 @@ std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program
 
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id) {
     return detail::GetKernel(program, kernel_id)->common_runtime_args_data();
-}
-
-uint32_t BeginTraceCapture(IDevice* device, const uint8_t cq_id) {
-    const uint32_t tid = Trace::next_id();
-    device->begin_trace(cq_id, tid);
-    return tid;
-}
-
-void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    device->end_trace(cq_id, tid);
-    // When light metal tracing is enabled, TraceDescriptor will be serialized via end_trace() and this
-    // will serialize the LightMetalLoadTraceId call to be used during replay to load trace back to device.
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureLoadTrace, device, cq_id, tid);
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, true);  // blocking=true
-}
-
-void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const bool blocking) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, blocking);
-    device->replay_trace(cq_id, tid, blocking /* block_on_device */, blocking /* block_on_worker_thread */);
-}
-
-void ReleaseTrace(IDevice* device, const uint32_t tid) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReleaseTrace, device, tid);
-    device->release_trace(tid);
 }
 
 // This is nop if compile time define not set.
@@ -1375,10 +1387,6 @@ LightMetalBinary LightMetalEndCapture() {
     log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalEndCapture()");
     return {};
 #endif
-}
-
-void LoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
-    device->load_trace(cq_id, trace_id, trace_desc);
 }
 
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {

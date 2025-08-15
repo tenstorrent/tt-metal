@@ -43,13 +43,10 @@ class TtPatchMerging:
         input_tensor_1 = input_tensor[..., 1::2, 0::2, :]  # ... H/2 W/2 C
         input_tensor_2 = input_tensor[..., 0::2, 1::2, :]  # ... H/2 W/2 C
         input_tensor_3 = input_tensor[..., 1::2, 1::2, :]  # ... H/2 W/2 C
-        input_tensor_0 = ttnn.to_layout(input_tensor_0, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        input_tensor_1 = ttnn.to_layout(input_tensor_1, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        input_tensor_2 = ttnn.to_layout(input_tensor_2, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        input_tensor_3 = ttnn.to_layout(input_tensor_3, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.concat(
             [input_tensor_0, input_tensor_1, input_tensor_2, input_tensor_3], -1, memory_config=ttnn.L1_MEMORY_CONFIG
         )
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.layer_norm(
             output_tensor,
             weight=self.parameters.norm["weight"],

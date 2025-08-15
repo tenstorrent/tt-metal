@@ -3,10 +3,6 @@ name: "[internal] Create and Publish Release Docker Image"
 on:
   workflow_call:
     inputs:
-      base-image:
-        description: "Base image to build on top of"
-        required: true
-        type: string
       version:
         required: true
         type: string
@@ -18,6 +14,9 @@ on:
         required: false
         type: number
         default: 10
+      wheel-artifact-name:
+        required: true
+        type: string
 jobs:
   create-docker-release-image:
     strategy:
@@ -41,7 +40,7 @@ jobs:
       - name: Download wheels
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: ${{ inputs.wheel-artifact-name }}
       - name: Get the name of the wheel and set up env variables
         id: generate-tag-name
         run: |
@@ -57,7 +56,6 @@ jobs:
           push: true
           build-args: |
             WHEEL_FILENAME=${{ env.WHEEL_FILENAME }}
-            BASE_IMAGE=${{ inputs.base-image }}
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/Dockerfile

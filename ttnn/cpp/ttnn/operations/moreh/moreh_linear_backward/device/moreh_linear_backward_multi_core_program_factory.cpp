@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "moreh_linear_backward_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -24,7 +25,6 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     Program program{};
     auto& output_grad = tensor_args.output_grad;
 
-    const auto& bias_grad_shape = bias_grad.logical_shape();
     const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
     auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
@@ -49,7 +49,6 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     // This should allocate a DRAM buffer on the device
     IDevice* device = output_grad.device();
     auto grid = device->compute_with_storage_grid_size();
-    auto arch = device->arch();
     const auto num_cores_y = grid.y;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -89,9 +88,10 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     const ::bfloat16 bfloat_scaler_value = ::bfloat16(1.0f);
     const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(output_grad)), packed_scaler_value};
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(bias_grad))};
+    std::vector<uint32_t> reader_compile_time_args{packed_scaler_value};
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_h.cpp";

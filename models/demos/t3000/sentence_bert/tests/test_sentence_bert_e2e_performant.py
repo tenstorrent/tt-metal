@@ -30,7 +30,7 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant_sentencebert_data_parallel(
-    mesh_device, device_batch_size, sequence_length, act_dtype, weight_dtype
+    mesh_device, device_batch_size, sequence_length, act_dtype, weight_dtype, model_location_generator
 ):
     batch_size = device_batch_size * mesh_device.get_num_devices()
     performant_runner = SentenceBERTPerformantRunner(
@@ -39,6 +39,7 @@ def test_e2e_performant_sentencebert_data_parallel(
         sequence_length=sequence_length,
         act_dtype=act_dtype,
         weight_dtype=weight_dtype,
+        model_location_generator=model_location_generator,
     )
     performant_runner._capture_sentencebert_trace_2cqs()
     inference_times = []

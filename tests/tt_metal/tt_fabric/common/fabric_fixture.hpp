@@ -116,6 +116,12 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
+class NightlyFabric1DFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
 class Fabric2DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
@@ -148,7 +154,7 @@ public:
     void SetUp(
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
@@ -158,7 +164,7 @@ private:
 
     void TearDown() override {
         BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().set_default_control_plane_mesh_graph();
+        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     }
 };
 
@@ -166,7 +172,7 @@ class T3kCustomMeshGraphFabric2DDynamicFixture
     : public CustomMeshGraphFabric2DDynamicFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {
     void SetUp() override {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::T3K) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
             GTEST_SKIP();
         }
     }
@@ -196,11 +202,7 @@ void RunTestMCastConnAPI(
     uint32_t bwd_hops = 1);
 
 void RunTest2DMCastConnAPI(
-    BaseFabricFixture* fixture,
-    RoutingDirection trunk_dir,
-    uint32_t trunk_hops,
-    uint32_t branch_east_hops,
-    uint32_t branch_west_hops);
+    BaseFabricFixture* fixture, uint32_t north_hops, uint32_t south_hops, uint32_t east_hops, uint32_t west_hops);
 
 void RunTestChipMCast1D(
     BaseFabricFixture* fixture,

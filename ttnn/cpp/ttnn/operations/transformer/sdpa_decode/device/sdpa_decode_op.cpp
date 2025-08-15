@@ -19,7 +19,6 @@ void ScaledDotProductAttentionDecode::validate(
     if (use_mla) {
         TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors and mask");
         TT_FATAL(this->head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
-        TT_FATAL(!this->paged_attention, "Paged attention is untested for multi-latent attention decode!");
         TT_FATAL(this->is_causal, "Multi-latent attention decode only tested for causal!");
     } else {
         TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
@@ -227,7 +226,6 @@ void ScaledDotProductAttentionDecode::validate(
             input_tensors.at(0).dtype() == DataType::BFLOAT16,
             "GQA expects BFLOAT16 input tensor, but got {}",
             input_tensors.at(0).dtype());
-        uint32_t num_heads_per_kv = q_shape_unpadded[2] / k_shape[1];
         TT_FATAL(
             q_shape_unpadded[2] % k_shape[1] == 0,
             "GQA expects Q to have a multiple of K heads, but got {} and {}",

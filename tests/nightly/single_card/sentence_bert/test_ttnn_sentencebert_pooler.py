@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/sentence_bert/test_ttnn_sentencebert_pooler.py
+../../../../models/demos/sentence_bert/tests/pcc/test_ttnn_sentencebert_pooler.py

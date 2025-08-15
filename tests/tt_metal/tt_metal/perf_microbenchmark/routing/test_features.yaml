@@ -1,5 +1,6 @@
 # This YAML file demonstrates the various features of the fabric performance test framework.
 # It will be updated as new features are added.
+# For multi-host testing, see test_t3k_2x2.yaml.
 
 # ======================================================================================
 # Optional Top-Level Configuration: Allocation Policies

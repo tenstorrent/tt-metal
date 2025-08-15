@@ -74,8 +74,7 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.cross_device_semaphore.has_value(),
         "Cross device semaphore must be specified at the moment");
-
-    TT_FATAL(operation_attributes.topology == tt::tt_fabric::Topology::Linear, "Topology must be linear at the moment");
+    TT_FATAL(operation_attributes.init_semaphore.has_value(), "Init semaphore must be specified at the moment");
 }
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
@@ -168,18 +167,20 @@ AllToAllDispatchDeviceOperation::invoke(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    tt::tt_metal::SubDeviceId subdevice_id,
+    const CoreRangeSet& worker_core_range_set,
     const std::optional<GlobalSemaphore>& global_semaphore,
-    AllToAllTransferType impl) {
+    AllToAllTransferType impl,
+    const std::optional<GlobalSemaphore>& init_semaphore) {
     return {
         operation_attributes_t{
-            .subdevice_id = std::move(subdevice_id),
+            .worker_core_range_set = worker_core_range_set,
             .output_mem_config = memory_config,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
             .cross_device_semaphore = global_semaphore,
-            .impl = impl},
+            .impl = impl,
+            .init_semaphore = init_semaphore},
         tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

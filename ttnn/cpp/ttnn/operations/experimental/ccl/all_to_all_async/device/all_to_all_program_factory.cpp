@@ -151,8 +151,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
 
     // Basic configuration
     const bool enable_async_output = false;
-    const bool is_first_chip = ring_index == 0;
-    const bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] const bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
 
     log_trace(
         tt::LogOp,
@@ -209,9 +209,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
 
     // Create buffers
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    auto [sender_buffer, header_buffer] =
-        all_to_all_detail::create_sender_buffers(program, sender_worker_core_range, cb_pages, page_size, data_format);
-    auto receiver_buffer = all_to_all_detail::create_receiver_buffer(
+    all_to_all_detail::create_sender_buffers(program, sender_worker_core_range, cb_pages, page_size, data_format);
+    all_to_all_detail::create_receiver_buffer(
         program, receiver_worker_core_range, pages_per_packet, page_size, data_format);
 
     const auto [chunk_granularity, chunk_num_tiles, num_chunks_per_shard] = all_to_all_detail::calculate_chunk_params(
@@ -231,7 +230,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     TT_FATAL(num_chunks_per_shard < 32, "num_chunks_per_shard must be < 32, got {}", num_chunks_per_shard);
     TT_FATAL(chunk_granularity >= 4, "chunk_granularity must be >= 4, got {}", chunk_granularity);
 
-    const uint32_t receiver_num_pages = pages_per_packet * 3;  // triple buffering
     const uint32_t receiver_cb_index = tt::CB::c_in0;
 
     /**
@@ -271,14 +269,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
      */
 
     // Tensor Info
-    const auto input_tensor_layout = input_tensor.buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
-    const auto input_tensor_page_layout = input_tensor.layout();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto output_tensor_layout = output_buffer.buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_buffer.buffer()->buffer_type();
-    const auto output_tensor_page_layout = output_buffer.layout();
-    const auto output_tensor_num_pages = output_buffer.buffer()->num_pages();
 
     const uint32_t N_DRAM_BANKS = device->num_dram_channels();
 
@@ -303,7 +296,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         num_targets_backward                              // num_targets_backward_direction
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
-    for (const auto& arg : reader_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -331,7 +324,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         contig_pages_advanced,                             // contig_pages_advanced
         N_DRAM_BANKS                                       // num_dram_banks
     };
-    for (const auto& arg : writer_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -456,7 +449,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             out_col_start,
         };
         log_trace(tt::LogOp, "Reader Runtime Args:");
-        for (const auto& arg : reader_rt_args) {
+        for ([[maybe_unused]] const auto& arg : reader_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
@@ -481,7 +474,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         };
 
         log_trace(tt::LogOp, "Writer Runtime Args:");
-        for (const auto& arg : writer_rt_args) {
+        for ([[maybe_unused]] const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
         writer_rt_args.push_back(forward_device.has_value());

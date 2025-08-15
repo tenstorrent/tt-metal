@@ -91,6 +91,9 @@ void ReduceScatterAsync::validate_with_output_tensors(
             }
         }
     }
+    TT_FATAL(
+        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        "Only 1D fabric config is supported for generic reduce scatter");
 }
 
 std::vector<ttnn::TensorSpec> ReduceScatterAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -171,7 +174,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
     auto target_device =
         input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
 
-    ttnn::ccl::SenderRecieverConfig config =
+    ttnn::ccl::SenderReceiverConfig config =
         ttnn::ccl::get_device_sender_receiver_config(target_device, devices, this->topology);
 
     TT_FATAL(
@@ -390,11 +393,6 @@ std::vector<Tensor> reduce_scatter(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_links_preferred,
     std::optional<SubDeviceId> worker_subdevice_id_opt) {
-    std::vector<IDevice*> devices;
-    devices.reserve(input_tensors.size());
-    for (auto& input_tensor : input_tensors) {
-        devices.push_back(input_tensor.device());
-    }
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -408,7 +406,7 @@ std::vector<Tensor> reduce_scatter(
             topology,
             num_links_preferred,
             worker_subdevice_id_opt,
-            devices));
+            ttnn::ccl::get_active_physical_devices(input_tensors)));
     }
     return output_tensors;
 }

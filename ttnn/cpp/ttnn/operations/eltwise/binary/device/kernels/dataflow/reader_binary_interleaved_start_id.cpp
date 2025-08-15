@@ -10,7 +10,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    // same arg indices as in reader_binary_diff_lenghts for compat
+    // same arg indices as in reader_binary_diff_lengths for compat
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
@@ -21,17 +21,23 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
-    constexpr bool block_or_width_sharded = get_compile_time_arg_val(2) == 1;
+    constexpr bool block_or_width_sharded = get_compile_time_arg_val(0) == 1;
+#if !defined(IN0_SHARDED) && !defined(IN1_SHARDED)
+    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+#elif !defined(IN0_SHARDED)
+    constexpr auto src0_args = TensorAccessorArgs<1>();
+#elif !defined(IN1_SHARDED)
+    constexpr auto src1_args = TensorAccessorArgs<1>();
+#endif
+
 #ifdef IN0_SHARDED
     cb_reserve_back(cb_id_in0, num_tiles);
     cb_push_back(cb_id_in0, num_tiles);
 #else
     uint32_t l1_write_addr_in0;
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    DataFormat src0_data_format = get_dataformat(cb_id_in0);
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
 #endif
 #ifdef IN1_SHARDED
     cb_reserve_back(cb_id_in1, num_tiles);
@@ -39,10 +45,7 @@ void kernel_main() {
 #else
     uint32_t l1_write_addr_in1;
     uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    DataFormat src1_data_format = get_dataformat(cb_id_in1);
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = src1_tile_bytes, .data_format = src1_data_format};
+    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
 #endif
 
 #if !(defined IN0_SHARDED && defined IN1_SHARDED)

@@ -7,7 +7,7 @@
 #include <fmt/ranges.h>
 #include <kernel.hpp>
 #include <kernel_types.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <utils.hpp>
 #include <algorithm>
 #include <cstring>
@@ -19,6 +19,7 @@
 
 #include "assert.hpp"
 #include "data_types.hpp"
+#include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
@@ -28,6 +29,7 @@
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
+#include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>
 #include "kernel_impl.hpp"
 
@@ -35,11 +37,61 @@ namespace tt {
 
 namespace tt_metal {
 
+namespace fs = std::filesystem;
+
+namespace {
+// Kernel path searching:
+//
+// If the path doesn't exist as a absolute/relative path, then it must be relative to
+// TT_METAL_HOME/TT_METAL_KERNEL_PATH.
+//
+std::vector<fs::path> source_search_paths(const fs::path& given_file_name) {
+    std::vector<fs::path> paths = {given_file_name};
+
+    TT_ASSERT(
+        fs::exists(given_file_name) || (!fs::path(given_file_name).is_absolute()),
+        "Kernel source path {} must be relative to TT_METAL_HOME/TT_METAL_KERNEL_PATH or be an absolute path to a "
+        "valid file",
+        given_file_name);
+
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.is_root_dir_specified()) {
+        auto root_dir_search_path = fs::path(rtoptions.get_root_dir()) / given_file_name;
+        paths.push_back(root_dir_search_path);
+    }
+
+    if (rtoptions.is_kernel_dir_specified()) {
+        auto kernel_dir_search_path = fs::path(rtoptions.get_kernel_dir()) / given_file_name;
+        paths.push_back(kernel_dir_search_path);
+    }
+
+    auto system_kernel_dir_search_path = fs::path(rtoptions.get_system_kernel_dir()) / given_file_name;
+    paths.push_back(system_kernel_dir_search_path);
+
+    return paths;
+}
+}  // namespace
+
+KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
+    source_(source), source_type_(source_type) {
+    if (source_type == FILE_PATH) {
+        auto search_paths = source_search_paths(source);
+        auto itr = std::ranges::find_if(search_paths, [](const auto& path) { return fs::exists(path); });
+        if (itr == search_paths.end()) {
+            log_critical(LogMetal, "Kernel file searched in {}!", source, fmt::join(search_paths, ", "));
+            TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", source);
+        }
+        path_ = *itr;
+    }
+};
+
 Kernel::Kernel(
-    const KernelSource &kernel_src,
-    const CoreRangeSet &core_range_set,
-    const std::vector<uint32_t> &compile_args,
-    const std::map<std::string, std::string> &defines) :
+    HalProgrammableCoreType programmable_core_type,
+    const KernelSource& kernel_src,
+    const CoreRangeSet& core_range_set,
+    const std::vector<uint32_t>& compile_args,
+    const std::map<std::string, std::string>& defines) :
+    programmable_core_type_(programmable_core_type),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
     max_runtime_args_per_core_(0),
@@ -63,8 +115,8 @@ Kernel::Kernel(
     }
     this->core_to_runtime_args_ = {max_x + 1, std::vector<std::vector<uint32_t>>(max_y + 1, std::vector<uint32_t>())};
     this->core_to_runtime_args_data_ = {max_x + 1, std::vector<RuntimeArgsData>(max_y + 1, RuntimeArgsData{})};
-    for (auto &runtime_args_data_x : this->core_to_runtime_args_data_) {
-        for (auto &runtime_args_data : runtime_args_data_x) {
+    for (auto& runtime_args_data_x : this->core_to_runtime_args_data_) {
+        for (auto& runtime_args_data : runtime_args_data_x) {
             runtime_args_data.rt_args_data = nullptr;
             runtime_args_data.rt_args_count = 0;
         }
@@ -90,42 +142,25 @@ void KernelImpl::register_kernel_elf_paths_with_watcher(IDevice& device) const {
 
 std::string Kernel::name() const { return this->kernel_src_.name(); }
 
-const std::set<CoreCoord> &Kernel::logical_cores() const { return this->logical_cores_; }
+const std::set<CoreCoord>& Kernel::logical_cores() const { return this->logical_cores_; }
 
 std::vector<CoreRange> Kernel::logical_coreranges() const {
     auto crs = this->core_range_set_.ranges();
     return {crs.begin(), crs.end()};
 }
 
-bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
+bool Kernel::is_on_logical_core(const CoreCoord& logical_core) const {
     return this->core_range_set_.contains(logical_core);
 }
 
-HalProgrammableCoreType Kernel::get_kernel_programmable_core_type() const {
-    RISCV riscv_processor = this->processor();
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: return HalProgrammableCoreType::TENSIX;
-        case RISCV::ERISC:
-        case RISCV::ERISC1:
-            return this->is_idle_eth() ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-        default: TT_ASSERT(false, "Unsupported kernel processor!");
-    }
-    return HalProgrammableCoreType::TENSIX;
-}
-
 CoreType Kernel::get_kernel_core_type() const {
-    RISCV riscv_processor = this->processor();
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: return CoreType::WORKER;
-        case RISCV::ERISC:
-        case RISCV::ERISC1: return CoreType::ETH;
-        default: TT_ASSERT(false, "Unsupported kernel processor!");
+    switch (programmable_core_type_) {
+        case HalProgrammableCoreType::TENSIX: return CoreType::WORKER;
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH: return CoreType::ETH;
+        case HalProgrammableCoreType::COUNT: TT_THROW("Bad programmable core type!");
     }
-    return CoreType::WORKER;
+    TT_THROW("Unreachable");
 }
 
 const std::string& KernelImpl::get_full_kernel_name() const { return this->kernel_full_name_; }
@@ -136,7 +171,7 @@ void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
 
 void KernelImpl::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
-    for (const auto &[define, value] : this->defines_) {
+    for (const auto& [define, value] : this->defines_) {
         callback(define, value);
     }
 }
@@ -150,7 +185,7 @@ void DataMovementKernel::process_defines(
 
 void ComputeKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
-    for (const auto &[define, value] : this->defines_) {
+    for (const auto& [define, value] : this->defines_) {
         callback(define, value);
     }
     // pass default noc mode as compute does not need it, just for compile to pass
@@ -166,19 +201,19 @@ void EthernetKernel::process_defines(
 }
 
 std::string_view DataMovementKernel::get_compiler_opt_level() const {
-    return magic_enum::enum_name(this->config_.opt_level);
+    return enchantum::to_string(this->config_.opt_level);
 }
 
 std::string_view DataMovementKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
 std::string_view ComputeKernel::get_compiler_opt_level() const {
-    return magic_enum::enum_name(this->config_.opt_level);
+    return enchantum::to_string(this->config_.opt_level);
 }
 
 std::string_view ComputeKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
 std::string_view EthernetKernel::get_compiler_opt_level() const {
-    return magic_enum::enum_name(this->config_.opt_level);
+    return enchantum::to_string(this->config_.opt_level);
 }
 
 std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
@@ -213,15 +248,15 @@ const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_ke
 std::string DataMovementKernel::config_hash() const {
     return fmt::format(
         "{}_{}_{}",
-        magic_enum::enum_name(this->config_.processor),
-        magic_enum::enum_name(this->config_.noc),
-        magic_enum::enum_name(this->config_.noc_mode));
+        enchantum::to_string(this->config_.processor),
+        enchantum::to_string(this->config_.noc),
+        enchantum::to_string(this->config_.noc_mode));
 }
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
 std::string EthernetKernel::config_hash() const {
     return fmt::format("eth_{}_{}_{}",
-        magic_enum::enum_name(this->config_.noc),
+        enchantum::to_string(this->config_.noc),
         this->config_.eth_mode,
         this->config_.processor);
 }
@@ -229,7 +264,7 @@ std::string EthernetKernel::config_hash() const {
 std::string ComputeKernel::config_hash() const {
     return fmt::format(
         "{}_{}_{}_{}",
-        magic_enum::enum_name(this->config_.math_fidelity),
+        enchantum::to_string(this->config_.math_fidelity),
         this->config_.fp32_dest_acc_en,
         this->config_.math_approx_mode,
         this->config_.dst_full_sync_en);
@@ -249,7 +284,7 @@ std::string Kernel::compute_hash() const {
         this->config_hash());
 }
 
-std::vector<uint32_t> &Kernel::runtime_args(const CoreCoord &logical_core) {
+std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
         logical_core.x < this->core_to_runtime_args_.size() &&
@@ -260,7 +295,7 @@ std::vector<uint32_t> &Kernel::runtime_args(const CoreCoord &logical_core) {
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
-RuntimeArgsData &Kernel::runtime_args_data(const CoreCoord &logical_core) {
+RuntimeArgsData& Kernel::runtime_args_data(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
         logical_core.x < this->core_to_runtime_args_.size() &&
@@ -271,30 +306,34 @@ RuntimeArgsData &Kernel::runtime_args_data(const CoreCoord &logical_core) {
     return this->core_to_runtime_args_data_[logical_core.x][logical_core.y];
 }
 
-std::vector<std::vector<std::vector<uint32_t>>> &Kernel::runtime_args() { return this->core_to_runtime_args_; }
+std::vector<std::vector<std::vector<uint32_t>>>& Kernel::runtime_args() { return this->core_to_runtime_args_; }
 
-std::vector<std::vector<RuntimeArgsData>> &Kernel::runtime_args_data() { return this->core_to_runtime_args_data_; }
+std::vector<std::vector<RuntimeArgsData>>& Kernel::runtime_args_data() { return this->core_to_runtime_args_data_; }
 
-std::vector<uint32_t> &Kernel::common_runtime_args() { return this->common_runtime_args_; }
+std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runtime_args_; }
 
-RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
+RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 void Kernel::validate_runtime_args_size(
-    size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
+    size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
     uint32_t idle_eth_max_runtime_args = MetalContext::instance().hal().get_dev_size(
-                                            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
-                                            sizeof(uint32_t);
+                                             HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
+                                         sizeof(uint32_t);
     uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
 
     if (total_rt_args > max_rt_args) {
-        log_warning(tt::LogMetal, "Too many runtime args, unique: {} common: {} on {}", num_unique_rt_args, num_common_rt_args, this->processor());
-        TT_THROW("{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}", total_rt_args, this->name(), logical_core.str(), max_runtime_args);
+        TT_THROW(
+            "{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}",
+            total_rt_args,
+            this->name(),
+            logical_core.str(),
+            max_runtime_args);
     }
 }
 
-void Kernel::set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args) {
+void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args) {
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not
     // placed on.
     //                  Should this check only be enabled in debug mode?
@@ -306,7 +345,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, stl::Span<const uin
 
     // Keep state for validation, to be able to check from both set_runtime_args() and set_common_runtime_args() APIs.
 
-    auto &set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
+    auto& set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
     // TODO: Only allow setting once
     if (set_rt_args.empty()) {
         if (runtime_args.size() > max_runtime_args_per_core_) {
@@ -321,7 +360,10 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, stl::Span<const uin
     } else {
         TT_FATAL(
             set_rt_args.size() == runtime_args.size(),
-            "Illegal Runtime Args on {}: Number of runtime args cannot be modified from {} to {}!", logical_core.str(), set_rt_args.size(), runtime_args.size());
+            "Illegal Runtime Args on {}: Number of runtime args cannot be modified from {} to {}!",
+            logical_core.str(),
+            set_rt_args.size(),
+            runtime_args.size());
         std::memcpy(
             this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data,
             runtime_args.data(),
@@ -330,7 +372,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, stl::Span<const uin
 }
 
 void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_args) {
-    auto &set_rt_args = this->common_runtime_args_;
+    auto& set_rt_args = this->common_runtime_args_;
     TT_FATAL(
         set_rt_args.empty(),
         "Illegal Common Runtime Args: Can only set common runtime args once. Get and modify args in place instead.");
@@ -342,12 +384,13 @@ void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_ar
 
 // Pads runtime args to count
 void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
-
-    for (const CoreRange &core_range : core_ranges.ranges()) {
+    for (const CoreRange& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                auto &set_rt_args = this->core_to_runtime_args_[x][y];
-                if (set_rt_args.empty()) continue;
+                auto& set_rt_args = this->core_to_runtime_args_[x][y];
+                if (set_rt_args.empty()) {
+                    continue;
+                }
 
                 TT_ASSERT(count >= core_to_runtime_args_data_[x][y].size());
                 core_to_runtime_args_data_[x][y].rt_args_count = count;
@@ -363,9 +406,7 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     this->common_runtime_args_data_.rt_args_count = count;
 }
 
-bool Kernel::is_idle_eth() const {
-    return std::holds_alternative<EthernetConfig>(this->config()) && std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
-}
+bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
 
 uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
@@ -379,7 +420,7 @@ uint32_t KernelImpl::get_binary_text_size(IDevice* device, int index) const {
     return iter != this->binaries_.end() ? iter->second[index]->get_text_size() : 0;
 }
 
-void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
+void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
     build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
     build_options.set_hlk_math_approx_mode_all_cores(this->config_.math_approx_mode);
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
@@ -393,7 +434,7 @@ void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*b
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     jit_build(
         BuildEnvManager::get_instance().get_kernel_build_state(
@@ -406,8 +447,8 @@ void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-    int erisc_id = magic_enum::enum_integer(this->config_.processor);
+    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    int erisc_id = enchantum::to_underlying(this->config_.processor);
     jit_build(
         BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), erisc_core_type, dm_class_idx, erisc_id),
@@ -419,26 +460,27 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
+    uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     JitBuildStateSubset build_states = BuildEnvManager::get_instance().get_kernel_build_states(
         device->build_id(), tensix_core_type, compute_class_idx);
     jit_build_subset(build_states, this);
 }
 
 void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries) {
-    // Try inserting an empry vector, as that is cheap to construct
-    // and avoids an additonal move.
+    // Try inserting an empty vector, as that is cheap to construct
+    // and avoids an additional move.
     auto pair = binaries_.insert({build_key, {}});
-    if (pair.second)
+    if (pair.second) {
         pair.first->second = std::move(binaries);
-    else
+    } else {
         TT_ASSERT(pair.first->second == binaries);
+    }
 }
 
 bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    const uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+    const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
@@ -449,20 +491,19 @@ bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
 
 void DataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
-    std::vector<ll_api::memory const*> binaries;
+    std::vector<const ll_api::memory*> binaries;
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
     // TODO(pgk): consolidate read_binaries where possible
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     auto load_type = MetalContext::instance().hal().get_jit_build_config(tensix_core_type, riscv_id, 0).memory_load;
-    ll_api::memory const& binary_mem = llrt::get_risc_binary(
-        build_state.get_target_out_path(this->kernel_full_name_),
-        load_type);
+    const ll_api::memory& binary_mem =
+        llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
@@ -473,7 +514,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
 std::vector<std::string> DataMovementKernel::file_paths(IDevice& device) const {
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device.build_id(), tensix_core_type, dm_class_idx, riscv_id);
@@ -483,7 +524,7 @@ std::vector<std::string> DataMovementKernel::file_paths(IDevice& device) const {
 bool EthernetKernel::binaries_exist_on_disk(const IDevice* device) const {
     const uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    const uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+    const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     const int erisc_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
@@ -495,11 +536,11 @@ bool EthernetKernel::binaries_exist_on_disk(const IDevice* device) const {
 void EthernetKernel::read_binaries(IDevice* device) {
     // untested
     TT_ASSERT(this->binaries_exist_on_disk(device));
-    std::vector<ll_api::memory const*> binaries;
+    std::vector<const ll_api::memory*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-    int erisc_id = magic_enum::enum_integer(this->config_.processor);
+    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    int erisc_id = enchantum::to_underlying(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
     // TODO: fix when active eth supports relo
@@ -511,8 +552,9 @@ void EthernetKernel::read_binaries(IDevice* device) {
                 // text_addr and some of span's addr point to IRAM base address.
                 // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
                 // The kernel can run with IRAM base address once it started.
-                binary_mem.set_text_addr(tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(
-                    (uint64_t)binary_mem.get_text_addr()));
+                binary_mem.set_text_addr(
+                    tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(
+                        (uint64_t)binary_mem.get_text_addr()));
                 std::function<void(uint64_t& addr)> update_callback = [](uint64_t& addr) {
                     addr = tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(addr);
                 };
@@ -529,8 +571,8 @@ void EthernetKernel::read_binaries(IDevice* device) {
 std::vector<std::string> EthernetKernel::file_paths(IDevice& device) const {
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-    int erisc_id = magic_enum::enum_integer(this->config_.processor);
+    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    int erisc_id = enchantum::to_underlying(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device.build_id(), erisc_core_type, dm_class_idx, erisc_id);
     return {build_state.get_target_out_path(this->kernel_full_name_)};
@@ -539,7 +581,7 @@ std::vector<std::string> EthernetKernel::file_paths(IDevice& device) const {
 bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    const uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
+    const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     const JitBuildStateSubset& build_states = BuildEnvManager::get_instance().get_kernel_build_states(
         device->build_id(), tensix_core_type, compute_class_idx);
 
@@ -555,10 +597,10 @@ bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
 
 void ComputeKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
-    std::vector<ll_api::memory const*> binaries;
+    std::vector<const ll_api::memory*> binaries;
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
+    uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
@@ -578,7 +620,7 @@ std::vector<std::string> ComputeKernel::file_paths(IDevice& device) const {
     std::vector<std::string> file_paths;
     auto& hal = MetalContext::instance().hal();
     uint32_t tensix_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
+    uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     uint32_t processor_types_count =
         hal.get_processor_types_count(this->get_kernel_programmable_core_type(), compute_class_idx);
     for (int trisc_id = 0; trisc_id < processor_types_count; trisc_id++) {
@@ -609,7 +651,8 @@ RISCV EthernetKernel::processor() const {
 
 RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 
-bool DataMovementKernel::configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+bool DataMovementKernel::configure(
+    IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
@@ -623,27 +666,29 @@ bool DataMovementKernel::configure(IDevice* device, const CoreCoord &logical_cor
     return true;
 }
 
-bool EthernetKernel::configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+bool EthernetKernel::configure(
+    IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem =
         *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)[0];
 
     if (this->config_.eth_mode == Eth::IDLE) {
-        uint32_t offset_idx = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(this->config_.processor);
+        uint32_t offset_idx = enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(this->config_.processor);
         llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);
     } else {
         uint32_t erisc_core_type =
             MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-        uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-        int erisc_id = magic_enum::enum_integer(this->config_.processor);
+        uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+        int erisc_id = enchantum::to_underlying(this->config_.processor);
         tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, erisc_core_type, dm_class_idx, erisc_id);
     }
 
     return true;
 }
 
-bool ComputeKernel::configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+bool ComputeKernel::configure(
+    IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
@@ -660,7 +705,7 @@ bool ComputeKernel::configure(IDevice* device, const CoreCoord &logical_core, ui
     return pass;
 }
 
-std::ostream &operator<<(std::ostream &os, const DataMovementProcessor &processor) {
+std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor) {
     switch (processor) {
         case DataMovementProcessor::RISCV_0: os << "RISCV_0"; break;
         case DataMovementProcessor::RISCV_1: os << "RISCV_1"; break;

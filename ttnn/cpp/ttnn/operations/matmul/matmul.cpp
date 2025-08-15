@@ -399,6 +399,40 @@ Tensor AddmmOperation::invoke(
     return out_tensor;
 }
 
+Tensor SparseMatmulOperation::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    uint32_t nnz,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const DataType> dtype,
+    const std::optional<const MatmulProgramConfig>& program_config,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreGrid> core_grid,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    std::optional<CoreCoord> user_core_coord =
+        core_grid.has_value() ? std::make_optional(CoreCoord(core_grid->x, core_grid->y)) : std::nullopt;
+    return sparse_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        sparsity,
+        SparseMatmul{
+            nnz,
+            program_config,
+            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+            dtype,
+            compute_kernel_config,
+            user_core_coord,
+            output_tile,
+            global_cb,
+            sub_device_id},
+        DefaultQueueId,
+        optional_output_tensor);
+}
+
 }  // namespace matmul
 }  // namespace operations
 }  // namespace ttnn

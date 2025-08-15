@@ -1,0 +1,105 @@
+name: "TTNN tutorials in minimum dev image test"
+
+# This workflow runs TTNN tutorials in form of unit tests in the minimum development environment.
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 30
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 30
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+
+jobs:
+  ttnn-tutorials:
+    name: TTNN tutorials ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        (github.event.pull_request.head.repo.fork == true || inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+      }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: 🐍 Install minimum set of packages
+        timeout-minutes: 10
+        run: |
+          cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
+          python3 -m pip install -r tutorials-dev.txt
+
+      - name: 🛠️ Install testing utils
+        timeout-minutes: 10
+        run: |
+          cd scripts/basic_dev_image
+          python3 -m pip install -r minimum-testing-kit.txt
+
+      - name: 🧪 Run tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          cd /work  # Go back to root for test_tutorials.py
+          python3 -m pytest tests/ttnn/unit_tests/test_tutorials.py -v
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

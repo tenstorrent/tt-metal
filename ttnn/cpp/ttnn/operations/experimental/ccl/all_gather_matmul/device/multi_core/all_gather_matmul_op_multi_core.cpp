@@ -59,7 +59,7 @@ DatacopyParams setup_datacopy(
         num_edm_buffers_per_channel = user_defined_num_buffers_per_channel.value();
     }
     const auto& device = input_tensor.device();
-    auto const& all_gather_config = ttnn::AllGatherConfig(
+    ttnn::AllGatherConfig(
         input_tensor,
         all_gather_output_tensor,
         dim,
@@ -131,7 +131,7 @@ DatacopyParams setup_datacopy(
     tt::tt_metal::CircularBufferConfig cb_in0_config =
         tt::tt_metal::CircularBufferConfig(page_size * datacopy_buffer_size, {{cb_id_in0, cb_data_format}})
             .set_page_size(cb_id_in0, page_size);
-    auto cb_input = tt::tt_metal::CreateCircularBuffer(program, datacopy_workers, cb_in0_config);
+    tt::tt_metal::CreateCircularBuffer(program, datacopy_workers, cb_in0_config);
 
     // Runtime args
     std::vector<uint32_t> datacopy_rt_args = {

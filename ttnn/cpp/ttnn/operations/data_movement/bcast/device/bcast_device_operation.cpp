@@ -5,6 +5,7 @@
 #include "bcast_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 // using namespace tt;
 // using namespace tt_metal;
@@ -28,6 +29,26 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     BcastOpMath bcast_op,
     bool inplace);
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+EltwiseBinaryBroadcast::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor0 = input_tensors.at(0);
+    const auto& input_tensor1 = input_tensors.at(1);
+    const auto& output_tensor = output_tensors.at(0);
+    bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool output_is_sharded = output_tensor.memory_config().is_sharded();
+    bool input_is_dram = input_tensor0.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool input_is_sharded = input_tensor0.memory_config().is_sharded();
+    bool is_local = input_is_sharded && !input_is_dram && output_is_sharded && !output_is_dram &&
+                    (output_tensor.memory_config().shard_spec().value().grid ==
+                     input_tensor0.memory_config().shard_spec().value().grid);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor1, output_tensor, false, 0, false, false, is_local);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
+}
 void EltwiseBinaryBroadcast::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     using namespace tt::constants;
@@ -212,10 +233,6 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-
-    uint32_t num_tiles = input_tensor_a.physical_volume() / TILE_HW;
-    uint32_t Ht = input_tensor_a.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input_tensor_a.padded_shape()[-1] / TILE_WIDTH;
 
     if (this->dim == BcastOpDim::H) {
         if (input_tensor_a.is_sharded()) {

@@ -10,6 +10,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range_dtype,
     compare_pcc,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -371,46 +372,6 @@ def test_unary_erfinv_ttnn(input_shapes, device):
     cq_id = 0
     ttnn.erfinv(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.erfinv(in_data)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_exp_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.exp(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.exp(in_data)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_exp2_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.exp2(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.exp2(in_data)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
@@ -810,6 +771,8 @@ def test_unary_signbit_ttnn(input_shapes, device):
     ),
 )
 def test_unary_silu_ttnn(input_shapes, device):
+    torch.manual_seed(0)
+    max_atol = 0.03125
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -819,6 +782,31 @@ def test_unary_silu_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+    atol_delta = torch.max(torch.abs(ttnn.to_torch(output_tensor) - golden_tensor)).item()
+    torch.allclose(golden_tensor, ttnn.to_torch(output_tensor), atol=max_atol)
+    assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_silu_ttnn_pos_ulp_check(input_shapes, device):
+    torch.manual_seed(0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 1, 10, device)
+
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+
+    cq_id = 0
+    ttnn.silu(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
+    golden_tensor = torch.nn.functional.silu(in_data)
+
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -1107,3 +1095,25 @@ def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "param",
+    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9, float("inf"), float("-inf"), float("nan")},
+)
+def test_unary_celu(input_shapes, param, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    output_tensor = ttnn.celu(input_tensor, alpha=param)
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    golden_tensor = golden_function(in_data, alpha=param)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

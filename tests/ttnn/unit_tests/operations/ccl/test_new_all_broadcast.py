@@ -17,6 +17,7 @@ def run_with_trace(
     num_links,
     output_mem_config,
     multi_device_global_semaphore,
+    barrier_semaphore,
     num_iter=20,
     subdevice_id=None,
 ):
@@ -29,6 +30,7 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
+        barrier_semaphore=barrier_semaphore,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -43,6 +45,7 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
+            barrier_semaphore=barrier_semaphore,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -74,7 +77,6 @@ def run_all_broadcast_impl(
     output_shard_shape=None,
     output_shard_grid=None,
     tensor_mem_layout=None,
-    use_cluster_axis_api=False,
     cluster_axis=None,
 ):
     if num_iters < 1:
@@ -96,6 +98,9 @@ def run_all_broadcast_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    barrier_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+    ]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"input_shard_shape: {input_shard_shape}")
@@ -191,7 +196,8 @@ def run_all_broadcast_impl(
             input_tensor_mesh_list[0],
             num_links,
             output_mem_config,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
+            multi_device_global_semaphore=ccl_semaphore_handles[i],
+            barrier_semaphore=barrier_semaphore_handles[i],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -205,6 +211,7 @@ def run_all_broadcast_impl(
                 memory_config=output_mem_config,
                 topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
+                barrier_semaphore=barrier_semaphore_handles[i],
             )
             tt_out_tensor_list.append(tt_out_tensors)
 
@@ -273,6 +280,9 @@ def test_all_broadcast(
     num_iters,
     function_level_defaults,
 ):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
     run_all_broadcast_impl(
         t3k_mesh_device,
         num_devices,
@@ -374,6 +384,9 @@ def test_all_broadcast_sharded(
     output_shard_grid,
     tensor_mem_layout,
 ):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
     run_all_broadcast_impl(
         t3k_mesh_device,
         num_devices,

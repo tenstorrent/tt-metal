@@ -10,25 +10,18 @@
 #include "chlkc_unpack_tile_dims.h"
 #define DATA_FORMATS_DEFINED
 #endif
-#include <noc/noc_parameters.h>
 
 #include <algorithm>
 #include <stdint.h>
 
+#include "dataflow_api_addrgen.h"
 #include "core_config.h"
 #include "circular_buffer.h"
-#include "dataflow_cmd_bufs.h"
-#include "debug/sanitize_noc.h"
-#include "debug/waypoint.h"
 #include "eth_l1_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
-#include "utils/utils.h"
-#include "debug/assert.h"
 #include "compile_time_args.h"
 #include "dev_msgs.h"
-#include "dataflow_api_common.h"
-#include "dataflow_api_addrgen.h"
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -93,7 +86,7 @@ inline uint8_t get_relative_logical_y() {
  *
  * | Argument       | Description                                                             | Type     | Valid Range | Required |
  * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
- * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255    | True     |
+ * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
 static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
@@ -107,7 +100,7 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l
  *
  * | Argument       | Description                                                             | Type     | Valid Range | Required |
  * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
- * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 255    | True     |
+ * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
 static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
@@ -121,7 +114,7 @@ static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t
  *
  * | Argument              | Description                                    | Type                  | Valid Range | Required |
  * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | Unique Runtime argument index                  | uint32_t              | 0 to 255    | True     |
+ * | arg_idx               | Unique Runtime argument index                  | uint32_t              | 0 to 341    | True     |
  * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
 // clang-format on
@@ -141,7 +134,7 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
  *
  * | Argument              | Description                                    | Type                  | Valid Range | Required |
  * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | Common Runtime argument index                  | uint32_t              | 0 to 255    | True     |
+ * | arg_idx               | Common Runtime argument index                  | uint32_t              | 0 to 341    | True     |
  * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
 // clang-format on
@@ -479,7 +472,11 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void noc_async_read_one_packet(
-    uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+    uint64_t src_noc_addr,
+    uint32_t dst_local_l1_addr,
+    uint32_t size,
+    uint8_t noc = noc_index,
+    uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -490,7 +487,7 @@ void noc_async_read_one_packet(
 
     WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
     WAYPOINT("NAOD");
 }
 
@@ -515,7 +512,12 @@ void noc_async_read_one_packet(
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
-inline void noc_async_read(uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+inline void noc_async_read(
+    uint64_t src_noc_addr,
+    uint32_t dst_local_l1_addr,
+    uint32_t size,
+    uint8_t noc = noc_index,
+    uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -523,11 +525,11 @@ inline void noc_async_read(uint64_t src_noc_addr, uint32_t dst_local_l1_addr, ui
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, noc);
+        noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
     } else {
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
         WAYPOINT("NARD");
     }
 }
@@ -670,6 +672,18 @@ FORCE_INLINE void noc_async_read_with_state(
     WAYPOINT("NAVD");
 }
 
+// clang-format off
+/**
+ * Increments the number of issued reads counter. This is used to manually increment the number of issued reads counter.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                            | Type     | Valid Range         | Required |
+ * |----------------------------|----------------------------------------|----------|---------------------|----------|
+ * | num_issued_reads_inc       | Number of reads to increment by        | uint32_t | Any uint32_t number | True     |
+ * | noc                        | Which NOC's counters to increment      | uint8_t  | 0 or 1              | False    |
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t noc = noc_index) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -687,14 +701,27 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
 // clang-format on
 FORCE_INLINE
 void noc_async_write_one_packet(
-    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    std::uint32_t src_local_l1_addr,
+    std::uint64_t dst_noc_addr,
+    std::uint32_t size,
+    uint8_t noc = noc_index,
+    uint32_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWPW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
 
     ncrisc_noc_fast_write<noc_mode>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
+        noc,
+        write_cmd_buf,
+        src_local_l1_addr,
+        dst_noc_addr,
+        size,
+        vc,
+        false /* mcast */,
+        false /* linked */,
+        1 /* num_dests */,
+        true /* multicast_path_reserve */);
 }
 
 // clang-format off
@@ -720,16 +747,21 @@ void noc_async_write_one_packet(
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
-inline void noc_async_write(uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
+inline void noc_async_write(
+    uint32_t src_local_l1_addr,
+    uint64_t dst_noc_addr,
+    uint32_t size,
+    uint8_t noc = noc_index,
+    uint32_t vc = NOC_UNICAST_WRITE_VC) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, vc);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
+        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc, vc);
     } else {
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
         ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
+            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, vc, false, false, 1, true);
         WAYPOINT("NAWD");
     }
 }
@@ -835,365 +867,394 @@ inline void noc_async_write_multicast(
     }
 }
 
-// TODO: write docs
-// this sets the state for issuing a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+// clang-format off
+/**
+ * Sets the stateful registers for an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * to a specified destination node located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function is used to set up the state for
+ * \a noc_async_write_one_packet_with_state, which will issue the actual
+ * write request. \a noc_async_write can be used instead if the state preservation is not
+ * needed. Also, see \a noc_async_write_barrier.
+ *
+ * The destination node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                                            | Data type | Valid range                      | required |
+ * |--------------------------------|--------------------------------------------------------|-----------|----------------------------------|----------|
+ * | dst_noc_addr                   | Encoding of the destination NOC location (x,y)+address | uint64_t  | Results of \a get_noc_addr calls | True     |
+ * | size                           | Size of data transfer in bytes                         | uint32_t  | 0..1MB                           | True     |
+ * | noc                            | Which NOC to use for the transaction                   | uint8_t   | 0 or 1                           | False    |
+ * | vc                             | Which VC to use for the transaction                    | uint8_t   | 0-3                              | False    |
+ * | non_posted (template argument) | Whether the write is nonposted (i.e. ack required)     | bool      | true or false                    | False    |
+ */
+// clang-format on
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_set_state(
-    std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size, vc);
 
     WAYPOINT("NWPW");
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    ncrisc_noc_write_set_state<non_posted, true /* one_packet */>(noc, write_cmd_buf, dst_noc_addr, size, vc);
     WAYPOINT("NWPD");
-
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             (non_posted ? NOC_CMD_RESP_MARKED : 0x0);
-
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
-#ifdef ARCH_BLACKHOLE
-    // Handles writing to PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
-        noc,
-        write_cmd_buf,
-        NOC_RET_ADDR_COORDINATE,
-        (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
 }
 
-// TODO: write docs
-// this issues only a single packet with cmd buf state with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+// clang-format off
+/**
+ * Initiates an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * to a specified destination node located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function must be preceded by a call to
+ * \a noc_async_write_one_packet_set_state. This function is used to issue the actual
+ * write request after the state has been set up.
+ * \a noc_async_write can be used instead if the state preservation is not needed. Also, see \a noc_async_write_barrier.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                                        | Data type | Valid range   | required |
+ * |--------------------------------|----------------------------------------------------|-----------|---------------|----------|
+ * | src_local_l1_addr              | Address in local L1 memory on source core          | uint32_t  | 0..1MB        | True     |
+ * | dst_local_l1_addr              | Address in local L1 memory on destination core     | uint32_t  | 0..1MB        | True     |
+ * | noc                            | Which NOC to use for the transaction               | uint8_t   | 0 or 1        | False    |
+ * | non_posted (template argument) | Whether the write is nonposted (i.e. ack required) | bool      | true or false | False    |
+ */
+// clang-format on
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
-    std::uint32_t src_local_l1_addr, std::uint32_t dst_noc_addr, uint8_t noc = noc_index) {
+    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
 
-    if constexpr (non_posted) {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-        }
-    } else {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-        }
-    }
-    WAYPOINT("NWPW");
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-    WAYPOINT("NWPD");
-
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_noc_addr, src_local_l1_addr);
-
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dst_noc_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-
-    if constexpr (non_posted) {
-        if constexpr (noc_mode == DM_DEDICATED_NOC) {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;  // num_dests
-        }
-    } else {
-        if constexpr (noc_mode == DM_DEDICATED_NOC) {
-            noc_posted_writes_num_issued[noc] += 1;
-        }
-    }
-}
-
-template <typename DSpec>
-FORCE_INLINE void noc_async_read_page(
-    const uint32_t id,
-    const TensorAccessor<DSpec>& s,
-    std::uint32_t dst_local_l1_addr,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    noc_async_read(s.get_noc_addr(id, offset, noc), dst_local_l1_addr, s.page_size, noc);
-}
-
-template <typename DSpec>
-FORCE_INLINE void noc_async_read_tile(
-    const uint32_t id,
-    const TensorAccessor<DSpec>& s,
-    std::uint32_t dst_local_l1_addr,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    noc_async_read(s.get_noc_addr(id, offset, noc), dst_local_l1_addr, s.page_size, noc);
-}
-
-template <bool DRAM>
-FORCE_INLINE void noc_async_read_tile(
-    const uint32_t id,
-    const InterleavedAddrGen<DRAM>& s,
-    std::uint32_t dst_local_l1_addr,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    noc_async_read(s.get_noc_addr(id, offset, noc), dst_local_l1_addr, s.page_size, noc);
-}
-
-template <typename DSpec>
-FORCE_INLINE void noc_async_write_page(
-    const uint32_t id,
-    const TensorAccessor<DSpec>& s,
-    std::uint32_t src_local_l1_addr,
-    const uint32_t write_size_bytes,
-    const uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, offset, noc), write_size_bytes, noc);
-}
-
-template <bool DRAM>
-FORCE_INLINE void noc_async_write_page(
-    const uint32_t id,
-    const InterleavedAddrGen<DRAM>& s,
-    std::uint32_t src_local_l1_addr,
-    const uint32_t write_size_bytes,
-    const uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, offset, noc), write_size_bytes, noc);
-}
-
-template <typename DSpec>
-FORCE_INLINE void noc_async_write_tile(
-    const uint32_t id, const TensorAccessor<DSpec>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
-    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, 0, noc), s.page_size, noc);
-}
-
-template <bool DRAM>
-FORCE_INLINE void noc_async_write_tile(
-    const uint32_t id, const InterleavedAddrGen<DRAM>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
-    noc_async_write(src_local_l1_addr, s.get_noc_addr(id, 0, noc), s.page_size, noc);
-}
-
-template <bool DRAM>
-FORCE_INLINE void noc_async_read_page(
-    const uint32_t id,
-    const InterleavedAddrGen<DRAM>& s,
-    std::uint32_t dst_local_l1_addr,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
-
-    noc_async_read(s.get_noc_addr(id, offset), dst_local_l1_addr, s.page_size, noc);
-}
-
-// clang-format off
-/**
- * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedAddrGenFast object.
- * Refer to \a noc_async_read for more details.
- *
- * Return value: None
- *
- * | Argument          | Description                          | Data type              | Valid range         | required |
- * |-------------------|--------------------------------------|------------------------|---------------------|----------|
- * | id                | Page id                              | uint32_t               | Any uint32_t number | True     |
- * | s                 | Address generator object             | InterleavedAddrGenFast | N/A                 | True     |
- * | dst_local_l1_addr | Address in local L1 memory           | uint32_t               | 0..1MB              | True     |
- * | offset            | Custom address offset                | uint32_t               | 0..1MB              | False    |
- * | noc               | Which NOC to use for the transaction | uint8_t                | 0 or 1              | False    |
- * | DRAM              | Whether to read from DRAM or L1      | bool                   | True or False       | True     |
- * | tile_hw           | Tile height x width                  | uint32_t               | Any uint32_t number | True     |
- */
-// clang-format on
-template <bool DRAM, uint32_t tile_hw>
-FORCE_INLINE void noc_async_read_tile(
-    const uint32_t id,
-    const InterleavedAddrGenFast<DRAM, tile_hw>& s,
-    uint32_t dst_local_l1_addr,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
-
-    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-    uint32_t src_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
-    uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-    uint64_t src_noc_addr = get_noc_addr_helper(src_noc_xy, src_addr);
-
-    WAYPOINT("NRTW");
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, s.page_size);
-    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("NRTD");
-
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, s.page_size);
-}
-
-template <bool DRAM, uint32_t tile_hw>
-FORCE_INLINE void noc_async_write_tile(
-    const uint32_t id,
-    const InterleavedAddrGenFast<DRAM, tile_hw>& s,
-    std::uint32_t src_local_l1_addr,
-    uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, s.page_size, NOC_UNICAST_WRITE_VC);
-
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-    }
-    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-    uint32_t dest_addr = s.get_addr(id, bank_offset_index, bank_index);
-    uint32_t dest_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-    WAYPOINT("NWTW");
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
-        noc, get_noc_addr_helper(dest_noc_xy, dest_addr), src_local_l1_addr, s.page_size);
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-    WAYPOINT("NWTD");
-
-    constexpr uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
-                                       NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
-                                       0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                                       0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                                       NOC_CMD_RESP_MARKED;
-
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dest_addr);            // (uint32_t)dest_addr
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, dest_noc_xy);  // dest_addr >> 32
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, s.page_size);            // len_bytes
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_nonposted_writes_num_issued[noc] += 1;
-        noc_nonposted_writes_acked[noc] += 1;  // num_dests
-    }
-}
-
-// clang-format off
-/**
- * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedPow2AddrGenFast object.
- * Refer to \a noc_async_read for more details.
- *
- * Return value: None
- *
- * | Argument          | Description                          | Data type                  | Valid range         | required |
- * |-------------------|--------------------------------------|----------------------------|---------------------|----------|
- * | id                | Page id                              | uint32_t                   | Any uint32_t number | True     |
- * | s                 | Address generator object             | InterleavedPow2AddrGenFast | N/A                 | True     |
- * | dst_local_l1_addr | Address in local L1 memory           | uint32_t                   | 0..1MB              | True     |
- * | offset            | Custom address offset                | uint32_t                   | 0..1MB              | False    |
- * | noc               | Which NOC to use for the transaction | uint8_t                    | 0 or 1              | False    |
- * | DRAM              | Whether to read from DRAM or L1      | bool                       | True or False       | True     |
- */
-// clang-format on
-template <bool DRAM>
-FORCE_INLINE void noc_async_read_page(
-    const uint32_t id,
-    const InterleavedPow2AddrGenFast<DRAM>& s,
-    uint32_t dst_local_l1_addr,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-    uint32_t src_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
-    uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-    uint64_t src_noc_addr = get_noc_addr_helper(src_noc_xy, src_addr);
-    uint32_t len_bytes = 1 << s.aligned_log_base_2_of_page_size;
-
-    WAYPOINT("NRPW");
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, len_bytes);
-    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("NRPD");
-
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, len_bytes);
-}
-
-// clang-format off
-/**
- * Initiates an asynchronous read for a single packet with custom transaction size and a source location determined by the InterleavedPow2AddrGenFast object.
- * Refer to \a noc_async_read for more details.
- *
- * Return value: None
- *
- * TODO: Not used anywhere in metal, should it be removed?
- *
- * | Argument          | Description                          | Data type                  | Valid range         | required |
- * |-------------------|--------------------------------------|----------------------------|---------------------|----------|
- * | id                | Page id                              | uint32_t                   | Any uint32_t number | True     |
- * | s                 | Address generator object             | InterleavedPow2AddrGenFast | N/A                 | True     |
- * | dst_local_l1_addr | Address in local L1 memory           | uint32_t                   | 0..1MB              | True     |
- * | size              | Size of data transfer in bytes       | uint32_t                   | 0..1MB              | True     |
- * | offset            | Custom address offset                | uint32_t                   | 0..1MB              | False    |
- * | noc               | Which NOC to use for the transaction | uint8_t                    | 0 or 1              | False    |
- * | DRAM              | Whether to read from DRAM or L1      | bool                       | True or False       | True     |
- */
-// clang-format on
-template <bool DRAM>
-FORCE_INLINE void noc_async_read_partial_page(
-    const uint32_t id,
-    const InterleavedPow2AddrGenFast<DRAM>& s,
-    uint32_t dst_local_l1_addr,
-    const uint32_t size,
-    const uint32_t offset,
-    uint8_t noc = noc_index) {
-    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-    uint32_t src_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
-    uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-    uint64_t src_noc_addr = get_noc_addr_helper(src_noc_xy, src_addr);
-
-    WAYPOINT("RP1W");
-    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RP1D");
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
-}
-
-template <bool DRAM>
-FORCE_INLINE void noc_async_write_page(
-    const uint32_t id,
-    const InterleavedPow2AddrGenFast<DRAM>& s,
-    std::uint32_t src_local_l1_addr,
-    const uint32_t write_size_bytes,
-    const uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    // Note: This is not used anywhere in tt-metal
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-    }
-    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-    uint32_t dest_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
-    uint32_t dest_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_local_l1_addr, src_local_l1_addr);
 
     WAYPOINT("NWPW");
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
-        noc, get_noc_addr_helper(dest_noc_xy, dest_addr), src_local_l1_addr, write_size_bytes);
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    ncrisc_noc_write_with_state<noc_mode, non_posted, true /* update_counter */, true /* one_packet */>(
+        noc, write_cmd_buf, src_local_l1_addr, dst_local_l1_addr);
     WAYPOINT("NWPD");
-
-    constexpr uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
-                                       NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
-                                       0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                                       0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                                       NOC_CMD_RESP_MARKED;
-
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dest_addr);            // (uint32_t)dest_addr
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, dest_noc_xy);  // dest_addr >> 32
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, write_size_bytes);       // len_bytes
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_nonposted_writes_num_issued[noc] += 1;
-        noc_nonposted_writes_acked[noc] += 1;  // num_dests
-    }
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous read for a single packet with transaction size and source location determined by the AddrGen object.
+ * This function is the generic implementation that can be used with any address generator that provides
+ * the get_noc_addr method and either a page_size or a log_base_2_of_page_size
+ * member variable. It is designed to be flexible and can be used with various address generators.
+ * Note that providing the size argument is optional, and if provided,
+ * it will override the default page size of the address generator.
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                          | Data type | Valid range                                    | required |
+ * |------------------------------|--------------------------------------|-----------|------------------------------------------------|----------|
+ * | id                           | Page id                              | uint32_t  | Any uint32_t number                            | True     |
+ * | addrgen                      | Address generator object             | AddrGen   | N/A                                            | True     |
+ * | dst_local_l1_addr            | Address in local L1 memory           | uint32_t  | 0..1MB                                         | True     |
+ * | offset                       | Custom address offset                | uint32_t  | 0..1MB                                         | False    |
+ * | noc                          | Which NOC to use for the transaction | uint8_t   | 0 or 1                                         | False    |
+ * | AddrGen (template parameter) | Address generator class              | typename  | Any AddrGen class in \a dataflow_api_addrgen.h | True     |
+ */
+// clang-format on
+template <typename AddrGen>
+FORCE_INLINE void noc_async_read_page(
+    const uint32_t id,
+    const AddrGen& addrgen,
+    uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    static_assert(
+        has_required_addrgen_traits_v<AddrGen>,
+        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+
+    uint32_t page_size;
+    if constexpr (has_page_size_v<AddrGen>) {
+        page_size = addrgen.page_size;
+    } else {
+        page_size = (1 << addrgen.log_base_2_of_page_size);
+    }
+    noc_async_read(addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
+ * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedAddrGen object.
+ * This function is a convenience wrapper around noc_async_read_page for InterleavedAddrGen objects.
+ * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
+ */
+// clang-format on
+template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
+FORCE_INLINE void noc_async_read_tile(
+    const uint32_t id,
+    const InterleavedAddrGen<DRAM>& addrgen,
+    uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read_page<InterleavedAddrGen<DRAM>>(id, addrgen, dst_local_l1_addr, offset, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
+ * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedAddrGen object.
+ * This function is a convenience wrapper around noc_async_read_page for InterleavedAddrGen objects.
+ * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
+ */
+// clang-format on
+template <typename DSpec>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
+FORCE_INLINE void noc_async_read_tile(
+    const uint32_t id,
+    const TensorAccessor<DSpec>& addrgen,
+    uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read_page<TensorAccessor<DSpec>>(id, addrgen, dst_local_l1_addr, offset, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
+ * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedAddrGen object.
+ * This function is a convenience wrapper around noc_async_read_page for InterleavedAddrGen objects.
+ * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
+ */
+// clang-format on
+template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
+FORCE_INLINE void noc_async_read_page(
+    const uint32_t id,
+    const InterleavedAddrGen<DRAM>& addrgen,
+    uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen.page_size, -1);
+    noc_async_read_page<InterleavedAddrGen<DRAM>>(id, addrgen, dst_local_l1_addr, offset, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
+ * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedAddrGenFast object.
+ * This function is a convenience wrapper around noc_async_read_page for InterleavedAddrGenFast objects.
+ * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
+ *
+ * Extra arguments:
+ *
+ * | Argument                     | Description         | Data type | Valid range         | required |
+ * |------------------------------|---------------------|-----------|---------------------|----------|
+ * | tile_hw (template parameter) | Tile height x width | uint32_t  | Any uint32_t number | True     |
+ */
+// clang-format on
+template <bool DRAM, uint32_t tile_hw>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
+FORCE_INLINE void noc_async_read_tile(
+    const uint32_t id,
+    const InterleavedAddrGenFast<DRAM, tile_hw>& addrgen,
+    uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen.page_size, -1);
+    noc_async_read_page<InterleavedAddrGenFast<DRAM, tile_hw>>(id, addrgen, dst_local_l1_addr, offset, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
+ * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedPow2AddrGenFast object.
+ * This function is a convenience wrapper around noc_async_read_page for InterleavedPow2AddrGenFast objects.
+ * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
+ */
+// clang-format on
+template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
+FORCE_INLINE void noc_async_read_page(
+    const uint32_t id,
+    const InterleavedPow2AddrGenFast<DRAM>& addrgen,
+    uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read_page<InterleavedPow2AddrGenFast<DRAM>>(id, addrgen, dst_local_l1_addr, offset, noc);
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the AddrGen object.
+ * This function is the generic implementation that can be used with any address generator that provides
+ * the get_noc_addr method and either a page_size or a log_base_2_of_page_size member variable.
+ * It is designed to be flexible and can be used with various address generators.
+ * Note that providing the size argument is optional, and if provided,
+ * it will override the default page size of the address generator.
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                          | Data type | Valid range                                    | required |
+ * |------------------------------|--------------------------------------|-----------|------------------------------------------------|----------|
+ * | id                           | Page id                              | uint32_t  | Any uint32_t number                            | True     |
+ * | addrgen                      | Address generator object             | AddrGen   | N/A                                            | True     |
+ * | src_local_l1_addr            | Address in local L1 memory           | uint32_t  | 0..1MB                                         | True     |
+ * | size                         | Size of data in bytes                | uint32_t  | 0..NOC_MAX_BURST_SIZE MB                       | False    |
+ * | offset                       | Custom address offset                | uint32_t  | 0..1MB                                         | False    |
+ * | noc                          | Which NOC to use for the transaction | uint8_t   | 0 or 1                                         | False    |
+ * | AddrGen (template parameter) | Address generator class              | typename  | Any AddrGen class in \a dataflow_api_addrgen.h | True     |
+ */
+// clang-format on
+template <typename AddrGen>
+FORCE_INLINE void noc_async_write_page(
+    const uint32_t id,
+    const AddrGen& addrgen,
+    uint32_t src_local_l1_addr,
+    uint32_t size = 0,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    static_assert(
+        has_required_addrgen_traits_v<AddrGen>,
+        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+
+    uint32_t page_size;
+    if constexpr (has_page_size_v<AddrGen>) {
+        page_size = addrgen.page_size;
+    } else {
+        page_size = (1 << addrgen.log_base_2_of_page_size);
+    }
+    noc_async_write(src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
+ * Initiates an asynchronous write for a single packet with custom transaction size, and destination location determined by the InterleavedAddrGen object.
+ * This function is a convenience wrapper around noc_async_write_page for InterleavedAddrGen objects.
+ * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
+ *
+ * Extra arguments:
+ *
+ * | Argument          | Description                          | Data type                  | Valid range              | required |
+ * |-------------------|--------------------------------------|----------------------------|--------------------------|----------|
+ * | write_size_bytes  | Size of data transfer in bytes       | uint32_t                   | 0..NOC_MAX_BURST_SIZE MB | True     |
+ */
+// clang-format on
+template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
+FORCE_INLINE void noc_async_write_page(
+    const uint32_t id,
+    const InterleavedAddrGen<DRAM>& addrgen,
+    uint32_t src_local_l1_addr,
+    const uint32_t write_size_bytes,
+    const uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_write_page<InterleavedAddrGen<DRAM>>(id, addrgen, src_local_l1_addr, write_size_bytes, offset, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
+ * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the InterleavedAddrGen object.
+ * This function is a convenience wrapper around noc_async_write_page for InterleavedAddrGen objects.
+ * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
+ */
+template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
+FORCE_INLINE void noc_async_write_tile(
+    const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
+    noc_async_write_page<InterleavedAddrGen<DRAM>>(
+        id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
+ * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the InterleavedAddrGenFast object.
+ * This function is a convenience wrapper around noc_async_write_page for InterleavedAddrGenFast objects.
+ * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
+ *
+ * Extra arguments:
+ *
+ * | Argument                     | Description         | Data type | Valid range         | required |
+ * |------------------------------|---------------------|-----------|---------------------|----------|
+ * | tile_hw (template parameter) | Tile height x width | uint32_t  | Any uint32_t number | True     |
+ */
+template <bool DRAM, uint32_t tile_hw>
+[[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
+FORCE_INLINE void noc_async_write_tile(
+    const uint32_t id,
+    const InterleavedAddrGenFast<DRAM, tile_hw>& addrgen,
+    uint32_t src_local_l1_addr,
+    uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, addrgen.page_size, NOC_UNICAST_WRITE_VC);
+    noc_async_write_page<InterleavedAddrGenFast<DRAM, tile_hw>>(
+        id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
+ * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the TensorAccessor object.
+ * This function is a convenience wrapper around noc_async_write_page for TensorAccessor objects.
+ * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
+ */
+// clang-format on
+template <typename DSpec>
+[[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
+FORCE_INLINE void noc_async_write_tile(
+    const uint32_t id, const TensorAccessor<DSpec>& addrgen, uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
+    noc_async_write_page<TensorAccessor<DSpec>>(id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_write_page instead.
+ *
+ * Initiates an asynchronous write for a single packet with transaction size and destination location determined by the InterleavedPow2AddrGenFast object.
+ * This function is a convenience wrapper around noc_async_write_page for InterleavedPow2AddrGenFast objects.
+ * Refer to template <typename AddrGen> noc_async_write_page for a generic implementation and more details.
+ *
+ * Extra arguments:
+ *
+ * | Argument          | Description                    | Data type | Valid range              | required |
+ * |-------------------|--------------------------------|-----------|--------------------------|----------|
+ * | write_size_bytes  | Size of data transfer in bytes | uint32_t  | 0..NOC_MAX_BURST_SIZE MB | True     |
+ *
+ */
+// clang-format on
+template <bool DRAM>
+[[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
+FORCE_INLINE void noc_async_write_page(
+    const uint32_t id,
+    const InterleavedPow2AddrGenFast<DRAM>& addrgen,
+    uint32_t src_local_l1_addr,
+    const uint32_t write_size_bytes,
+    const uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_write_page<InterleavedPow2AddrGenFast<DRAM>>(
+        id, addrgen, src_local_l1_addr, write_size_bytes, offset, noc);
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous read of a shard from a source noc address into a local L1 address.
+ * The size of the transaction and the source address are determined by the TensorAccessor object.
+ * This function only works for sharded tensors.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                      | Type           | Valid Range                                              | Required |
+ * |----------------------------|--------------------------------------------------|----------------|----------------------------------------------------------|----------|
+ * | shard_id                   | Row-major index of a shard in the sharded tensor | uint32_t       | Any uint32_t number                                      | True     |
+ * | s                          | TensorAccessor object                            | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
+ * | dst_local_l1_addr          | Destination address in local L1 memory           | uint32_t       | 0..1MB                                                   | True     |
+ * | noc                        | Which NOC to use for the transaction             | uint8_t        | 0 or 1                                                   | False    |
+ */
+// clang-format on
 template <typename DSpec>
 FORCE_INLINE void noc_async_read_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
@@ -1201,6 +1262,22 @@ FORCE_INLINE void noc_async_read_shard(
     noc_async_read(s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write of a shard from a local L1 address to a destination noc address.
+ * The size of the transaction and the destination address are determined by the TensorAccessor object.
+ * This function only works for sharded tensors.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                      | Type           | Valid Range                                              | Required |
+ * |----------------------------|--------------------------------------------------|----------------|----------------------------------------------------------|----------|
+ * | shard_id                   | Row-major index of a shard in the sharded tensor | uint32_t       | Any uint32_t number                                      | True     |
+ * | s                          | TensorAccessor object                            | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
+ * | src_local_l1_addr          | Source address in local L1 memory                | uint32_t       | 0..1MB                                                   | True     |
+ * | noc                        | Which NOC to use for the transaction             | uint8_t        | 0 or 1                                                   | False    |
+ */
+// clang-format on
 template <typename DSpec>
 FORCE_INLINE void noc_async_write_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
@@ -1208,11 +1285,39 @@ FORCE_INLINE void noc_async_write_shard(
     noc_async_write(src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
 }
 
+// clang-format off
+/**
+ * Returns the local address of the semaphore with the given id.
+ *
+ * Return value: Local address of the semaphore (uint32_t)
+ *
+ * | Argument                  | Description                | Type                     | Valid Range              | Required |
+ * |---------------------------|----------------------------|--------------------------|--------------------------|----------|
+ * | semaphore_id              | Semaphore id               | uint32_t                 | 0..2^20-1                | True     |
+ * | type (template parameter) | Type of the core           | ProgrammableCoreType     | Any ProgrammableCoreType | False    |
+ */
+// clang-format on
 template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
 FORCE_INLINE uint32_t get_semaphore(uint32_t semaphore_id) {
     return (uint32_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to a single destination node.
+ * The size of data that is sent is 4 Bytes. This is usually used to set a
+ * semaphore value at the destination node, as a way of synchronization.
+ *
+ * Return value: None
+ *
+ * | Argument               | Description                          | Type     | Valid Range                     | Required |
+ * |------------------------|--------------------------------------|----------|---------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory    | uint32_t | 0..1MB                          | True     |
+ * | dst_noc_addr           | Destination NOC address              | uint64_t | Results of \a get_noc_addr call | True     |
+ * | noc                    | Which NOC to use for the transaction | uint8_t  | 0 or 1                          | False    |
+ */
+// clang-format on
 inline void noc_semaphore_set_remote(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, uint8_t noc = noc_index) {
     WAYPOINT("NSSW");
@@ -1330,6 +1435,25 @@ inline void noc_semaphore_set_multicast_loopback_src(
     WAYPOINT("NSLD");
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to a rectangular destination grid.
+ * This API is the same as *noc_async_write_multicast* but with the multicast
+ * sender being part of the multicast destinations. Refer to *noc_async_write_multicast* for more details.
+ *
+ * Return value: None
+ *
+ * | Argument                          | Description                                                              | Type     | Valid Range                                | Required |
+ * |-----------------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | src_local_l1_addr                 | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
+ * | dst_noc_addr_multicast            | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | size                              | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                     | True     |
+ * | num_dests                         | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores -1)                    | True     |
+ * | linked                            | Whether the transaction is linked                                        | bool     | true or false                              | False    |
+ * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
+ */
+// clang-format on
 inline void noc_async_write_multicast_loopback_src(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr_multicast,
@@ -1368,7 +1492,7 @@ inline void noc_async_write_multicast_loopback_src(
  *
  * | Argument | Description                          | Type     | Valid Range | Required |
  * |----------|--------------------------------------|----------|-------------|----------|
- * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START);
@@ -1397,7 +1521,7 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
  *
  * | Argument | Description                          | Type     | Valid Range | Required |
  * |----------|--------------------------------------|----------|-------------|----------|
- * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
@@ -1421,6 +1545,12 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
  * This blocking call waits for all outstanding enqueued *noc_async_write*
  * calls issued on the current Tensix core to depart, but will not wait
  * for them to complete
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_writes_flushed(uint8_t noc = noc_index) {
@@ -1442,6 +1572,12 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
  * This blocking call waits for all outstanding enqueued posted *noc_async_write*
  * calls issued on the current Tensix core to depart, but will not wait
  * for them to complete
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
@@ -1458,12 +1594,16 @@ void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
 }
 
 /**
- * This blocking call waits for all the outstanding enqueued *noc_async_write*
- * calls issued on the current Tensix core to complete. After returning from
- * this call the *noc_async_write* queue will be empty for the current Tensix
- * core.
+ * This blocking call waits for all the outstanding enqueued atomic
+ * transactions issued on the current Tensix core to complete. After returning
+ * from this call the atomic transaction queue will be empty for the current
+ * Tensix core.
  *
  * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc_idx  | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
@@ -1600,73 +1740,41 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * Initiates an asynchronous write of a 32-bit value to a NOC destination.
  * Typically used for writing registers, but can be used for memory locations as well.
  * The destination is specified as a 64-bit NOC address (see \a noc_async_write).
- * The advantage over using \a noc_async_write is that we don't a Tensix L1
+ * The advantage over using \a noc_async_write is that we don't use a Tensix L1
  * memory source location; the write value is written directly into a register.
  * Unlike using \a noc_async_write, there are also no address alignment concerns.
  * Also, see \a noc_async_write_barrier.
  *
  * The destination node can be either a Tensix core+L1 memory
- * address or a PCIe controller.
+ * address or a PCIe controller; This API does not support DRAM addresses.
  *
  * Return value: None
  *
- * | Argument  | Description                                            | Type     | Valid Range                      | Required |
- * |-----------|--------------------------------------------------------|----------|----------------------------------|----------|
- * | addr      | Encoding of the destination location (x,y)+address     | uint64_t | Results of \a get_noc_addr calls | True     |
- * | val       | The value to be written                                | uint32_t | Any uint32_t value               | True     |
- * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                          | False    |
+ * | Argument                                 | Description                                                | Type     | Valid Range                      | Required |
+ * |------------------------------------------|------------------------------------------------------------|----------|----------------------------------|----------|
+ * | addr                                     | Encoding of the destination location (x,y)+address         | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | val                                      | The value to be written                                    | uint32_t | Any uint32_t value               | True     |
+ * | be                                       | Byte-enable                                                | uint8_t  | 0x1-0xF                          | False    |
+ * | noc                                      | NOC to use for the transaction                             | uint8_t  | 0 or 1                           | False    |
+ * | vc                                       | Virtual channel to use for the transaction                 | uint8_t  | 0-3 (Unicast VCs)                | False    |
+ * | InlineWriteDst (template parameter)      | Whether the write is targeting L1 or a Stream Register     | InlineWriteDst     | DEFAULT, L1, REG       | False    |
+ * | posted              (template parameter) | Whether the call is posted (i.e. ack requirement)          | bool     | true or false                    | False    |
  */
 // clang-format on
-template <bool write_to_stream_reg = false, bool posted = false>
+template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false>
 FORCE_INLINE void noc_inline_dw_write(
     uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
-    // This API does not support DRAM addresses
     DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
-#ifdef ARCH_BLACKHOLE
-    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
-    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
-    // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
-    ASSERT((addr & 0x3) == 0);
-    if constexpr (write_to_stream_reg) {
-        noc_fast_write_dw_inline<noc_mode>(
-            noc,
-            write_at_cmd_buf,
-            val,
-            addr,
-            be,  // byte-enable
-            vc,
-            false,  // mcast
-            posted  // posted
-        );
-        WAYPOINT("NWID");
-        return;
+#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
+    if constexpr (dst_type == InlineWriteDst::L1) {
+        uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
     }
+#endif
 
-    ASSERT(be == 0xF);
-    uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
-    noc_async_writes_flushed(noc);
-    volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
-    *interim_addr_ptr = val;
-    ncrisc_noc_fast_write_any_len<noc_mode>(
-        noc,
-        write_cmd_buf,
-        src_addr,
-        addr,
-        4,
-        vc,
-        false,  // mcast
-        false,  // linked
-        1,      // num_dests
-        true,   // multicast_path_reserve
-        posted  // posted
-    );
-    noc_async_writes_flushed(noc);
-#else
-    noc_fast_write_dw_inline<noc_mode>(
+    noc_fast_write_dw_inline<noc_mode, dst_type>(
         noc,
         write_at_cmd_buf,
         val,
@@ -1676,11 +1784,36 @@ FORCE_INLINE void noc_inline_dw_write(
         false,  // mcast
         posted  // posted
     );
-#endif
     WAYPOINT("NWID");
 }
 
-// on BH this api can only write to stream register, writing to L1 will cause hangs!
+// clang-format off
+/**
+ * Sets the stateful registers for an inline write of a 32-bit value to a NOC destination.
+ * This function is used to set up the state for \a noc_inline_dw_write_with_state, which will issue the actual
+ * write request. The 32-bit value and part of the destination address can be set later in \a noc_inline_dw_write_with_state.
+ * \a noc_inline_dw_write can be used instead if the state preservation is not
+ * needed. Also, see \a noc_async_write_barrier.
+ *
+ * The destination node can be either a Tensix core+L1 memory
+ * address or a PCIe controller; This API does not support DRAM addresses.
+ *
+ * Note: On Blackhole, this API can only write to stream registers, writing to L1 will cause hangs!
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                                                | Type     | Valid Range                      | Required |
+ * |------------------------------|------------------------------------------------------------|----------|----------------------------------|----------|
+ * | addr                         | Encoding of the destination location (x,y)+address         | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | val                          | The value to be written                                    | uint32_t | Any uint32_t value               | False    |
+ * | be                           | Byte-enable                                                | uint8_t  | 0x1-0xF                          | False    |
+ * | cmd_buf                      | Command buffer to use for the transaction                  | uint8_t  | 0-3                              | False    |
+ * | noc                          | NOC to use for the transaction                             | uint8_t  | 0 or 1                           | False    |
+ * | vc                           | Virtual channel to use for the transaction                 | uint8_t  | 0-3 (Unicast VCs)                | False    |
+ * | posted (template parameter)  | Whether the call is posted (i.e. ack requirement)          | bool     | true or false                    | False    |
+ * | set_val (template parameter) | Whether to set the value for the write here                | bool     | true or false                    | False    |
+ */
+// clang-format on
 template <bool posted = false, bool set_val = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr,
@@ -1690,34 +1823,39 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
-    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
-    // The address could be set here or later in noc_inline_dw_write_with_state
-
-    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_WR_INLINE |
-                             0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
-
-    uint32_t be32 = be;
-    uint32_t be_shift = (addr & (NOC_WORD_BYTES - 1));
-    // If we're given a misaligned address, don't write to the bytes in the word below the address
-    be32 = (be32 << be_shift);
-
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    if constexpr (set_val) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
-    }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr & 0xFFFFFFFF);
-#ifdef ARCH_BLACKHOLE
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & 0x1000000F);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+    noc_fast_write_dw_inline_set_state<posted, set_val>(noc, cmd_buf, addr, be, vc, val);
     WAYPOINT("NWID");
 }
 
-// on BH this api can only write to stream register, writing to L1 will cause hangs!
+// clang-format off
+/**
+ * Initiates an inline write of a 32-bit value to a NOC destination.
+ * This function must be preceded by a call to \a noc_inline_dw_write_set_state.
+ * This function is used to issue the actual write request after the state has been set up.
+ * The 32-bit value and part of the destination address can also be set in this API (Only either hi or lo address should be getting updated).
+ * \a noc_inline_dw_write can be used instead if the state preservation is not
+ * needed. Also, see \a noc_async_write_barrier.
+ *
+ * The destination node can be either a Tensix core+L1 memory
+ * address or a PCIe controller; This API does not support DRAM addresses.
+ *
+ * Note: On Blackhole, this API can only write to stream registers, writing to L1 will cause hangs!
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                         | Data type | Valid range   | required |
+ * |-------------------------------------|-----------------------------------------------------|-----------|---------------|----------|
+ * | val                                 | The value to be written                             | uint32_t  | Any uint32_t  | True     |
+ * | addr                                | The local address to write to (if not set in state) | uint32_t  | 0..1MB        | False    |
+ * | cmd_buf                             | Command buffer to use for the transaction           | uint8_t   | 0-3           | False    |
+ * | noc                                 | NOC to use for the transaction                      | uint8_t   | 0 or 1        | False    |
+ * | update_addr_lo (template parameter) | Whether to update the lower 32 bits of the address  | bool      | true or false | False    |
+ * | update_counter (template parameter) | Whether to update the write counters                | bool      | true or false | False    |
+ * | posted (template parameter)         | Whether the call is posted (i.e. ack requirement)   | bool      | true or false | False    |
+ * | update_addr_hi (template parameter) | Whether to update the upper 32 bits of the address  | bool      | true or false | False    |
+ * | update_val (template parameter)     | Whether to set the value to be written              | bool      | true or false | False    |
+ */
+// clang-format on
 template <
     bool update_addr_lo = false,
     bool update_counter = true,
@@ -1726,40 +1864,9 @@ template <
     bool update_val = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
-    // only either hi or lo address should be getting updated
-    static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
-
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (update_counter) {
-            if constexpr (posted) {
-                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-            } else {
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-            }
-        }
-    }
     WAYPOINT("NWIW");
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    if constexpr (update_addr_lo) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr);
-    } else if constexpr (update_addr_hi) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, addr);
-    }
-    if constexpr (update_val) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
-    }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (update_counter) {
-            if constexpr (posted) {
-                noc_posted_writes_num_issued[noc] += 1;
-            } else {
-                noc_nonposted_writes_num_issued[noc] += 1;
-                noc_nonposted_writes_acked[noc] += 1;
-            }
-        }
-    }
+    noc_fast_write_dw_inline_with_state<noc_mode, update_addr_lo, update_addr_hi, update_val, posted, update_counter>(
+        noc, cmd_buf, val, addr);
     WAYPOINT("NWID");
 }
 
@@ -1878,6 +1985,24 @@ void noc_async_read_tile_dram_sharded_with_state(
     WAYPOINT("NRTD");
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
+ * This is similar to \a noc_async_read_tile_dram_sharded_with_state, except that this is used when the transaction
+ * id is set.
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                    | Data type | Valid range   | required |
+ * |-------------------------------------|------------------------------------------------|-----------|---------------|----------|
+ * | src_base_addr                       | Base address of source location                | uint32_t  | 0..1MB        | True     |
+ * | src_addr                            | Address in local L1 memory on source core      | uint32_t  | 0..1MB        | True     |
+ * | dest_addr                           | Address in local L1 memory on destination core | uint32_t  | 0..1MB        | True     |
+ * | trid                                | Transaction id for the transaction             | uint32_t  | 0x0 - 0xF     | False    |
+ * | noc                                 | Which NOC to use for the transaction           | uint8_t   | 0 or 1        | False    |
+ * | skip_ptr_update (template argument) | Whether to skip updating counters              | bool      | true or false | False    |
+ */
+// clang-format on
 template <bool skip_ptr_update = false>
 FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
@@ -1889,6 +2014,18 @@ FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     WAYPOINT("NRDD");
 }
 
+// clang-format off
+/**
+ * Sets the transaction id for a noc read.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | False    |
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | False    |
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
@@ -1898,6 +2035,21 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
     WAYPOINT("NSTD");
 }
 
+// clang-format off
+/**
+ * This blocking call waits for all the outstanding enqueued read transactions
+ * issued on the current Tensix core with the given transaction id to complete.
+ * After returning from this call there will be no outstanding read transactions
+ * with the given transaction id.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | trid     | Transaction id for the transaction   | uint32_t | 0x0 - 0xF   | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
@@ -1909,127 +2061,146 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTD");
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * with a transaction ID. Refer to \a noc_async_write_one_packet for more details.
+ *
+ * Extra arguments:
+ *
+ * | Argument                           | Description                                        | Type     | Valid Range       | Required |
+ * |------------------------------------|----------------------------------------------------|----------|-------------------|----------|
+ * | trid                               | Transaction ID to be used for the write operation  | uint32_t | 0-15              | True     |
+ * | cmd_buf                            | Command buffer to use for the transaction          | uint8_t  | 0-3               | False    |
+ * | vc                                 | VC to use for the transaction                      | uint8_t  | 0-3 (Unicast VCs) | False    |
+ * | update_counter (template argument) | Whether to update write counters or not            | bool     | true or false     | False    |
+ * | posted (template argument)         | Whether the write is posted (i.e. ack requirement) | bool     | true or false     | False    |
+ */
+// clang-format on
+template <bool update_counter = true, bool posted = false>
+FORCE_INLINE void noc_async_write_one_packet_with_trid(
+    uint32_t src_local_l1_addr,
+    uint64_t dst_noc_addr,
+    uint32_t size,
+    uint32_t trid,
+    uint8_t cmd_buf = write_cmd_buf,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    WAYPOINT("NAWW");
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    ncrisc_noc_fast_write<noc_mode, true /* use_trid */, update_counter>(
+        noc,
+        cmd_buf,
+        src_local_l1_addr,
+        dst_noc_addr,
+        size,
+        vc,
+        false,  // mcast
+        false,  // linked
+        1,      // num_dests
+        true,   // multicast_path_reserve
+        posted,
+        trid);
+    WAYPOINT("NWPD");
+}
+
+// clang-format off
+/**
+ * Sets the stateful registers for an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * to a specified destination node located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function is used to set up the state for
+ * noc_async_write_one_packet_with_trid_with_state, which will issue the actual
+ * write request. \a noc_async_write_one_packet_with_trid can be used instead if the state preservation is not
+ * needed.
+ *
+ * The destination node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                            | Data type | Valid range                      | required |
+ * |----------------------------|--------------------------------------------------------|-----------|----------------------------------|----------|
+ * | dst_noc_addr               | Encoding of the destination NOC location (x,y)+address | uint64_t  | Results of \a get_noc_addr calls | True     |
+ * | cmd_buf                    | Command buffer to use for the transaction              | uint8_t   | 0-3                              | False    |
+ * | noc                        | NOC to use for the transaction                         | uint8_t   | 0 or 1                           | False    |
+ * | vc                         | VC to use for the transaction                          | uint8_t   | 0-3 (Unicast VCs)                | False    |
+ * | posted (template argument) | Whether the write is posted (i.e. ack requirement)     | bool      | true or false                    | False    |
+ */
+// clang-format on
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
-    std::uint64_t dst_noc_addr,
+    uint64_t dst_noc_addr,
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, vc);
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    WAYPOINT("NAWD");
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             (posted ? 0 : NOC_CMD_RESP_MARKED);
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-#ifdef ARCH_BLACKHOLE
-    // Handles writing to PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    ncrisc_noc_write_set_state<!posted, false /* one_packet */>(noc, cmd_buf, dst_noc_addr, 0 /* len_bytes */, vc);
+    WAYPOINT("NAWD");
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size)
+ * with a transaction ID. This function must be preceded by a call to
+ * \a noc_async_write_one_packet_with_trid_set_state. This function is used to issue the actual
+ * write request after the state has been set up.
+ * \a noc_async_write_one_packet_with_trid can be used instead if the state preservation is not needed.
+ * Also, see \a noc_async_write_barrier.
+ *
+ * Return value: None
+ *
+ * | Argument                           | Description                                        | Data type | Valid range   | required |
+ * |------------------------------------|----------------------------------------------------|-----------|---------------|----------|
+ * | src_local_l1_addr                  | Address in local L1 memory on source core          | uint32_t  | 0..1MB        | True     |
+ * | dst_local_l1_addr                  | Address in local L1 memory on destination core     | uint32_t  | 0..1MB        | True     |
+ * | size                               | Size of the data transfer in bytes                 | uint32_t  | 0..1MB        | True     |
+ * | trid                               | Transaction ID to be used for the transaction      | uint32_t  | 0-15          | True     |
+ * | cmd_buf                            | Command buffer to use for the transaction          | uint8_t   | 0-3           | False    |
+ * | noc                                | NOC to use for the transaction                     | uint8_t   | 0 or 1        | False    |
+ * | update_counter (template argument) | Whether to update write counters or not            | bool      | true or false | False    |
+ * | posted (template argument)         | Whether the write is posted (i.e. ack requirement) | bool      | true or false | False    |
+ */
+// clang-format on
 template <bool update_counter = true, bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
-    std::uint32_t src_local_l1_addr,
-    std::uint32_t dst_noc_addr,
-    std::uint32_t size,
-    std::uint32_t trid,
+    uint32_t src_local_l1_addr,
+    uint32_t dst_local_l1_addr,
+    uint32_t size,
+    uint32_t trid,
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (update_counter) {
-            if constexpr (posted) {
-                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-            } else {
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-            }
-        }
-    }
-    WAYPOINT("NWPW");
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_WITH_STATE, 0ull, size, -1);
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    WAYPOINT("NWPD");
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_noc_addr, src_local_l1_addr, size);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (update_counter) {
-            if constexpr (posted) {
-                noc_posted_writes_num_issued[noc] += 1;
-            } else {
-                noc_nonposted_writes_num_issued[noc] += 1;
-                noc_nonposted_writes_acked[noc] += 1;
-            }
-        }
-    }
-}
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
 
-template <bool update_counter = true, bool posted = false>
-FORCE_INLINE void noc_async_write_one_packet_with_trid(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr,
-    std::uint32_t size,
-    std::uint32_t trid,
-    uint8_t cmd_buf = write_cmd_buf,
-    uint8_t noc = noc_index,
-    uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (update_counter) {
-            if constexpr (posted) {
-                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-            } else {
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-            }
-        }
-    }
-    WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    WAYPOINT("NWPW");
+    ncrisc_noc_set_transaction_id(noc, cmd_buf, trid);
+    ncrisc_noc_write_with_state<noc_mode, !posted, update_counter>(
+        noc, cmd_buf, src_local_l1_addr, dst_local_l1_addr, size);
     WAYPOINT("NWPD");
-
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             (posted ? 0 : NOC_CMD_RESP_MARKED);
-
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-#ifdef ARCH_BLACKHOLE
-    // Handles writing to PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (update_counter) {
-            if constexpr (posted) {
-                noc_posted_writes_num_issued[noc] += 1;
-            } else {
-                noc_nonposted_writes_num_issued[noc] += 1;
-                noc_nonposted_writes_acked[noc] += 1;
-            }
-        }
-    }
 }
 
+// clang-format off
+/**
+ * This blocking call waits for all the outstanding enqueued write transactions
+ * issued on the current Tensix core with the given transaction id to complete.
+ * After returning from this call there will be no outstanding write transactions
+ * with the given transaction id.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | trid     | Transaction id for the transaction   | uint32_t | 0x0 - 0xF   | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ */
+// clang-format on
 FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");

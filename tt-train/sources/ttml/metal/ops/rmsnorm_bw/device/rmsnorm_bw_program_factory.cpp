@@ -8,6 +8,8 @@
 
 #include "metal/ops/common/program_utils.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace {
 
 constexpr auto kWriterKernelPath =
@@ -45,7 +47,7 @@ constexpr auto kRecipRmsACbIndex = tt::CBIndex::c_9;
 constexpr auto kScaleCbIndex = tt::CBIndex::c_10;
 constexpr auto kScaleBcastedCbIndex = tt::CBIndex::c_11;
 
-// Some of the below constants are set to 2U because we might need to push a new value before poping the old one.
+// Some of the below constants are set to 2U because we might need to push a new value before popping the old one.
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumRmsATiles = 2U;
@@ -67,59 +69,6 @@ struct RMSNormBackwardKernels {
     tt::tt_metal::KernelHandle compute_group_1;
     tt::tt_metal::KernelHandle compute_group_2;
 };
-
-tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size,
-    uint32_t num_tiles) {
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
-            .set_page_size(cb_index, single_tile_size);
-
-    auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
-    return cb_handle;
-}
-
-tt::tt_metal::KernelHandle create_reader_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
-}
-
-tt::tt_metal::KernelHandle create_writer_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
-}
-
-tt::tt_metal::KernelHandle create_compute_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program,
-        kernel_path,
-        core_ranges,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-            .math_approx_mode = false,
-            .compile_args = compile_time_args,
-            .defines = defines});
-}
 
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
@@ -308,37 +257,37 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     TT_FATAL(
         input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* gamma_buffer = gamma.buffer();
     TT_FATAL(
         gamma_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        magic_enum::enum_name(gamma_buffer->buffer_type()));
+        enchantum::to_string(gamma_buffer->buffer_type()));
 
     auto* rms_buffer = rms.buffer();
     TT_FATAL(
         rms_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "RMS buffer must be in DRAM. RMS buffer of type {}",
-        magic_enum::enum_name(rms_buffer->buffer_type()));
+        enchantum::to_string(rms_buffer->buffer_type()));
 
     auto* dLdout_buffer = dLdout.buffer();
     TT_FATAL(
         dLdout_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dout buffer must be in DRAM. dL_dout buffer of type {}",
-        magic_enum::enum_name(dLdout_buffer->buffer_type()));
+        enchantum::to_string(dLdout_buffer->buffer_type()));
 
     auto* dL_da_buffer = output[0].buffer();
     TT_FATAL(
         dL_da_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_da buffer must be in DRAM. dL_da buffer of type {}",
-        magic_enum::enum_name(dL_da_buffer->buffer_type()));
+        enchantum::to_string(dL_da_buffer->buffer_type()));
 
     auto* dL_dgamma_components_buffer = output[1].buffer();
     TT_FATAL(
         dL_dgamma_components_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dgamma buffer must be in DRAM. dL_dgamma buffer of type {}",
-        magic_enum::enum_name(dL_dgamma_components_buffer->buffer_type()));
+        enchantum::to_string(dL_dgamma_components_buffer->buffer_type()));
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
@@ -374,8 +323,8 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         Wt                          // num_inner / TILE_W
     };
 
-    kernels.compute_group_1 =
-        create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath);
+    kernels.compute_group_1 = create_compute_kernel(
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -386,8 +335,8 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
             Wt                          // num_inner / TILE_W
         };
 
-        kernels.compute_group_2 =
-            create_compute_kernel(program, core_group_2, compute_group_2_args, defines, kComputeKernelPath);
+        kernels.compute_group_2 = create_compute_kernel(
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core

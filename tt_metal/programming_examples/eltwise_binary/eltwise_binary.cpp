@@ -6,6 +6,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -81,7 +82,7 @@ int main(int argc, char** argv) {
         // sending end can get the next piece of data ready to be pushed. Overlapping the operations. Leading to better performance.
         // However there is a trade off, The more tiles in a circular buffer, the more memory is used. And Circular buffers are
         // backed by L1(SRAM) memory and L1 is a precious resource.
-        // The hardware supports up to 16 circular buffers and they all act the same.
+        // The hardware supports up to 32 circular buffers and they all act the same.
         constexpr uint32_t tiles_per_cb = 2;
         tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
         CreateCircularBuffer(program, core, CircularBufferConfig(
@@ -110,16 +111,21 @@ int main(int argc, char** argv) {
         // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them available in the
         // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
         // back to DRAM.
+        std::vector<uint32_t> reader_compile_time_args;
+        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
         auto reader = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
+        std::vector<uint32_t> writer_compile_time_args;
+        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
         auto writer = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
         auto compute = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",

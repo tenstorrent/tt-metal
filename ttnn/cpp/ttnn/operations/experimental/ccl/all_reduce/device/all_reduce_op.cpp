@@ -44,7 +44,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program_at(
     std::vector<Tensor>& output_tensors) const {
     auto target_device =
         input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
-    ttnn::ccl::SenderRecieverConfig config =
+    ttnn::ccl::SenderReceiverConfig config =
         ttnn::ccl::get_device_sender_receiver_config(target_device, this->devices, this->topology);
 
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(
@@ -454,8 +454,6 @@ Tensor all_reduce(
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
 
-    bool is_linear = topology == ttnn::ccl::Topology::Linear;
-
     // Choose the appropriate strategy
     AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensor, num_devices, num_links, topology);
 
@@ -486,15 +484,9 @@ std::vector<Tensor> all_reduce(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "All Reduce op is only supported for Fast Dispatch");
 
-    std::vector<IDevice*> devices;
-    devices.reserve(input_tensors.size());
-    for (const auto& input_tensor : input_tensors) {
-        devices.push_back(input_tensor.device());
-    }
+    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensors);
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
-
-    bool is_linear = topology == ttnn::ccl::Topology::Linear;
 
     // Choose the appropriate strategy
     AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensors.at(0), num_devices, num_links, topology);

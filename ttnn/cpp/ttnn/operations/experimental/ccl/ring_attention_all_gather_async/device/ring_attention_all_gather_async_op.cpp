@@ -17,7 +17,6 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
         input_tensors.size() > 0, "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
 
     const auto& first_input_tensor = input_tensors[0];
-    const auto& layout = first_input_tensor.layout();
     const auto& dtype = first_input_tensor.dtype();
     const auto& memory_config = first_input_tensor.memory_config();
     const auto& input_shape = first_input_tensor.logical_shape();

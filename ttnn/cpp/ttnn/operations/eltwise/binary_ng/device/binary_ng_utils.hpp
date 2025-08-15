@@ -32,6 +32,7 @@ enum class KernelName {
     ReaderColBcastNg,
     ReaderRowBColABcastNg,
     ReaderScalarBcastNg,
+    ComputeRowBcastNg,
 };
 
 struct BinaryNgKernelConfig {
@@ -68,7 +69,8 @@ struct OpConfig {
         REQUANT,
         DEQUANT,
         MAXIMUM,
-        MINIMUM
+        MINIMUM,
+        XLOGY
     };
 
     template <class EnumT>

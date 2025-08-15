@@ -90,7 +90,6 @@ Data will be read to the circular buffers on each core through the DRAM buffer, 
 # Configure circular buffers
 
 ``` cpp
-bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 uint32_t input_cb_index = CBIndex::c_0;
 CircularBufferConfig input_cb_config = CircularBufferConfig(shard_size * input_unit_size, {{input_cb_index, cb_data_format}})
     .set_page_size(input_cb_index, input_unit_size);
@@ -103,9 +102,8 @@ The corresponding `CircularBuffer` objects are then allocated with this configur
 # Create data movement kernels for sharding
 
 ``` cpp
-std::vector<uint32_t> reader_compile_time_args = {
-    (std::uint32_t)input_cb_index,
-    (std::uint32_t)src_is_dram};
+std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index};
+TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 auto reader_id = tt_metal::CreateKernel(
     program,
     "tt_metal/programming_examples/sharding/kernels/reader_sharded_rm.cpp",
@@ -147,10 +145,8 @@ For each core, the kernel function runtime arguments are set as a prerequisite f
 # Sharding kernel function
 
 ``` cpp
-const InterleavedAddrGen<src_is_dram> s0 = {
-    .bank_base_address = src_addr,
-    .page_size = stick_size
-};
+constexpr auto s0_args = TensorAccessorArgs<1>();
+const auto s0 = TensorAccessor(s1_args, src_addr, stick_size);
 uint32_t stick_id = start_id;
 cb_reserve_back(cb_id_in0, shard_height);
 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
@@ -169,7 +165,7 @@ noc_async_read_barrier();
 cb_push_back(cb_id_in0, shard_height);
 ```
 
-The `InterleavedAddrGen` object allows us to retrieve the data stored in the DRAM by incrementing by stick size. The stick size determines the difference between addresses of each piece of source data in the DRAM buffer; its value in this case is the size of a `uint32_t` data type.
+The `TensorAccessor` object allows us to retrieve the data stored in the DRAM by incrementing by stick size. The stick size determines the difference between addresses of each piece of source data in the DRAM buffer; its value in this case is the size of a `uint32_t` data type.
 Each stick will then contain 2 of the BFloat16 tensor values. The generator is used to ensure that the correct address is read from the DRAM buffer into a given core\'s L1 memory.
 
 In the indicated kernel function file, we call `cb_reserve_back` for the indicated circular buffer in order to wait for space of the specified data segment size to be free, then load the data into the circular buffer by reading the value from the NoC address (indicated by `src_noc_addr`) to the L1 memory address (indicated by `l1_write_addr`).

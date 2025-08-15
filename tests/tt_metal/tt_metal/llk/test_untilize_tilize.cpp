@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdint.h>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
@@ -126,11 +126,10 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         tt_metal::CircularBufferConfig(
             num_input_tiles * test_config.input_single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, test_config.input_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     std::shared_ptr<tt_metal::Buffer> src1_dram_buffer;
     uint32_t dram_buffer_src1_addr{};
-    CoreCoord dram_src1_noc_xy{};
 
     if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         src1_dram_buffer = CreateBuffer(input_dram_config);
@@ -142,7 +141,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             tt_metal::CircularBufferConfig(
                 num_input_tiles * test_config.input_single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src1_cb_index, test_config.input_single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
     }
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
@@ -152,7 +151,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             num_output_tiles * test_config.output_single_tile_size,
             {{ouput_cb_index, test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     std::string reader_kernel_path;
     if (test_config.untilize_type.has_value()) {
@@ -184,7 +183,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
 
     std::string compute_kernel;
     if (test_config.untilize_type.has_value()) {
-        std::string untilize_type = magic_enum::enum_name(test_config.untilize_type.value()).data();
+        std::string untilize_type = enchantum::to_string(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c) {
             return std::tolower(c);
         });
@@ -209,7 +208,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         defines["FAST_TILIZE"] = "1";
     }
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         compute_kernel,
         core,
@@ -462,7 +461,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilize) {
 }
 
 TEST_F(DeviceFixture, TensixComputePackUntilizeDst) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             unit_tests::compute::tilize::TestConfig test_config = {

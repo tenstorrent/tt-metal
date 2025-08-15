@@ -1,14 +1,46 @@
 name: "Nightly tt-metal L2 tests"
 
 on:
+  schedule:
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
+      run_conv_tests:
+        description: 'Run TTNN nightly conv tests'
+        required: false
+        type: boolean
+        default: false
+      run_matmul_tests:
+        description: 'Run TTNN nightly matmul tests'
+        required: false
+        type: boolean
+        default: false
+      run_pool_tests:
+        description: 'Run TTNN nightly pool tests'
+        required: false
+        type: boolean
+        default: false
+      run_sdxl_tests:
+        description: 'Run TTNN nightly SDXL tests'
+        required: false
+        type: boolean
+        default: false
+      run_didt_tests:
+        description: 'Run DIDT tests'
+        required: false
+        type: boolean
+        default: false
+      run_train_tests:
+        description: 'Run TTNN nightly train tests'
+        required: false
+        type: boolean
+        default: false
       timeout:
+        description: 'Test timeout in minutes'
         required: false
         type: number
         default: 120
-  schedule:
-    - cron: "0 22 * * *"
+
 
 jobs:
   build-artifact:
@@ -18,6 +50,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
+      skip-tt-train: false
       version: 22.04
   tt-metal-l2-tests:
     needs: build-artifact
@@ -39,7 +72,14 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      # Test group selection - default to all enabled for scheduled runs
+      run_conv_tests: ${{ github.event_name == 'schedule' || inputs.run_conv_tests }}
+      run_matmul_tests: ${{ github.event_name == 'schedule' || inputs.run_matmul_tests }}
+      run_pool_tests: ${{ github.event_name == 'schedule' || inputs.run_pool_tests }}
+      run_sdxl_tests: ${{ github.event_name == 'schedule' || inputs.run_sdxl_tests }}
+      run_train_tests: ${{ github.event_name == 'schedule' || inputs.run_train_tests }}
   didt-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_didt_tests }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/didt-tests.yaml
@@ -55,7 +95,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      timeout: 10
+      timeout: 20
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
