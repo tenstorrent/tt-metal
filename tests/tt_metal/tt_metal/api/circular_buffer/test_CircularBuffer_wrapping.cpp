@@ -19,10 +19,10 @@ namespace tt::tt_metal {
  *
  * To dive into a bit more detail, CB is implemented with 2 counters, received and acked, where received counter
  * indicates the amount of pages pushed into CB, and acked counter indicates the amount of pages popped from CB. The
- * caluclation of received and acked counter is done in 16 bits. Naturally, the received counter will be bigger than the
+ * calculation of received and acked counter is done in 16 bits. Naturally, the received counter will be bigger than the
  * acked counter, which would be reverted when received counter overflows. Prior to #26536, the calculation for the
  * amount of free pages left in the system does not handle the overflow correctly, resulting in cb_reserve_back
- * prematurely.
+ * returning prematurely.
  *
  * Because we cannot directly test if functions are hanging correctly, we test for data corruption instead. If
  * cb_reserve_back or cb_wait_front does not handle overflow correctly when calculating the amount of free pages left/
@@ -45,7 +45,7 @@ namespace tt::tt_metal {
  *    If cb_reserve_back handles the overflow correctly, it will hang and wait for reader.
  *    If cb_reserve_back handles the overflow incorrectly, it will be incorrectly overwritten the first step of A with
  *    B.
- * 5. Writer exits spin, reads all pending data (3 steps worth of data)
+ * 5. Reader exits spin, reads all pending data (3 steps worth of data)
  *    If cb_reserve_back handles the overflow correctly, it should hang writer till reader exits spin, resulting in BBA.
  *    If cb_reserve_back handles the overflow incorrectly, premature write will happen before reader exists spin,
  *    resulting in ABA (first step of pages is overwritten with A).

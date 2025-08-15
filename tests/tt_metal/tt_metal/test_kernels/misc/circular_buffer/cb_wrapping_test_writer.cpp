@@ -89,7 +89,7 @@ void MAIN {
 
     // This reserve should not return
     cb_reserve_back(CB_ID, CB_STEP_SIZE);
-    // This would be overwrite previous value if reserve returns prematurely.
+    // This would overwrite previous value if reserve returns prematurely.
     fill_step(WRITE_OVER_VALUE);
     cb_push_back(CB_ID, CB_STEP_SIZE);
 }
