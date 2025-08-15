@@ -192,7 +192,7 @@ def create_tt_model(
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -210,6 +210,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -278,6 +280,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # Repeat2 (Batch-1) run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -295,6 +299,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-4k-b1 - Single user, 4K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -312,6 +318,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-8k-b1 - Single user, 8K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -329,6 +337,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-16k-b32 - 32 users, 16K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -346,6 +356,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-32k-b1 - Single user, 32K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -363,6 +375,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-64k-b1 - Single user, 64K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -380,6 +394,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-128k-b1 - Single user, 128K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
@@ -397,6 +413,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -414,6 +432,8 @@ def create_tt_model(
             True,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -431,6 +451,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # pcc-80L - CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -448,6 +470,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
     ],
     ids=[
@@ -521,6 +545,8 @@ def test_demo_text(
     request,
     galaxy_type,
     print_outputs,
+    is_cur_pos_sharded,
+    is_page_table_sharded,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -845,8 +871,6 @@ def test_demo_text(
         # Start decoding
         iteration = 0
         users_decoding = True
-        is_cur_pos_sharded = True
-        is_page_table_sharded = True
 
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
@@ -868,6 +892,9 @@ def test_demo_text(
         top_1_accs = []
         read_events = []
         tt_out_toks = []
+
+        breakpoint()
+
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)

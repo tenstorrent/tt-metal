@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;

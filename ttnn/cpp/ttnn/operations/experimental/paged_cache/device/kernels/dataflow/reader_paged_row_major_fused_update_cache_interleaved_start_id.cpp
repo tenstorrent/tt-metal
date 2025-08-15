@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
+
 void kernel_main() {
     uint32_t rt_args_idx = 0;
     const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
@@ -86,6 +86,7 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
 
         const uint32_t update_idx = index_ptr[my_batch_idx];
+
         if (update_idx == (uint32_t)-1) {
             // Passing update_idx = -1 tells us to skip update for this user
             skip_update = true;
@@ -119,6 +120,7 @@ void kernel_main() {
                 const uint32_t physical_block_id = (page_table_is_dram)
                                                        ? page_table_ptr_u32[virtual_block_id]
                                                        : static_cast<uint32_t>(page_table_ptr_u16[virtual_block_id]);
+
                 const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
                 const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
                 const uint32_t block_offset = block_row_tile * Wt;

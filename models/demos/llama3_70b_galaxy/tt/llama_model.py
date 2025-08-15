@@ -357,7 +357,12 @@ class TtTransformer(LightweightModule):
         )
         if page_table is not None:
             if is_page_table_sharded:
-                page_table = page_table.repeat(self.args.sub_core_grids.num_cores(), 1)
+                page_table_chunks = page_table.split(8, dim=0)
+                repeated_page_table_chunks = [
+                    chunk.repeat(self.args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
+                ]
+                page_table = torch.cat(repeated_page_table_chunks, dim=0)
+
             page_table = ttnn.from_torch(
                 page_table,
                 device=None,

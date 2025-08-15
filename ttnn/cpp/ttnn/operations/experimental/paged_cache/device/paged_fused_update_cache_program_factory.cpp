@@ -131,7 +131,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         block_size = cache_tensor1.padded_shape()[2];
         block_size_t = block_size / TILE_HEIGHT;
         max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-        page_table_stick_size = page_table_tensor.padded_shape()[-1] * page_table_tensor.element_size();
+        page_table_stick_size = page_table.value().buffer()->aligned_page_size();
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
         page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
@@ -615,7 +615,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         block_size = cache_tensor1.padded_shape()[2];
         block_size_t = block_size / TILE_HEIGHT;
         max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-        page_table_stick_size = page_table_tensor.padded_shape()[-1] * page_table_tensor.element_size();
+        page_table_stick_size = page_table.value().buffer()->aligned_page_size();
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
         page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
