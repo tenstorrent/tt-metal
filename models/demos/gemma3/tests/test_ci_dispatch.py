@@ -14,17 +14,16 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "model_weights",
     [
-        "/mnt/MLPerf/huggingface/hub/models--google--gemma-3-4b-it/snapshots/093f9f388b31de276ce2de164bdc2081324b9767",
+        "google/gemma-3-4b-it",
     ],
     ids=[
-        "gemma3-4b-it",
+        "gemma-3-4b-it",
     ],
 )
 def test_ci_dispatch(model_weights):
     logger.info(f"Running fast dispatch tests for {model_weights}")
-    if os.getenv("HF_MODEL"):
-        del os.environ["HF_MODEL"]
-        del os.environ["TT_CACHE_PATH"]
+    os.environ["HF_HOME"] = "/mnt/MLPerf/huggingface"
+    os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["HF_MODEL"] = model_weights
     os.environ["TT_CACHE_PATH"] = model_weights
 
