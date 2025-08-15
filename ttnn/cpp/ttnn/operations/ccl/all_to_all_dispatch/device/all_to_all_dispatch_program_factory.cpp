@@ -112,6 +112,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::Program program{};
+    std::cout << "creating with tmp infra" << std::endl;
 
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
