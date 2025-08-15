@@ -38,16 +38,16 @@ std::ostream &operator<<(std::ostream &os, const EthernetEndpoint &ep) {
 }
 
 // Required by Boost for hashing
-namespace tt { 
-    namespace umd {
-        size_t hash_value(const xy_pair &xy) {
-            std::size_t seed = 0;
-            boost::hash_combine(seed, xy.x);
-            boost::hash_combine(seed, xy.y);
-            return seed;
-        }
-    }
+namespace tt {
+namespace umd {
+size_t hash_value(const xy_pair& xy) {
+    std::size_t seed = 0;
+    boost::hash_combine(seed, xy.x);
+    boost::hash_combine(seed, xy.y);
+    return seed;
 }
+}  // namespace umd
+}  // namespace tt
 
 size_t hash_value(const EthernetEndpoint &ep) {
     size_t seed = 0;
@@ -78,7 +78,7 @@ std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_b
             TT_ASSERT(ethernet_channel_to_core_coord.count(channel) != 0, "Channel {} missing in ethernet_channel_to_core_coord map for {}", channel, chip);
             CoreCoord ethernet_core = ethernet_channel_to_core_coord[channel];
             EthernetEndpoint endpoint{ .chip = chip, .ethernet_core = ethernet_core, .channel = channel };
-        
+
             // Add to list of endpoints for current chip
             endpoints_this_chip.push_back(endpoint);
         }
@@ -86,5 +86,3 @@ std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_b
 
     return ethernet_endpoints_by_chip;
 }
-
-
