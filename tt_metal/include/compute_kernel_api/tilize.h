@@ -76,7 +76,7 @@ ALWI void tilizeA_B_reduce_init(
 
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb0, icb1_scaler)));
+    MATH((llk_math_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init(ocb)));
@@ -246,7 +246,7 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
-    MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
+    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
 
     fast_tilize_init(icb, full_dim, ocb);
 }

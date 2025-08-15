@@ -322,13 +322,7 @@ Tensor Identity::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
     DataType input_dtype = input_tensor.dtype();
-
-    if (input_dtype != DataType::UINT8) {
-        return detail::unary_impl(
-            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-    } else {
-        TT_THROW("ttnn.identity doesn't support uint8 datatype");
-    }
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor Abs::invoke(
