@@ -219,8 +219,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
     auto mesh_device = input_tensor.mesh_device();
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
 
     log_trace(
         tt::LogOp,

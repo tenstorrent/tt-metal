@@ -151,8 +151,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
 
     // Basic configuration
     const bool enable_async_output = false;
-    const bool is_first_chip = ring_index == 0;
-    const bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] const bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
 
     log_trace(
         tt::LogOp,
@@ -296,7 +296,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         num_targets_backward                              // num_targets_backward_direction
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
-    for (const auto& arg : reader_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -324,7 +324,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         contig_pages_advanced,                             // contig_pages_advanced
         N_DRAM_BANKS                                       // num_dram_banks
     };
-    for (const auto& arg : writer_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -449,7 +449,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             out_col_start,
         };
         log_trace(tt::LogOp, "Reader Runtime Args:");
-        for (const auto& arg : reader_rt_args) {
+        for ([[maybe_unused]] const auto& arg : reader_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
@@ -474,7 +474,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         };
 
         log_trace(tt::LogOp, "Writer Runtime Args:");
-        for (const auto& arg : writer_rt_args) {
+        for ([[maybe_unused]] const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
         writer_rt_args.push_back(forward_device.has_value());
