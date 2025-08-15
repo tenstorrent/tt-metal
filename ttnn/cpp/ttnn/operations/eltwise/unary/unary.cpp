@@ -96,7 +96,6 @@ template struct ExecuteUnary<UnaryOpType::ISNAN>;
 template struct ExecuteUnary<UnaryOpType::ISNEGINF>;
 template struct ExecuteUnary<UnaryOpType::ISPOSINF>;
 template struct ExecuteUnary<UnaryOpType::LEZ>;
-template struct ExecuteUnary<UnaryOpType::LOG>;
 template struct ExecuteUnary<UnaryOpType::LOG10>;
 template struct ExecuteUnary<UnaryOpType::LOG2>;
 template struct ExecuteUnary<UnaryOpType::LOG1P>;
@@ -146,6 +145,7 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
