@@ -202,11 +202,7 @@ void RunTestMCastConnAPI(
     uint32_t bwd_hops = 1);
 
 void RunTest2DMCastConnAPI(
-    BaseFabricFixture* fixture,
-    RoutingDirection trunk_dir,
-    uint32_t trunk_hops,
-    uint32_t branch_east_hops,
-    uint32_t branch_west_hops);
+    BaseFabricFixture* fixture, uint32_t north_hops, uint32_t south_hops, uint32_t east_hops, uint32_t west_hops);
 
 void RunTestChipMCast1D(
     BaseFabricFixture* fixture,
