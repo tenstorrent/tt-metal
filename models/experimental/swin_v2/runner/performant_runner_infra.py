@@ -64,18 +64,19 @@ class SwinV2PerformanceRunnerInfra:
 
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
-    def _setup_l1_sharded_input(self, device, torch_input_tensor=None):
+    def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
             exit("Unsupported device")
 
-        num_devices = device.get_num_devices()
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-
         n, c, h, w = torch_input_tensor.shape
-        if c == 3:
-            c = 16
+        if c < min_channels:
+            c = min_channels
+        elif c % min_channels != 0:
+            c = ((c // min_channels) + 1) * min_channels
+
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
