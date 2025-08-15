@@ -67,7 +67,7 @@ def test_forward_pass(
     mesh_device,
     model_path,
     ccl,
-    reset_seeds,
+    set_deterministic_env,
 ):
     mesh_shape = list(mesh_device.shape)
     num_rows, sdpa_dp_factor = mesh_shape
@@ -79,8 +79,6 @@ def test_forward_pass(
     ############################
     logger.info("Setting up reference model")
     if module_path is None:
-        # This is needed to make the reference model weights initialization deterministic
-        torch.use_deterministic_algorithms(True)
         reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=reference_layer_idx).eval()
         # This needs to be disabled as deterministic way to quantize weights is not supported
         torch.use_deterministic_algorithms(False)

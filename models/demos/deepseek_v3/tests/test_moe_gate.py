@@ -39,7 +39,7 @@ def reference_model(hf_config, use_bitonic_sort):
 def test_forward_pass(
     mode,
     seq_len,
-    reset_seeds,
+    use_deterministic_env,
     reference_model,
     hf_config,
     topk_fallback,
