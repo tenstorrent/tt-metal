@@ -1,0 +1,988 @@
+TTResNetFeatures: parameters={
+  conv1: {
+    weight: ttnn.Tensor(shape=Shape([64, 3, 7, 7]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+  },
+  bn1: {
+    weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+    bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+  },
+  layer1: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      }
+    }
+  },
+  layer2: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([128, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([128, 64, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      }
+    }
+  },
+  layer3: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([256, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([256, 128, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      }
+    }
+  },
+  layer4: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([512, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([512, 256, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      }
+    }
+  },
+  model_args: ResNetFeatures(
+  (conv1): Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+  (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+  (layer1): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+      (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 64, eps=1e-05, affine=True)
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+      (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 64, eps=1e-05, affine=True)
+    )
+  )
+  (layer2): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(64, 128, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 128, eps=1e-05, affine=True)
+    )
+  )
+  (layer3): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(128, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(128, 256, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 256, eps=1e-05, affine=True)
+    )
+  )
+  (layer4): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(256, 512, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(256, 512, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 512, eps=1e-05, affine=True)
+    )
+  )
+)
+},
+ conv_pt={'conv1': {'in_channels': 3, 'out_channels': 64, 'kernel_size': (7, 7), 'stride': (2, 2), 'padding': (3, 3), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 384, 'input_width': 1280, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'layer1': {'0': {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 0: {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, '1': {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer2': {'0': {'conv1': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer3': {'0': {'conv1': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer4': {'0': {'conv1': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}},
+ block=<class 'models.experimental.oft.tt.tt_resnet.TTBasicBlock'>,
+ layers=[2, 2, 2, 2]
+TTResNetFeatures: parameters={
+  conv1: {
+    weight: ttnn.Tensor(shape=Shape([64, 3, 7, 7]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+  },
+  bn1: {
+    weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+    bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+  },
+  layer1: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      }
+    }
+  },
+  layer2: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([128, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([128, 64, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      }
+    }
+  },
+  layer3: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([256, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([256, 128, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      }
+    }
+  },
+  layer4: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([512, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([512, 256, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      }
+    }
+  },
+  model_args: ResNetFeatures(
+  (conv1): Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+  (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+  (layer1): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+      (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 64, eps=1e-05, affine=True)
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+      (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 64, eps=1e-05, affine=True)
+    )
+  )
+  (layer2): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(64, 128, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 128, eps=1e-05, affine=True)
+    )
+  )
+  (layer3): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(128, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(128, 256, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 256, eps=1e-05, affine=True)
+    )
+  )
+  (layer4): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(256, 512, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(256, 512, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 512, eps=1e-05, affine=True)
+    )
+  )
+)
+},
+ conv_pt={'conv1': {'in_channels': 3, 'out_channels': 64, 'kernel_size': (7, 7), 'stride': (2, 2), 'padding': (3, 3), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 384, 'input_width': 1280, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'layer1': {'0': {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 0: {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, '1': {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer2': {'0': {'conv1': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer3': {'0': {'conv1': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer4': {'0': {'conv1': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}},
+ block=<class 'models.experimental.oft.tt.tt_resnet.TTBasicBlock'>,
+ layers=[2, 2, 2, 2]
+TTResNetFeatures: parameters={
+  conv1: {
+    weight: ttnn.Tensor(shape=Shape([64, 3, 7, 7]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+  },
+  bn1: {
+    weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+    bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+  },
+  layer1: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      }
+    }
+  },
+  layer2: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([128, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([128, 64, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      }
+    }
+  },
+  layer3: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([256, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([256, 128, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      }
+    }
+  },
+  layer4: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([512, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([512, 256, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      }
+    }
+  },
+  model_args: ResNetFeatures(
+  (conv1): Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+  (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+  (layer1): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+      (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 64, eps=1e-05, affine=True)
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+      (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 64, eps=1e-05, affine=True)
+    )
+  )
+  (layer2): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(64, 128, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 128, eps=1e-05, affine=True)
+    )
+  )
+  (layer3): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(128, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(128, 256, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 256, eps=1e-05, affine=True)
+    )
+  )
+  (layer4): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(256, 512, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(256, 512, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 512, eps=1e-05, affine=True)
+    )
+  )
+)
+},
+ conv_pt={'conv1': {'in_channels': 3, 'out_channels': 64, 'kernel_size': (7, 7), 'stride': (2, 2), 'padding': (3, 3), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 384, 'input_width': 1280, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'layer1': {'0': {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 0: {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, '1': {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer2': {'0': {'conv1': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer3': {'0': {'conv1': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer4': {'0': {'conv1': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}},
+ block=<class 'models.experimental.oft.tt.tt_resnet.TTBasicBlock'>,
+ layers=[2, 2, 2, 2]
+TTResNetFeatures: parameters={
+  conv1: {
+    weight: ttnn.Tensor(shape=Shape([64, 3, 7, 7]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+  },
+  bn1: {
+    weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+    bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+  },
+  layer1: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([64, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([64]), dtype=torch.float32)
+      }
+    }
+  },
+  layer2: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([128, 64, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([128, 64, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([128, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([128]), dtype=torch.float32)
+      }
+    }
+  },
+  layer3: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([256, 128, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([256, 128, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([256, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([256]), dtype=torch.float32)
+      }
+    }
+  },
+  layer4: {
+    0: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([512, 256, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      downsample: {
+        0: {
+          weight: ttnn.Tensor(shape=Shape([512, 256, 1, 1]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+        },
+        1: {
+          weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+          bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+        }
+      }
+    },
+    1: {
+      conv1: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn1: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      },
+      conv2: {
+        weight: ttnn.Tensor(shape=Shape([512, 512, 3, 3]), layout=Layout.ROW_MAJOR, dtype=DataType.FLOAT32)
+      },
+      bn2: {
+        weight: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32),
+        bias: torch.Tensor(shape=torch.Size([512]), dtype=torch.float32)
+      }
+    }
+  },
+  model_args: ResNetFeatures(
+  (conv1): Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+  (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+  (layer1): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+      (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 64, eps=1e-05, affine=True)
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 64, eps=1e-05, affine=True)
+      (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 64, eps=1e-05, affine=True)
+    )
+  )
+  (layer2): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(64, 128, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 128, eps=1e-05, affine=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 128, eps=1e-05, affine=True)
+    )
+  )
+  (layer3): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(128, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(128, 256, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 256, eps=1e-05, affine=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 256, eps=1e-05, affine=True)
+    )
+  )
+  (layer4): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(256, 512, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (downsample): Sequential(
+        (0): Conv2d(256, 512, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      )
+    )
+    (1): BasicBlock(
+      (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): GroupNorm(16, 512, eps=1e-05, affine=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): GroupNorm(16, 512, eps=1e-05, affine=True)
+    )
+  )
+)
+},
+ conv_pt={'conv1': {'in_channels': 3, 'out_channels': 64, 'kernel_size': (7, 7), 'stride': (2, 2), 'padding': (3, 3), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 384, 'input_width': 1280, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'layer1': {'0': {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 0: {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, '1': {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 64, 'out_channels': 64, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer2': {'0': {'conv1': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 64, 'out_channels': 128, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 96, 'input_width': 320, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 128, 'out_channels': 128, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer3': {'0': {'conv1': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 128, 'out_channels': 256, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 48, 'input_width': 160, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 256, 'out_channels': 256, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}, 'layer4': {'0': {'conv1': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, 0: {'conv1': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (2, 2), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}, 'downsample': {'0': {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 0: {'in_channels': 256, 'out_channels': 512, 'kernel_size': (1, 1), 'stride': (2, 2), 'padding': (0, 0), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 24, 'input_width': 80, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, '1': {}, 1: {}}}, '1': {'conv1': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}, 1: {'conv1': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn1': {}, 'conv2': {'in_channels': 512, 'out_channels': 512, 'kernel_size': (3, 3), 'stride': (1, 1), 'padding': (1, 1), 'dilation': (1, 1), 'groups': 1, 'padding_mode': 'zeros', 'batch_size': 1, 'input_height': 12, 'input_width': 40, 'math_fidelity': <MathFidelity.HiFi4: 4>, 'dtype': <DataType.BFLOAT16: 0>, 'weights_dtype': <DataType.BFLOAT16: 0>, 'use_1d_systolic_array': True, 'enable_auto_formatting': False, 'conv_blocking_and_parallelization_config_override': {}, 'device': None}, 'bn2': {}}}},
+ block=<class 'models.experimental.oft.tt.tt_resnet.TTBasicBlock'>,
+ layers=[2, 2, 2, 2]
