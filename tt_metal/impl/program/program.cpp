@@ -65,7 +65,6 @@
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
 #include "tile.hpp"
-#include "tt_backend_api_types.hpp"
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
@@ -362,12 +361,12 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
 
 namespace {
 
-uint64_t get_processor_mask(const Kernel& kernel) {
-    uint64_t processor_mask = 0;
+std::bitset<MAX_PROCESSOR_TYPES_COUNT> get_kernel_processor_set(const Kernel& kernel) {
+    std::bitset<MAX_PROCESSOR_TYPES_COUNT> set;
     for (int i = 0; i < kernel.expected_num_binaries(); i++) {
-        processor_mask |= (1ULL << kernel.get_processor_id(i));
+        set.set(kernel.get_processor_id(i));
     }
-    return processor_mask;
+    return set;
 }
 
 }  // namespace
@@ -383,16 +382,16 @@ KernelHandle detail::ProgramImpl::add_kernel(
     auto new_kernel_processor_class = kernel->get_kernel_processor_class();
 
     std::set<CoreCoord> kernel_logical_cores = kernel->logical_cores();
-    uint64_t new_kernel_processor_mask = get_processor_mask(*kernel);
+    auto new_kernel_processor_set = get_kernel_processor_set(*kernel);
     for (size_t i = 0; i < this->num_kernels(); i++) {
         // Note, looks like id is program specific, and increments naturally as kernels are added.
         //  add_kernel -> id = num_kernels -> kernel is inserted -> next num_kernels() increments.
         std::shared_ptr<Kernel> check_kernel = this->get_kernel(i);
         auto check_kernel_core_type = check_kernel->get_kernel_programmable_core_type();
         auto check_kernel_processor_class = check_kernel->get_kernel_processor_class();
-        if (check_kernel_core_type == new_kernel_core_type ||
-            check_kernel_processor_class == new_kernel_processor_class ||
-            (new_kernel_processor_mask & get_processor_mask(*check_kernel))) {
+        if (check_kernel_core_type == new_kernel_core_type &&
+            check_kernel_processor_class == new_kernel_processor_class &&
+            (new_kernel_processor_set & get_kernel_processor_set(*check_kernel)).any()) {
             // Two kernels are using the same processor, need to check core ranges.
             std::set<CoreCoord> check_kernel_logical_cores = check_kernel->logical_cores();
             for (CoreCoord coreCoord : kernel_logical_cores) {
