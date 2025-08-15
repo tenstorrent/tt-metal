@@ -23,6 +23,7 @@
 #include <optional>
 
 #include <boost/functional/hash.hpp>
+#include <cxxopts.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/assert.hpp>
@@ -91,25 +92,57 @@ static void test_print_link_health() {
     }
 }
 
-int main() {
-    test_print_link_health();
+int main(int argc, char* argv[]) {
+    // Parse command line arguments
+    cxxopts::Options options("tt_telemetry_server", "TT-Metal Telemetry Server");
+
+    options.add_options()(
+        "mock-telemetry",
+        "Use mock telemetry data instead of real hardware",
+        cxxopts::value<bool>()->default_value("false"))(
+        "print-link-health",
+        "Print link health to terminal at startup",
+        cxxopts::value<bool>()->default_value("false"))(
+        "p,port", "Port for the primary web server", cxxopts::value<int>()->default_value("8080"))(
+        "h,help", "Print usage");
+
+    auto result = options.parse(argc, argv);
+
+    if (result.count("help")) {
+        std::cout << options.help() << std::endl;
+        return 0;
+    }
+
+    bool use_mock_telemetry = result["mock-telemetry"].as<bool>();
+    bool print_link_health = result["print-link-health"].as<bool>();
+    int port = result["port"].as<int>();
+
+    if (print_link_health) {
+        test_print_link_health();
+    }
 
     // Web server
+    std::cout << "Starting primary web server on port " << port << std::endl;
     std::future<bool> web_server;
     std::shared_ptr<TelemetrySubscriber> web_server_subscriber;
-    std::tie(web_server, web_server_subscriber) = run_web_server(5555);
+    std::tie(web_server, web_server_subscriber) = run_web_server(port);
 
     // Web server #2 (testing the ability of our producer to supply two consumers)
+    std::cout << "Starting secondary web server on port 5555" << std::endl;
     std::future<bool> web_server2;
     std::shared_ptr<TelemetrySubscriber> web_server2_subscriber;
-    std::tie(web_server2, web_server2_subscriber) = run_web_server(8086);
+    std::tie(web_server2, web_server2_subscriber) = run_web_server(5555);
 
-    // Fake telemetry
-    //TODO: make command line option for testing?
-    //MockTelemetryProvider mock_telemetry{web_server_subscriber, web_server2_subscriber};
-
-    // Telemetry
-    run_telemetry_provider({ web_server_subscriber, web_server2_subscriber });
+    if (use_mock_telemetry) {
+        // Mock telemetry
+        std::cout << "Using mock telemetry data" << std::endl;
+        MockTelemetryProvider mock_telemetry{web_server_subscriber, web_server2_subscriber};
+        mock_telemetry.run();
+    } else {
+        // Real telemetry
+        std::cout << "Using real hardware telemetry data" << std::endl;
+        run_telemetry_provider({web_server_subscriber, web_server2_subscriber});
+    }
 
     // Run until finished
     bool web_server_succeeded = web_server.get();
