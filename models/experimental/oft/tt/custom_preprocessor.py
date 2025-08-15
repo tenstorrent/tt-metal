@@ -46,6 +46,6 @@ def create_OFT_model_parameters_resnet(model, input_tensor: torch.Tensor, device
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
-    # parameters["model_args"] = model
+    parameters["model_args"] = model
 
     return parameters
