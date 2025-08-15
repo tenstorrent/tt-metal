@@ -57,7 +57,7 @@ protected:
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
-            // return false;
+            return false;
         }
         return true;
     }
