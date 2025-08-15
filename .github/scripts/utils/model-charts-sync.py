@@ -73,15 +73,15 @@ def parse_featured_models(md_file_path):
                 j += 1
             if not table_lines:
                 errors.append(
-                    f"ERROR: Attributes chart under '{model_name}' at line {table_start_line} seems to be malformed."
-                    f"\nExpected 3 rows (header / markdown chars / values) but found {len(table_lines)} rows instead."
+                    f"ERROR: ### header for '{model_name}' at line {abs_line_number} not followed by attributes chart"
                 )
                 i += 1
                 continue
             if len(table_lines) != 3:
                 table_start_line = i + 2
                 errors.append(
-                    f"ERROR: Attributes chart under '{model_name}' at line {table_start_line} has {len(table_lines)} rows instead of 3"
+                    f"ERROR: Attributes chart under '{model_name}' at line {table_start_line} seems to be malformed."
+                    f"\nExpected 3 rows (header / markdown chars / values) but found {len(table_lines)} rows instead."
                 )
                 i = j
                 continue
