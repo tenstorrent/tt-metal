@@ -27,6 +27,8 @@
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
 struct CQPrefetchHToPrefetchDHeader_s {
     uint32_t length;
+    uint8_t raw_copy;     // If true, copy the data directly to the downstream.
+    uint8_t extra_pages;  // Number of extra pages to flush at the end (if doing raw copy)
 };
 union CQPrefetchHToPrefetchDHeader {
     CQPrefetchHToPrefetchDHeader_s header;
@@ -1513,6 +1515,76 @@ bool process_cmd(
     return done;
 }
 
+// Used in prefetch_h upstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
+uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr) {
+    // This ensures that a previous cmd using the scratch buf has finished
+    noc_async_writes_flushed();
+
+    volatile CQPrefetchCmd tt_l1_ptr* cmd =
+        (volatile CQPrefetchCmd tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
+    uint32_t noc_xy_addr = cmd->relay_linear_h.noc_xy_addr;
+    uint32_t read_addr = cmd->relay_linear_h.addr;
+    uint32_t length = cmd->relay_linear_h.length;
+
+    uint32_t total_length = length + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    ASSERT(total_length <= scratch_db_size);
+
+    // DPRINT << "relay_linear_h: " << ((uint32_t)cmd_ptr) << " " << static_cast<uint32_t>(cmd->base.cmd_id) << " " <<
+    // length << " " << read_addr << " " << noc_xy_addr << " dest " << scratch_db_top[0] << ENDL();
+
+    uint32_t data_ptr = scratch_db_top[0];
+    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr =
+        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)scratch_db_top[0];
+    dptr->header.length = total_length;
+    dptr->header.raw_copy = true;
+    dptr->header.extra_pages = 1;
+
+    uint32_t payload_ptr = data_ptr + sizeof(CQPrefetchHToPrefetchDHeader);
+    uint64_t noc_addr = get_noc_addr_helper(noc_xy_addr, read_addr);
+
+    noc_async_read(noc_addr, payload_ptr, length);
+    noc_async_read_barrier();
+
+    uint32_t npages = (total_length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
+    // Assume the dispatch buffer is big relative to cmddat command size that we can
+    // grab what we need in one chunk
+    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages, my_downstream_cb_sem_additional_count);
+
+    // Write sizes below may exceed NOC_MAX_BURST_SIZE so we use the any_len version
+    // Amount to write depends on how much free space
+    uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
+    if (downstream_pages_left >= npages) {
+        // WAIT is not needed here because previous writes have already been flushed. Prefetch H only uses this
+        // function and this function always flushes before returning
+        relay_client
+            .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, false, NCRISC_WR_CMD_BUF>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), total_length, npages);
+        downstream_data_ptr += npages * downstream_cb_page_size;
+    } else {
+        uint32_t tail_pages = npages - downstream_pages_left;
+        uint32_t available = downstream_pages_left * downstream_cb_page_size;
+        if (available > 0) {
+            relay_client.write_any_len<my_noc_index, false, NCRISC_WR_CMD_BUF, true>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
+            data_ptr += available;
+            total_length -= available;
+        }
+
+        // Remainder
+        // WAIT is needed here because previously "if (available > 0)" then it used the write buf which may still be
+        // busy at this point
+        relay_client
+            .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, true, NCRISC_WR_CMD_BUF>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), total_length, npages);
+
+        downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
+    }
+
+    noc_async_writes_flushed();
+
+    return CQ_PREFETCH_CMD_BARE_MIN_SIZE + sizeof(CQPrefetchHToPrefetchDHeader);
+}
+
 // This function is only valid when called on the H variant
 // It expects the NoC async write state to be initialized to point to the downstream
 static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool is_exec_buf) {
@@ -1521,6 +1593,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     // This packet header just contains the length
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr = (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
     dptr->header.length = length;
+    dptr->header.raw_copy = false;
 
     uint32_t npages = (length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
 
@@ -1572,40 +1645,74 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     return fence;
 }
 
+// Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
+template <typename RelayInlineState>
+inline void relay_raw_data_to_downstream(
+    uint32_t& data_ptr, uint32_t length, uint32_t& local_downstream_data_ptr, uint8_t extra_pages) {
+    // DPRINT << "relay_raw_data_to_downstream: " << data_ptr << " " << length << " " << local_downstream_data_ptr << "
+    // " << static_cast<uint32_t>(extra_pages) << ENDL();
+    uint32_t remaining = cmddat_q_end - data_ptr;
+    if (length > remaining) {
+        uint32_t npages = write_pages_to_dispatcher<0, false>(local_downstream_data_ptr, data_ptr, remaining);
+        data_ptr = cmddat_q_base;
+        length -= remaining;
+        remaining = cmddat_q_end - data_ptr;
+    }
+    uint32_t npages = write_pages_to_dispatcher<1, true>(local_downstream_data_ptr, data_ptr, length);
+    local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
+    cb_release_pages<my_noc_index, RelayInlineState::downstream_noc_encoding, RelayInlineState::downstream_cb_sem>(
+        npages + extra_pages);
+    noc_async_writes_flushed();
+    data_ptr += length;
+    data_ptr = round_up_pow2(data_ptr, cmddat_q_page_size);
+}
+
 // Gets cmds from upstream prefetch_h
 // Note the prefetch_h uses the HostQ and grabs whole commands
 // Shared command processor assumes whole commands are present, really
 // just matters for the inline command which could be re-implemented
 // This grabs whole (possibly sets of if multiple in a page) commands
-inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
-    // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end << ENDL();
-    if (data_ptr == fence) {
-        get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
-            data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
+inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t& downstream_data_ptr) {
+    while (true) {
+        // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end <<
+        // ENDL();
+        if (data_ptr == fence) {
+            get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
+                data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
+        }
+
+        volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
+            (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
+        uint32_t length = cmd_ptr->header.length;
+
+        uint32_t pages_ready = (fence - data_ptr) >> cmddat_q_log_page_size;
+        uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
+        int32_t pages_pending = pages_needed - pages_ready;
+        int32_t npages = 0;
+
+        // TODO
+        // Ugly: get_cb_page was written to process 1 page at a time, we need multiple
+        // If it wraps, it resets the data_ptr to the top of the buffer, hand it a dummy for now
+        uint32_t dummy_data_ptr = data_ptr;
+        while (npages < pages_pending) {
+            npages += get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
+                dummy_data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
+            IDLE_ERISC_RETURN(length - sizeof(CQPrefetchHToPrefetchDHeader));
+        }
+
+        data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
+        if (cmd_ptr->header.raw_copy) {
+            relay_raw_data_to_downstream<DispatchRelayInlineState>(
+                data_ptr,
+                length - sizeof(CQPrefetchHToPrefetchDHeader),
+                downstream_data_ptr,
+                cmd_ptr->header.extra_pages);
+            uint32_t pages_to_free = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
+            relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
+        } else {
+            return length - sizeof(CQPrefetchHToPrefetchDHeader);
+        }
     }
-
-    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
-        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
-    uint32_t length = cmd_ptr->header.length;
-
-    uint32_t pages_ready = (fence - data_ptr) >> cmddat_q_log_page_size;
-    uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
-    int32_t pages_pending = pages_needed - pages_ready;
-    int32_t npages = 0;
-
-    // TODO
-    // Ugly: get_cb_page was written to process 1 page at a time, we need multiple
-    // If it wraps, it resets the data_ptr to the top of the buffer, hand it a dummy for now
-    uint32_t dummy_data_ptr = data_ptr;
-    while (npages < pages_pending) {
-        npages += get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
-            dummy_data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
-        IDLE_ERISC_RETURN(length - sizeof(CQPrefetchHToPrefetchDHeader));
-    }
-
-    data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
-
-    return length - sizeof(CQPrefetchHToPrefetchDHeader);
 }
 
 void kernel_main_h() {
@@ -1649,7 +1756,11 @@ void kernel_main_h() {
         uint32_t cmd_id = cmd->base.cmd_id;
         // Infer that an exec_buf command is to be executed based on the stall state.
         bool is_exec_buf = (stall_state == STALLED);
-        cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
+        if (cmd_id == CQ_PREFETCH_CMD_RELAY_LINEAR_H) {
+            cmd_ptr += process_relay_linear_h_cmd(cmd_ptr);
+        } else {
+            cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
+        }
 
         // Note: one fetch_q entry can contain multiple commands
         // The code below assumes these commands arrive individually, packing them would require parsing all cmds
@@ -1711,7 +1822,7 @@ void kernel_main_d() {
     while (!done) {
         // cmds come in packed batches based on HostQ reads in prefetch_h
         // once a packed batch ends, we need to jump to the next page
-        uint32_t length = relay_cb_get_cmds(fence, cmd_ptr);
+        uint32_t length = relay_cb_get_cmds(fence, cmd_ptr, downstream_data_ptr);
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
