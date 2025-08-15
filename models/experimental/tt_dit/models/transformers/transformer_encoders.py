@@ -34,18 +34,26 @@ class CLIPTextEncoderTransformer:
                 },
             )
 
-            layer = CLIPEncoderLayer(parameters, self.config, self.parallel_manager)
+            layer = CLIPEncoderLayer(parameters, self.config, self.mesh_device, self.parallel_manager)
             layer.load_state_dict(layer_state)
             self._layers.append(layer)
 
     def __call__(
         self,
         hidden_states: ttnn.Tensor,
+        mesh_device: ttnn.Device,
         causal_attention_mask: ttnn.Tensor = None,
         parallel_manager: EncoderParallelManager = None,
         output_hidden_states: bool = True,
     ):
         all_hidden_states = []
+
+        # create causal attention mask if not provided (following SD 3.5 pattern)
+        if causal_attention_mask is None:
+            input_shape = (hidden_states.shape[0], hidden_states.shape[1])  # (batch_size, seq_len)
+            causal_attention_mask = _create_4d_causal_attention_mask(
+                input_shape, mesh_device, dtype=hidden_states.get_dtype()
+            )
 
         if output_hidden_states:  # this is the transformer input
             all_hidden_states.append(hidden_states)

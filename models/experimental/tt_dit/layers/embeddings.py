@@ -9,6 +9,7 @@ import ttnn
 from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ..utils.substate import substate
 from .linear import Linear
+from ..utils.causal_mask import create_4d_causal_attention_mask
 
 
 # Helper classes for SD35Transformer2DModel
@@ -303,7 +304,12 @@ class TextEmbedding:
             position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
 
             position_embeddings = ttnn.embedding(position_ids, self.position_embedding, layout=ttnn.TILE_LAYOUT)
+            input_embeddings = input_embeddings + position_embeddings
 
-            return input_embeddings + position_embeddings
+        # always create / cache causal mask using (batch, seq_len)
+        mask_shape = (input_embeddings.shape[0], input_embeddings.shape[1])  # batch, sequence length
+        self.causal_attention_mask = create_4d_causal_attention_mask(
+            mask_shape, device, dtype=input_embeddings.get_dtype()
+        )
 
         return input_embeddings

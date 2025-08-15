@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from ..models.transformers.attention_encoders import CLIPAttentionParameters, CLIPAttention
+from loguru import logger
+from ..models.transformers.attention_encoders import EncoderAttention
 from ..parallel.config import EncoderParallelManager
 from ..utils.tensor import bf16_tensor
 from ..utils.substate import substate
@@ -11,10 +12,12 @@ import ttnn
 
 
 class CLIPEncoderLayer:
-    def __init__(self, parameters, config, parallel_manager: EncoderParallelManager = None) -> None:
+    def __init__(
+        self, parameters, config, mesh_device: ttnn.Device, parallel_manager: EncoderParallelManager = None
+    ) -> None:
         self.config = config
         self._parallel_manager = parallel_manager
-        self.mesh_device = getattr(parameters, "mesh_device", None)
+        self.mesh_device = mesh_device
 
         # will be created in load_state_dict
         self._self_attn = None
@@ -42,15 +45,13 @@ class CLIPEncoderLayer:
             state_dict["layer_norm2.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
         )
 
-        attn_params = CLIPAttentionParameters.from_torch(
-            substate(state_dict, "self_attn"),
-            config=self.config,
-            mesh_device=self.mesh_device,
-            parallel_manager=self._parallel_manager,
-        )
-        self._self_attn = CLIPAttention(attn_params, self.config, self._parallel_manager)
+        self._self_attn = EncoderAttention(self.config, self.mesh_device, self._parallel_manager)
 
-        # MLP
+        # load attention weights
+        attn_state = substate(state_dict, "self_attn")
+        self._self_attn.load_state_dict(attn_state)
+
+        # create and load MLP
         if self.config.hidden_act == "gelu":
             activation_fn = "gelu"
         elif self.config.hidden_act == "quick_gelu":
@@ -77,24 +78,71 @@ class CLIPEncoderLayer:
         causal_attention_mask: ttnn.Tensor,
         parallel_manager: EncoderParallelManager = None,
     ) -> ttnn.Tensor:
+        logger.info(f"Starting CLIPEncoderLayer forward pass, input shape: {hidden_states.shape}")
+
         # self attention block
         residual = hidden_states
         hidden_states = ttnn.layer_norm(
             hidden_states, weight=self._layer_norm1, bias=self._layer_norm1_bias, epsilon=self._layer_norm_eps
         )
+        logger.info(f" Layer norm 1 done, shape: {hidden_states.shape}")
 
         attn_output = self._self_attn(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
+        logger.info(f"Self-attention done, output shape: {attn_output.shape}")
 
         hidden_states = residual + attn_output
+        logger.info(f"Residual added, shape: {hidden_states.shape}")
 
         # MLP block
         residual = hidden_states
         hidden_states = ttnn.layer_norm(
             hidden_states, weight=self._layer_norm2, bias=self._layer_norm2_bias, epsilon=self._layer_norm_eps
         )
+        logger.info(f"Layer norm 2 done, shape: {hidden_states.shape}")
 
         mlp_output = self._mlp(hidden_states, parallel_manager=parallel_manager)
+        logger.info(f"MLP done, output shape: {mlp_output.shape}")
 
+        hidden_states_shape = list(mlp_output.shape)
+        logger.debug(f"Saving original shape: {hidden_states_shape}")
+
+        logger.debug(f"Adding batch dimension for reduce-scatter...")
+        mlp_output = ttnn.unsqueeze(mlp_output, 0)
+        logger.debug(f"After unsqueeze, shape: {mlp_output.shape}")
+
+        # AllReduce output
+        logger.debug(f"Starting reduce_scatter_minimal_async...")
+        mlp_output_scattered = ttnn.experimental.reduce_scatter_minimal_async(
+            mlp_output,
+            dim=3,
+            multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=parallel_manager.topology,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+        )
+        logger.debug(f"reduce_scatter completed, shape: {mlp_output_scattered.shape}")
+
+        logger.debug(f"Starting all_gather_async...")
+        mlp_output = ttnn.experimental.all_gather_async(
+            mlp_output_scattered,
+            dim=3,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+            mesh_device=parallel_manager.mesh_device,
+            topology=parallel_manager.topology,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        logger.debug(f"all_gather completed, shape: {mlp_output.shape}")
+
+        logger.debug(f"Reshaping back to original shape...")
+        mlp_output = ttnn.reshape(mlp_output, hidden_states_shape)
+        logger.debug(f"Target shape: {hidden_states_shape}, current shape: {mlp_output.shape}")
+        logger.debug(f"Final MLP output shape: {mlp_output.shape}")
+
+        logger.info("Adding final residual connection...")
         hidden_states = residual + mlp_output
+        logger.info(f"CLIPEncoderLayer completed, final shape: {hidden_states.shape}")
 
         return hidden_states

@@ -114,6 +114,7 @@ def test_clip_encoder(
     start_time = time.time()
 
     tt_embeddings = tt_model.embeddings(tt_tokens, device=encoder_submesh)
+    causal_attention_mask = tt_model.embeddings.causal_attention_mask
     logger.info(f"TT embeddings runtime: {time.time() - start_time}")
 
     # test hf embeddings for comparison
@@ -149,10 +150,15 @@ def test_clip_encoder(
 
     logger.info("compiling text encoder...")
 
-    breakpoint()
+    # breakpoint()
 
-    # pass through encoder
-    encoder_outputs = tt_model.encoder(tt_embeddings, parallel_manager=encoder_parallel_manager)
+    # pass through encoder with causal mask
+    encoder_outputs = tt_model.encoder(
+        tt_embeddings,
+        mesh_device=encoder_submesh,
+        causal_attention_mask=causal_attention_mask,
+        parallel_manager=encoder_parallel_manager,
+    )
 
     tt_sequence_output, tt_projected_output = encoder_outputs
 

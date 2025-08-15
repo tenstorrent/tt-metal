@@ -111,15 +111,6 @@ class EncoderParallelManager:
         self.rs_ping_pong_idx = 0
         self.ar_ping_pong_idx = 0
 
-    @property
-    def tp_mesh(self) -> ttnn.MeshDevice:
-        """Sub-mesh that contains exactly the tensor-parallel group."""
-        # slice the full mesh along the chosen axis
-        shape = list(self.mesh_device.shape)
-        shape[self.tensor_parallel.mesh_axis] = self.tensor_parallel.factor
-        # choose the first tensor-parallel slice starting at (0,0)
-        return self.mesh_device.create_submeshes(ttnn.MeshShape(*shape))[0]
-
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
         self.ccl_cores = ttnn.CoreRangeSet(
