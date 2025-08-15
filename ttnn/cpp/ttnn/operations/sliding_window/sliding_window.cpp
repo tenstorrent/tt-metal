@@ -1279,15 +1279,16 @@ Tensor move_config_tensor_to_device(
 }
 
 std::string SlidingWindowConfig::to_string() const {
-    return std::to_string(batch_size) + "_" + std::to_string(std::get<0>(input_hw)) + "_" +
-           std::to_string(std::get<1>(input_hw)) + "_" + std::to_string(std::get<0>(window_hw)) + "_" +
+    return std::to_string(batch_size) + "_" + std::to_string(channels) + "_" + std::to_string(std::get<0>(input_hw)) +
+           "_" + std::to_string(std::get<1>(input_hw)) + "_" + std::to_string(std::get<0>(window_hw)) + "_" +
            std::to_string(std::get<1>(window_hw)) + "_" + std::to_string(std::get<0>(stride_hw)) + "_" +
            std::to_string(std::get<1>(stride_hw)) + "_" + std::to_string(padding[0]) + "_" +
            std::to_string(padding[1]) + "_" + std::to_string(padding[2]) + "_" + std::to_string(padding[3]) + "_" +
+           std::to_string(std::get<0>(output_pad_hw)) + "_" + std::to_string(std::get<1>(output_pad_hw)) + "_" +
            std::to_string(std::get<0>(dilation_hw)) + "_" + std::to_string(std::get<1>(dilation_hw)) + "_" +
            std::to_string(num_cores_nhw) + "_" + std::to_string(num_cores_c) + "_" + core_range_set.str() +
            (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
-           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "");
+           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") + (is_avg_pool ? "_avg_pool" : "");
 }
 
 }  // namespace ttnn::operations::sliding_window
