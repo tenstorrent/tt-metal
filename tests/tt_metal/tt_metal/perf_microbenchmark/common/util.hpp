@@ -78,10 +78,6 @@ inline int get_tt_npu_clock(tt::tt_metal::IDevice* device) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
 }
 
-inline int get_tt_npu_rpeak_tflops(tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(mesh_device->get_devices()[0]->id());
-}
-
 template <typename T>
 inline T calculate_average(const std::vector<T>& vec, bool skip_first_run = true) {
     if (vec.empty()) {

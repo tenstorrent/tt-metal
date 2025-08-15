@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
-        int clock_freq_mhz = get_tt_npu_clock(device.get());
+        int clock_freq_mhz = get_tt_npu_clock(device->get_devices()[0]);
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

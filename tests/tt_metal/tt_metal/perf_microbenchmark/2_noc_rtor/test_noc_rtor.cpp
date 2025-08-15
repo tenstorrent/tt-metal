@@ -141,7 +141,7 @@ int main(int argc, char** argv) {
         int device_id = 0;
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
-        int clock_freq_mhz = get_tt_npu_clock(device.get());
+        int clock_freq_mhz = get_tt_npu_clock(device->get_devices()[0]);
         auto grid_coord = device->compute_with_storage_grid_size();
         num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
         num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;

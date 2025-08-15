@@ -594,7 +594,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         constexpr int giga_byte = 1000000;
         constexpr long long tera_byte = 1000000000000LL;
-        int tt_npu_clock = get_tt_npu_clock(device.get());
+        int tt_npu_clock = get_tt_npu_clock(device->get_devices()[0]);
         double rpeak_tflops = get_tt_npu_rpeak_tflops(arch, grid_size, tt_npu_clock);
         std::vector<double> rmax_tflops;
         uint64_t num_of_matmul_ops =
