@@ -23,7 +23,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04]
         image: [ttnn, models]
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.generate-tag-name.outputs.TAG_NAME }}
     steps:
