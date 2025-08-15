@@ -34,7 +34,7 @@ class FeedForward:
         self.activation_fn = activation_fn
         self.bias = bias
 
-        self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, init=init)
+        self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation=activation_fn, init=init)
         self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device, init=init)
 
     def load_state_dict(self, state_dict, transform=None):
@@ -83,8 +83,8 @@ class ParallelFeedForward:
         self.inner_dim = inner_dim
         self.activation_fn = activation_fn
         self.bias = bias
-
-        self.ff1 = ColParallelLinear(dim, inner_dim, bias=bias, mesh_device=mesh_device, init=init)
+        # breakpoint()
+        self.ff1 = ColParallelLinear(dim, inner_dim, bias=bias, mesh_device=mesh_device, mesh_axis=mesh_axis, init=init)
         self.ff2 = RowParallelLinear(
             inner_dim,
             dim_out,
@@ -118,18 +118,16 @@ class ParallelFeedForward:
         """
         logger.info(f"Starting ParallelFeedForward, input shape: {x.shape}")
 
-        logger.info("Computing FF1 (first linear layer)...")
+        logger.info("Computing FF1 (first linear layer)...")  # [.., 768]  [.., 3072]
         ff1_output = self.ff1(x)
         logger.info(f"FF1 done, shape: {ff1_output.shape}")
 
         logger.info(f"Activation function: {self.activation_fn}")
         if self.activation_fn == "gelu":
-            logger.info("Activation function: gelu")
             # TODO: Should we use approximate gelu?
             ff1_output = ttnn.gelu(ff1_output)
         elif self.activation_fn == "quick_gelu":
-            logger.info("Activation function: quick_gelu")
-            ff1_output = ttnn.quick_gelu(ff1_output)
+            ff1_output = ff1_output * ttnn.sigmoid(1.702 * ff1_output)
         else:
             raise ValueError(f"Unsupported activation function: {self.activation_fn}")
 
