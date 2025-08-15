@@ -21,6 +21,7 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "layernorm_compute_utils.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -175,7 +176,9 @@ void MAIN {
                     start_N += tile_width;
                 }
             }
-            // Transpose dst1 and dst2 back to columns
+            // Transpose dst1 and dst2 back to columns.
+            // transpose_dest() was buggy, so we
+            // use CB-interface transpose
             pack_reconfig_data_format(cb_ex);
             pack_tile(dst1, cb_ex);
             pack_reconfig_data_format(cb_ex2);
@@ -183,24 +186,8 @@ void MAIN {
             REL();
             cb_push_back(cb_ex, onetile);
             cb_push_back(cb_ex2, onetile);
-            ACQ();
-            cb_wait_front(cb_ex, onetile);
-            cb_wait_front(cb_ex2, onetile);
-            transpose_wh_init_short(cb_ex);
-            reconfig_data_format_srca(cb_ex);
-            transpose_wh_tile(cb_ex, 0, dst1);
-            transpose_wh_init_short(cb_ex2);
-            reconfig_data_format_srca(cb_ex2);
-            transpose_wh_tile(cb_ex2, 0, dst2);
-            cb_pop_front(cb_ex, onetile);
-            cb_pop_front(cb_ex2, onetile);
-            cb_reserve_back(cb_ex, onetile);
-            cb_reserve_back(cb_ex2, onetile);
-            pack_reconfig_data_format(cb_ex);
-            pack_tile(dst1, cb_ex);
-            pack_reconfig_data_format(cb_ex2);
-            pack_tile(dst2, cb_ex2);
-            REL();
+            layernorm::compute::utils::transpose_single_tile_cb(cb_ex, dst1);
+            layernorm::compute::utils::transpose_single_tile_cb(cb_ex2, dst2);
             cb_push_back(cb_ex, onetile);
             cb_push_back(cb_ex2, onetile);
 
