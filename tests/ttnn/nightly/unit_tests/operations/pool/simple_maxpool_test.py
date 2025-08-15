@@ -34,19 +34,6 @@ torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
 torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
 ttnn_input = ttnn.from_torch(torch_input_reshaped, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-# ttnn_output = ttnn.max_pool2d(
-#     input_tensor=ttnn_input,
-#     batch_size=in_n,
-#     input_h=in_h,
-#     input_w=in_w,
-#     channels=in_c,
-#     kernel_size=kernel_size,
-#     stride=stride,
-#     padding=padding,  # ttnn is padding in the order (top, bottom, left, right)
-#     dilation=dilation,
-#     applied_shard_scheme=shard_scheme,
-# )
-
 # print("Output without indices:")
 # print(ttnn.to_torch(ttnn_output))
 
@@ -63,12 +50,29 @@ ttnn_output, indices = ttnn.max_pool2d(
     applied_shard_scheme=shard_scheme,
     return_indices=True,
 )
+ttnn_outputs_exactly_equal = True
 
 print("\nTTNN max pool results:")
 print("Output shape:", ttnn.to_torch(ttnn_output).shape)
 # print("Output:\n", ttnn.to_torch(ttnn_output))
 print("Indices shape:", ttnn.to_torch(indices).shape)
 # print("Indices:\n", ttnn.to_torch(indices))
+
+# Check that ttnn_output_base is exactly equal to ttnn_output
+ttnn_output_base = ttnn.max_pool2d(
+    input_tensor=ttnn_input,
+    batch_size=in_n,
+    input_h=in_h,
+    input_w=in_w,
+    channels=in_c,
+    kernel_size=kernel_size,
+    stride=stride,
+    padding=padding,  # ttnn is padding in the order (top, bottom, left, right)
+    dilation=dilation,
+    applied_shard_scheme=shard_scheme,
+)
+ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn.to_torch(ttnn_output))
+print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
 
 # Run PyTorch max pool for reference
 torch_output, torch_indices = torch.nn.functional.max_pool2d(
@@ -237,7 +241,7 @@ print(f"Tie-breaking differences: {tie_breaking_differences}")
 print(f"Value or window differences(actual errors): {value_differences}")
 
 # Updated test result logic - only fail if there are actual value differences or output mismatches
-test_passed = output_match and (not has_actual_errors)
+test_passed = output_match and (not has_actual_errors) and ttnn_outputs_exactly_equal
 
 if test_passed:
     print("\n✓ Test PASSED: TTNN and PyTorch outputs match!")
