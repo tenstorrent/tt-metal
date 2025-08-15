@@ -12,7 +12,6 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-#include <server/json_messages.hpp>
 #include <server/telemetry_subscriber.hpp>
 #include <server/web_server.hpp>
 
