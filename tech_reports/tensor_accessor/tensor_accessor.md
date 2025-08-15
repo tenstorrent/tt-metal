@@ -98,21 +98,21 @@ Address Calculation
 
 ```c++
 // Get the NOC address for a given page
-uint32_t noc_addr = tensor_accessor.get_noc_addr(page_id);
+uint64_t noc_addr = tensor_accessor.get_noc_addr(page_id);
 
 // Get bank ID and offset for a given page
 auto [bank_id, bank_offset] = tensor_accessor.get_bank_and_offset(page_id);
 
 // You can also address pages by nd coordinate (such address calculation is a little bit cheaper)
 std::array<uint32_t, 4> page_coord{0, 1, 2, 3};
-uint32_t noc_addr = tensor_accessor.get_noc_addr(page_coord);   // <- Anything with operator[] should work
+uint64_t noc_addr = tensor_accessor.get_noc_addr(page_coord);   // <- Anything with operator[] should work
 
 // For sharded tensor, you can get address of shards:
 static_assert(args::is_sharded, "Sharded API requires sharded tensor");
-uint32_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_id);
+uint64_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_id);
 
 std::array<uint32_t, 4> shard_coord{0, 1, 2, 3};
-uint32_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_coord); // <- Anything with operator[] should work
+uint64_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_coord); // <- Anything with operator[] should work
 ```
 
 Data Transfer

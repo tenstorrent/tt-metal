@@ -1142,6 +1142,25 @@ def test_unary_exp2_ttnn(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_exp_ttnn(input_shapes, device):
+    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.exp(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.exp)
+    golden_tensor = golden_function(in_data)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
         (torch.Size([100])),
         (torch.Size([64, 32])),
         (torch.Size([3, 128, 32])),

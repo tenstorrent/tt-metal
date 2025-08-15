@@ -51,7 +51,7 @@ for device in devices_data["devices"].keys():
     # Calculate sync between cores. Sync metric is based on number of cores that have start time diff less than abs(sync_thr) value
     # Since we have 64 cores [num_of_cores], we have (num_of_cores * (num_of_cores - 1) / 2) unique core pairs to check
     # Sync measure is expressed as percentual value of synced core pairs where 100% is equal to (num_of_cores * (num_of_cores - 1) / 2)
-    # Overall sync is measured as mean value accross all blocks
+    # Overall sync is measured as mean value across all blocks
     sync_thr = 300
     num_of_cores = len(start_time_per_core)
     num_of_blocks = len(start_time_per_core[0])
