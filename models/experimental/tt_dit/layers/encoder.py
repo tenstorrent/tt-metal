@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from ..models.transformers.attention_encoders import CLIPAttentionParameters, CLIPMLPParameters, CLIPAttention, CLIPMLP
+from ..models.transformers.attention_encoders import CLIPAttentionParameters, CLIPAttention
 from ..parallel.config import EncoderParallelManager
 from ..utils.tensor import bf16_tensor
 from ..utils.substate import substate
+from .feedforward import ParallelFeedForward
 import ttnn
-import logging
 
 
 class CLIPEncoderLayer:
@@ -50,15 +50,25 @@ class CLIPEncoderLayer:
         )
         self._self_attn = CLIPAttention(attn_params, self.config, self._parallel_manager)
 
-        # load MLP weights
-        logging.info("loading mlp")
-        mlp_params = CLIPMLPParameters.from_torch(
-            substate(state_dict, "mlp"),
-            config=self.config,
-            mesh_device=self.mesh_device,
-            parallel_manager=self._parallel_manager,
+        # MLP
+        if self.config.hidden_act == "gelu":
+            activation_fn = "gelu"
+        elif self.config.hidden_act == "quick_gelu":
+            activation_fn = "quick_gelu"
+        else:
+            raise ValueError(f"Unsupported activation function: {self.config.hidden_act}")
+
+        self.mlp = ParallelFeedForward(
+            dim=dim,
+            dim_out=dim,
+            activation_fn=activation_fn,
+            mesh_device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            ccl_manager=ccl_manager,  # TODO: add ccl_manager
+            init=init,
         )
-        self._mlp = CLIPMLP(mlp_params, self.config, self._parallel_manager)
+
+        self.mlp.load_state_dict(rename_ff_state(substate(state_dict, "mlp")))
 
     def __call__(
         self,

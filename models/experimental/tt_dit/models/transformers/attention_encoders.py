@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from ...layers.linear import ColParallelLinear, RowParallelLinear
+from ...layers.linear import ColParallelLinear
 from ...parallel.config import EncoderParallelManager
 from ...utils.substate import substate
 
 
-# TODO: merge param and isntance classes
+# TODO: merge attention param and instance classes
 
 
 class CLIPAttentionParameters:
@@ -62,71 +62,6 @@ class CLIPAttentionParameters:
         out_proj.load_state_dict(substate(state_dict, "out_proj"))
 
         return cls(q_proj=q_proj, k_proj=k_proj, v_proj=v_proj, out_proj=out_proj)
-
-
-class CLIPMLPParameters:
-    def __init__(self, fc1, fc2):
-        self.fc1 = fc1
-        self.fc2 = fc2
-
-    @classmethod
-    def from_torch(
-        cls,
-        state_dict: dict,
-        config,
-        mesh_device=None,
-        parallel_manager: EncoderParallelManager = None,
-    ):
-        fc1 = ColParallelLinear(
-            in_features=config.hidden_size,
-            out_features=config.intermediate_size,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_manager.tensor_parallel.mesh_axis if parallel_manager else 0,
-        )
-
-        fc2 = RowParallelLinear(
-            in_features=config.intermediate_size,
-            out_features=config.hidden_size,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_manager.tensor_parallel.mesh_axis if parallel_manager else 0,
-            ccl_manager=parallel_manager,
-        )
-
-        fc1.load_state_dict(substate(state_dict, "fc1"))
-        fc2.load_state_dict(substate(state_dict, "fc2"))
-
-        return cls(fc1=fc1, fc2=fc2)
-
-
-class CLIPMLP:
-    def __init__(self, parameters: CLIPMLPParameters, config, parallel_manager: EncoderParallelManager = None):
-        self.config = config
-        self.parallel_manager = parallel_manager
-
-        self.fc1 = parameters.fc1
-        self.fc2 = parameters.fc2
-
-        self.activation = config.hidden_act
-
-    def __call__(self, hidden_states: ttnn.Tensor, parallel_manager: EncoderParallelManager = None) -> ttnn.Tensor:
-        hidden_states = self.fc1(hidden_states)
-
-        if self.activation == "quick_gelu":
-            # Quick GELU: x * sigmoid(1.702 * x)
-            hidden_states = hidden_states * ttnn.sigmoid(1.702 * hidden_states)
-        elif self.activation == "gelu":
-            hidden_states = ttnn.gelu(hidden_states)
-        elif self.activation == "relu":
-            hidden_states = ttnn.relu(hidden_states)
-        else:
-            # default to quick_gelu if unknown activation
-            hidden_states = hidden_states * ttnn.sigmoid(1.702 * hidden_states)
-
-        hidden_states = self.fc2(hidden_states)
-
-        return hidden_states
 
 
 class CLIPAttention:

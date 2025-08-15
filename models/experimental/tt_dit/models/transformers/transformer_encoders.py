@@ -18,7 +18,6 @@ class CLIPTextEncoderTransformer:
         self._d_model = config.hidden_size
 
     def load_state_dict(self, state_dict):
-        """Load transformer layers from state dict"""
         layer_states = indexed_substates(state_dict, "layers")
 
         for layer_state in layer_states:
