@@ -126,14 +126,14 @@ void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core) {
 
     go_msg_t reset_msg;
     reset_msg.signal = RUN_MSG_RESET_READ_PTR_FROM_HOST;
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        &reset_msg, sizeof(go_msg_t), tt_cxy_pair(chip, virtual_core), go_signal_adrr, true);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
+        &reset_msg, sizeof(go_msg_t), tt_cxy_pair(chip, virtual_core), go_signal_adrr);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(chip);
     uint32_t go_message_index_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
         dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     uint32_t zero = 0;
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        &zero, sizeof(uint32_t), tt_cxy_pair(chip, virtual_core), go_message_index_addr, true);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
+        &zero, sizeof(uint32_t), tt_cxy_pair(chip, virtual_core), go_message_index_addr);
 }
 
 void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
@@ -144,12 +144,12 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     // TODO: Get this from the hal. Need to modify the write_launch_msg_to_core API to get the LM and Go signal addr from the hal.
     uint64_t go_addr = base_addr + sizeof(launch_msg_t) * launch_msg_buffer_num_entries;
 
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        (void*)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr, true);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
+        (void*)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
     tt_driver_atomics::sfence();
     if (send_go) {
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr, true);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
+            go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
     }
 }
 
@@ -185,7 +185,7 @@ bool test_load_write_read_risc_binary(
         uint64_t relo_addr = tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr, true);
+            &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());

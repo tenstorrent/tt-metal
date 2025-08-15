@@ -657,8 +657,7 @@ bool Cluster::supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) c
            sz_in_bytes >= min_dma_size_bytes;
 }
 
-void Cluster::write_core(
-    const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool bypass_wc) const {
+void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
     const chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled()) {
@@ -674,12 +673,7 @@ void Cluster::write_core(
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (bypass_wc) {
-        // Risk of duplicate or split writes from the host when WC Hugepage is used.
-        // write_to_device_reg does not use WC
-        this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
-    } else if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
-        // log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);
+    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
@@ -708,10 +702,33 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
     if (this->supports_dma_operations(chip_id, size_in_bytes)) {
-        // log_info(tt::LogMetal, "Reading from device {} using DMA", core.chip);
         this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
+    }
+}
+
+void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    const chip_id_t chip_id = core.chip;
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+
+    if (rtoptions_.get_watcher_enabled()) {
+        tt::watcher_sanitize_host_noc_write(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_eth_cores_.at(chip_id),
+            this->virtual_pcie_cores_.at(chip_id),
+            this->virtual_dram_cores_.at(chip_id),
+            {core.x, core.y},
+            addr,
+            sz_in_bytes);
+    }
+
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+
+    if (this->cluster_desc_->is_chip_remote(chip_id)) {
+        this->driver_->wait_for_non_mmio_flush(chip_id);
     }
 }
 
