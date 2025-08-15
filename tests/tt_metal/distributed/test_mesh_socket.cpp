@@ -124,7 +124,9 @@ void verify_socket_configs(
     EXPECT_EQ(recv_config.upstream_chip_id, upstream_device_id);
     EXPECT_EQ(recv_config.upstream_noc_y, sender_virtual_coord.y);
     EXPECT_EQ(recv_config.upstream_noc_x, sender_virtual_coord.x);
-    EXPECT_EQ(recv_config.upstream_bytes_acked_addr, send_socket.get_config_buffer()->address());
+    EXPECT_EQ(
+        recv_config.upstream_bytes_acked_addr,
+        send_socket.get_config_buffer()->address() + align_up_local(sizeof(sender_socket_md), l1_alignment));
     EXPECT_EQ(recv_config.upstream_bytes_acked_addr % l1_alignment, 0);
 }
 
@@ -136,6 +138,13 @@ void test_single_connection_single_device_socket(
     bool use_cbs) {
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 1);
+    log_info(LogTest, "chip device id: {}", md0->get_devices()[0]->id());
+    auto sender_virtual_coord = md0->worker_core_from_logical_core(sender_logical_coord);
+    log_info(LogTest, "Sender virtual coord: {} {}", sender_virtual_coord.x, sender_virtual_coord.y);
+    auto recv_virtual_coord = md0->worker_core_from_logical_core(recv_logical_coord);
+    log_info(LogTest, "Receiver virtual coord: {} {}", recv_virtual_coord.x, recv_virtual_coord.y);
+
+    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
@@ -265,6 +274,8 @@ void test_single_connection_single_device_socket(
     EnqueueMeshWorkload(md0->mesh_command_queue(), mesh_workload, false);
     log_info(LogTest, "Workload enqueued");
     std::vector<uint32_t> recv_data_readback;
+    Finish(md0->mesh_command_queue());
+    log_info(LogTest, "Workload finished");
     ReadShard(md0->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
     log_info(LogTest, "Readback complete");
     EXPECT_EQ(src_vec, recv_data_readback);

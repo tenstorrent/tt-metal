@@ -255,7 +255,8 @@ void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& config_buffer,
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
-    SocketEndpoint socket_endpoint) {
+    SocketEndpoint socket_endpoint,
+    uint32_t downstream_num) {
     auto mesh_device = config_buffer->device();
     auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
@@ -265,10 +266,9 @@ void write_socket_configs(
 
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto& l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    auto align_up = [l1_alignment](uint32_t v) { return ((v + l1_alignment - 1) / l1_alignment) * l1_alignment; };
     if (is_sender) {
-        auto align_up = [l1_alignment](uint32_t v) { return ((v + l1_alignment - 1) / l1_alignment) * l1_alignment; };
         const auto num_downstreams_per_core = get_num_downstreams_per_core(config);
-        const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
         const auto num_downstreams = get_max_num_downstreams_per_core(config);
         uint32_t md_size_bytes = align_up(sizeof(sender_socket_md));
         uint32_t ack_size_bytes = align_up(sizeof(uint32_t)) * num_downstreams;
@@ -338,7 +338,8 @@ void write_socket_configs(
                 md.upstream_chip_id = upstream_chip_id;
                 md.upstream_noc_y = sender_virtual_core.y;
                 md.upstream_noc_x = sender_virtual_core.x;
-                md.upstream_bytes_acked_addr = peer_config_buf_addr;
+                md.upstream_bytes_acked_addr = peer_config_buf_addr + align_up(sizeof(sender_socket_md)) +
+                                               align_up(sizeof(uint32_t)) * downstream_num;
                 md.is_sender = is_sender;
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);

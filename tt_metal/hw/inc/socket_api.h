@@ -11,7 +11,7 @@
 #include "risc_attribs.h"
 #include "socket.h"
 #include "utils/utils.h"
-#include "debug/deprint.h"
+#include "debug/dprint.h"
 #ifndef COMPILE_FOR_TRISC
 #include <type_traits>
 #include "dataflow_api.h"
@@ -110,17 +110,6 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     } else {
         socket.write_ptr += num_bytes;
         socket.bytes_sent += num_bytes;
-    }
-}
-
-void socket_async_write(SocketSenderInterface& socket, uint32_t data_addr, uint32_t data_size) {
-    for (uint32_t i = 0; i < socket.num_downstreams; i++) {
-        sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
-            socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
-        noc_async_write(
-            data_addr,
-            get_noc_addr(downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, 0) | socket.write_ptr,
-            data_size);
     }
 }
 
@@ -265,6 +254,17 @@ void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t c
 }
 
 #ifndef COMPILE_FOR_TRISC
+void socket_async_write(SocketSenderInterface& socket, uint32_t data_addr, uint32_t data_size) {
+    for (uint32_t i = 0; i < socket.num_downstreams; i++) {
+        sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
+            socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
+        noc_async_write(
+            data_addr,
+            get_noc_addr(downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, 0) | socket.write_ptr,
+            data_size);
+    }
+}
+
 void socket_notify_sender(const SocketReceiverInterface& socket) {
     // TODO: Store noc encoding in struct?
     auto upstream_bytes_acked_noc_addr =
