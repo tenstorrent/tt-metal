@@ -44,7 +44,7 @@ void MAIN {
         cb_wait_front(cb_in1, 1);
         // Add the tiles from the input circular buffers and write the result to the destination register
         add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);
-        // Wait for results in the registers are avaliable
+        // Wait for results in the registers are available
         tile_regs_commit();
         tile_regs_wait();
         // Make sure there is space in the output circular buffer
