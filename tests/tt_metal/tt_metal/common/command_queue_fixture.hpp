@@ -377,6 +377,8 @@ protected:
 
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
 
+class UnitMeshCQMultiDeviceProgramFixture : public UnitMeshCQMultiDeviceFixture {};
+
 class UnitMeshCQMultiDeviceBufferFixture : public UnitMeshCQMultiDeviceFixture {};
 
 class DISABLED_CQMultiDeviceOnFabricFixture
