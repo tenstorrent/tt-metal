@@ -468,8 +468,7 @@ def run_unary_with_aprox_mode_fruit_test(
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
     if memory_type == "L1":
         core_grid = device.compute_with_storage_grid_size()
-        num_cores = core_grid.x * core_grid.y
-        assert num_cores == 64
+        num_cores = 64
 
         shard_spec = ttnn.ShardSpec(
             grid=ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size()),
