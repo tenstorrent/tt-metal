@@ -16,18 +16,10 @@
 namespace ttnn::operations::experimental::ccl {
 
 bool use_composite_reduce_scatter(
-    const ttnn::Tensor& input_tensor,
-    const int32_t dim,
-    std::optional<uint32_t> cluster_axis,
-    const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
-
-    // Composite only supported when barrier_semaphore is provided
-    if (!barrier_semaphore.has_value()) {
-        return false;
-    }
 
     // Composite currently only valid for scattering on dim 3
     int32_t rank = input_tensor.logical_shape().rank();
@@ -70,8 +62,6 @@ bool use_composite_reduce_scatter(
 ttnn::Tensor composite_reduce_scatter(
     ttnn::Tensor input_tensor,
     const int32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -135,16 +125,8 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    if (use_composite_reduce_scatter(input_tensor, dim, cluster_axis, barrier_semaphore)) {
-        return composite_reduce_scatter(
-            input_tensor,
-            dim,
-            multi_device_global_semaphore,
-            barrier_semaphore.value(),
-            num_links,
-            memory_config,
-            subdevice_id,
-            cluster_axis);
+    if (use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
+        return composite_reduce_scatter(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
         return ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
             input_tensor,
