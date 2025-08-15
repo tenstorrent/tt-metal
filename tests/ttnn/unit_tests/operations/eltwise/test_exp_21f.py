@@ -37,9 +37,6 @@ def test_exp_arange_masking(device):
     tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_with_ulp(golden, result, 1)
-    # Input  :  tensor([-87.0000,   -87.5000,   -88.0000,   -88.5000,   -89.0000,   -89.5000,   -90.0000], dtype=torch.bfloat16)
-    # Golden :  tensor([1.6439e-38, 1.0010e-38, 6.0611e-39, 3.6734e-39, 2.2041e-39, 1.3775e-39, 8.2652e-40], dtype=torch.bfloat16)
-    # Result :  tensor([1.6439e-38, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00], dtype=torch.bfloat16)
 
 
 @pytest.mark.parametrize(
