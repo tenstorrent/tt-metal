@@ -159,7 +159,7 @@ The number of available tiles is determined by the combination of these two sett
 
 .. warning::
 
-    Setting ``fp32_dest_acc_en = true`` only allocates 32-bit per-element storage space in the ``Dst`` registers; it does not guarantee that computations are performed in 32-bit precision. For example, the matrix engine might still compute in bfloat16 and store the result in a 32-bit container.
+    Setting ``fp32_dest_acc_en = true`` only allocates 32-bit per-element storage space in the ``Dst`` registers; it does not guarantee that computations are performed in 32-bit precision. For example, the matrix engine might still compute in bfloat16 and store the result in a 32-bit container. Also, the matrix engine's maximum accuracy is TF32 (19 active bits), which is less than the full 32-bit precision. On the other hand, the vector engine does support the full 32-bit precision (with some limitations as it does not strictly follow IEEE 754 rounding).
 
     Accessing ``Dst`` register tiles beyond the number available for the current configuration results in undefined behavior.
 
