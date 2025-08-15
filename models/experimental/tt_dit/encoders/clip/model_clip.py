@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from ...utils.substate import substate
 from ...layers.embeddings import TextEmbedding
 from ...models.transformers.transformer_encoders import CLIPTextEncoderTransformer
 
@@ -29,6 +30,19 @@ class CLIPTextModel:
             mesh_device=mesh_device,
             parallel_manager=parallel_manager,
         )
+
+    def load_state_dict(self, state_dict):
+        """Load weights from HuggingFace state dictionary and distribute to components"""
+
+        text_model_state = substate(state_dict, "text_model")
+
+        embeddings_state = substate(text_model_state, "embeddings")
+        if embeddings_state:
+            self.embeddings.load_state_dict(embeddings_state)
+
+        encoder_state = substate(text_model_state, "encoder")
+        if encoder_state:
+            self.encoder.load_state_dict(encoder_state)
 
 
 class hidden_states:

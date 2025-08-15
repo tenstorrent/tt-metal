@@ -58,17 +58,18 @@ class CLIPEncoderLayer:
         else:
             raise ValueError(f"Unsupported activation function: {self.config.hidden_act}")
 
-        self.mlp = ParallelFeedForward(
-            dim=dim,
-            dim_out=dim,
+        self._mlp = ParallelFeedForward(
+            dim=self.config.hidden_size,
+            dim_out=self.config.hidden_size,
             activation_fn=activation_fn,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            ccl_manager=ccl_manager,  # TODO: add ccl_manager
-            init=init,
+            mesh_device=self.mesh_device,
+            mesh_axis=self._parallel_manager.tensor_parallel.mesh_axis if self._parallel_manager else 0,
+            ccl_manager=self._parallel_manager,
         )
 
-        self.mlp.load_state_dict(rename_ff_state(substate(state_dict, "mlp")))
+        # load MLP weights
+        mlp_state = substate(state_dict, "mlp")
+        self._mlp.load_state_dict(mlp_state)
 
     def __call__(
         self,
