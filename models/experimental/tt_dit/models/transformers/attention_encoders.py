@@ -7,18 +7,11 @@ from ...layers.linear import ColParallelLinear, RowParallelLinear
 from ...parallel.config import EncoderParallelManager
 from ...utils.substate import substate
 
-# Ensure that the fabric is initialized in 1-D mode so that collective ops such as
-# all_gather_async can correctly establish routes on a (N, 4) line mesh.
-# When running inside the SD-3.5 test-suite the fixtures take care of this, but
-# standalone tests (like the CLIP encoder unit-test) need this safeguard.
-# ttnn_fabric.set_fabric_config(ttnn_fabric.FabricConfig.FABRIC_1D)
 
 # TODO: merge param and isntance classes
 
 
 class CLIPAttentionParameters:
-    """Parameters for CLIP attention layer"""
-
     def __init__(self, q_proj, k_proj, v_proj, out_proj):
         self.q_proj = q_proj
         self.k_proj = k_proj
@@ -33,7 +26,6 @@ class CLIPAttentionParameters:
         mesh_device=None,
         parallel_manager: EncoderParallelManager = None,
     ):
-        """Create attention parameters"""
         q_proj = ColParallelLinear(
             in_features=config.hidden_size,
             out_features=config.hidden_size,
@@ -73,8 +65,6 @@ class CLIPAttentionParameters:
 
 
 class CLIPMLPParameters:
-    """Parameters for CLIP MLP layer"""
-
     def __init__(self, fc1, fc2):
         self.fc1 = fc1
         self.fc2 = fc2
@@ -87,7 +77,6 @@ class CLIPMLPParameters:
         mesh_device=None,
         parallel_manager: EncoderParallelManager = None,
     ):
-        """Create MLP parameters from torch state dict"""
         fc1 = ColParallelLinear(
             in_features=config.hidden_size,
             out_features=config.intermediate_size,
@@ -112,8 +101,6 @@ class CLIPMLPParameters:
 
 
 class CLIPMLP:
-    """CLIP MLP implementation with parallelism"""
-
     def __init__(self, parameters: CLIPMLPParameters, config, parallel_manager: EncoderParallelManager = None):
         self.config = config
         self.parallel_manager = parallel_manager
@@ -124,16 +111,6 @@ class CLIPMLP:
         self.activation = config.hidden_act
 
     def __call__(self, hidden_states: ttnn.Tensor, parallel_manager: EncoderParallelManager = None) -> ttnn.Tensor:
-        """
-        Forward pass of CLIP MLP
-
-        Args:
-            hidden_states: Input tensor
-            parallel_manager: Parallel manager for distributed operations
-
-        Returns:
-            MLP output tensor
-        """
         hidden_states = self.fc1(hidden_states)
 
         if self.activation == "quick_gelu":
@@ -153,8 +130,6 @@ class CLIPMLP:
 
 
 class CLIPAttention:
-    """CLIP attention implementation with head parallelism"""
-
     def __init__(self, parameters: CLIPAttentionParameters, config, parallel_manager: EncoderParallelManager = None):
         self.config = config
         self.parallel_manager = parallel_manager
@@ -181,17 +156,6 @@ class CLIPAttention:
         causal_attention_mask: ttnn.Tensor = None,
         parallel_manager: EncoderParallelManager = None,
     ) -> ttnn.Tensor:
-        """
-        Forward pass of CLIP attention
-
-        Args:
-            hidden_states: Input tensor of shape (batch_size, seq_length, hidden_size)
-            causal_attention_mask: Optional attention mask
-            parallel_manager: Parallel manager for distributed operations
-
-        Returns:
-            Attention output tensor
-        """
         batch_size, seq_length, _ = hidden_states.shape
 
         # project to Q, K, V (column parallel - each device gets a subset of heads)
