@@ -153,6 +153,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
         /*init_profiler*/ false,
         /*use_max_eth_core_count_on_all_devices*/ true,
         /* initialize_fabric_and_dispatch_fw */ false);
+
     for (auto device_id : device_ids) {
         if (device_id.is_local()) {
             auto* device = opened_local_devices_.at(*device_id);

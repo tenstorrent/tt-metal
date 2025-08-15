@@ -238,6 +238,7 @@ void DevicePool::initialize(
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::MetalContext::instance().initialize(
         dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
+
     if (_inst == nullptr) {
         static DevicePool device_pool{};
         _inst = &device_pool;
@@ -308,6 +309,7 @@ void DevicePool::initialize(
     // This call will be a no-op if fabric is disabled.
     // May be called again below
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
     if (any_remote_devices) {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
@@ -325,6 +327,7 @@ void DevicePool::initialize(
         }
         log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
     }
+
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids_to_open);
