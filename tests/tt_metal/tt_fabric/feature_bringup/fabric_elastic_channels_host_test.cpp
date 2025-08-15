@@ -53,6 +53,12 @@ struct TimingStats {
     uint32_t misc_count = 0;
 };
 
+// Worker timing stats structure matching worker kernel side
+struct WorkerTimingStats {
+    uint64_t total_idle_cycles = 0;
+    uint32_t idle_count = 0;
+};
+
 class N300TestDevice {
 public:
     N300TestDevice() : device_open(false) {
@@ -113,6 +119,7 @@ struct DeviceTestResources {
     uint32_t worker_ack_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_new_chunk_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_src_buffer_address = std::numeric_limits<uint32_t>::max();
+    std::vector<uint32_t> worker_timing_stats_addresses;
 };
 
 
@@ -224,6 +231,13 @@ void set_worker_runtime_args(
         TT_FATAL(device_resources.worker_ack_semaphore_id != std::numeric_limits<uint32_t>::max(), "worker_ack_semaphore_id is not set");
         TT_FATAL(device_resources.worker_new_chunk_semaphore_id != std::numeric_limits<uint32_t>::max(), "worker_new_chunk_semaphore_id is not set");
         TT_FATAL(device_resources.worker_src_buffer_address != std::numeric_limits<uint32_t>::max(), "worker_src_buffer_address is not set");
+        TT_FATAL(
+            i < device_resources.worker_timing_stats_addresses.size(),
+            "worker_timing_stats_addresses not allocated for worker {}",
+            i);
+
+        // Use properly allocated timing stats buffer address for this worker core
+        uint32_t worker_timing_stats_addr = device_resources.worker_timing_stats_addresses[i];
 
         std::vector<uint32_t> rt_args = {
             config.total_messages,
@@ -233,8 +247,8 @@ void set_worker_runtime_args(
             config.message_size,
             device_resources.worker_new_chunk_semaphore_id,
             device_resources.worker_ack_semaphore_id,
-            i
-        };
+            i,
+            worker_timing_stats_addr};
 
         tt_metal::SetRuntimeArgs(device_resources.program, worker_kernels.at(i), worker_core, rt_args);
     }
@@ -264,6 +278,20 @@ TimingStats read_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_
 
     // Copy data to stats structure
     std::memcpy(&stats, timing_data.data(), sizeof(TimingStats));
+
+    return stats;
+}
+
+WorkerTimingStats read_worker_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_t timing_stats_addr) {
+    WorkerTimingStats stats;
+
+    std::vector<uint32_t> timing_data;
+    timing_data.resize(sizeof(WorkerTimingStats) / sizeof(uint32_t));
+    tt_metal::detail::ReadFromDeviceL1(
+        device, core, timing_stats_addr, sizeof(WorkerTimingStats), timing_data, CoreType::WORKER);
+
+    // Copy data to stats structure
+    std::memcpy(&stats, timing_data.data(), sizeof(WorkerTimingStats));
 
     return stats;
 }
@@ -415,6 +443,43 @@ void run_test(
             stats1.misc_count > 0 ? (double)stats1.total_misc_cycles / stats1.misc_count : 0.0);
     }
 
+    // Read worker timing statistics from all worker cores
+    if (config.n_workers > 0) {
+        log_info(tt::LogAlways, "Worker Timing Stats:");
+
+        // Read stats from local device workers
+        for (size_t i = 0; i < config.n_workers; i++) {
+            auto worker_core = test_resources.local_device.worker_cores_vec[i];
+            uint32_t worker_timing_stats_addr = test_resources.local_device.worker_timing_stats_addresses[i];
+            WorkerTimingStats worker_stats =
+                read_worker_timing_stats(test_resources.local_device.device, worker_core, worker_timing_stats_addr);
+
+            log_info(tt::LogAlways, "  Local Device Worker {}: ", i);
+            log_info(tt::LogAlways, "    Idle operations: {}", worker_stats.idle_count);
+            log_info(tt::LogAlways, "    Total idle cycles: {}", worker_stats.total_idle_cycles);
+            log_info(
+                tt::LogTest,
+                "    Average idle cycles: {:.2f}",
+                worker_stats.idle_count > 0 ? (double)worker_stats.total_idle_cycles / worker_stats.idle_count : 0.0);
+        }
+
+        // Read stats from remote device workers
+        for (size_t i = 0; i < config.n_workers; i++) {
+            auto worker_core = test_resources.remote_device.worker_cores_vec[i];
+            uint32_t worker_timing_stats_addr = test_resources.remote_device.worker_timing_stats_addresses[i];
+            WorkerTimingStats worker_stats =
+                read_worker_timing_stats(test_resources.remote_device.device, worker_core, worker_timing_stats_addr);
+
+            log_info(tt::LogAlways, "  Remote Device Worker {}: ", i);
+            log_info(tt::LogAlways, "    Idle operations: {}", worker_stats.idle_count);
+            log_info(tt::LogAlways, "    Total idle cycles: {}", worker_stats.total_idle_cycles);
+            log_info(
+                tt::LogTest,
+                "    Average idle cycles: {:.2f}",
+                worker_stats.idle_count > 0 ? (double)worker_stats.total_idle_cycles / worker_stats.idle_count : 0.0);
+        }
+    }
+
     // Calculate throughput metrics
     uint32_t total_messages_sent = config.total_messages * config.n_workers;
     auto total_cycles = stats0.total_test_cycles;
@@ -466,6 +531,17 @@ TestResources create_test_resources(
             .buffer_type = tt::tt_metal::BufferType::L1
         });
         device_resource.worker_src_buffer_address = worker_src_buffer->address();
+
+        // Allocate timing stats buffers for each worker core
+        device_resource.worker_timing_stats_addresses.reserve(config.n_workers);
+        auto worker_timing_stats_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::InterleavedBufferConfig{
+            .device = device_resource.device,
+            .size = config.n_workers * sizeof(WorkerTimingStats) * 2,
+            .page_size = config.n_workers * sizeof(WorkerTimingStats) * 2,
+            .buffer_type = tt::tt_metal::BufferType::L1});
+        for (uint32_t i = 0; i < config.n_workers; i++) {
+            device_resource.worker_timing_stats_addresses.push_back(worker_timing_stats_buffer->address());
+        }
     }
 
     return resources;

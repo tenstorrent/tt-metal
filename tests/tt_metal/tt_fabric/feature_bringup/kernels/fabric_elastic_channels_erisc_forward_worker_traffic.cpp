@@ -122,13 +122,14 @@ void process_send_side(
     uint32_t& messages_acked,
     uint32_t messages_to_send,
     std::array<size_t, RX_N_PKTS>& receiver_buffer_addresses,
+    // std::BarrelIterator<size_t, RX_N_PKTS>& receiver_buffer_addresses,
     tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS>& sender_view_rx_buf_wr_ptr,
     uint32_t message_size) {
     // Process Ack
 
     auto n_unsent_messages = get_ptr_val(local_src_ch_flow_control_stream_id);
     // Try to send from current chunk
-    if (!eth_txq_is_busy() && n_unsent_messages > 0) {
+    if (unacked_sends < RX_N_PKTS && n_unsent_messages > 0 && !eth_txq_is_busy()) {
         ASSERT(!open_chunks_cb.is_empty()); // should not be possible to receive a message if this is false
         ASSERT(!current_chunk_ptr.is_done()); // should not be possible to receive a message if this is false
 
@@ -138,40 +139,39 @@ void process_send_side(
         auto src_addr = current_chunk_ptr.get_current_ptr();
         reinterpret_cast<volatile uint32_t*>(src_addr)[0] = local_src_ch_ack_stream_id;
         auto dest_addr = receiver_buffer_addresses[sender_view_rx_buf_wr_ptr.get_buffer_index()];
+        // auto dest_addr = receiver_buffer_addresses.get_current_value();
+        // receiver_buffer_addresses.increment();
 
         // Send packet using the buffer's channel ID
         eth_send_bytes_over_channel_payload_only_unsafe_one_packet((uint32_t)src_addr, dest_addr, message_size);
-
         while (eth_txq_is_busy()) {
         }
         notify_remote_receiver_of_new_packet();
 
         current_chunk_ptr.increment();
-
         increment_local_update_ptr_val(local_src_ch_flow_control_stream_id, -1);
-        messages_sent++;
-
         sender_view_rx_buf_wr_ptr.increment();
+
+        messages_sent++;
         unacked_sends++;
     }
 
     auto num_unprocessed_acks = get_sender_num_unprocessed_acks(local_src_ch_ack_stream_id);
     if (num_unprocessed_acks > 0) {
-        current_chunk_ack_index = BufferIndex{static_cast<uint8_t>(current_chunk_ack_index.get() + 1)};
-        bool can_release_chunk = current_chunk_ack_index.get() == CHUNK_N_PKTS;
         uint64_t start_cycles = eth_read_wall_clock();
+        bool can_release_chunk = current_chunk_ack_index.get() == CHUNK_N_PKTS - 1;
         if (can_release_chunk) {  // 22 cycles!??!?! (44 -> 22 if I don't include the branch condition in the timing)
             auto chunk = open_chunks_cb.pop();  // avg 7.3 cycles
             send_pool.return_chunk(chunk);      // 16 cycles
             current_chunk_ack_index = BufferIndex{0};
+        } else {
+            current_chunk_ack_index = BufferIndex{static_cast<uint8_t>(current_chunk_ack_index.get() + 1)};
         }
-        uint64_t end_cycles = eth_read_wall_clock();
         sender_mark_ack_processed(local_src_ch_ack_stream_id);
 
-        // if (can_release_chunk) {
+        uint64_t end_cycles = eth_read_wall_clock();
         timing_stats->release_count++;
         timing_stats->total_release_cycles += (end_cycles - start_cycles);
-        // }
         messages_acked++;
         unacked_sends--;
     }
