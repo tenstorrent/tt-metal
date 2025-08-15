@@ -45,7 +45,7 @@ void kernel_main() {
     constexpr uint32_t output_hw_size = get_compile_time_arg_val(7);
 
     constexpr auto src_args = TensorAccessorArgs<8>();
-    constexpr auto grid_args = TensorAccessorArgs<9>();
+    constexpr auto grid_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     const auto s0 = TensorAccessor(grid_args, grid_addr, grid_stick_nbytes);
     const auto s1 = TensorAccessor(src_args, input_addr, input_stick_nbytes);
