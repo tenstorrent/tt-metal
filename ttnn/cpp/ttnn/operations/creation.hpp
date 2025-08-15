@@ -284,10 +284,10 @@ struct FromBuffer {
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
         TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
-        Layout selected_layout = layout.has_value() ? layout.value() : ttnn::ROW_MAJOR_LAYOUT;
-        MemoryConfig mem_cfg =
-            memory_config.has_value() ? memory_config.value() : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-        TensorSpec spec(shape, TensorLayout(dtype, PageConfig(selected_layout), mem_cfg));
+        TensorSpec spec(
+            shape,
+            TensorLayout(
+                dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
         return Tensor::from_vector<BufferType>(buffer, spec, device);
     }
 };
