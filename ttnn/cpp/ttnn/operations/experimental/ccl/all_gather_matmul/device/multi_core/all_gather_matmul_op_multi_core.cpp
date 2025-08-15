@@ -59,7 +59,7 @@ DatacopyParams setup_datacopy(
         num_edm_buffers_per_channel = user_defined_num_buffers_per_channel.value();
     }
     const auto& device = input_tensor.device();
-    auto const& all_gather_config = ttnn::AllGatherConfig(
+    ttnn::AllGatherConfig(
         input_tensor,
         all_gather_output_tensor,
         dim,

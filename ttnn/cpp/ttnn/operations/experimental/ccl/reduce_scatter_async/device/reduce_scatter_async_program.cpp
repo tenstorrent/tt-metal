@@ -879,7 +879,7 @@ static void generate_partial_reducer_writer_worker_command_streams(
     auto const& topology_config = builder_config.topology_config.get();
     auto const& worker_cores = builder_config.worker_cores.get().partial_reducers[direction];
     auto const& worker_cores_vec = builder_config.worker_cores.get().partial_reducers_vec[direction];
-    size_t num_devices = topology_config.line_size();
+    [[maybe_unused]] size_t num_devices = topology_config.line_size();
     bool is_forward_direction = direction == LineDirection::FORWARD;
 
     log_trace(
