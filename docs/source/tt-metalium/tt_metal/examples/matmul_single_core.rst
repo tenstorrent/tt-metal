@@ -263,7 +263,7 @@ Key operations include:
 *   ``tile_regs_acquire()``: Called before the inner accumulation loop (over ``Kt``). This prepares the FPU's destination/accumulator registers, typically by zeroing them, for the upcoming sum of products.
 *   The inner loop iterates ``Kt`` times, performing the dot-product-like accumulation for a single output tile.
 *   ``matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false)``: Executes the core FPU instruction: multiplies a tile from ``cb_in0`` with a tile from ``cb_in1`` and adds the result to the accumulator.
-*   ``tile_regs_commit()`` and ``tile_regs_wait()``: After the inner loop, these functions ensure that the FPU has finished computation and result avaliable in the destination registers.
+*   ``tile_regs_commit()`` and ``tile_regs_wait()``: After the inner loop, these functions ensure that the FPU has finished computation and result available in the destination registers.
 *   ``cb_pop_front(cb_in0, 1); cb_pop_front(cb_in1, 1);``: After the tiles are used by ``matmul_tiles``, they are marked as consumed by popping them from the input CBs.
 *   ``pack_tile(0, cb_out); cb_push_back(cb_out, 1);``: Once the ``Kt`` loop completes for an output tile, the accumulated result in the FPU registers is packed and pushed to the output circular buffer ``cb_out``.
 
