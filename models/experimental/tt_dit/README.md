@@ -93,7 +93,3 @@ When adding new components:
 2. Add corresponding unit tests
 3. Update model tests if necessary
 4. Ensure parallel processing compatibility
-
-## License
-
-[Insert License Information]
