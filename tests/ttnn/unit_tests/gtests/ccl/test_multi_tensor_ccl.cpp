@@ -148,7 +148,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllReduceAsync) {
         ttnn::ccl::Topology::Linear,
         1,
         SubDeviceId(0));
-
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = all_reduced[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
