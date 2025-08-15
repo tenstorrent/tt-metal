@@ -119,7 +119,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_output_mapping_config =
         CircularBufferConfig(output_mapping_page_size_bytes, {{output_mapping_cb_id, output_mapping_data_format}})
             .set_page_size(output_mapping_cb_id, output_mapping_page_size_bytes);
-    const auto output_mapping_cb_handle = CreateCircularBuffer(program, total_cores, cb_output_mapping_config);
+    CreateCircularBuffer(program, total_cores, cb_output_mapping_config);
 
     // output reduced staging buffer
     const auto output_reduced_data_format = datatype_to_dataformat_converter(output_reduced_tensor.dtype());
@@ -127,7 +127,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_output_reduced_config =
         CircularBufferConfig(output_reduced_page_size_bytes, {{output_reduced_cb_id, output_reduced_data_format}})
             .set_page_size(output_reduced_cb_id, output_reduced_page_size_bytes);
-    const auto output_reduced_cb_handle = CreateCircularBuffer(program, total_cores, cb_output_reduced_config);
+    CreateCircularBuffer(program, total_cores, cb_output_reduced_config);
 
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
