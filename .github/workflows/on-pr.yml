@@ -40,6 +40,7 @@ jobs:
       github: ${{ steps.filter.outputs.github }}
       documentation: ${{ steps.filter.outputs.documentation }}
       performance: ${{ steps.filter.outputs.performance }}
+      quasar: ${{ steps.filter.outputs.quasar }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,6 +56,8 @@ jobs:
                 - 'tt_llk_wormhole_b0/**'
               blackhole:
                 - 'tt_llk_blackhole/**'
+              quasar:
+                - 'tt_llk_quasar/**'
               tests:
                 - 'tests/**'
               github:
@@ -87,6 +90,7 @@ jobs:
             if ("${{ needs.detect-changes.outputs.github }}" === "true") expectedLabels.add("ci");
             if ("${{ needs.detect-changes.outputs.documentation }}" === "true") expectedLabels.add("documentation");
             if ("${{ needs.detect-changes.outputs.performance }}" === "true") expectedLabels.add("performance");
+            if ("${{ needs.detect-changes.outputs.quasar }}" === "true") expectedLabels.add("quasar");
 
             // Get current labels
             const {data: currentLabels} = await github.rest.issues.listLabelsOnIssue({
@@ -96,7 +100,7 @@ jobs:
             });
 
             // Create sets for comparison
-            const managedLabels = new Set(["blackhole", "ci", "documentation",
+            const managedLabels = new Set(["blackhole", "ci", "documentation", "quasar",
                                            "performance", "test-infra", "wormhole"]);
             const currentLabelSet = new Set(currentLabels.map(label => label.name));
 
