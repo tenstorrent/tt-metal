@@ -12,6 +12,11 @@ from models.experimental.swin_s.tt.tt_shifted_window_attention import TtShiftedW
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
 from models.experimental.swin_s.common import load_torch_model, SWIN_S_L1_SMALL_SIZE
+from models.experimental.swin_s.tt.common import (
+    preprocess_linear_bias,
+    preprocess_linear_weight,
+)
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 
 
 def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):
@@ -56,23 +61,38 @@ def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, devic
     return attn_mask_tuple
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(torch_model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(torch_model, ShiftedWindowAttention):
-            parameters["qkv"] = {}
-            parameters["proj"] = {}
-            parameters["qkv"]["weight"] = preprocess_linear_weight(torch_model.qkv.weight, dtype=ttnn.bfloat16)
-            parameters["qkv"]["bias"] = preprocess_linear_bias(torch_model.qkv.bias, dtype=ttnn.bfloat16)
-            parameters["relative_position_bias"] = ttnn.from_torch(
-                torch_model.get_relative_position_bias(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            parameters["proj"]["weight"] = preprocess_linear_weight(torch_model.proj.weight, dtype=ttnn.bfloat16)
-            parameters["proj"]["bias"] = preprocess_linear_bias(torch_model.proj.bias, dtype=ttnn.bfloat16)
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name):
+        return custom_preprocessor(model, name, mesh_mapper)
 
-        return parameters
+    return custom_mesh_preprocessor
 
-    return custom_preprocessor
+
+def custom_preprocessor(torch_model, name, mesh_mapper=None):
+    parameters = {}
+    if isinstance(torch_model, ShiftedWindowAttention):
+        parameters["qkv"] = {}
+        parameters["proj"] = {}
+        parameters["qkv"]["weight"] = preprocess_linear_weight(
+            torch_model.qkv.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["qkv"]["bias"] = preprocess_linear_bias(
+            torch_model.qkv.bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["relative_position_bias"] = ttnn.from_torch(
+            torch_model.get_relative_position_bias(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+        )
+        parameters["proj"]["weight"] = preprocess_linear_weight(
+            torch_model.proj.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["proj"]["bias"] = preprocess_linear_bias(
+            torch_model.proj.bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+
+    return parameters
 
 
 @skip_for_grayskull()
@@ -115,12 +135,14 @@ def test_shifted_window_attention(
     torch_model = load_torch_model(
         torch_model=torch_model, i=i, j=j, module="attention", model_location_generator=model_location_generator
     )
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     torch_input_tensor = torch.randn(batch_size, seq_len, seq_len, dim)
     torch_output = torch_model(torch_input_tensor)
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
+        initialize_model=lambda: torch_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
 
     ttnn_model = TtShiftedWindowAttention(

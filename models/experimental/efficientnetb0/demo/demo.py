@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.efficientnetb0.demo.demo_utils import get_data_loader, get_batch
+from models.demos.utils.common_demo_utils import get_data_loader, get_batch, load_imagenet_dataset
 from models.experimental.efficientnetb0.runner.performant_runner import EfficientNetb0PerformantRunner
 from models.experimental.efficientnetb0.common import load_torch_model, EFFICIENTNETB0_L1_SMALL_SIZE
 
@@ -33,11 +33,13 @@ from models.experimental.efficientnetb0.common import load_torch_model, EFFICIEN
         "tt_model",
     ],
 )
-def test_demo(model_type, batch_size, device, reset_seeds, imagenet_label_dict, model_location_generator):
+def test_demo(
+    model_type, batch_size, device, reset_seeds, imagenet_label_dict, model_location_generator, resolution=224
+):
     logger.info("ImageNet-1k validation Dataset")
-    input_loc = str(model_location_generator("ImageNet_data"))
+    input_loc = load_imagenet_dataset(model_location_generator)
     data_loader = get_data_loader(input_loc, batch_size, 1)
-    input_tensor, labels = get_batch(data_loader)
+    input_tensor, labels = get_batch(data_loader, resolution)
 
     if model_type == "torch_model":
         torch_model = load_torch_model(model_location_generator)
@@ -50,7 +52,7 @@ def test_demo(model_type, batch_size, device, reset_seeds, imagenet_label_dict, 
             ttnn.bfloat16,
             ttnn.bfloat16,
             model_location_generator=model_location_generator,
-            resolution=(224, 224),
+            resolution=(resolution, resolution),
         )
         performant_runner._capture_efficientnetb0_trace_2cqs()
         output = performant_runner.run(torch_input_tensor=input_tensor)
