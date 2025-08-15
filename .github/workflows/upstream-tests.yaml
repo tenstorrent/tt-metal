@@ -196,7 +196,7 @@ jobs:
       - name: Run image
         timeout-minutes: 45
         env:
-          HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+          HF_HOME: /mnt/MLPerf/huggingface
           HF_MODEL: meta-llama/Llama-3.3-70B-Instruct
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro -e HF_HOME -e HF_MODEL ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
@@ -246,7 +246,7 @@ jobs:
       - name: Run image
         timeout-minutes: 30
         env:
-          HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+          HF_HOME: /mnt/MLPerf/huggingface
           HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro -e HF_HOME -e HF_MODEL ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
   test-bh-image:
@@ -271,7 +271,7 @@ jobs:
         timeout-minutes: 30
         env:
           # For different environments, yyz BH VLAN vs. cloud
-          HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+          HF_HOME: /mnt/MLPerf/huggingface
           HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro -e HF_HOME -e HF_MODEL ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image

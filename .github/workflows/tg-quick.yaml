@@ -42,7 +42,7 @@ jobs:
         HF_MODEL: meta-llama/Llama-3.3-70B-Instruct
         TT_METAL_ENABLE_ERISC_IRAM: 1
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+        HF_HOME: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -95,7 +95,7 @@ jobs:
         LOGURU_LEVEL: INFO
         HF_MODEL: meta-llama/Llama3.3-70B-Instruct
         TT_METAL_ENABLE_ERISC_IRAM: 1
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+        HF_HOME: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -150,7 +150,7 @@ jobs:
         HF_MODEL: meta-llama/Llama3.3-70B-Instruct
         TT_METAL_ENABLE_ERISC_IRAM: 1
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+        HF_HOME: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
