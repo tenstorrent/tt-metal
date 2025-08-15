@@ -105,7 +105,7 @@ A Python/NumPy implementation of the same reversal is as follows:
     import numpy as np
 
     def convert_from_tile(arr: np.ndarray) -> np.ndarray:
-        # arr must be a 32x32 matrix in the tile data foramt
+        # arr must be a 32x32 matrix in the tile data format
         if arr.shape != (32, 32):
             raise ValueError("Input must have shape (32, 32)")
         faces = arr.reshape(4, 16, 16)
