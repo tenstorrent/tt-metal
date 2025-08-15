@@ -1,0 +1,281 @@
+asic_info:
+  metal-wh-01:
+    asic_info:
+      - asic_id: 14521741489
+        tray_id: 3
+        nid: 2
+        board_type: N300
+      - asic_id: 14521741477
+        tray_id: 1
+        nid: 2
+        board_type: N300
+      - asic_id: 14521741474
+        tray_id: 0
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774178
+        tray_id: 0
+        nid: 1
+        board_type: N300
+      - asic_id: 10226774193
+        tray_id: 3
+        nid: 1
+        board_type: N300
+      - asic_id: 14521741346
+        tray_id: 2
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774181
+        tray_id: 1
+        nid: 1
+        board_type: N300
+      - asic_id: 10226774050
+        tray_id: 2
+        nid: 1
+        board_type: N300
+  metal-wh-02:
+    asic_info:
+      - asic_id: 14521741424
+        tray_id: 0
+        nid: 2
+        board_type: N300
+      - asic_id: 14521741414
+        tray_id: 2
+        nid: 2
+        board_type: N300
+      - asic_id: 14521741392
+        tray_id: 3
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774096
+        tray_id: 3
+        nid: 1
+        board_type: N300
+      - asic_id: 10226774128
+        tray_id: 0
+        nid: 1
+        board_type: N300
+      - asic_id: 14521741387
+        tray_id: 1
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774118
+        tray_id: 2
+        nid: 1
+        board_type: N300
+      - asic_id: 10226774091
+        tray_id: 1
+        nid: 1
+        board_type: N300
+  metal-wh-05:
+    asic_info:
+      - asic_id: 14521741468
+        tray_id: 0
+        nid: 2
+        board_type: N300
+      - asic_id: 14521741409
+        tray_id: 3
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774172
+        tray_id: 0
+        nid: 1
+        board_type: N300
+      - asic_id: 14521741406
+        tray_id: 1
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774113
+        tray_id: 3
+        nid: 1
+        board_type: N300
+      - asic_id: 14521741393
+        tray_id: 2
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774110
+        tray_id: 1
+        nid: 1
+        board_type: N300
+      - asic_id: 10226774097
+        tray_id: 2
+        nid: 1
+        board_type: N300
+  metal-wh-03:
+    asic_info:
+      - asic_id: 14521741446
+        tray_id: 3
+        nid: 2
+        board_type: N300
+      - asic_id: 14521741379
+        tray_id: 1
+        nid: 2
+        board_type: N300
+      - asic_id: 14521741326
+        tray_id: 2
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774030
+        tray_id: 2
+        nid: 1
+        board_type: N300
+      - asic_id: 10226774083
+        tray_id: 1
+        nid: 1
+        board_type: N300
+      - asic_id: 14521741318
+        tray_id: 0
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774150
+        tray_id: 3
+        nid: 1
+        board_type: N300
+      - asic_id: 10226774022
+        tray_id: 0
+        nid: 1
+        board_type: N300
+  metal-wh-08:
+    asic_info:
+      - asic_id: 14521741513
+        tray_id: 1
+        nid: 2
+        board_type: N300
+      - asic_id: 14521741503
+        tray_id: 2
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774217
+        tray_id: 1
+        nid: 1
+        board_type: N300
+      - asic_id: 14521741401
+        tray_id: 0
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774207
+        tray_id: 2
+        nid: 1
+        board_type: N300
+      - asic_id: 14521741399
+        tray_id: 3
+        nid: 2
+        board_type: N300
+      - asic_id: 10226774105
+        tray_id: 0
+        nid: 1
+        board_type: N300
+      - asic_id: 10226774103
+        tray_id: 3
+        nid: 1
+        board_type: N300
+local_connections:
+  - [{host_name: metal-wh-08, chan_id: 6, tray_id: 3, nid: 1}, {host_name: metal-wh-08, chan_id: 6, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-08, chan_id: 7, tray_id: 3, nid: 1}, {host_name: metal-wh-08, chan_id: 7, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-08, chan_id: 8, tray_id: 3, nid: 1}, {host_name: metal-wh-08, chan_id: 0, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 9, tray_id: 3, nid: 1}, {host_name: metal-wh-08, chan_id: 1, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 14, tray_id: 3, nid: 1}, {host_name: metal-wh-08, chan_id: 14, tray_id: 2, nid: 1}]
+  - [{host_name: metal-wh-08, chan_id: 15, tray_id: 3, nid: 1}, {host_name: metal-wh-08, chan_id: 15, tray_id: 2, nid: 1}]
+  - [{host_name: metal-wh-08, chan_id: 8, tray_id: 0, nid: 1}, {host_name: metal-wh-08, chan_id: 0, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 9, tray_id: 0, nid: 1}, {host_name: metal-wh-08, chan_id: 1, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 14, tray_id: 0, nid: 1}, {host_name: metal-wh-08, chan_id: 14, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-08, chan_id: 15, tray_id: 0, nid: 1}, {host_name: metal-wh-08, chan_id: 15, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-08, chan_id: 0, tray_id: 2, nid: 1}, {host_name: metal-wh-08, chan_id: 0, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-08, chan_id: 1, tray_id: 2, nid: 1}, {host_name: metal-wh-08, chan_id: 1, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-08, chan_id: 8, tray_id: 2, nid: 1}, {host_name: metal-wh-08, chan_id: 0, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 9, tray_id: 2, nid: 1}, {host_name: metal-wh-08, chan_id: 1, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 8, tray_id: 1, nid: 1}, {host_name: metal-wh-08, chan_id: 0, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 9, tray_id: 1, nid: 1}, {host_name: metal-wh-08, chan_id: 1, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 6, tray_id: 3, nid: 2}, {host_name: metal-wh-08, chan_id: 6, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 7, tray_id: 3, nid: 2}, {host_name: metal-wh-08, chan_id: 7, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 6, tray_id: 0, nid: 2}, {host_name: metal-wh-08, chan_id: 6, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-08, chan_id: 7, tray_id: 0, nid: 2}, {host_name: metal-wh-08, chan_id: 7, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 6, tray_id: 0, nid: 1}, {host_name: metal-wh-03, chan_id: 6, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 7, tray_id: 0, nid: 1}, {host_name: metal-wh-03, chan_id: 7, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 8, tray_id: 0, nid: 1}, {host_name: metal-wh-03, chan_id: 0, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 9, tray_id: 0, nid: 1}, {host_name: metal-wh-03, chan_id: 1, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 14, tray_id: 0, nid: 1}, {host_name: metal-wh-03, chan_id: 14, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 15, tray_id: 0, nid: 1}, {host_name: metal-wh-03, chan_id: 15, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 0, tray_id: 2, nid: 1}, {host_name: metal-wh-03, chan_id: 0, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 1, tray_id: 2, nid: 1}, {host_name: metal-wh-03, chan_id: 1, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 8, tray_id: 2, nid: 1}, {host_name: metal-wh-03, chan_id: 0, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 9, tray_id: 2, nid: 1}, {host_name: metal-wh-03, chan_id: 1, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 14, tray_id: 2, nid: 1}, {host_name: metal-wh-03, chan_id: 14, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 15, tray_id: 2, nid: 1}, {host_name: metal-wh-03, chan_id: 15, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 8, tray_id: 1, nid: 1}, {host_name: metal-wh-03, chan_id: 0, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 9, tray_id: 1, nid: 1}, {host_name: metal-wh-03, chan_id: 1, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 8, tray_id: 3, nid: 1}, {host_name: metal-wh-03, chan_id: 0, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 9, tray_id: 3, nid: 1}, {host_name: metal-wh-03, chan_id: 1, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 6, tray_id: 0, nid: 2}, {host_name: metal-wh-03, chan_id: 6, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 7, tray_id: 0, nid: 2}, {host_name: metal-wh-03, chan_id: 7, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 6, tray_id: 2, nid: 2}, {host_name: metal-wh-03, chan_id: 6, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-03, chan_id: 7, tray_id: 2, nid: 2}, {host_name: metal-wh-03, chan_id: 7, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 0, tray_id: 2, nid: 1}, {host_name: metal-wh-05, chan_id: 0, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-05, chan_id: 1, tray_id: 2, nid: 1}, {host_name: metal-wh-05, chan_id: 1, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-05, chan_id: 8, tray_id: 2, nid: 1}, {host_name: metal-wh-05, chan_id: 0, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 9, tray_id: 2, nid: 1}, {host_name: metal-wh-05, chan_id: 1, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 14, tray_id: 2, nid: 1}, {host_name: metal-wh-05, chan_id: 14, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-05, chan_id: 15, tray_id: 2, nid: 1}, {host_name: metal-wh-05, chan_id: 15, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-05, chan_id: 8, tray_id: 1, nid: 1}, {host_name: metal-wh-05, chan_id: 0, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 9, tray_id: 1, nid: 1}, {host_name: metal-wh-05, chan_id: 1, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 14, tray_id: 1, nid: 1}, {host_name: metal-wh-05, chan_id: 14, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-05, chan_id: 15, tray_id: 1, nid: 1}, {host_name: metal-wh-05, chan_id: 15, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-05, chan_id: 6, tray_id: 3, nid: 1}, {host_name: metal-wh-05, chan_id: 6, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-05, chan_id: 7, tray_id: 3, nid: 1}, {host_name: metal-wh-05, chan_id: 7, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-05, chan_id: 8, tray_id: 3, nid: 1}, {host_name: metal-wh-05, chan_id: 0, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 9, tray_id: 3, nid: 1}, {host_name: metal-wh-05, chan_id: 1, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 8, tray_id: 0, nid: 1}, {host_name: metal-wh-05, chan_id: 0, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 9, tray_id: 0, nid: 1}, {host_name: metal-wh-05, chan_id: 1, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 6, tray_id: 2, nid: 2}, {host_name: metal-wh-05, chan_id: 6, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 7, tray_id: 2, nid: 2}, {host_name: metal-wh-05, chan_id: 7, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 6, tray_id: 1, nid: 2}, {host_name: metal-wh-05, chan_id: 6, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-05, chan_id: 7, tray_id: 1, nid: 2}, {host_name: metal-wh-05, chan_id: 7, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 0, tray_id: 1, nid: 1}, {host_name: metal-wh-02, chan_id: 0, tray_id: 2, nid: 1}]
+  - [{host_name: metal-wh-02, chan_id: 1, tray_id: 1, nid: 1}, {host_name: metal-wh-02, chan_id: 1, tray_id: 2, nid: 1}]
+  - [{host_name: metal-wh-02, chan_id: 8, tray_id: 1, nid: 1}, {host_name: metal-wh-02, chan_id: 0, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 9, tray_id: 1, nid: 1}, {host_name: metal-wh-02, chan_id: 1, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 14, tray_id: 1, nid: 1}, {host_name: metal-wh-02, chan_id: 14, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-02, chan_id: 15, tray_id: 1, nid: 1}, {host_name: metal-wh-02, chan_id: 15, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-02, chan_id: 6, tray_id: 3, nid: 1}, {host_name: metal-wh-02, chan_id: 6, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-02, chan_id: 7, tray_id: 3, nid: 1}, {host_name: metal-wh-02, chan_id: 7, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-02, chan_id: 8, tray_id: 3, nid: 1}, {host_name: metal-wh-02, chan_id: 0, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 9, tray_id: 3, nid: 1}, {host_name: metal-wh-02, chan_id: 1, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 14, tray_id: 3, nid: 1}, {host_name: metal-wh-02, chan_id: 14, tray_id: 2, nid: 1}]
+  - [{host_name: metal-wh-02, chan_id: 15, tray_id: 3, nid: 1}, {host_name: metal-wh-02, chan_id: 15, tray_id: 2, nid: 1}]
+  - [{host_name: metal-wh-02, chan_id: 8, tray_id: 2, nid: 1}, {host_name: metal-wh-02, chan_id: 0, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 9, tray_id: 2, nid: 1}, {host_name: metal-wh-02, chan_id: 1, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 8, tray_id: 0, nid: 1}, {host_name: metal-wh-02, chan_id: 0, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 9, tray_id: 0, nid: 1}, {host_name: metal-wh-02, chan_id: 1, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 6, tray_id: 1, nid: 2}, {host_name: metal-wh-02, chan_id: 6, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 7, tray_id: 1, nid: 2}, {host_name: metal-wh-02, chan_id: 7, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 6, tray_id: 3, nid: 2}, {host_name: metal-wh-02, chan_id: 6, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-02, chan_id: 7, tray_id: 3, nid: 2}, {host_name: metal-wh-02, chan_id: 7, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 0, tray_id: 2, nid: 1}, {host_name: metal-wh-01, chan_id: 0, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-01, chan_id: 1, tray_id: 2, nid: 1}, {host_name: metal-wh-01, chan_id: 1, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-01, chan_id: 8, tray_id: 2, nid: 1}, {host_name: metal-wh-01, chan_id: 0, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 9, tray_id: 2, nid: 1}, {host_name: metal-wh-01, chan_id: 1, tray_id: 2, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 14, tray_id: 2, nid: 1}, {host_name: metal-wh-01, chan_id: 14, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-01, chan_id: 15, tray_id: 2, nid: 1}, {host_name: metal-wh-01, chan_id: 15, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-01, chan_id: 6, tray_id: 0, nid: 1}, {host_name: metal-wh-01, chan_id: 6, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-01, chan_id: 7, tray_id: 0, nid: 1}, {host_name: metal-wh-01, chan_id: 7, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-01, chan_id: 8, tray_id: 0, nid: 1}, {host_name: metal-wh-01, chan_id: 0, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 9, tray_id: 0, nid: 1}, {host_name: metal-wh-01, chan_id: 1, tray_id: 0, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 14, tray_id: 0, nid: 1}, {host_name: metal-wh-01, chan_id: 14, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-01, chan_id: 15, tray_id: 0, nid: 1}, {host_name: metal-wh-01, chan_id: 15, tray_id: 1, nid: 1}]
+  - [{host_name: metal-wh-01, chan_id: 8, tray_id: 1, nid: 1}, {host_name: metal-wh-01, chan_id: 0, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 9, tray_id: 1, nid: 1}, {host_name: metal-wh-01, chan_id: 1, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 8, tray_id: 3, nid: 1}, {host_name: metal-wh-01, chan_id: 0, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 9, tray_id: 3, nid: 1}, {host_name: metal-wh-01, chan_id: 1, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 6, tray_id: 2, nid: 2}, {host_name: metal-wh-01, chan_id: 6, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 7, tray_id: 2, nid: 2}, {host_name: metal-wh-01, chan_id: 7, tray_id: 3, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 6, tray_id: 0, nid: 2}, {host_name: metal-wh-01, chan_id: 6, tray_id: 1, nid: 2}]
+  - [{host_name: metal-wh-01, chan_id: 7, tray_id: 0, nid: 2}, {host_name: metal-wh-01, chan_id: 7, tray_id: 1, nid: 2}]
+global_connections:
+  - [{host_name: metal-wh-08, chan_id: 0, tray_id: 3, nid: 1}, {host_name: metal-wh-03, chan_id: 0, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-08, chan_id: 1, tray_id: 3, nid: 1}, {host_name: metal-wh-03, chan_id: 1, tray_id: 0, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 6, tray_id: 2, nid: 1}, {host_name: metal-wh-02, chan_id: 0, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 7, tray_id: 2, nid: 1}, {host_name: metal-wh-02, chan_id: 1, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 6, tray_id: 1, nid: 1}, {host_name: metal-wh-01, chan_id: 0, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 7, tray_id: 1, nid: 1}, {host_name: metal-wh-01, chan_id: 1, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 0, tray_id: 3, nid: 1}, {host_name: metal-wh-05, chan_id: 0, tray_id: 3, nid: 1}]
+  - [{host_name: metal-wh-03, chan_id: 1, tray_id: 3, nid: 1}, {host_name: metal-wh-05, chan_id: 1, tray_id: 3, nid: 1}]
