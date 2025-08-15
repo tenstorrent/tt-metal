@@ -118,6 +118,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     vim \
     libgl1 \
+    ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # IWYU could be useful to developers
