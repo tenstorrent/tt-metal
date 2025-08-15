@@ -238,9 +238,8 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
             YAML::Node src_conn_node;
             YAML::Node dst_conn_node;
             src_conn_node["host_name"] = local_host_name;
-            src_conn_node["chan_id"] = src.chan_id;
             dst_conn_node["host_name"] = local_host_name;
-            dst_conn_node["chan_id"] = dst.chan_id;
+
             for (const auto& asic_desc : descriptor.asic_ids.at(local_host_name)) {
                 if (asic_desc.unique_id == src.board_id) {
                     src_conn_node["tray_id"] = asic_desc.tray_id;
@@ -251,6 +250,8 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
                     dst_conn_node["nid"] = asic_desc.n_id;
                 }
             }
+            src_conn_node["chan_id"] = src.chan_id;
+            dst_conn_node["chan_id"] = dst.chan_id;
             connection_pair.push_back(src_conn_node);
             connection_pair.push_back(dst_conn_node);
             local_eth_connections.push_back(connection_pair);
@@ -286,22 +287,24 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
             YAML::Node src_conn_node;
             YAML::Node dst_conn_node;
             src_conn_node["host_name"] = local_host_name;
-            src_conn_node["chan_id"] = src.chan_id;
             dst_conn_node["host_name"] = dst_desc.first;
-            dst_conn_node["chan_id"] = dst_desc.second.chan_id;
 
             for (const auto& asic_desc : descriptor.asic_ids.at(local_host_name)) {
                 if (asic_desc.unique_id == src.board_id) {
                     src_conn_node["tray_id"] = asic_desc.tray_id;
                     src_conn_node["nid"] = asic_desc.n_id;
+                    break;
                 }
             }
             for (const auto& asic_desc : descriptor.asic_ids.at(dst_desc.first)) {
                 if (asic_desc.unique_id == dst_desc.second.board_id) {
                     dst_conn_node["tray_id"] = asic_desc.tray_id;
                     dst_conn_node["nid"] = asic_desc.n_id;
+                    break;
                 }
             }
+            src_conn_node["chan_id"] = src.chan_id;
+            dst_conn_node["chan_id"] = dst_desc.second.chan_id;
             connection_pair.push_back(src_conn_node);
             connection_pair.push_back(dst_conn_node);
             global_connections.push_back(connection_pair);
