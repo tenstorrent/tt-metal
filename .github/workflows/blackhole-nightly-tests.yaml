@@ -23,10 +23,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: ${{ inputs.version || '22.04' }}
+      version: 22.04
   bh-nightly:
     needs: build-artifact
     uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
