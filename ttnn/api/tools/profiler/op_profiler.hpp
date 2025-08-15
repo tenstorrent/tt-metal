@@ -212,7 +212,7 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     if (tt::DevicePool::instance().is_device_active(device_id)) {
         device = tt::DevicePool::instance().get_active_device(device_id);
     }
-    json kernelSizes;
+    json kernelSizes = json::object();
 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
