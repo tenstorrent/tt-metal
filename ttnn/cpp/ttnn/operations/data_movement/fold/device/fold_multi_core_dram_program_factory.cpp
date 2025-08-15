@@ -32,7 +32,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
-    const uint32_t batch_size = input_tensor.logical_shape()[0];
     const uint32_t input_height = input_tensor.logical_shape()[1];
     const uint32_t input_width = input_tensor.logical_shape()[2];
 
@@ -190,7 +189,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     std::vector<CoreCoord> cores_with_rtargs;
 
     const uint32_t patch_size = stride_h * stride_w;         // Size of each patch
-    const uint32_t output_height = input_height / stride_h;  // Output height
     const uint32_t output_width = input_width / stride_w;    // Output width
     // Configure runtime arguments for each core
     for (auto i = 0; i < cores.size(); i++) {
