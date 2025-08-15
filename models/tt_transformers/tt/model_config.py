@@ -2087,7 +2087,9 @@ class ModelArgs:
             try:
                 # Try to load tokenizer from the original model path
                 # If there is no Processor, it will return Tokenizer (useful for multimodal models)
-                tokenizer = AutoProcessor.from_pretrained(self.TOKENIZER_PATH)
+                tokenizer = AutoProcessor.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
@@ -2126,7 +2128,9 @@ class ModelArgs:
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                     try:
-                        tokenizer = AutoProcessor.from_pretrained(fallback_tokenizer_path)
+                        tokenizer = AutoProcessor.from_pretrained(
+                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        )
                         logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                     except Exception as fallback_e:
                         logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
