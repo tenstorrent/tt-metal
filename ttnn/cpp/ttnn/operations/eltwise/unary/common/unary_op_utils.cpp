@@ -99,7 +99,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
-            if (input_dtype == DataType::INT32) {
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0)};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
@@ -762,7 +762,7 @@ std::string get_compute_kernel_path(
 }
 
 uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype) {
-    if (dtype == DataType::INT32) {
+    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
     }
     return std::bit_cast<uint32_t>(scalar);
