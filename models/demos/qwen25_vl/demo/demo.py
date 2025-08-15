@@ -115,8 +115,8 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",  # real multi-user prompts
+        (  # Batch-32 run (Throughput) - 32 users, small prompts
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -128,8 +128,8 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Batch-2 run with single decoder layer (CI only) - single user repeated batch
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
+        (  # Batch-1 run with single decoder layer in vision model (CI only) - single user repeated batch
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",
             True,  # instruct mode
             4,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -141,8 +141,8 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-32 run with single decoder layer (CI only) - 32 users
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",  # real multi-user prompts
+        (  # Batch-32 run with single decoder layer in vision model (CI only) - 32 users
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -154,8 +154,8 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-32 run with single decoder layer (CI only) - 32 users
-            "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",  # real multi-user prompts
+        (  # Batch-32 run with single decoder layer in vision model (CI only) - 32 users
+            "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -167,8 +167,8 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-32 run with single decoder layer (CI only) - 32 users
-            "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",  # real multi-user prompts
+        (  # Batch-1 run with single decoder layer in vision model (CI only) - one users
+            "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
