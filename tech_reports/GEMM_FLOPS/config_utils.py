@@ -9,22 +9,37 @@ import numpy as np
 
 
 def load_sweep_data(
-    n150_path="tech_reports/GEMM_FLOPS/n150-sweep.csv", p150_path="tech_reports/GEMM_FLOPS/p150-sweep.csv"
+    n150_path="tech_reports/GEMM_FLOPS/n150-sweep.csv",
+    p150_path="tech_reports/GEMM_FLOPS/p150-sweep.csv",
+    combined_path=None,
 ):
-    """Load and standardize sweep data from both devices."""
-    df_n150 = pd.read_csv(n150_path)
-    df_p150 = pd.read_csv(p150_path)
+    """Load and standardize sweep data from both devices or from a combined file."""
 
-    # Standardize column names
-    if "best_tflops" in df_p150.columns:
-        df_p150.rename(columns={"best_tflops": "tflops"}, inplace=True)
+    if combined_path:
+        # Load from combined file (like matmul_2d_host_perf_sweep_all.csv)
+        df = pd.read_csv(combined_path)
 
-    # Add source column
-    df_n150["source"] = "n150"
-    df_p150["source"] = "p150"
+        # Determine source from grid_size column if available
+        if "grid_size" in df.columns:
+            df["source"] = df["grid_size"].apply(lambda x: "n150" if "8x8" in str(x) else "p150")
+        else:
+            # Fallback: no source info available
+            df["source"] = "unknown"
+    else:
+        # Load from separate files
+        df_n150 = pd.read_csv(n150_path)
+        df_p150 = pd.read_csv(p150_path)
 
-    # Combine dataframes
-    df = pd.concat([df_n150, df_p150], ignore_index=True)
+        # Standardize column names
+        if "best_tflops" in df_p150.columns:
+            df_p150.rename(columns={"best_tflops": "tflops"}, inplace=True)
+
+        # Add source column
+        df_n150["source"] = "n150"
+        df_p150["source"] = "p150"
+
+        # Combine dataframes
+        df = pd.concat([df_n150, df_p150], ignore_index=True)
 
     # Create dtype_fidelity column
     df["dtype_short"] = df["dtype"].str.replace("DataType.", "", regex=False)
@@ -36,8 +51,20 @@ def load_sweep_data(
 
     # Add utilization columns - use host-based utilization as device-based has calculation errors
     df["utilization"] = np.nan
-    df.loc[df["source"] == "n150", "utilization"] = df["Host based utilization[%] (vs full available grid 8x8)"]
-    df.loc[df["source"] == "p150", "utilization"] = df["Host based utilization[%] (vs full available grid 13x10)"]
+    n150_util_col = "Host based utilization[%] (vs full available grid 8x8)"
+    p150_util_col = "Host based utilization[%] (vs full available grid 13x10)"
+
+    if n150_util_col in df.columns:
+        df.loc[df["source"] == "n150", "utilization"] = df[n150_util_col]
+    if p150_util_col in df.columns:
+        df.loc[df["source"] == "p150", "utilization"] = df[p150_util_col]
+
+    # Add aspect ratio pattern column if aspect ratio columns exist
+    if all(col in df.columns for col in ["aspect_ratio_m", "aspect_ratio_k", "aspect_ratio_n"]):
+        df["aspect_ratio_pattern"] = df.apply(
+            lambda row: f"{int(row['aspect_ratio_m'])}:{int(row['aspect_ratio_k'])}:{int(row['aspect_ratio_n'])}",
+            axis=1,
+        )
 
     return df
 

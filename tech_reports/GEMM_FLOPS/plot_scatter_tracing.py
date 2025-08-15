@@ -17,14 +17,6 @@ df = load_sweep_data()
 # Generate plots for each source
 for source in ["n150", "p150"]:
     plt.figure(figsize=(16, 12))
-    plt.figtext(
-        0.99,
-        1.02,
-        "Percentages show improvement of traced over non-traced performance",
-        ha="right",
-        va="top",
-        bbox=dict(facecolor="white", alpha=0.8),
-    )
 
     for dtype_fidelity, color in dtype_configs:
         traced_perf = []
@@ -69,7 +61,9 @@ for source in ["n150", "p150"]:
     plt.grid(True, which="both", linestyle="--", alpha=0.7)
     plt.xlabel("Matrix Elements")
     plt.ylabel("TFLOPs")
-    plt.title(f"Traced vs Non-traced Performance ({source.upper()})")
+    plt.title(
+        f"Traced vs Non-traced Performance ({source.upper()})\nTraced execution shows consistent performance improvements"
+    )
     plt.legend(bbox_to_anchor=(0.5, -0.04), loc="upper center", ncol=3)
     plt.tight_layout()
     plt.savefig(f"tech_reports/GEMM_FLOPS/images/trace_comparison_{source}.png", bbox_inches="tight")

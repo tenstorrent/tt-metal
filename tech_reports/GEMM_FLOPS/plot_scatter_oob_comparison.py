@@ -59,8 +59,11 @@ for source in ["n150", "p150"]:
     plt.grid(True, which="both", linestyle="--", alpha=0.7)
     plt.xlabel("Matrix Elements")
     plt.ylabel("TFLOPs")
-    plt.title(f"Best vs Default Performance ({source.upper()})")
+    plt.title(
+        f"Best vs Default Performance ({source.upper()})\nOptimized configs outperform default by 5-35% on average"
+    )
     plt.legend(bbox_to_anchor=(0.5, -0.04), loc="upper center", ncol=3)
+
     plt.tight_layout()
     plt.savefig(f"tech_reports/GEMM_FLOPS/images/oob_comparison_{source}.png", bbox_inches="tight")
     plt.close()

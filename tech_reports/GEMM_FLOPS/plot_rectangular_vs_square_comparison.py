@@ -11,111 +11,20 @@ import numpy as np
 from config_utils import load_sweep_data, get_best_config_with_storage_precedence
 
 
-def get_core_grid_for_source(source):
-    """Get the core grid size (X, Y) for a given source device, matching test_benchmark.py logic"""
-    if source == "n150":
-        return (8, 8)  # X=8, Y=8 (8x8 grid)
-    elif source == "p150":
-        return (13, 10)  # X=13, Y=10 (13x10 grid)
-    else:
-        return (8, 8)  # default
-
-
-def get_base_dimensions_from_scaled(m, k, n, source):
+def get_aspect_ratio_from_saved_columns(row):
     """
-    Extract the true effective dimensions from scaled dimensions using exact test_benchmark.py logic.
-
-    From test_benchmark.py scaling:
-    m = m_base * shape_ratios[0] * grid_size[1]  # M scaled by Y (num cols)
-    k = k_base * shape_ratios[1] * grid_size[0]  # K scaled by X (num rows)
-    n = n_base * shape_ratios[2] * grid_size[0]  # N scaled by X (num rows)
-
-    We need to find the effective (m_base * shape_ratios[0]) : (k_base * shape_ratios[1]) : (n_base * shape_ratios[2]) ratio.
+    Get aspect ratio pattern from saved CSV columns.
+    Now we have direct access to aspect_ratio_m, aspect_ratio_k, aspect_ratio_n!
     """
-    # Get the exact grid size using test_benchmark.py logic
-    grid_x, grid_y = get_core_grid_for_source(source)
-
-    # Unscale by grid to get (base * shape_ratios) values
-    # This matches the exact inverse of test_benchmark.py scaling
-    effective_m = m / grid_y  # m / grid_size[1]
-    effective_k = k / grid_x  # k / grid_size[0]
-    effective_n = n / grid_x  # n / grid_size[0]
-
-    return (effective_m, effective_k, effective_n)
-
-
-def classify_matrix_aspect_ratio(m, k, n, source=None):
-    """
-    Classify matrix by its aspect ratio pattern based on test_benchmark.py shape_ratios.
-
-    The sweep in test_benchmark.py uses these shape_ratios:
-    - (1, 1, 1): Base configuration (1:1:1, 1:2:2, 1:2:4, etc. from base configs)
-    - (1, 2, 4): Makes K 2x and N 4x (1:2:4, 1:4:8, 1:4:16, etc.)
-    - (1, 2, 8): Makes K 2x and N 8x (1:2:8, 1:4:16, 1:4:32, etc.)
-    """
-    # If source is provided, get the effective dimensions (base * shape_ratios)
-    if source:
-        effective_m, effective_k, effective_n = get_base_dimensions_from_scaled(m, k, n, source)
-    else:
-        effective_m, effective_k, effective_n = m, k, n
-
-    # Normalize by the smallest dimension to get the aspect ratio
-    dims = [effective_m, effective_k, effective_n]
-    min_dim = min(dims)
-    normalized = [d / min_dim for d in dims]
-
-    # Round to common ratios to handle floating point precision
-    norm_m = round(normalized[0] * 2) / 2  # Round to nearest 0.5
-    norm_k = round(normalized[1] * 2) / 2
-    norm_n = round(normalized[2] * 2) / 2
-
-    # Convert to integer ratios by finding a good scale
-    scale = 2
-    int_m = int(norm_m * scale)
-    int_k = int(norm_k * scale)
-    int_n = int(norm_n * scale)
-
-    # Simplify by finding GCD
-    from math import gcd
-
-    def gcd_three(a, b, c):
-        return gcd(gcd(a, b), c)
-
-    common_gcd = gcd_three(int_m, int_k, int_n)
-    if common_gcd > 0:
-        int_m //= common_gcd
-        int_k //= common_gcd
-        int_n //= common_gcd
-
-    # Classify based on known patterns from test_benchmark.py
-    ratio_str = f"{int_m}:{int_k}:{int_n}"
-
-    # Map to common expected patterns
-    if int_m == int_k == int_n:
+    try:
+        # Use the saved aspect ratio columns directly
+        m_ratio = int(row["aspect_ratio_m"])
+        k_ratio = int(row["aspect_ratio_k"])
+        n_ratio = int(row["aspect_ratio_n"])
+        return f"{m_ratio}:{k_ratio}:{n_ratio}"
+    except (KeyError, ValueError):
+        # Fallback to "1:1:1" if columns don't exist (for older data)
         return "1:1:1"
-    elif (int_m, int_k, int_n) == (1, 2, 2):
-        return "1:2:2"
-    elif (int_m, int_k, int_n) == (1, 2, 4):
-        return "1:2:4"
-    elif (int_m, int_k, int_n) == (1, 2, 8):
-        return "1:2:8"
-    elif (int_m, int_k, int_n) == (1, 4, 8):
-        return "1:4:8"
-    elif (int_m, int_k, int_n) == (1, 4, 16):
-        return "1:4:16"
-    elif (int_m, int_k, int_n) == (1, 4, 32):
-        return "1:4:32"
-    elif (int_m, int_k, int_n) == (1, 1, 2):
-        return "1:1:2"
-    elif (int_m, int_k, int_n) == (2, 2, 1):
-        return "2:2:1"
-    elif (int_m, int_k, int_n) == (3, 3, 4):
-        return "3:3:4"
-    elif (int_m, int_k, int_n) == (3, 4, 4):
-        return "3:4:4"
-    else:
-        # For any other ratios, use the computed ratio
-        return ratio_str
 
 
 def generate_test_matrices(base_complexity):
@@ -175,12 +84,15 @@ def generate_test_matrices(base_complexity):
 def find_similar_aspect_ratios_in_data(df, source=None):
     """
     Find matrices in the actual data that match different aspect ratio patterns.
+    Now using saved aspect ratio columns - much simpler!
     """
     df = df.copy()
     df["complexity"] = df["m"] * df["k"] * df["n"]
-    df["aspect_ratio_pattern"] = df.apply(
-        lambda row: classify_matrix_aspect_ratio(row["m"], row["k"], row["n"], source), axis=1
-    )
+
+    # Use the aspect_ratio_pattern column if it exists (from config_utils)
+    # Otherwise create it from the saved columns
+    if "aspect_ratio_pattern" not in df.columns:
+        df["aspect_ratio_pattern"] = df.apply(get_aspect_ratio_from_saved_columns, axis=1)
 
     # Group by aspect ratio patterns
     aspect_groups = {}
@@ -190,6 +102,72 @@ def find_similar_aspect_ratios_in_data(df, source=None):
             aspect_groups[pattern] = pattern_data
 
     return aspect_groups
+
+
+def get_focused_performance_for_pattern(pattern, source_df, source):
+    """
+    Get performance for a specific pattern using the same focused approach as table analysis.
+    Returns performance from the smallest bucket containing all three patterns.
+    """
+    # Find aspect ratio groups
+    aspect_groups = find_similar_aspect_ratios_in_data(source_df, source)
+
+    # Focus on smaller matrices (bottom 60% of complexity range)
+    all_complexities = []
+    for pattern_data in aspect_groups.values():
+        all_complexities.extend(pattern_data["matrix_elements"].tolist())
+
+    sorted_complexities = sorted(set(all_complexities))
+
+    if len(sorted_complexities) > 5:
+        max_complexity_for_focus = sorted_complexities[int(len(sorted_complexities) * 0.6)]
+        small_complexities = [c for c in sorted_complexities if c <= max_complexity_for_focus]
+    else:
+        small_complexities = sorted_complexities
+
+    # Create complexity buckets
+    complexity_buckets = []
+    if small_complexities:
+        current_bucket = [small_complexities[0]]
+        bucket_min = small_complexities[0]
+
+        for complexity in small_complexities[1:]:
+            if complexity <= bucket_min * 3:
+                current_bucket.append(complexity)
+            else:
+                if len(current_bucket) >= 2:
+                    complexity_buckets.append(current_bucket)
+                current_bucket = [complexity]
+                bucket_min = complexity
+
+        if len(current_bucket) >= 2:
+            complexity_buckets.append(current_bucket)
+
+    # Find smallest bucket with all three patterns
+    target_patterns = {"1:1:1", "1:2:4", "1:2:8"}
+    smallest_complete_bucket = None
+
+    for complexity_bucket in complexity_buckets:
+        bucket_patterns = set()
+        for p, pattern_data in aspect_groups.items():
+            bucket_group = pattern_data[pattern_data["matrix_elements"].isin(complexity_bucket)]
+            if not bucket_group.empty:
+                bucket_patterns.add(p)
+
+        if target_patterns.issubset(bucket_patterns):
+            smallest_complete_bucket = complexity_bucket
+            break
+
+    # Get performance for the requested pattern from the focused bucket
+    if smallest_complete_bucket is not None and pattern in aspect_groups:
+        pattern_data = aspect_groups[pattern]
+        bucket_group = pattern_data[pattern_data["matrix_elements"].isin(smallest_complete_bucket)]
+        if not bucket_group.empty:
+            best_config = get_best_config_with_storage_precedence(bucket_group)
+            if not best_config.empty:
+                return best_config["tflops"]
+
+    return 0  # Return 0 if no focused data available
 
 
 def plot_aspect_ratio_comparison(source):
@@ -235,7 +213,7 @@ def plot_aspect_ratio_comparison(source):
     # Create single larger plot
     fig, ax = plt.subplots(1, 1, figsize=(16, 8))
     fig.suptitle(
-        f"Matrix Aspect Ratio Performance Comparison ({source.upper()})\nM:K:N Ratios Ordered from Most Square → Most Rectangular",
+        f"Matrix Aspect Ratio Performance Comparison ({source.upper()})\nM:K:N Ratios: Square (1:1:1) → Moderately Rectangular (1:2:4) → Very Rectangular (1:2:8)",
         fontsize=16,
     )
 
@@ -260,23 +238,16 @@ def plot_aspect_ratio_comparison(source):
 
         for pattern_idx, pattern in enumerate(sorted_patterns):
             # Find data for this pattern and dtype
-            pattern_data = dtype_df[
-                dtype_df.apply(
-                    lambda row: classify_matrix_aspect_ratio(row["m"], row["k"], row["n"], source) == pattern, axis=1
-                )
-            ]
+            if "aspect_ratio_pattern" in dtype_df.columns:
+                pattern_data = dtype_df[dtype_df["aspect_ratio_pattern"] == pattern]
+            else:
+                pattern_data = dtype_df[dtype_df.apply(get_aspect_ratio_from_saved_columns, axis=1) == pattern]
 
             if pattern_data.empty:
                 performance = 0
             else:
-                # Get best performance for this pattern
-                best_perf = 0
-                for matrix_elements in pattern_data["matrix_elements"].unique():
-                    group = pattern_data[pattern_data["matrix_elements"] == matrix_elements]
-                    best_config = get_best_config_with_storage_precedence(group)
-                    if not best_config.empty and best_config["tflops"] > best_perf:
-                        best_perf = best_config["tflops"]
-                performance = best_perf
+                # Use the same focused approach as table analysis - smallest bucket with all patterns
+                performance = get_focused_performance_for_pattern(pattern, dtype_df, source)
 
             # Calculate position
             x_pos = pattern_idx * (group_width + 0.1) + dtype_idx * bar_width
@@ -299,19 +270,23 @@ def plot_aspect_ratio_comparison(source):
                     fontweight="bold",
                 )
 
-    # Add progressive squareness labels (Most Square → Most Rectangular)
+    # Add specific aspect ratio labels
     for pattern_idx, pattern in enumerate(sorted_patterns):
-        squareness = calculate_squareness(pattern)
-        if squareness <= 8.5:
-            sq_label = "Most Square"
-        elif squareness <= 11.0:
-            sq_label = "→ More Rectangular"
-        elif squareness <= 13.0:
-            sq_label = "→ More Rectangular"
-        elif squareness <= 17.0:
-            sq_label = "→ Very Rectangular"
+        if pattern == "1:1:1":
+            sq_label = "Square Matrices"
+        elif pattern == "1:2:4":
+            sq_label = "Moderately Rectangular"
+        elif pattern == "1:2:8":
+            sq_label = "Very Rectangular"
         else:
-            sq_label = "Most Rectangular"
+            # Fallback for other patterns
+            squareness = calculate_squareness(pattern)
+            if squareness <= 2.0:
+                sq_label = "Square-ish"
+            elif squareness <= 5.0:
+                sq_label = "Moderately Rectangular"
+            else:
+                sq_label = "Very Rectangular"
 
         group_center = pattern_idx * (group_width + 0.1) + group_width / 2 - bar_width / 2
         max_perf = max(all_performances) if all_performances else 100
@@ -348,12 +323,12 @@ def plot_aspect_ratio_comparison(source):
 
 
 def create_detailed_aspect_ratio_table(source):
-    """Create a detailed table showing aspect ratio performance"""
+    """Create a detailed table showing aspect ratio performance with fair complexity comparison"""
 
     df = load_sweep_data()
     source_df = df[df["source"] == source]
 
-    print(f"\n=== {source.upper()} Aspect Ratio Performance Analysis ===")
+    print(f"\n=== {source.upper()} Aspect Ratio Performance Analysis (Prioritizing Smaller Matrices) ===")
 
     dtype_configs = ["BFLOAT4_B_LoFi", "BFLOAT8_B_HiFi2", "BFLOAT16_HiFi4"]
 
@@ -372,12 +347,63 @@ def create_detailed_aspect_ratio_table(source):
             print("No aspect ratio patterns found")
             continue
 
-        print(
-            f"{'Aspect Ratio':<15} {'Squareness':<12} {'Best Matrix Shape':<25} {'Best TFLOPs':<15} {'Complexity':<15} {'Relative Perf':<15}"
-        )
-        print("-" * 105)
+        print(f"{'Complexity Range':<25} {'Aspect Ratios Compared':<50} {'Performance Impact':<20}")
+        print("-" * 95)
 
-        # Get performance for each pattern
+        # Focus on smaller matrices first - they show clearer aspect ratio effects
+        all_complexities = []
+        for pattern_data in aspect_groups.values():
+            all_complexities.extend(pattern_data["matrix_elements"].tolist())
+
+        sorted_complexities = sorted(set(all_complexities))
+
+        # Filter to focus on smaller matrices (bottom 60% of complexity range)
+        if len(sorted_complexities) > 5:
+            max_complexity_for_focus = sorted_complexities[int(len(sorted_complexities) * 0.6)]
+            small_complexities = [c for c in sorted_complexities if c <= max_complexity_for_focus]
+            print(
+                f"Focusing on smaller matrices: {len(small_complexities)} complexity levels (up to {max_complexity_for_focus:.1e})"
+            )
+        else:
+            small_complexities = sorted_complexities
+            print(
+                f"Using all available complexity levels: {len(small_complexities)} (up to {max(small_complexities):.1e})"
+            )
+
+        # Create logarithmic buckets - group complexities within 3x of each other for smaller matrices
+        import math
+
+        complexity_buckets = []
+
+        if small_complexities:
+            current_bucket = [small_complexities[0]]
+            bucket_min = small_complexities[0]
+
+            for complexity in small_complexities[1:]:
+                # If complexity is within 3x of bucket minimum, add to current bucket
+                if complexity <= bucket_min * 3:  # Tighter range for small matrices
+                    current_bucket.append(complexity)
+                else:
+                    # Start new bucket
+                    if len(current_bucket) >= 2:  # Only keep buckets with multiple complexities
+                        complexity_buckets.append(current_bucket)
+                    current_bucket = [complexity]
+                    bucket_min = complexity
+
+            # Add the last bucket
+            if len(current_bucket) >= 2:
+                complexity_buckets.append(current_bucket)
+
+        # Sort by bucket size (data richness) and prioritize smaller matrices
+        def bucket_priority(bucket):
+            avg_complexity = sum(bucket) / len(bucket)
+            data_richness = len(bucket)
+            # Lower complexity = higher priority, more data = higher priority
+            return (-avg_complexity, data_richness)
+
+        complexity_buckets.sort(key=bucket_priority, reverse=True)
+        target_buckets = complexity_buckets[:4]  # Top 4 buckets prioritizing smaller matrices
+
         def calculate_squareness(pattern_str):
             """Calculate how 'rectangular' a pattern is. Lower = more square."""
             try:
@@ -389,36 +415,58 @@ def create_detailed_aspect_ratio_table(source):
             except:
                 return 999
 
-        pattern_results = []
-        for pattern, pattern_data in aspect_groups.items():
-            best_perf = 0
-            best_shape = None
-            best_complexity = 0
+        # Find the smallest bucket that has all three aspect ratio patterns for fair comparison
+        target_patterns = {"1:1:1", "1:2:4", "1:2:8"}
+        smallest_complete_bucket = None
 
-            for matrix_elements in pattern_data["matrix_elements"].unique():
-                group = pattern_data[pattern_data["matrix_elements"] == matrix_elements]
-                best_config = get_best_config_with_storage_precedence(group)
-                if not best_config.empty and best_config["tflops"] > best_perf:
-                    best_perf = best_config["tflops"]
-                    best_shape = f"{best_config['m']}x{best_config['k']}x{best_config['n']}"
-                    best_complexity = best_config["m"] * best_config["k"] * best_config["n"]
+        for complexity_bucket in complexity_buckets:
+            # Check if this bucket has all three patterns
+            bucket_patterns = set()
+            for pattern, pattern_data in aspect_groups.items():
+                bucket_group = pattern_data[pattern_data["matrix_elements"].isin(complexity_bucket)]
+                if not bucket_group.empty:
+                    bucket_patterns.add(pattern)
 
-            if best_perf > 0:
-                squareness = calculate_squareness(pattern)
-                pattern_results.append((pattern, squareness, best_shape, best_perf, best_complexity))
+            # If this bucket has all three patterns, it's our target
+            if target_patterns.issubset(bucket_patterns):
+                smallest_complete_bucket = complexity_bucket
+                break
 
-        # Sort by squareness (most square first), then by performance
-        pattern_results.sort(key=lambda x: (x[1], -x[3]))
+        if smallest_complete_bucket is not None:
+            min_complexity = min(smallest_complete_bucket)
+            max_complexity = max(smallest_complete_bucket)
+            range_ratio = max_complexity / min_complexity
+            print(f"\nSmallest complete bucket: {min_complexity:.1e} - {max_complexity:.1e} ({range_ratio:.1f}x range)")
+            print("(Contains all three aspect ratios: 1:1:1, 1:2:4, 1:2:8)")
 
-        # Print results with relative performance
-        if pattern_results:
-            best_overall_perf = max(r[3] for r in pattern_results)  # Get max performance
-            for pattern, squareness, shape, perf, complexity in pattern_results:
-                relative_perf = perf / best_overall_perf
-                squareness_label = f"{squareness:.1f}x" if squareness < 999 else "N/A"
-                print(
-                    f"{pattern:<15} {squareness_label:<12} {shape:<25} {perf:<15.2f} {complexity:<15.2e} {relative_perf:<15.3f}"
-                )
+            # Get best performance for each aspect ratio within this complexity range
+            bucket_results = []
+            for pattern in ["1:1:1", "1:2:4", "1:2:8"]:  # Force specific order
+                if pattern in aspect_groups:
+                    pattern_data = aspect_groups[pattern]
+                    bucket_group = pattern_data[pattern_data["matrix_elements"].isin(smallest_complete_bucket)]
+                    if not bucket_group.empty:
+                        best_config = get_best_config_with_storage_precedence(bucket_group)
+                        if not best_config.empty:
+                            squareness = calculate_squareness(pattern)
+                            shape = f"{best_config['m']}x{best_config['k']}x{best_config['n']}"
+                            complexity = best_config["matrix_elements"]
+                            bucket_results.append((pattern, squareness, best_config["tflops"], shape, complexity))
+
+            if len(bucket_results) == 3:  # All three patterns
+                # Square is always first (1:1:1)
+                baseline_perf = bucket_results[0][2]  # Square performance
+
+                print(f"  {'Pattern':<12} {'Shape':<25} {'TFLOPs':<10} {'Complexity':<12} {'vs Square':<12}")
+                for pattern, squareness, perf, shape, complexity in bucket_results:
+                    relative_perf = (perf / baseline_perf - 1) * 100  # Percentage change
+                    print(f"  {pattern:<12} {shape:<25} {perf:<10.2f} {complexity:<12.1e} {relative_perf:+6.1f}%")
+            else:
+                print(f"  Could not find complete data for all three patterns")
+        else:
+            print(f"  No bucket found with all three aspect ratio patterns")
+
+        print(f"\nSummary: Focused on smallest matrices with complete aspect ratio comparison")
 
 
 if __name__ == "__main__":
