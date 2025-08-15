@@ -234,9 +234,9 @@ jobs:
     secrets: inherit
     if: github.ref != 'refs/heads/main'
     with:
-      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
       is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   release-docs:
     needs: [
       build-artifact,
