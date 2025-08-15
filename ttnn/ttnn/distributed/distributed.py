@@ -249,8 +249,7 @@ def create_system_mesh_table():
 
 
 def get_num_devices() -> List[int]:
-    system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
-    return system_mesh_desc.shape().mesh_size()
+    return ttnn._ttnn.device.GetNumAvailableDevices()
 
 
 def get_num_pcie_devices() -> int:

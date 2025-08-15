@@ -420,9 +420,6 @@ void MetalContext::set_fabric_config(
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
-    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED && fabric_config != this->fabric_config_) {
-        control_plane_.reset();
-    }
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
