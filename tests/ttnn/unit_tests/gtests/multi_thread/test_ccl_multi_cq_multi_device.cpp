@@ -62,9 +62,6 @@ protected:
 };
 
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
-    const size_t dim = 0;
-    const size_t num_links = 1;
-    constexpr auto layout = Layout::TILE;
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -222,9 +219,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 }
 
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
-    const size_t dim = 0;
-    const size_t num_links = 1;
-    constexpr auto layout = Layout::TILE;
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -348,7 +342,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, promise]() mutable {
                 auto& single_mesh = single_meshes[dev_idx];
-                // Wait for the CCL operation to finish before enqueueing the dummy ops, because ownership of the workers needs to be transferred between CQs.
+                // Wait for the CCL operation to finish before enqueueing the dummy ops, because ownership of the
+                // workers needs to be transferred between CQs.
                 ttnn::queue_synchronize(single_mesh->mesh_command_queue(ccl_cq_id));
 
                 auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
@@ -420,9 +415,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 }
 
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
-    const size_t dim = 0;
-    const size_t num_links = 1;
-    constexpr auto layout = Layout::TILE;
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -472,8 +464,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
 
-    uint8_t op_ccl_cq_id = 0;   // device operation, ccl command queue id
-    uint8_t mem_cq_id = 1;   // read/write command queue id
+    uint8_t op_ccl_cq_id = 0;  // device operation, ccl command queue id
+    uint8_t mem_cq_id = 1;     // read/write command queue id
 
     boost::asio::thread_pool pool(devices.size());
 
@@ -497,7 +489,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 }
 
                 auto& single_mesh = single_meshes[dev_idx];
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
+                auto input_buffer =
+                    tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, 0)}};
 
                 // TODO (#25340): Switch to use create_device_tensor? (TensorTopology logic should mirror
@@ -553,7 +546,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 for (int j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
-                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
+                auto dummy_buffer =
+                    tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
                 auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
                 Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
                 ttnn::write_buffer(ttnn::QueueId(op_ccl_cq_id), dummy_tensor, {dummy_data});

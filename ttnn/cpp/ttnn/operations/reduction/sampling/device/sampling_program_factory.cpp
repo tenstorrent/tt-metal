@@ -38,8 +38,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
-    uint32_t k_tile_size = tile_size(k_cb_data_format);
-    uint32_t p_tile_size = tile_size(p_cb_data_format);
     uint32_t temp_tile_size = tile_size(temp_cb_data_format);
 
     auto input_values_buffer = input_values_tensor.buffer();
@@ -202,20 +200,20 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     tt::tt_metal::CircularBufferConfig k_cb_config =
         tt::tt_metal::CircularBufferConfig(TILE_WIDTH * uint32_bytes, {{k_cb_index, k_cb_data_format}})
             .set_page_size(k_cb_index, TILE_WIDTH * uint32_bytes);
-    auto cb_k_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, k_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_grid, k_cb_config);
 
     uint32_t p_cb_index = tt::CBIndex::c_15;
     tt::tt_metal::CircularBufferConfig p_cb_config =
         tt::tt_metal::CircularBufferConfig(TILE_WIDTH * bf16_bytes, {{p_cb_index, p_cb_data_format}})
             .set_page_size(p_cb_index, TILE_WIDTH * bf16_bytes);
-    auto cb_p_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, p_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_grid, p_cb_config);
 
     // Add temp circular buffer
     uint32_t temp_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig temp_cb_config =
         tt::tt_metal::CircularBufferConfig(temp_tile_size, {{temp_cb_index, temp_cb_data_format}})
             .set_page_size(temp_cb_index, temp_tile_size);
-    auto cb_temp_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, temp_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_grid, temp_cb_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_values_cb_index,

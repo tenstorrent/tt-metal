@@ -53,7 +53,7 @@ xt::xarray<float> calculate_cross_entropy_loss(const xt::xarray<float>& input, c
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
     using namespace ttml;
 
-    const uint32_t N = 1, C = 1, H = 1, W = 8;
+    const uint32_t N = 1, H = 1;
 
     xt::xarray<float> input_tensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
@@ -85,7 +85,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Negetive_Values) {
     using namespace ttml;
 
-    const uint32_t N = 1, C = 1, H = 2, W = 4;
+    const uint32_t N = 1, H = 2;
 
     xt::xarray<float> input_tensor = {{{{-100.F, -101.F, -102.F, -103.F}, {-5.01F, -5.02F, -0.3F, -7.F}}}};
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());

@@ -63,7 +63,6 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
         // Reads on CQ 1
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             readback_vecs.push_back({});
-            auto shard = buf->get_device_buffer(coord);
             ReadShard(mesh_device_->mesh_command_queue(1), readback_vecs.back(), buf, coord);
         }
 
@@ -238,7 +237,6 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         for (const auto& coord : devices_0) {
             readback_vecs.push_back({});
-            auto shard = buf->get_device_buffer(coord);
             ReadShard(mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, coord);
         }
 
@@ -248,7 +246,6 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         for (const auto& coord : devices_1) {
             readback_vecs.push_back({});
-            auto shard = buf->get_device_buffer(coord);
             ReadShard(mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, coord);
         }
         for (auto& vec : readback_vecs) {

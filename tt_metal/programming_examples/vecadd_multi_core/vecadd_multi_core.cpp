@@ -113,7 +113,6 @@ int main(int argc, char** argv) {
 
     const uint32_t tile_size = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     std::map<CoreCoord, uint32_t> core_tile_idx;
-    const uint32_t core_to_print = 4;
 
     // Create 3 buffers on DRAM. These will hold the input and output data. A
     // and B are the input buffers, C is the output buffer.
@@ -133,7 +132,6 @@ int main(int argc, char** argv) {
     auto core_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = core_grid.x;
     uint32_t num_cores_y = core_grid.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
     // CoreRnge uses inclusive start and exclusive end coordinates so range is [0, 0] to [num_cores_x - 1, num_cores_y -
     // 1]. instead of the more intuitive [0, num_cores_x) and [0, num_cores_y).
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});

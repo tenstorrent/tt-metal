@@ -21,7 +21,6 @@ bool use_composite_reduce_scatter(
     std::optional<uint32_t> cluster_axis,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
     // Composite only supported when barrier_semaphore is provided

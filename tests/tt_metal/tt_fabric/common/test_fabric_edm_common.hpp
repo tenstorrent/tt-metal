@@ -324,7 +324,6 @@ static Correctness run_output_check(
     const std::vector<uint32_t>& all_zeros,
     const std::vector<uint32_t>& inputs,
     std::shared_ptr<Buffer>& output_buffer) {
-    constexpr bool debug_mode = true;
     std::vector<uint32_t> readback_data_vec(all_zeros.size(), 0);  // init to 0 data for easier debug
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
@@ -491,11 +490,11 @@ static void generate_fabric_test_kernels(
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_input_buffer_base_addr};
 
     log_trace(tt::LogTest, "\tSenderReader CT Args");
-    for (const auto& arg : sender_worker_reader_compile_args) {
+    for ([[maybe_unused]] const auto& arg : sender_worker_reader_compile_args) {
         log_trace(tt::LogTest, "\t\t{}", arg);
     }
     log_trace(tt::LogTest, "\tSenderReader RT Args");
-    for (const auto& arg : sender_worker_reader_runtime_args) {
+    for ([[maybe_unused]] const auto& arg : sender_worker_reader_runtime_args) {
         log_trace(tt::LogTest, "\t\t{}", arg);
     }
 
@@ -525,11 +524,11 @@ static void generate_fabric_test_kernels(
 
     uint32_t src0_cb_index = CBIndex::c_0;
     log_trace(tt::LogTest, "\tSenderWriter CT Args");
-    for (const auto& arg : sender_worker_writer_compile_args) {
+    for ([[maybe_unused]] const auto& arg : sender_worker_writer_compile_args) {
         log_trace(tt::LogTest, "\t\t{}", arg);
     }
     log_trace(tt::LogTest, "\tSenderWriter RT Args");
-    for (const auto& arg : sender_worker_writer_runtime_args) {
+    for ([[maybe_unused]] const auto& arg : sender_worker_writer_runtime_args) {
         log_trace(tt::LogTest, "\t\t{}", arg);
     }
 
@@ -540,7 +539,7 @@ static void generate_fabric_test_kernels(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
-    CBHandle sender_workers_cb = CreateCircularBuffer(sender_program, worker_core, cb_src0_config);
+    CreateCircularBuffer(sender_program, worker_core, cb_src0_config);
     auto sender_worker_reader_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_erisc_datamover_sender_worker_reader.cpp",
@@ -876,7 +875,6 @@ static int TestLoopbackEntrypoint(
     std::vector<Program> programs(2);
 
     IDevice* sender_device = device_0;
-    IDevice* receiver_device = device_1;
 
     log_info(tt::LogTest, "{} programs ", programs.size());
     bool success = false;
@@ -1443,7 +1441,6 @@ void Run1DFabricPacketSendTest(
     bool use_t3k = num_devices == 8;
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
-    bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
     if (num_devices < 4) {
         log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
@@ -1474,10 +1471,6 @@ void Run1DFabricPacketSendTest(
         case FabricTestMode::FullRing:
         case FabricTestMode::RingAsLinear: topology = tt::tt_fabric::Topology::Ring; break;
     }
-
-    const auto edm_buffer_config = get_edm_buffer_config_helper(fabric_mode, line_size);
-
-    auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
     // static constexpr size_t source_l1_buffer_address = 1000000;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
@@ -1606,7 +1599,7 @@ void Run1DFabricPacketSendTest(
             tt_metal::CircularBufferConfig cb_src1_config =
                 tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                     .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
-            CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+            CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
@@ -1629,9 +1622,6 @@ void Run1DFabricPacketSendTest(
                     .noc = tt_metal::NOC::NOC_0,
                     .compile_args = worker_ct_args});
             worker_kernel_ids.push_back(worker_kernel_id);
-            auto device_fabric_node_id =
-                tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-                    device->id());
             auto build_connection_args =
                 [device, &program](
                     CoreCoord& worker_core,
@@ -1670,8 +1660,6 @@ void Run1DFabricPacketSendTest(
 
             for (size_t l = 0; l < params.num_links; l++) {
                 auto worker_core = worker_cores_vec[l];
-                const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord[l]).x;
-                const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord[l]).y;
 
                 // RT ARGS
                 bool disable_sends_for_worker =
@@ -1869,7 +1857,6 @@ static void validate_fabric_packet_send_test_params(const FullMeshTestParams& fu
 static void validate_fabric_packet_send_test_params(
     const std::variant<WriteThroughputStabilityTestWithPersistentFabricParams, FullMeshTestParams>& params) {
     if (std::holds_alternative<WriteThroughputStabilityTestWithPersistentFabricParams>(params)) {
-        const auto& write_throughput_params = std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(params);
         TT_THROW("Not commonized yet");
     } else {
         const auto& full_mesh_params = std::get<FullMeshTestParams>(params);
@@ -2206,7 +2193,6 @@ void Run1DFullMeshFabricPacketSendTest(
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval) {
     log_info(tt::LogTest, "Running 1D Full Mesh Fabric Packet Send Test");
 
-    static constexpr bool enable_persistent_fabric_mode = true;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
     constexpr size_t MAX_NUM_AXES = FullMeshTestParams::MAX_NUM_AXES;
 
@@ -2229,7 +2215,6 @@ void Run1DFullMeshFabricPacketSendTest(
 
     const bool use_galaxy = num_devices == 32;
     const bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
-    const bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
 
     create_fabric_fixture<FABRIC_DEVICE_FIXTURE>(test_fixture_, use_galaxy);
     auto &mesh_device = *(test_fixture_->mesh_device_);
@@ -2305,17 +2290,11 @@ void Run1DFullMeshFabricPacketSendTest(
     for (size_t axis = 0; axis < MAX_NUM_AXES; axis++) {
         const uint32_t source_payload_cb_index = axis == 0 ? tt::CB::c_in1 : tt::CB::c_in3;
         auto line_size = params.line_size[axis];
-        auto fabric_mode = fabric_modes[axis];
-        auto topology = topologies[axis];
         auto& dest_core_coord = dest_core_coord_per_axis[axis];
         auto num_devices_with_workers = params.num_devices_with_workers[axis];
         if (num_devices_with_workers == 0) {
             num_devices_with_workers = line_size;
         }
-        auto num_links = params.num_links[axis];
-        auto first_link_offset = params.first_link_offset[axis];
-        auto num_op_invocations = params.num_op_invocations;
-        auto senders_are_unidirectional = params.senders_are_unidirectional[axis];
         size_t num_messages = (test_specs.num_messages * line_size) / max_line_size;
 
         for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size(); fabric_index++) {
@@ -2339,8 +2318,7 @@ void Run1DFullMeshFabricPacketSendTest(
                 tt_metal::CircularBufferConfig cb_src1_config =
                     tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                         .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
-                CBHandle sender_workers_payload_cb =
-                    CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
+                CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
 
                 auto worker_kernel_id = tt_metal::CreateKernel(
                     program,
@@ -2431,13 +2409,13 @@ static size_t get_number_of_links_for_ring_deadlock_stability_test(
         if (cluster_type == ClusterType::GALAXY) {
             for (size_t i = 0; i < mesh_device.shape()[0]; i++) {
                 size_t cluster_axis = 1;
-                auto nl =
+                [[maybe_unused]] auto nl =
                     tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);
                 log_debug(tt::LogTest, "Number of links for Galaxy cluster_axis 0, row {}: {}", i, nl);
             }
             for (size_t i = 0; i < mesh_device.shape()[1]; i++) {
                 size_t cluster_axis = 0;
-                auto nl =
+                [[maybe_unused]] auto nl =
                     tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);
                 log_debug(tt::LogTest, "Number of links for Galaxy cluster_axis 1, row {}: {}", i, nl);
             }
@@ -2512,8 +2490,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     bool has_backward_connection,
     size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes,
     std::optional<size_t> row_or_col = std::nullopt) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     switch (cluster_type) {
         case ClusterType::T3K:
@@ -2531,8 +2507,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         default: log_debug(tt::LogTest, "This test can only be run on T3000 or Galaxy devices"); return;
     }
 
-    auto topology = tt::tt_fabric::Topology::Ring;
-    constexpr size_t num_unicasts = 0;
     size_t line_size = num_devices;
     size_t num_devices_with_workers = line_size;
     constexpr bool line_sync = false;
@@ -2617,7 +2591,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     uint32_t num_dirs = (uint32_t)has_forward_connection + (uint32_t)has_backward_connection;
     log_debug(tt::LogTest, "Initializing worker programs");
     for (size_t i = 0; i < num_devices_with_workers; i++) {
-        const size_t line_index = i;
         auto& program = programs[i];
         auto* device = devices[i];
         const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
@@ -2639,7 +2612,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                 .set_page_size(source_payload_cb_index, packet_payload_size_bytes);
-        CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+        CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
         std::vector<uint32_t> worker_ct_args = {line_sync, line_sync};
 

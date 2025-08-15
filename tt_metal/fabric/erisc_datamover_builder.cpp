@@ -610,7 +610,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     bool is_dateline = options.edm_type == FabricEriscDatamoverType::Dateline;
     bool is_dateline_upstream = options.edm_type == FabricEriscDatamoverType::DatelineUpstream;
     bool is_dateline_upstream_adj_dev = options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-    bool is_dateline_upstream_adj_dev_upstream =
+    [[maybe_unused]] bool is_dateline_upstream_adj_dev_upstream =
         options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
 
     configure_buffer_slots_helper(

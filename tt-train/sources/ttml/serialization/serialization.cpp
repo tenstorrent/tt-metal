@@ -83,13 +83,11 @@ void write_ttnn_tensor(MsgPackFile& file, std::string_view name, const tt::tt_me
     // we currently assume that there are two types of runs: single device and DDP
     // once we decide to use other parallelization techniques (tensor parallel, FSDP) we need to update this code
     if (data_type == tt::tt_metal::DataType::BFLOAT16) {
-        auto* device = &ttml::autograd::ctx().get_device();
         auto data_all_devices = ttml::core::to_xtensor<float>(tensor, core::IdentityComposer{});
         // pick weights from first device
         auto data = data_all_devices.front();
         file.put(std::string(name) + "/data", std::span<const float>(data.data(), data.size()));
     } else if (data_type == tt::tt_metal::DataType::UINT32) {
-        auto* device = &ttml::autograd::ctx().get_device();
         auto data_all_devices = ttml::core::to_xtensor<uint32_t>(tensor, ttml::core::IdentityComposer{});
         // pick weights from first device
         auto data = data_all_devices.front();
@@ -175,7 +173,6 @@ void write_optimizer(MsgPackFile& file, std::string_view name, const optimizers:
 
 void read_optimizer(MsgPackFile& file, std::string_view name, optimizers::OptimizerBase* optimizer) {
     assert(optimizer);
-    size_t steps = 0;
     auto state_dict = optimizer->get_state_dict();
     read_state_dict(file, name, state_dict);
     optimizer->set_state_dict(state_dict);
