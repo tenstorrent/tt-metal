@@ -41,11 +41,14 @@ PYTHON_MODELS = [
 ]
 
 SINGLE_CARD_MODELS = [
+    "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.2-1B-Instruct",
     "meta-llama/Llama-3.2-3B-Instruct",
     "meta-llama/Llama-3.2-11B-Vision-Instruct",
     "mistralai/Mistral-7B-Instruct-v0.3",
+    "nvidia/segformer-b0-finetuned-ade-512-512",
+    "tiiuae/falcon-7b-instruct",
     "Qwen/Qwen2-7B-Instruct",
 ]
 
@@ -118,7 +121,7 @@ def download_datasets(args):
 
 def get_parser():
     parser = argparse.ArgumentParser(
-        epilog="Example: HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home python scripts/download_hf_artifacts.py --all --hf_token <your_hf_token>"
+        epilog="Example: HF_HOME=/mnt/MLPerf/huggingface python scripts/download_hf_artifacts.py --all --hf_token <your_hf_token>"
     )
     parser.add_argument(
         "--hf_token",
