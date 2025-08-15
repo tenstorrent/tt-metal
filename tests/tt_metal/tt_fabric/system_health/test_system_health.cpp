@@ -196,21 +196,41 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
         const std::string& hostname = host_entry.first;
         const std::vector<ASICDescriptor>& asics = host_entry.second;
 
-        YAML::Node asic_info_node;
+        // Group ASICs by tray_id and board_type
+        std::map<uint32_t, std::vector<ASICDescriptor>> grouped_asics;
 
-        // ASIC info section
-        YAML::Node asic_info;
         for (const auto& asic : asics) {
-            YAML::Node asic_node;
-            asic_node["asic_id"] = asic.unique_id;
-            asic_node["tray_id"] = asic.tray_id;
-            asic_node["nid"] = asic.n_id;
-            asic_node["board_type"] = enchantum::to_string(asic.board_type);
-            asic_info.push_back(asic_node);
+            grouped_asics[asic.tray_id].push_back(asic);
         }
-        asic_info_node["asic_info"] = asic_info;
 
-        asic_info_map[hostname] = asic_info_node;
+        YAML::Node host_node;
+
+        // Create array of tray groups
+        for (const auto& group : grouped_asics) {
+            YAML::Node tray_group;
+
+            // Set tray_id and board_type
+            tray_group["tray_id"] = group.first;  // tray_id
+            tray_group["board_type"] = enchantum::to_string(group.second.front().board_type);
+
+            std::vector<ASICDescriptor> sorted_asics = group.second;
+            std::sort(sorted_asics.begin(), sorted_asics.end(), [](const ASICDescriptor& a, const ASICDescriptor& b) {
+                return a.n_id < b.n_id;
+            });
+            // Create asics array
+            YAML::Node asics_array;
+            for (const auto& asic : sorted_asics) {
+                YAML::Node asic_node;
+                asic_node["nid"] = asic.n_id;
+                asic_node["asic_id"] = asic.unique_id;
+                asics_array.push_back(asic_node);
+            }
+            tray_group["asics"] = asics_array;
+
+            host_node.push_back(tray_group);
+        }
+
+        asic_info_map[hostname] = host_node;
     }
 
     root["asic_info"] = asic_info_map;
