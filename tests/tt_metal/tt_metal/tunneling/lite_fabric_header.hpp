@@ -38,11 +38,45 @@ struct LiteFabricRoutingFields {
     uint32_t value;
 };
 
-enum class NocSendType : uint8_t {
+enum class NocSendTypeEnum : uint8_t {
     NOC_UNICAST_WRITE = 0,
     NOC_READ = 1,
     NOC_SEND_TYPE_LAST = NOC_READ,
 };
+
+union NocSendType {
+    uint8_t raw;
+    
+    struct {
+        NocSendTypeEnum send_type : 7;  // bits 0-6
+        uint8_t noc_index : 1;          // bit 7
+    } fields;
+    
+    // Constructors
+    NocSendType() : raw(0) {}
+    NocSendType(uint8_t value) : raw(value) {}
+    NocSendType(NocSendTypeEnum type, uint8_t noc_idx = 0) {
+        fields.send_type = type;
+        fields.noc_index = noc_idx & 0x1;
+    }
+    
+    // Conversion operators
+    operator uint8_t() const { return raw; }
+    
+    // Helper methods
+    inline NocSendTypeEnum get_send_type() const volatile { return fields.send_type; }
+    inline uint8_t get_noc_index() const volatile { return fields.noc_index; }
+    
+    inline void set_send_type(NocSendTypeEnum type) { fields.send_type = type; }
+    inline void set_noc_index(uint8_t noc_idx) { fields.noc_index = noc_idx & 0x1; }
+    
+    // Comparison operators
+    bool operator==(const NocSendType& other) const { return raw == other.raw; }
+    bool operator!=(const NocSendType& other) const { return raw != other.raw; }
+    bool operator==(NocSendTypeEnum type) const { return fields.send_type == type && fields.noc_index == 0; }
+};
+
+static_assert(sizeof(NocSendType) == 1, "NocSendType must be 1 byte");
 
 struct LiteFabricHeader {
     LiteFabricCommandFields command_fields;
@@ -55,13 +89,17 @@ struct LiteFabricHeader {
     uint8_t src_ch_id;
     LiteFabricRoutingFields routing_fields;
 
-    lite_fabric::NocSendType get_noc_send_type() volatile const { return this->noc_send_type; }
+    lite_fabric::NocSendType get_noc_send_type() volatile const { return lite_fabric::NocSendType(this->noc_send_type.raw); }
     uint16_t get_payload_size_bytes() volatile const { return this->payload_size_bytes; }
+    uint8_t get_noc_index() volatile const { return this->noc_send_type.get_noc_index(); }
+    lite_fabric::NocSendTypeEnum get_base_send_type() volatile const { return this->noc_send_type.get_send_type(); }
 
     // Set the packet to be a NoC write to the target chip
     inline LiteFabricHeader& to_noc_unicast_write(
-        const NocUnicastCommandHeader& noc_unicast_command_header, uint16_t payload_size_bytes) {
-        this->noc_send_type = lite_fabric::NocSendType::NOC_UNICAST_WRITE;
+        const NocUnicastCommandHeader& noc_unicast_command_header, 
+        uint16_t payload_size_bytes, 
+        uint8_t noc_index = 0) {
+        this->noc_send_type = lite_fabric::NocSendType(lite_fabric::NocSendTypeEnum::NOC_UNICAST_WRITE, noc_index);
         this->payload_size_bytes = payload_size_bytes;
         this->command_fields.noc_unicast = noc_unicast_command_header;
         return *static_cast<LiteFabricHeader*>(this);
@@ -69,8 +107,10 @@ struct LiteFabricHeader {
 
     // Set the packet to be a NoC read at the target chip
     inline LiteFabricHeader& to_noc_read(
-        const NocReadCommandHeader& noc_read_command_header, uint16_t payload_size_bytes) {
-        this->noc_send_type = lite_fabric::NocSendType::NOC_READ;
+        const NocReadCommandHeader& noc_read_command_header, 
+        uint16_t payload_size_bytes, 
+        uint8_t noc_index = 0) {
+        this->noc_send_type = lite_fabric::NocSendType(lite_fabric::NocSendTypeEnum::NOC_READ, noc_index);
         this->payload_size_bytes = payload_size_bytes;
         this->command_fields.noc_read = noc_read_command_header;
         return *static_cast<LiteFabricHeader*>(this);

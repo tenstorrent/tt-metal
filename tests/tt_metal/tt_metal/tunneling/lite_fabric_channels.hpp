@@ -129,12 +129,13 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
     invalidate_l1_cache();
     const auto& header = *packet_start;
 
-    lite_fabric::NocSendType noc_send_type = header.noc_send_type;
-    if (noc_send_type > lite_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
+    lite_fabric::NocSendTypeEnum noc_send_type = header.get_base_send_type();
+    uint8_t noc_index = header.get_noc_index();
+    if (static_cast<int>(noc_send_type) > static_cast<int>(lite_fabric::NocSendTypeEnum::NOC_SEND_TYPE_LAST)) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
-        case lite_fabric::NocSendType::NOC_UNICAST_WRITE: {
+        case lite_fabric::NocSendTypeEnum::NOC_UNICAST_WRITE: {
             const uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) +
                                                    sizeof(lite_fabric::LiteFabricHeader) + header.unaligned_offset;
 
@@ -149,11 +150,11 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 payload_size_bytes,
                 transaction_id,
                 lite_fabric::local_chip_data_cmd_buf,
-                lite_fabric::edm_to_local_chip_noc,
+                noc_index,
                 lite_fabric::forward_and_local_write_noc_vc);
         } break;
 
-        case lite_fabric::NocSendType::NOC_READ: {
+        case lite_fabric::NocSendTypeEnum::NOC_READ: {
             if (!on_mmio_chip) {
                 auto& host_interface = lite_fabric->host_interface;
                 const auto src_address = header.command_fields.noc_read.noc_address;
@@ -174,8 +175,8 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 // This is safe only if the data at the sender buffer slot has been flushed out
                 // We rely on the host to not do a read until the received data has been read out
                 DPRINT << "Read into buffer" << ENDL();
-                noc_async_read(src_address, payload_dst_address, payload_size_bytes);
-                noc_async_read_barrier();
+                noc_async_read(src_address, payload_dst_address, payload_size_bytes, noc_index);
+                noc_async_read_barrier(noc_index);
                 DPRINT << "Read into buffer done" << ENDL();
 
                 // Tell ourselves there is data to send
