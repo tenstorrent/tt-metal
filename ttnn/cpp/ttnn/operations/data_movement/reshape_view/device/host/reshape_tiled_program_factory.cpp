@@ -365,6 +365,16 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(grid, num_output_pages);
 
+    bool is_bfloat8_b = input_tensor.dtype() == DataType::BFLOAT8_B;
+    constexpr auto exp_cb_idx = tt::CBIndex::c_3;
+    uint32_t exponents_size = 64;
+    tt::tt_metal::CircularBufferConfig cb_exponents =
+        tt::tt_metal::CircularBufferConfig(exponents_size, {{exp_cb_idx, output_cb_data_format}})
+            .set_page_size(exp_cb_idx, exponents_size);
+    if (is_bfloat8_b) {
+        tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_exponents);
+    }
+
     TT_ASSERT(num_cores <= num_output_pages);
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -378,13 +388,25 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
+    uint32_t faceline_row = 16;
+    uint32_t tile_width = output_tensor.tensor_spec().tile().get_width();
+    uint32_t tiles_per_row = std::ceil((float)output_shape[-1] / (float)tile_width);
+    bool last_is_two_facelines = (output_shape[-1] - (tiles_per_row - 1) * tile_width) > faceline_row;
+    uint32_t faceline_size = 256;
     std::vector<uint32_t> writer_compile_time_args = {
         input_tile_size_bytes,
         max_map_entries,
-        tt::datum_size(output_cb_data_format),
+        is_bfloat8_b ? 1 : tt::datum_size(output_cb_data_format),
         mapping_cb_idx,
         input_cb_idx,
-        output_cb_idx};
+        output_cb_idx,
+        is_bfloat8_b,
+        tiles_per_row,
+        last_is_two_facelines,
+        faceline_row,
+        faceline_size,
+        exp_cb_idx,
+        exponents_size};
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
