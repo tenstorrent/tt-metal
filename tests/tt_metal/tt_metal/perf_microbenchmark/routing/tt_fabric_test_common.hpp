@@ -104,17 +104,12 @@ public:
             routing_type);
         auto new_fabric_config = it->second;
 
-        // Set fabric tensix config based on type
-        tt_fabric::FabricTensixConfig fabric_tensix_config = (fabric_tensix_type == FabricTensixType::Mux)
-                                                                 ? tt_fabric::FabricTensixConfig::MUX
-                                                                 : tt_fabric::FabricTensixConfig::DISABLED;
-        tt::tt_metal::MetalContext::instance().set_fabric_tensix_config(fabric_tensix_config);
-        if (new_fabric_config != current_fabric_config_) {
+        if (new_fabric_config != current_fabric_config_ || fabric_tensix_type != curr_fabric_tensix_type_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
-            open_devices_internal(new_fabric_config);
+            open_devices_internal(new_fabric_config, fabric_tensix_type);
 
             topology_ = topology;
             routing_type_ = routing_type;
@@ -151,6 +146,7 @@ public:
         mesh_device_.reset();
         mesh_workload_.reset();
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
+        curr_fabric_tensix_type_ = FabricTensixType::Default;
         are_devices_open_ = false;
     }
 
@@ -1375,6 +1371,7 @@ private:
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
     tt::tt_fabric::FabricConfig current_fabric_config_;
+    FabricTensixType curr_fabric_tensix_type_;
     std::vector<FabricNodeId> local_available_node_ids_;
     std::vector<FabricNodeId> global_available_node_ids_;
     std::shared_ptr<MeshDevice> mesh_device_;
@@ -1420,7 +1417,12 @@ private:
             *local_mesh_id);
     }
 
-    void open_devices_internal(tt::tt_fabric::FabricConfig fabric_config) {
+    void open_devices_internal(tt::tt_fabric::FabricConfig fabric_config, FabricTensixType fabric_tensix_type) {
+        // Set fabric tensix config based on type
+        tt_fabric::FabricTensixConfig fabric_tensix_config = (fabric_tensix_type == FabricTensixType::Mux)
+                                                                 ? tt_fabric::FabricTensixConfig::MUX
+                                                                 : tt_fabric::FabricTensixConfig::DISABLED;
+        tt::tt_metal::MetalContext::instance().set_fabric_tensix_config(fabric_tensix_config);
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
         tt::tt_fabric::SetFabricConfig(fabric_config);
 
@@ -1463,6 +1465,7 @@ private:
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 
         current_fabric_config_ = fabric_config;
+        curr_fabric_tensix_type_ = fabric_tensix_type;
         are_devices_open_ = true;
     }
 
