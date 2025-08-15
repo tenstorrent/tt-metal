@@ -286,7 +286,7 @@ def dump_callstacks(
                         )
                     )
 
-    except:
+    finally:
         if gdb_server is not None:
             gdb_server.stop()
 
