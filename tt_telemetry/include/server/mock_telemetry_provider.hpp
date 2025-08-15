@@ -25,7 +25,7 @@
  class MockTelemetryProvider {
     private:
         static constexpr auto UPDATE_INTERVAL_SECONDS = std::chrono::seconds(5);
-    
+
         // Telemetry metrics state
         const std::vector<std::string> bool_metric_names_ = {
             "foo_bar_baz1",
@@ -43,33 +43,33 @@
         };
         std::vector<size_t> uint_metric_ids_;
         std::vector<uint64_t> uint_metric_values_;
-    
+
         // Snapshot and distribution to consumers
         std::mutex mtx_;
         std::queue<TelemetrySnapshot *> available_buffers_;
         std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers_;
         std::atomic<bool> stopped_{false};
-    
+
         // Random number generators for generating random updates
         std::random_device rd_;
         std::mt19937 gen_;
         std::uniform_int_distribution<> bool_dist_;
         std::uniform_int_distribution<uint64_t> uint_dist_;
         std::uniform_int_distribution<> num_updates_dist_;
-    
+
         std::thread thread_;
-    
+
         void return_buffer_to_pool(TelemetrySnapshot *buffer) {
             if (stopped_.load()) {
                 return;
             }
-    
+
             // Clear buffer and return to pool
             buffer->clear();
             std::lock_guard<std::mutex> lock(mtx_);
             available_buffers_.push(buffer);
         }
-    
+
         std::shared_ptr<TelemetrySnapshot> create_new_handoff_buffer(TelemetrySnapshot *buffer) {
             return std::shared_ptr<TelemetrySnapshot>(
                 buffer,
@@ -82,10 +82,10 @@
                 }
             );
         }
-    
+
         std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
             std::lock_guard<std::mutex> lock(mtx_);
-    
+
             TelemetrySnapshot *buffer;
             if (!available_buffers_.empty()) {
                 // Get a free buffer
@@ -97,11 +97,11 @@
                 buffer = new TelemetrySnapshot();
                 std::cout << "[MockTelemetryProvider] Allocated new buffer" << std::endl;
             }
-    
+
             // Return a RAII handle that will automatically return buffer to pool
             return create_new_handoff_buffer(buffer);
         }
-    
+
         void create_random_updates(std::shared_ptr<TelemetrySnapshot> delta) {
             // Select random bool metrics to update
             std::uniform_int_distribution<> bool_metric_dist(0, bool_metric_names_.size() - 1);
@@ -110,7 +110,7 @@
                 size_t idx = bool_metric_dist(gen_);
                 size_t id = bool_metric_ids_[idx];
                 bool new_value = bool_dist_(gen_) & 1;
-                
+
                 // Only add to updates if state actually changes
                 if (bool_metric_values_[idx] != new_value) {
                     bool_metric_values_[idx] = new_value;
@@ -134,10 +134,10 @@
                     delta->uint_metric_values.push_back(new_value);
                 }
             }
-    
+
             std::cout << "[MockTelemetryProvider] Updated: " << (delta->bool_metric_ids.size() + delta->uint_metric_ids.size()) << " values pending" << std::endl;
         }
-    
+
         void update_telemetry_randomly() {
             // Send initial snapshot to subscriber
             {
@@ -156,31 +156,31 @@
                     snapshot->uint_metric_names.push_back(uint_metric_names_[i]);
                     snapshot->uint_metric_values.push_back(uint_metric_values_[i]);
                 }
-    
+
                 for (auto &subscriber: subscribers_) {
                     subscriber->on_telemetry_ready(snapshot);
                 }
             }
-    
+
             // Send periodic updates
             while (!stopped_.load()) {
                 // We will now produce a delta snapshot
                 std::shared_ptr<TelemetrySnapshot> delta = get_writeable_buffer();
                 delta->clear();
                 delta->is_absolute = false;
-    
+
                 // Fill it with updates
                 create_random_updates(delta);
-    
+
                 // Push to subscribers
                 for (auto &subscriber: subscribers_) {
                     subscriber->on_telemetry_ready(delta);
                 }
-    
+
                 std::this_thread::sleep_for(UPDATE_INTERVAL_SECONDS);
             }
         }
-    
+
     public:
         explicit MockTelemetryProvider(std::initializer_list<std::shared_ptr<TelemetrySubscriber>> subscribers)
             : subscribers_(subscribers)
@@ -197,7 +197,7 @@
             uint_metric_ids_.reserve(uint_metric_names_.size());
             uint_metric_values_.clear();
             uint_metric_values_.reserve(uint_metric_names_.size());
-            
+
             size_t id = 1;
             for (size_t i = 0; i < bool_metric_names_.size(); ++i) {
                 bool initial_value = bool_dist_(gen_) & 1;
@@ -209,8 +209,8 @@
                 uint_metric_values_.push_back(initial_value);
                 uint_metric_ids_.push_back(id++);
             }
-    
+
             // Start update thread
             thread_ = std::thread(&MockTelemetryProvider::update_telemetry_randomly, this);
         }
-    };
+ };

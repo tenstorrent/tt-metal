@@ -22,12 +22,7 @@ namespace messages {
     };
 
     static inline void to_json(nlohmann::json &j, const EndpointDescription &d) {
-        j = nlohmann::json {
-            { "id", d.id },
-            { "from", d.from }, 
-            { "to", d.to },
-            { "state", d.state }
-        };
+        j = nlohmann::json{{"id", d.id}, {"from", d.from}, {"to", d.to}, {"state", d.state}};
     }
 
     static inline void from_json(const nlohmann::json &j, EndpointDescription &d) {
@@ -79,4 +74,4 @@ namespace messages {
         j.at("endpoint_indices").get_to(s.endpoint_indices);
         j.at("endpoint_states").get_to(s.endpoint_states);
     }
-}
+    }  // namespace messages

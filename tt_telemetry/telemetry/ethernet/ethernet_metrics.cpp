@@ -30,10 +30,9 @@ void EthernetEndpointUpMetric::update(const tt::Cluster &cluster) {
  Number of CRC errors encountered.
 **************************************************************************************************/
 
-EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster) 
-    : UIntMetric(id)
-    , endpoint_(endpoint)
-{
+EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(
+    size_t id, const EthernetEndpoint& endpoint, const tt::Cluster& cluster) :
+    UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
     if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
         virtual_eth_core_ = tt_cxy_pair(endpoint.chip.id, cluster.get_virtual_coordinate_from_logical_coordinates(endpoint.chip.id, endpoint.ethernet_core, CoreType::ETH));
@@ -64,10 +63,9 @@ void EthernetCRCErrorCountMetric::update(const tt::Cluster &cluster) {
  Number of CRC retrains that occurred.
 **************************************************************************************************/
 
-EthernetRetrainCountMetric::EthernetRetrainCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster) 
-    : UIntMetric(id)
-    , endpoint_(endpoint)
-{
+EthernetRetrainCountMetric::EthernetRetrainCountMetric(
+    size_t id, const EthernetEndpoint& endpoint, const tt::Cluster& cluster) :
+    UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
     virtual_eth_core_ = tt_cxy_pair(endpoint.chip.id, cluster.get_virtual_coordinate_from_logical_coordinates(endpoint.chip.id, endpoint.ethernet_core, CoreType::ETH));
     retrain_count_addr_ = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
@@ -94,10 +92,9 @@ void EthernetRetrainCountMetric::update(const tt::Cluster &cluster) {
  Number of codeword corrections.
 **************************************************************************************************/
 
-EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster) 
-    : UIntMetric(id)
-    , endpoint_(endpoint)
-{
+EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(
+    size_t id, const EthernetEndpoint& endpoint, const tt::Cluster& cluster) :
+    UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
     if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
         virtual_eth_core_ = tt_cxy_pair(endpoint.chip.id, cluster.get_virtual_coordinate_from_logical_coordinates(endpoint.chip.id, endpoint.ethernet_core, CoreType::ETH));
@@ -130,10 +127,9 @@ void EthernetCorrectedCodewordCountMetric::update(const tt::Cluster &cluster) {
  Number of uncorrected codewords.
 **************************************************************************************************/
 
-EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster) 
-    : UIntMetric(id)
-    , endpoint_(endpoint)
-{
+EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(
+    size_t id, const EthernetEndpoint& endpoint, const tt::Cluster& cluster) :
+    UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
     if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
         virtual_eth_core_ = tt_cxy_pair(endpoint.chip.id, cluster.get_virtual_coordinate_from_logical_coordinates(endpoint.chip.id, endpoint.ethernet_core, CoreType::ETH));
