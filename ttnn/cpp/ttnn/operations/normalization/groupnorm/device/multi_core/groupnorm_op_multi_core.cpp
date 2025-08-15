@@ -1209,19 +1209,19 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
     // Compute optimal core grid
-    uint32_t num_virtual_cols = grid_size.x;  // TODO: Fix frame of reference. X/Y flipped
+    uint32_t num_virtual_cols = grid_size.x;
     while ((W / num_virtual_cols) % TILE_WIDTH != 0) {
         num_virtual_cols -= 1;
     }
     uint32_t num_actual_cols =
-        (grid_size.x / num_virtual_cols) *
-        num_virtual_cols;  // Largest multiple of virtual cols < 8 //TODO: Fix frame of reference. X/Y flipped
-    uint32_t num_actual_rows = grid_size.y;  // TODO: Fix frame of reference. X/Y flipped
+        (grid_size.x / num_virtual_cols) * num_virtual_cols;  // Largest multiple of virtual cols < 8
+    uint32_t num_actual_rows = grid_size.y;
     uint32_t num_virtual_rows =
         (grid_size.x / num_virtual_cols) * num_actual_rows;  // TODO: Assert if we don't have enough data
 
     uint32_t num_cores = num_actual_cols * num_actual_rows;
-    auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
+    const bool row_wise = false;
+    auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
 
     uint32_t per_core_M_group_1 = H / num_virtual_rows;
     uint32_t per_core_M_group_2 = 0;
@@ -1536,8 +1536,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t start_core_y = 0;
 
     // create a vector of cores, in either RM or CM
-    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_rows, num_actual_cols, false);
-    std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_rows, num_virtual_cols, false);
+    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
+    std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
     for (int i = 0; i < core_coords.size(); ++i) {
         log_debug(tt::LogOp, "worker coord: {} {}", core_coords[i].x, core_coords[i].y);
     }
