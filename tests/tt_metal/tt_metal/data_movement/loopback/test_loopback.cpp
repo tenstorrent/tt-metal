@@ -44,7 +44,14 @@ struct LoopbackConfig {
 bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Buffer Parameters
     const uint32_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
@@ -78,7 +85,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfi
 
     // Kernels
     auto sender_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
         master_core_set,
         DataMovementConfig{
@@ -88,7 +95,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfi
 
     // Semaphores
     CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
-    const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
+    const uint32_t sem_id = CreateSemaphore(program_, sem_core_set, 0);
 
     // Runtime Arguments
     CoreCoord worker = device->worker_core_from_logical_core(test_config.master_core_coord);
