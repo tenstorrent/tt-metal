@@ -232,6 +232,8 @@ void ScaledDotProductAttentionDecode::validate(
             q_shape_unpadded[2],
             k_shape[1]);
     }
+
+    // TODO: Add validation for attention_sink
 }
 
 std::vector<TensorSpec> ScaledDotProductAttentionDecode::compute_output_specs(
@@ -261,6 +263,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
     auto& cur_pos_tensor = optional_input_tensors.at(0);
     auto& page_table_tensor = optional_input_tensors.at(1);
     auto& attn_mask = optional_input_tensors.at(2);
+    auto& attention_sink = optional_input_tensors.at(3);
 
     auto& output_tensor = output_tensors.at(0);
 
@@ -276,6 +279,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         cur_pos_tensor,
         page_table_tensor,
         attn_mask,
+        attention_sink,
         output_tensor,
         this->is_causal,
         this->cur_pos,
