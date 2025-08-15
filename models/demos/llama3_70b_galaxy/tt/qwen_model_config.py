@@ -1049,7 +1049,8 @@ class TtQwenModelArgs(TtModelArgs):
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
             LM_HEAD_RING_SIZE = 24
-            self.lm_head_shape = (self.dim // 4, 151936 // 8)
+            # self.lm_head_shape = (self.dim // 4, 151936 // 8)
+            self.lm_head_shape = (6144 // 4, 24576)
 
             lm_head_ring_core_range_set = ttnn.CoreRangeSet(
                 [
@@ -1106,14 +1107,14 @@ class TtQwenModelArgs(TtModelArgs):
             )
             self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 # shape=(32, 16896 // LM_HEAD_RING_SIZE),  # padded shape
-                shape=(32, 151936 // 8 // LM_HEAD_RING_SIZE),  # padded shape
+                shape=(32, 24576 // LM_HEAD_RING_SIZE),  # padded shape
                 core_grid=lm_head_ring_core_output_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
             self.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.lm_head_shape[1] // 32),
+                shape=(32, self.lm_head_shape[1] // 32),  # (32, 608)
                 core_grid=lm_head_ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1122,9 +1123,10 @@ class TtQwenModelArgs(TtModelArgs):
             self.model_config["LM_HEAD_TG_RING_PROGCFG"] = self.matmul_1d_ring_lm_head_config(
                 1,
                 32,
-                self.dim // 4,
+                # self.dim // 4,
+                6144 // 4,
                 # 16896,  # use padded shape
-                151936 // 8,
+                19200,
                 LM_HEAD_RING_SIZE,
                 prefetch=False,
             )
@@ -1893,16 +1895,14 @@ class TtQwenModelArgs(TtModelArgs):
     ):
         M *= B  # Fuse batch always enabled
 
-        in0_block_h = M // ttnn.TILE_SIZE
-        in0_block_w = K // num_cores // ttnn.TILE_SIZE
-        out_block_h = M // ttnn.TILE_SIZE
-        out_block_w = N // num_cores // ttnn.TILE_SIZE
+        in0_block_h = M // ttnn.TILE_SIZE  # 1
+        in0_block_w = K // num_cores // ttnn.TILE_SIZE  # 1
+        out_block_h = M // ttnn.TILE_SIZE  # 1
+        out_block_w = N // num_cores // ttnn.TILE_SIZE  # 24
 
-        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
-        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
-        num_blocks_total = num_blocks_y * num_blocks_x
-
-        print(num_blocks_total, num_cores)
+        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1  # 1
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # 25
+        num_blocks_total = num_blocks_y * num_blocks_x  # 25
 
         if num_blocks_total != num_cores:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
