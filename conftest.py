@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
 import pytest
 import torch
 import random
@@ -961,6 +962,8 @@ def reset_tensix(tt_open_devices=None):
     if not shutil.which("tt-smi"):
         logger.error("tt-smi command not found. Cannot reset devices. Please install tt-smi.")
         return
+
+    gc.collect()
 
     if tt_open_devices is None:
         logger.info(f"Running reset for all pci devices")
