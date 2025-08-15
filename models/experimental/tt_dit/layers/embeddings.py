@@ -240,3 +240,70 @@ class PatchEmbed:
 
         out = ttnn.reshape(out, (1, batch_size, patches_h * patches_w, -1))
         return out
+
+
+class TextEmbedding:
+    def __init__(
+        self,
+        config,
+        vocab_size=None,
+        max_position_embeddings=None,
+        embed_dim=None,
+        mesh_device=None,
+        init=False,
+        with_projection=False,
+        position_embedding=None,
+    ):
+        self.vocab_size = vocab_size or config.vocab_size
+        self.max_position_embeddings = max_position_embeddings or config.max_prompt_length
+        self.embed_dim = embed_dim or config.hidden_size
+        self.mesh_device = mesh_device
+        self.with_projection = with_projection
+
+        # state tensors for embeddings - initialized in load_state_dict or init
+        self.token_embedding = None
+        self.position_embedding = None
+
+    def load_state_dict(self, state_dict):
+        # weights must be bfloat16 for ttnn.embedding ops
+        self.token_embedding = bf16_tensor(
+            state_dict["token_embedding.weight"], device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        self.position_embedding = bf16_tensor(
+            state_dict["position_embedding.weight"], device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+
+    def truncate_ids(self, input_ids: ttnn.Tensor, device: ttnn.Device, with_projection: bool = False) -> ttnn.Tensor:
+        seq_length = input_ids.shape[-1]
+
+        # truncate seq if >max_position_embeddings
+        if seq_length > self.max_position_embeddings:
+            input_ids = input_ids[:, : self.max_position_embeddings]
+            seq_length = self.max_position_embeddings
+
+        return input_ids, seq_length
+
+    def __call__(
+        self, input_ids: ttnn.Tensor, seq_length: int = None, device: ttnn.Device = None, with_projection: bool = False
+    ) -> ttnn.Tensor:
+        # calculate seq_length from input_ids if not provided
+        if seq_length is not None:
+            seq_length = input_ids.shape[-1]
+
+        # use mesh_device if device not provided
+        if device is None:
+            device = self.mesh_device
+
+        input_ids, seq_length = self.truncate_ids(input_ids, device, with_projection)
+
+        input_embeddings = ttnn.embedding(input_ids, self.token_embedding, layout=ttnn.TILE_LAYOUT)
+
+        if self.with_projection and self.position_embedding is not None:
+            position_ids = torch.arange(seq_length).expand((1, -1))
+            position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+
+            position_embeddings = ttnn.embedding(position_ids, self.position_embedding, layout=ttnn.TILE_LAYOUT)
+
+            return input_embeddings + position_embeddings
+
+        return input_embeddings
