@@ -99,7 +99,7 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
         CircularBufferConfig l1_cb_config =
             CircularBufferConfig(total_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
                 .set_page_size(l1_cb_index, test_config.page_size_bytes);
-        auto l1_cb = CreateCircularBuffer(program, test_config.cores, l1_cb_config);
+        CreateCircularBuffer(program, test_config.cores, l1_cb_config);
     }
 
     uint32_t l1_addr = get_l1_address_and_size(device, corerange_to_cores(test_config.cores)[0]).base_address;
@@ -527,7 +527,6 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageCoreLocations) {
     // Parameters
     uint32_t num_pages = 16;
     uint32_t page_size_bytes = 32 * 32 * 2;  // = tile
-    uint32_t num_of_transactions = 16;
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         // Cores

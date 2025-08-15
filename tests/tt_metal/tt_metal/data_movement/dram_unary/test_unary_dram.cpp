@@ -80,7 +80,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
         (uint32_t)test_config.virtual_channel};
 
     // Kernels
-    auto reader_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/reader_unary.cpp",
         test_config.core_coord,
@@ -89,7 +89,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
             .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_args});
 
-    auto writer_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/writer_unary.cpp",
         test_config.core_coord,

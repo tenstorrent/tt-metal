@@ -109,7 +109,9 @@ void kernel_main() {
 #endif
 
     OpSignaler op_signaler;
+    uint32_t self_write_done_semaphore_addr;
     if constexpr (fuse_op) {
+        self_write_done_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
         op_signaler = OpSignaler(arg_idx);
     }
 
@@ -182,10 +184,6 @@ void kernel_main() {
         } else {
             sender_chip_id = my_chip_id - (slices_received + 1);
             actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
-        }
-        if (fuse_op) {
-            // Signal matmul to go
-            op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
         }
 
         // Direction == backward: Should I forward what I got from the left to my right?
@@ -271,6 +269,15 @@ void kernel_main() {
         }
 
         slices_received++;
+        if (fuse_op) {
+            // Signal matmul to go
+            if (direction == 1 && slices_received == 1) {
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(self_write_done_semaphore_addr), 1);
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(self_write_done_semaphore_addr), 0);
+            }
+            op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+        }
     }
 
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
