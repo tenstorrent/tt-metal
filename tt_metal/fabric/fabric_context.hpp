@@ -27,8 +27,14 @@ public:
 
     static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
 
+    static bool is_2D_topology(tt::tt_fabric::Topology topology);
+    static bool is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config);
+
     tt::tt_fabric::Topology get_fabric_topology() const;
-    tt::tt_fabric::FabricConfig get_fabric_config() const { return fabric_config_; }
+    bool is_2D_routing_enabled() const;
+    bool is_dynamic_routing_enabled() const;
+
+    bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
 
     size_t get_fabric_packet_header_size_bytes() const;
     size_t get_fabric_max_payload_size_bytes() const;
@@ -62,9 +68,13 @@ private:
 
     bool initialized_ = false;
     tt::tt_fabric::FabricConfig fabric_config_{};
+    tt::tt_fabric::Topology topology_{};
+
+    bool is_2D_routing_enabled_ = false;
+    bool is_dynamic_routing_enabled_ = false;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_{};
-    tt::tt_fabric::Topology topology_{};
+
     size_t packet_header_size_bytes_ = 0;
     size_t max_payload_size_bytes_ = 0;
     size_t channel_buffer_size_bytes_ = 0;

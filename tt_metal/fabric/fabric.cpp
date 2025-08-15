@@ -109,11 +109,10 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = topology == Topology::Mesh;
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
     // but the routing is simple and doesnt need any special inter-mesh handling
@@ -259,9 +258,15 @@ bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
 }
+
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(
