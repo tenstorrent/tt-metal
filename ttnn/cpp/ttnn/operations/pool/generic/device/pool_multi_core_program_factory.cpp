@@ -397,6 +397,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         const uint32_t in_idx_cb_pagesize = params.index_nbytes * in_cb_page_padded;
         const uint32_t in_idx_cb_npages = params.multi_buffering_factor;
 
+        printf("in_idx_cb pagesize: %d, in_idx_cb npages: %d\n", in_idx_cb_pagesize, in_idx_cb_npages);
+
+        // Print data type of in_idx_cb
+        const char* in_idx_cb_data_type_str = "invalid";
+        if (params.index_format == tt::DataFormat::UInt32) {
+            in_idx_cb_data_type_str = "uint32";
+        } else if (params.index_format == tt::DataFormat::UInt16) {
+            in_idx_cb_data_type_str = "uint16";
+        }
+        printf("in_idx_cb datatype: %s\n", in_idx_cb_data_type_str);
+
         in_idx_cb_id_0 = next_cb_index++;
         tt::tt_metal::create_cb(
             in_idx_cb_id_0, program, all_cores, in_idx_cb_pagesize, in_idx_cb_npages, params.index_format);
@@ -419,11 +430,23 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         } else if (params.data_format == tt::DataFormat::UInt16) {
             tile_cb_data_type_str = "uint16";
         }
-        printf("tile_cb datatype: %s\n\n", tile_cb_data_type_str);
+        printf("tile_cb datatype: %s\n", tile_cb_data_type_str);
 
         tt::tt_metal::create_cb(tile_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.data_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_tmp_cb_id, params.nbytes * tile_elems, 1);
         tile_idx_tmp_cb_id = next_cb_index++;
+
+        printf("tile_idx_cb pagesize: %d, tile_idx_cb npages: %d\n", params.index_nbytes * tile_elems, 1);
+
+        // Print data type of tile_idx_cb
+        const char* tile_idx_cb_data_type_str = "invalid";
+        if (params.index_format == tt::DataFormat::UInt32) {
+            tile_idx_cb_data_type_str = "uint32";
+        } else if (params.index_format == tt::DataFormat::UInt16) {
+            tile_idx_cb_data_type_str = "uint16";
+        }
+        printf("tile_idx_cb datatype: %s\n\n", tile_idx_cb_data_type_str);
+
         tt::tt_metal::create_cb(
             tile_idx_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1);
