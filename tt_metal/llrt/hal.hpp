@@ -9,12 +9,14 @@
 // level APIs
 //
 
+#include <cstddef>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <ostream>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -31,6 +33,20 @@ namespace tt {
 enum class ARCH;
 
 namespace tt_metal {
+
+// Struct of core type, processor class, and processor type to uniquely identify any processor.
+struct HalProcessorIdentifier {
+    HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX;
+    HalProcessorClassType processor_class = HalProcessorClassType::DM;
+    int processor_type = 0;
+};
+
+std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
+bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+// Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
+static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
@@ -116,7 +132,9 @@ inline uint32_t HalCoreInfoType::get_processor_classes_count() const { return th
 
 inline uint32_t HalCoreInfoType::get_processor_types_count(uint32_t processor_class_idx) const {
     TT_ASSERT(processor_class_idx < this->processor_classes_.size());
-    return this->processor_classes_[processor_class_idx].size();
+    uint32_t count = this->processor_classes_[processor_class_idx].size();
+    TT_ASSERT(count <= MAX_PROCESSOR_TYPES_COUNT);
+    return count;
 }
 
 inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
@@ -492,6 +510,11 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
 
 }  // namespace tt_metal
 }  // namespace tt
+
+template <>
+struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
+    std::size_t operator()(const tt::tt_metal::HalProcessorIdentifier&) const;
+};
 
 #define HAL_MEM_L1_BASE                                          \
     ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
