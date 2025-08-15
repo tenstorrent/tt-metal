@@ -1041,6 +1041,7 @@ void pytensor_module(py::module& m_tensor) {
             "empty",
             [](const Tensor& self) { return self.is_empty(); },
             R"doc(
+                Returns true if tensor is empty.
                 Tensor is considered empty if its volume is 0 or if is deallocated");
             )doc")
         .def(
