@@ -15,7 +15,10 @@
 namespace ttnn::operations::experimental::ccl {
 
 bool use_composite_all_gather(
-    const ttnn::Tensor& input_tensor, const int32_t dim, const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<MemoryConfig>& memory_config) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -26,6 +29,12 @@ bool use_composite_all_gather(
     // Composite only supported when barrier_semaphore is provided
     if (!barrier_semaphore.has_value()) {
         return false;
+    }
+
+    auto input_memory_config = input_tensor.memory_config();
+    auto output_memory_config = memory_config.value_or(input_memory_config);
+    if (input_memory_config != output_memory_config) {
+        return true;
     }
 
     // Use composite for row-major tensors
@@ -59,6 +68,24 @@ ttnn::Tensor composite_all_gather(
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+
+    auto input_memory_config = input_tensor.memory_config();
+    auto output_memory_config = memory_config.value_or(input_memory_config);
+    if (input_memory_config != output_memory_config) {
+        std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
+            input_tensor,
+            multi_device_global_semaphore[0],
+            barrier_semaphore,
+            num_links,
+            input_memory_config,
+            ttnn::ccl::Topology::Linear,
+            cluster_axis,
+            subdevice_id);
+
+        ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
+
+        return ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
+    }
 
     // Convert to row major
     if (is_tiled) {
@@ -128,7 +155,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensor, dim, barrier_semaphore)) {
+    if (use_composite_all_gather(input_tensor, dim, barrier_semaphore, memory_config)) {
         return composite_all_gather(
             input_tensor,
             dim,
@@ -167,7 +194,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    if (use_composite_all_gather(input_tensor, dim, barrier_semaphore)) {
+    if (use_composite_all_gather(input_tensor, dim, barrier_semaphore, memory_config)) {
         return composite_all_gather(
             input_tensor,
             dim,
@@ -206,7 +233,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensors[0], dim, barrier_semaphore)) {
+    if (use_composite_all_gather(input_tensors[0], dim, barrier_semaphore, memory_config)) {
         return composite_all_gather(
             input_tensors,
             dim,
@@ -243,7 +270,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensor, dim, barrier_semaphore)) {
+    if (use_composite_all_gather(input_tensor, dim, barrier_semaphore, memory_config)) {
         return composite_all_gather(
             input_tensor,
             dim,
@@ -283,7 +310,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensors[0], dim, barrier_semaphore)) {
+    if (use_composite_all_gather(input_tensors[0], dim, barrier_semaphore, memory_config)) {
         return composite_all_gather(
             input_tensors,
             dim,
