@@ -29,7 +29,7 @@ using MeshCompletionReaderVariant =
 struct DeviceMemoryAddress {
     MeshCoordinate device_coord;
     CoreCoord virtual_core_coord;
-    DeviceAddr address;
+    DeviceAddr address{};
 };
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
@@ -113,11 +113,11 @@ private:
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<CQSharedState> cq_shared_state_;
 
-    DispatchArray<uint32_t> expected_num_workers_completed_;
+    DispatchArray<uint32_t> expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
 
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads

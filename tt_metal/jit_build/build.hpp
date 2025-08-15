@@ -62,7 +62,7 @@ public:
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
 
 private:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
 
     // Paths
     std::string root_;
@@ -90,7 +90,7 @@ protected:
     int core_id_;
     int is_fw_;
     uint32_t dispatch_message_addr_;
-    bool process_defines_at_compile;
+    bool process_defines_at_compile{};
 
     std::string out_path_;
     std::string target_name_;
@@ -133,8 +133,9 @@ public:
 
     void build(const JitBuildSettings* settings) const;
 
-    const std::string& get_out_path() const { return this->out_path_; };
+    const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; };
+    ;
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }

@@ -131,7 +131,7 @@ private:
         chip_id_t dest_chip_id,
         RoutingDirection port_direction);
 
-    ChipSpec chip_spec_;
+    ChipSpec chip_spec_{};
     std::map<MeshId, MeshContainer<chip_id_t>> mesh_to_chip_ids_;
     IntraMeshConnectivity intra_mesh_connectivity_;
     InterMeshConnectivity inter_mesh_connectivity_;

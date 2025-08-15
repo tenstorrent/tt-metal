@@ -131,8 +131,8 @@ struct CCLWorkerArgBuilder {
     ttnn::ccl::TensorPartition const output_tensor_partition;
     ttnn::ccl::CCLOpConfig const op_config;
     std::size_t operating_dim;
-    bool src_is_dram;
-    bool dst_is_dram;
+    bool src_is_dram{};
+    bool dst_is_dram{};
 };
 
 bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_tensor);

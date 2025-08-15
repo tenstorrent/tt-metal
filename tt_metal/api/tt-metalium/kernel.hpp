@@ -90,7 +90,7 @@ public:
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
-    const std::set<CoreCoord> &cores_with_runtime_args() const { return core_with_runtime_args_; }
+    const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
 
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
     RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
@@ -130,17 +130,17 @@ public:
     bool is_idle_eth() const;
 
 protected:
-    int watcher_kernel_id_;
+    int watcher_kernel_id_{};
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
-    uint8_t dispatch_class_;
+    uint8_t dispatch_class_{};
     std::vector<uint32_t> compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
     std::vector< std::vector< RuntimeArgsData> > core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_;
     std::vector<uint32_t> common_runtime_args_;
-    RuntimeArgsData common_runtime_args_data_;
+    RuntimeArgsData common_runtime_args_data_{};
     std::set<CoreCoord> core_with_runtime_args_;
     std::size_t max_runtime_args_per_core_;             // For validation
     CoreCoord core_with_max_runtime_args_;              // For validation
