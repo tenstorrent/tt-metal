@@ -165,7 +165,7 @@ const core_descriptor_t& get_core_descriptor_config(
     TT_ASSERT(compute_with_storage_start.IsSequence() and compute_with_storage_end.IsSequence());
     TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
     TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
-    // chose what core grid to use based on the environment variable
+    // // Adjusts the core grid configuration based on the value of the environment variable
     if (getenv("CORE_GRID_OVERRIDE_TODEPRECATE")) {
         auto compute_with_storage_end_override = string_to_yaml_node(getenv("CORE_GRID_OVERRIDE_TODEPRECATE"));
         TT_FATAL(
