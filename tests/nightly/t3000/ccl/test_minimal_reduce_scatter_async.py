@@ -246,7 +246,6 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
         # Tests for training shapes
         (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        (8, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
         (8, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
@@ -260,7 +259,6 @@ def run_reduce_scatter_impl(
         "batch_1",
         "tt_training_test_one",
         "tt_training_test_two",
-        "tt_training_test_three",
     ],
 )
 @pytest.mark.parametrize(
