@@ -135,10 +135,6 @@ void MAIN {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
     }
-
-    if constexpr (one_scalar_per_core) {
-        cb_pop_front(in_scalar_cb_id_0, 1);
-    }
 }
 
 }  // namespace NAMESPACE

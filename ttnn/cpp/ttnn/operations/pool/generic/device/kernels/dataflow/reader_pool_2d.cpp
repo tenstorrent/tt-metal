@@ -244,7 +244,9 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(28);
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
 
-    clear_out_tiles<in_cb_id, clear_value_cb_id>();
+    if constexpr (last_tile_is_partial) {
+        clear_out_tiles<in_cb_id, clear_value_cb_id>();
+    }
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
