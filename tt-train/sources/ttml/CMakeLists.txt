@@ -24,6 +24,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/random.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/scoped.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.hpp
@@ -54,6 +55,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.cpp

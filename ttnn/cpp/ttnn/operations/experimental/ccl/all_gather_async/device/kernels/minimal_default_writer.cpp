@@ -236,21 +236,15 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    uint64_t remote_noc0_dest_noc_addr_tile_one =
-                        get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-                    uint64_t remote_noc0_dest_noc_addr_tile_two =
-                        get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            scatter_write_for_fabric_write(
-                                remote_noc0_dest_noc_addr_tile_one,
-                                remote_noc0_dest_noc_addr_tile_two,
+                            scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_one_id,
+                                tile_two_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
-                                l1_read_addr,
-                                output_page_size,
-                                output_page_size);
+                                l1_read_addr);
                         }
                         uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
                         uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
@@ -261,14 +255,13 @@ void kernel_main() {
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            scatter_write_for_fabric_write(
-                                remote_noc0_dest_noc_addr_tile_one,
-                                remote_noc0_dest_noc_addr_tile_two,
+                            scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_one_id,
+                                tile_two_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
-                                l1_read_addr,
-                                output_page_size,
-                                output_page_size);
+                                l1_read_addr);
                         }
                     }
                     tiles_read += 2;
@@ -283,12 +276,11 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    uint64_t remote_noc0_dest_noc_addr =
-                        get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            write_for_fabric_write(
-                                remote_noc0_dest_noc_addr,
+                            write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
                                 l1_read_addr,
@@ -299,8 +291,9 @@ void kernel_main() {
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            write_for_fabric_write(
-                                remote_noc0_dest_noc_addr,
+                            write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
                                 l1_read_addr,
@@ -421,19 +414,8 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        uint64_t remote_noc0_dest_noc_addr_tile_one =
-                            get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-                        uint64_t remote_noc0_dest_noc_addr_tile_two =
-                            get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-
-                        scatter_write_for_fabric_write(
-                            remote_noc0_dest_noc_addr_tile_one,
-                            remote_noc0_dest_noc_addr_tile_two,
-                            pkt_hdr,
-                            *mux_connection_handle,
-                            l1_read_addr,
-                            output_page_size,
-                            output_page_size);
+                        scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                            output_addrgen, tile_one_id, tile_two_id, pkt_hdr, *mux_connection_handle, l1_read_addr);
                         tiles_read += 2;
                         break;
                     }
@@ -446,10 +428,8 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        uint64_t remote_noc0_dest_noc_addr =
-                            get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-                        write_for_fabric_write(
-                            remote_noc0_dest_noc_addr, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
+                        write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                            output_addrgen, tile_id, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
                         tiles_read++;
                         break;
                     }
@@ -477,6 +457,9 @@ void kernel_main() {
         }
         slice_writes++;
     }
+
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);

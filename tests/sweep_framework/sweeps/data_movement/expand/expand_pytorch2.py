@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 import torch
 import random
 import ttnn
+import pytest
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -285,7 +286,7 @@ parameters = {
             {"shape": [7, 1], "size": [7, 9]},
             {"shape": [768], "size": [1, 1, -1]},
         ],
-        "dtype": [ttnn.bfloat16],
+        "dtype": [ttnn.bfloat16, ttnn.int32],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
@@ -300,6 +301,16 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             return True, "bfloat8_b not supported with dims  < 2"
 
     return False, None
+
+
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
 
 
 def run(
@@ -324,3 +335,29 @@ def run(
 
     return [result, e2e_perf]
     # raise Exception("Expand is not supported, TODO: implement via recursive concat with itself")
+
+
+@pytest.mark.parametrize("expand_specs", parameters["nightly"]["expand_specs"])
+@pytest.mark.parametrize("dtype", parameters["nightly"]["dtype"])
+@pytest.mark.parametrize("layout", parameters["nightly"]["layout"])
+def test_run(
+    expand_specs,
+    dtype,
+    layout,
+    *,
+    device,
+):
+    torch_tensor = random_torch_tensor(dtype, expand_specs["shape"])
+    expanded_tensor = torch_tensor.expand(expand_specs["size"])
+
+    ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=layout, dtype=dtype)
+
+    start_time = start_measuring_time()
+    expanded_ttnn_tensor = ttnn.expand(ttnn_tensor, expand_specs["size"])
+    e2e_perf = stop_measuring_time(start_time)
+
+    ttnn_output_tensor = ttnn.to_torch(expanded_ttnn_tensor)
+
+    result = check_with_pcc(expanded_tensor, ttnn_output_tensor, 0.999)
+
+    return [result, e2e_perf]

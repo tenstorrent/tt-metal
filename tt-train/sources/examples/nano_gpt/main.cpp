@@ -43,7 +43,7 @@ void signal_handler(int signum) {
     exit(signum);
 }
 
-using Model = std::shared_ptr<ttml::autograd::ModuleBase>;
+using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
 void model_to_eval(Model &model) {
     model->eval();
@@ -485,13 +485,13 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt.yaml";
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_gpt2s.yaml";
 
     std::string run_name = "";
-    bool is_eval = false;
+    bool is_eval = true;
     bool add_time_to_name = true;
     bool enable_wandb = false;
-    std::string safetensors_path = "";
+    std::string safetensors_path = "/tmp/.huggingface/models--gpt2/snapshots/607a30d783dfa663caf39e06633721c8d4cfcd7e";
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
@@ -779,8 +779,7 @@ int main(int argc, char **argv) {
 
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
-        auto parameters = model->parameters();
-        ttml::models::gpt2::load_model_from_safetensors(safetensors_path, parameters);
+        model->load_from_safetensors(safetensors_path);
         fmt::print("Model loaded from safetensors\n");
     }
     if (!save_and_exit_path.empty()) {
