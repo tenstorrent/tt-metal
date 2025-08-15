@@ -5,12 +5,12 @@ import math
 device = ttnn.CreateDevice(0, l1_small_size=8192)
 
 in_n = 1
-in_h = 18
-in_w = 18
+in_h = 159
+in_w = 159
 in_c = 32
-kernel_size = [2, 2]
+kernel_size = [3, 3]
 stride = [1, 1]
-padding = [0, 0]
+padding = [1, 1]
 dilation = [1, 1]
 shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 tensor_shape = (in_n, in_c, in_h, in_w)  # NCHW format
