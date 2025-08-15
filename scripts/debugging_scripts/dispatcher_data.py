@@ -45,6 +45,8 @@ class DispatcherCoreData:
 class DispatcherData:
     def __init__(self, inspector_data: InspectorData, context: Context):
         self.inspector_data = inspector_data
+        if inspector_data.kernels is None or len(inspector_data.kernels) == 0:
+            raise TTTriageError("No kernels found in inspector data.")
 
         self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
         brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
