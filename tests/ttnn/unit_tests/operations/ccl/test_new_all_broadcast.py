@@ -283,6 +283,55 @@ def test_all_broadcast(
     )
 
 
+# Enumerate the post-commit cases explicitly
+@pytest.mark.parametrize(
+    "num_devices, num_links, output_shape, layout, input_dtype",
+    [
+        (4, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (2, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10000}], indirect=True
+)
+def test_all_broadcast_trace(
+    t3k_mesh_device,
+    # pcie_mesh_device,
+    num_devices,
+    output_shape,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    num_iters,
+    function_level_defaults,
+):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
+    run_all_broadcast_impl(
+        t3k_mesh_device,
+        num_devices,
+        output_shape,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        all_broadcast_topology=ttnn.Topology.Linear,
+        num_iters=num_iters,
+        rand_tensor=True,
+        mem_config=mem_config,
+        trace_mode=True,
+    )
+
+
 @pytest.mark.parametrize(
     "num_devices, output_shape, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
