@@ -461,7 +461,7 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    JitBuildStateSubset build_states = BuildEnvManager::get_instance().get_kernel_build_states(
+    auto build_states = BuildEnvManager::get_instance().get_kernel_build_states(
         device->build_id(), tensix_core_type, compute_class_idx);
     jit_build_subset(build_states, this);
 }
@@ -582,12 +582,12 @@ bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    const JitBuildStateSubset& build_states = BuildEnvManager::get_instance().get_kernel_build_states(
+    const auto build_states = BuildEnvManager::get_instance().get_kernel_build_states(
         device->build_id(), tensix_core_type, compute_class_idx);
 
-    const std::string output_path = build_states.build_ptr[0]->get_out_path();
-    for (uint32_t i = 0; i < build_states.size; i++) {
-        TT_ASSERT(build_states.build_ptr[i]->get_out_path() == output_path);
+    const std::string output_path = build_states[0].get_out_path();
+    for (auto& build : build_states) {
+        TT_ASSERT(build.get_out_path() == output_path);
     }
 
     const std::string build_success_marker_path =
