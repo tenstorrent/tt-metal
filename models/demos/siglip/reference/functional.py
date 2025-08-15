@@ -29,9 +29,9 @@ def siglip_attention(
     head_dim = vision_dim // num_heads
 
     # Project to Q, K, V
-    queries = F.linear(hidden_states, state_dict["q_proj"]["weight"], state_dict["q_proj"].get("bias"))
-    keys = F.linear(hidden_states, state_dict["k_proj"]["weight"], state_dict["k_proj"].get("bias"))
-    values = F.linear(hidden_states, state_dict["v_proj"]["weight"], state_dict["v_proj"].get("bias"))
+    queries = F.linear(hidden_states, state_dict["wq"]["weight"], state_dict["wq"].get("bias"))
+    keys = F.linear(hidden_states, state_dict["wk"]["weight"], state_dict["wk"].get("bias"))
+    values = F.linear(hidden_states, state_dict["wv"]["weight"], state_dict["wv"].get("bias"))
 
     # Reshape to multi-head format
     queries = queries.view(batch_size, seq_length, num_heads, head_dim).transpose(1, 2)
@@ -61,6 +61,6 @@ def siglip_attention(
     attn_output = attn_output.reshape(batch_size, seq_length, embed_dim)
 
     # Final output projection
-    attn_output = F.linear(attn_output, state_dict["out_proj"]["weight"], state_dict["out_proj"].get("bias"))
+    attn_output = F.linear(attn_output, state_dict["wo"]["weight"], state_dict["wo"].get("bias"))
 
     return attn_output, attn_weights

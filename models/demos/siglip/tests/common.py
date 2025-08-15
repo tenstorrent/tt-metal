@@ -16,7 +16,7 @@ def convert_state_dict(flat_dict):
 
     Example:
         Input: {'model.layers.0.self_attn.q_proj.weight': tensor(...)}
-        Output: {'model': {'layers': [{'self_attn': {'q_proj': {'weight': tensor(...)}}}]}}
+        Output: {'model': {'layers': [{'self_attn': {'wq': {'weight': tensor(...)}}}]}}
     """
     # Map the attention weights to the Meta format (until image attention is generic)
     mappings = {
