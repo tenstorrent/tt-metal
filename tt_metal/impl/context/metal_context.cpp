@@ -306,7 +306,7 @@ void MetalContext::clear_l1_state(chip_id_t device_id) {
             CoreCoord logical_core(x, y);
             auto virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
-            get_cluster().write_core(device_id, virtual_core, zero_vec, start_address);
+            cluster_->write_core(device_id, virtual_core, zero_vec, start_address);
         }
     }
 
@@ -319,7 +319,7 @@ void MetalContext::clear_l1_state(chip_id_t device_id) {
 
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-        get_cluster().write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
+        cluster_->write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
     }
     // TODO: clear idle eriscs as well
     cluster_->l1_barrier(device_id);
@@ -556,7 +556,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             "Invalid core {} for context switch check",
             virtual_core.str());
         std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
-        auto data = get_cluster().read_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
+        auto data = cluster_->read_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
         return (data[0] != 0);
     };
 
@@ -577,7 +577,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             HalL1MemAddrType::LAUNCH);
 
         std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        data = get_cluster().read_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
+        data = cluster_->read_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
 
         launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
         launch_msg->kernel_config.exit_erisc_kernel = 1;
@@ -586,7 +586,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
         if (!is_idle_eth) {
             // Active
             std::vector<uint32_t> clear_flag_data = {0};
-            get_cluster().write_core_immediate(
+            cluster_->write_core_immediate(
                 device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
         }
     };
@@ -1095,7 +1095,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
                 core_info->absolute_logical_x = logical_core.x;
                 core_info->absolute_logical_y = logical_core.y;
                 // Must write to core before starting it
-                get_cluster().write_core_immediate(
+                cluster_->write_core_immediate(
                     device_id,
                     worker_core,
                     core_info_vec,
@@ -1116,7 +1116,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
 
-        get_cluster().write_core_immediate(
+        cluster_->write_core_immediate(
             device_id,
             virtual_core,
             zero_vec_erisc_init,
@@ -1130,7 +1130,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         core_info->absolute_logical_x = eth_core.x;
         core_info->absolute_logical_y = eth_core.y;
-        get_cluster().write_core_immediate(
+        cluster_->write_core_immediate(
             device_id,
             virtual_core,
             core_info_vec,
@@ -1147,7 +1147,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         core_info->absolute_logical_x = eth_core.x;
         core_info->absolute_logical_y = eth_core.y;
-        get_cluster().write_core_immediate(
+        cluster_->write_core_immediate(
             device_id,
             virtual_core,
             core_info_vec,
