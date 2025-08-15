@@ -49,16 +49,15 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
         buffer_size,
         {{src0_cb_index, tt::DataFormat::Float16_b}}
     ).set_page_size(src0_cb_index, buffer_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     // This kernel is enough to fill up the print buffer, even though the device is not being
     // printed from, we still need to drain the print buffer to prevent hanging the core.
-    KernelHandle brisc_print_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Run the program
     fixture->RunProgram(device, program);
