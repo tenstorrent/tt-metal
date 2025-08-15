@@ -76,7 +76,7 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12640
+#define MEM_MAILBOX_SIZE 12656
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 4
 #define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 8
@@ -104,18 +104,17 @@
 
 // Tensix fabric connection metadata for workers
 #define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
-#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 688        // sizeof(tensix_fabric_connections_l1_info_t)
-#define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 432  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 720        // sizeof(tensix_fabric_connections_l1_info_t)
+#define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 464  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
 
 // Packet header pool sizing constants
 #define PACKET_HEADER_MAX_SIZE 64
-#define PACKET_HEADER_MAX_DIRECTIONS \
-    4 * 2 * MaxDMProcessorsPerCoreType  // (EAST, WEST, NORTH, SOUTH) * convention * (DM0, DM1)
+#define NUM_PACKET_HEADERS (4 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH) * convention * (DM0, DM1)
 
 // Packet header pool for fabric networking
 // Size: 64 * 4 * 2 * 2 = 1024
 #define MEM_PACKET_HEADER_POOL_BASE (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
-#define MEM_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * PACKET_HEADER_MAX_DIRECTIONS)
+#define MEM_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * NUM_PACKET_HEADERS)
 #if (MEM_PACKET_HEADER_POOL_BASE % 16 != 0) || (MEM_PACKET_HEADER_POOL_SIZE % 16 != 0)
 #error "Packet header pool base and size must be 16-byte aligned"
 #endif
