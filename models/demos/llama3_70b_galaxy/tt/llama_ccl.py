@@ -365,7 +365,7 @@ class TT_CCL:
         N_per_shard = (
             (16 * 1024) // num_cores_after_lm_head * cluster_shape[cluster_axis]
             if not self.use_qwen_mlp
-            else (155648 // 8) // num_cores_after_lm_head * cluster_shape[cluster_axis]
+            else (16 * 1536) // num_cores_after_lm_head * cluster_shape[cluster_axis]
         )  # LM Head
         self.lm_head_buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -638,6 +638,9 @@ class TT_CCL:
                 persistent_buffer = self.tt_lm_head_buffer_l1
             else:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
+
+            breakpoint()
+
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 persistent_buffer,
@@ -654,6 +657,8 @@ class TT_CCL:
                 use_noc1_only=use_noc1_only,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
             )
+
+            breakpoint()
 
             if lm_head:
                 persistent_buffer.deallocate(True)
