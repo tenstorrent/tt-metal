@@ -84,7 +84,9 @@ struct AllBroadcastAsync {
     tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
         const ttnn::MeshCoordinate& coord,
         const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+        std::vector<Tensor>& output_tensors,
+        const GlobalSemaphore& init_barrier_semaphore,
+        const GlobalSemaphore& final_barrier_semaphore) const;
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 

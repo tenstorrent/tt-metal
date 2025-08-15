@@ -286,7 +286,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores, ring_index](
+        [worker_sender_reader_kernel_id,
+         worker_sender_writer_kernel_id,
+         semaphore,
+         barrier_semaphore,
+         sender_worker_cores,
+         ring_index](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -294,10 +299,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
 
-            auto semaphore = static_cast<const ttnn::AllBroadcastAsync*>(operation)->semaphore;
-            auto barrier_semaphore = static_cast<const ttnn::AllBroadcastAsync*>(operation)->barrier_semaphore;
-
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
+            log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", barrier_semaphore.address());
 
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
