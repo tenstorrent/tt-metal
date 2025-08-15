@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
+#include <umd/device/types/xy_pair.h>
 #include <cstdint>
 #include <string>
 
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
+#include "tt-metalium/core_coord.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
@@ -18,6 +20,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <utility>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::operations::conv {
@@ -94,13 +97,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         input_cores == output_cores || block_sharded,
         "For height sharded convs input and output cores must be the same");
 
-    CoreRangeSet all_cores = output.memory_config().shard_spec().value().grid;
-    if (input_cores.num_cores() > output_cores.num_cores()) {
-        all_cores = input_cores;
+    CoreRangeSet all_cores;
+    if (height_sharded) {
+        all_cores = CoreRangeSet(CoreRange(
+            CoreCoord(0, 0),
+            CoreCoord(parallelization_config.grid_size.x - 1, parallelization_config.grid_size.y - 1)));
+    } else {
+        all_cores = input_cores.merge(output_cores);
     }
 
     const uint32_t num_cores_x = parallelization_config.grid_size.x;
     const uint32_t num_cores_y = parallelization_config.grid_size.y;
+    log_info(tt::LogOp, "Conv2D parallelization grid size: {} x {}", num_cores_x, num_cores_y);
     const uint32_t total_num_cores = all_cores.num_cores();
 
     const uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
@@ -108,8 +116,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     const bool slice_inner_dim = height_sharded || !full_inner_dim;
 
-    uint32_t conv_act_c_blocks;
-    uint32_t input_channels_padded;
+    uint32_t conv_act_c_blocks = 1;
+    uint32_t out_conv_c_blocks = 1;
+    uint32_t input_channels_padded = shard_shape[1];
     if (block_sharded) {
         TT_ASSERT(input_cores.size() == 1, "Block sharded convs should have only one input core range!");
         const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
@@ -117,6 +126,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
         conv_act_c_blocks =
             a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR ? in_num_cores_x : in_num_cores_y;
+        out_conv_c_blocks =
+            output.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR ? num_cores_x : num_cores_y;
         if (transpose_mcast) {
             TT_FATAL(conv_act_c_blocks == in_num_cores_y, "Expected conv_act_c_blocks to be equal to height of grid");
             input_channels_padded = shard_shape[1] * in_num_cores_y;
@@ -124,10 +135,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             TT_FATAL(conv_act_c_blocks == in_num_cores_x, "Expected conv_act_c_blocks to be equal to width of grid");
             input_channels_padded = shard_shape[1] * in_num_cores_x;
         }
-    } else {
-        conv_act_c_blocks = 1;
-        input_channels_padded = shard_shape[1];
     }
+
     const ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     const uint32_t conv_act_size_c = ashape_with_channels_padded[3];
@@ -455,12 +464,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     // Mcast cores
     // If total_num_cores, there is no mcasting
-    CoreCoord top_left_core = {(std::size_t)0, (std::size_t)0};
-    CoreCoord top_left_core_plus_one = {(std::size_t)1, (std::size_t)1};
-    CoreCoord bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
+    const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
+
+    const CoreCoord top_left_core = {(std::size_t)0, (std::size_t)0};
+    const CoreCoord top_left_core_plus_one = {(std::size_t)1, (std::size_t)1};
+    const CoreCoord bottom_right_core = {(std::size_t)in_num_cores_x - 1, (std::size_t)in_num_cores_y - 1};
+    const CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+    const CoreCoord top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
+    const CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     CoreRange mcast_sender_cores(top_left_core, top_left_core);  // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores;
@@ -468,16 +480,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t weights_mcast_receiver_semaphore_id{};
     uint32_t act_mcast_sender_semaphore_id = 0;
     uint32_t act_mcast_receiver_semaphore_id = 0;
-    std::vector<uint32_t> act_mcast_noc_y;
     if (block_sharded) {
         // 2D mcast
         if (transpose_mcast) {
-            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
+            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, in_num_cores_y - 1));
             if (!skip_weights_mcast) {
                 mcast_receiver_cores = CoreRange(CoreCoord(1, 0), bottom_right_core);
             }
         } else {
-            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
+            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(in_num_cores_x - 1, 0));
             if (!skip_weights_mcast) {
                 mcast_receiver_cores = CoreRange(CoreCoord(0, 1), bottom_right_core);
             }
@@ -487,29 +498,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     } else {
         // 1D mcast
         if (!skip_weights_mcast) {
-            std::set<CoreRange> mcast_receiver_set;
-            if (num_cores_x > 1) {
-                mcast_receiver_set.insert(CoreRange(CoreCoord(1, 0), CoreCoord(num_active_cores_x - 1, 0)));
-            }
-            if (num_cores_y > 1) {
-                if (num_active_cores_y_with_full_x >= 2) {
-                    mcast_receiver_set.insert(CoreRange(
-                        CoreCoord(0, 1), CoreCoord(num_active_cores_x - 1, num_active_cores_y_with_full_x - 1)));
-                }
-                if (num_active_cores_x_last_y > 0) {
-                    mcast_receiver_set.insert(CoreRange(
-                        CoreCoord(0, num_active_cores_y_with_full_x),
-                        CoreCoord(num_active_cores_x_last_y - 1, num_active_cores_y_with_full_x)));
-                }
-            }
-            mcast_receiver_cores = mcast_receiver_set;
+            mcast_receiver_cores = all_cores.subtract(mcast_sender_cores);
             weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
             weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
         }
     }
-
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> writer_compile_time_args;
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     uint32_t act_block_w_extra_align_bytes =
@@ -588,19 +581,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
             act_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, input_cores, INVALID);
             act_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, input_cores, INVALID);
-
-            if (transpose_mcast) {
-                act_mcast_noc_y.reserve(num_cores_y);
-                for (uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
-                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
-                }
-            } else {
-                // NOTE: using same var for x as well, this is intentional
-                act_mcast_noc_y.reserve(num_cores_x);
-                for (int32_t core_idx_x = 0; core_idx_x < num_cores_x; ++core_idx_x) {
-                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({(uint32_t)core_idx_x, 0}).x);
-                }
-            }
         } else if (is_conv_1d_depthwise_conv) {
             // 1D Depthwise Conv (height sharded)
             compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
@@ -632,7 +612,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t reader_arg_act_block_h_datums = (enable_split_reader ? act_block_h_datums_split : act_block_h_datums);
     TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
-    reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)dilation_h,
         (uint32_t)dilation_w,
         (uint32_t)stride_w,
@@ -705,7 +685,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
 
-    writer_compile_time_args = {
+    std::vector<uint32_t> writer_compile_time_args = {
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
         (uint32_t)(bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0)),
@@ -725,7 +705,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_ntiles_per_core,
 
         num_blocks_act_h_per_core,
-        num_blocks_weight_w_per_core};
+        num_blocks_weight_w_per_core,
+        out_conv_c_blocks};
+    for (auto elem : writer_compile_time_args) {
+        log_info(tt::LogOp, "writer_compile_time_args: {}", elem);
+    }
 
     if (enable_split_reader) {
         std::vector<uint32_t> split_reader_args = {
@@ -746,6 +730,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
+
+    const bool check_skip_compute = input_cores != output_cores;
 
     std::vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,
@@ -781,11 +767,20 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index,
         partials_cb_uses_output,
-        conv_act_c_blocks};
+        conv_act_c_blocks,
+        check_skip_compute};
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+
+    log_info(tt::LogOp, "All cores grid {}, num cores {}", all_cores, all_cores.num_cores());
+    log_info(tt::LogOp, "Input cores grid {}, num cores {}", input_cores, input_cores.num_cores());
+    log_info(tt::LogOp, "Output cores grid {}, num cores {}", output_cores, output_cores.num_cores());
+    log_info(tt::LogOp, "mcast sender cores {}, num cores {}", mcast_sender_cores, mcast_sender_cores.size());
+    log_info(
+        tt::LogOp, "mcast receiver cores {}, num cores {}", mcast_receiver_cores, mcast_receiver_cores.num_cores());
+
     auto writer_mcast_sender_id = CreateKernel(
         program,
         writer_mcast_sender_kernel,
@@ -809,23 +804,21 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 .defines = writer_defines});
     }
 
-    log_info(tt::LogOp, "All cores grid {}", all_cores.bounding_box());
-    auto reader_id = CreateKernel(
+    tt::tt_metal::KernelHandle reader_id = CreateKernel(
         program,
         reader_kernel,
-        all_cores,
+        // ToDo, might need output grid for BS
+        input_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
-    // Compile compute kernel for active cores only
-    // Compile blank kernel for noop cores
-    CreateKernel(
+    tt::tt_metal::KernelHandle compute_kernel_id = CreateKernel(
         program,
         compute_kernel,
-        all_cores,
+        height_sharded ? input_cores : all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -838,25 +831,33 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                         : std::vector<uint32_t>{end_x, end_y, start_x, start_y};
     };
 
-    // Helper lambda to create receiver runtime args
-    auto create_receiver_args = [&](uint32_t sender_noc_x, uint32_t sender_noc_y) {
-        return std::vector<uint32_t>{
-            0,  // noop_core (false for receivers)
-            sender_noc_x,
-            sender_noc_y,
-            weights_mcast_sender_semaphore_id,
-            weights_mcast_receiver_semaphore_id};
-    };
+    if (block_sharded) {
+        // Setup reader runtime arguments
+        const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
+        const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
+        std::vector<uint32_t> act_mcast_noc_y;
+        if (transpose_mcast) {
+            act_mcast_noc_y.reserve(in_num_cores_y);
+            for (uint32_t core_idx_y = 0; core_idx_y < in_num_cores_y; ++core_idx_y) {
+                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+            }
+        } else {
+            // NOTE: using same var for x as well, this is intentional
+            act_mcast_noc_y.reserve(in_num_cores_x);
+            for (int32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
+                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+            }
+        }
+        for (auto coord : act_mcast_noc_y) {
+            log_info(tt::LogOp, "act_mcast_noc_y: {}", coord);
+        }
 
-    const uint32_t all_num_cores_x = all_cores.bounding_box().end_coord.x + 1;
-    const uint32_t all_num_cores_y = all_cores.bounding_box().end_coord.y + 1;
-    const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
-
-    // Setup reader runtime arguments
-    for (const CoreRange& core_range : all_cores.ranges()) {
-        for (const CoreCoord& core : core_range) {
-            std::vector<uint32_t> reader_rt_args;
-            if (block_sharded) {
+        for (const CoreRange& core_range : input_cores.ranges()) {
+            for (const CoreCoord& core : core_range) {
+                std::vector<uint32_t> reader_rt_args;
+                const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
+                bool is_receiver_core = output_cores.contains(core);
+                // log_info(tt::LogOp, "core {}, is_receiver_core {}", core, is_receiver_core);
                 if (transpose_mcast) {
                     CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
                     CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
@@ -872,15 +873,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                     reader_rt_args.push_back(core.y);                  // act_mcast_sender_id
                     reader_rt_args.push_back(bottom_core_physical.x);  // act_mcast_sender_noc_x
                 } else {
-                    bool is_receiver_core = output_cores.contains(core);
-                    bool is_sender_core = input_cores.contains(core);
-                    log_info(
-                        tt::LogOp,
-                        "core_x_i: {}, core_y_i: {}, is_receiver_core: {}, is_sender_core: {}",
-                        core.x,
-                        core.y,
-                        is_receiver_core,
-                        is_sender_core);
                     CoreCoord core_physical = device->worker_core_from_logical_core(core);
 
                     std::vector<uint32_t> mcast_coords = setup_mcast_args(
@@ -889,123 +881,154 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                         core_physical.y,
                         bottom_right_core_physical.x,
                         core_physical.y);
-
                     reader_rt_args.insert(reader_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
                     reader_rt_args.push_back(core.x);           // act_mcast_sender_id
                     reader_rt_args.push_back(core_physical.y);  // act_mcast_sender_noc_x
-                    reader_rt_args.push_back(static_cast<uint32_t>(is_receiver_core));
-                    reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
                 }
+                reader_rt_args.push_back(static_cast<uint32_t>(is_receiver_core));  // is_receiver_core
                 reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
-            } else {
-                reader_rt_args = {static_cast<uint32_t>(!input_cores.contains(core))};
+                SetRuntimeArgs(program, reader_id, core, reader_rt_args);
             }
-            SetRuntimeArgs(program, reader_id, core, reader_rt_args);
         }
     }
 
-    // Setup writer runtime arguments
-    for (uint32_t core_i = 0; core_i < total_active_num_cores; core_i++) {
-        uint32_t core_x_i = core_i % num_cores_x;
-        uint32_t core_y_i = core_i / num_cores_x;
-        CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
-        bool noop_core = false;
-
-        // Calculate weight slice and output tile indices
-        uint32_t weight_slice_i = (block_sharded && transpose_mcast || !block_sharded)
-                                      ? core_i / total_num_cores_per_weight_slice
-                                      : core_i % total_num_cores_per_act_slice;
+    // Setup writer mcast arguments
+    // Setup sender args first
+    for (const CoreCoord& core : mcast_sender_cores) {
+        // Calculate weight slice indices
+        uint32_t weight_slice_i = (block_sharded && transpose_mcast || !block_sharded) ? core.y : core.x;
 
         uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
+        log_info(tt::LogOp, "out_start_tile_id_w: {}", out_start_tile_id_w);
         uint32_t bias_tile_offset = out_start_tile_id_w;
 
-        if (has_bias) {
-            TT_FATAL(
-                bias_tile_offset < bias_ntiles,
-                "bias_tile_offset {} should be less than bias_ntiles {}",
-                bias_tile_offset,
-                bias_ntiles);
-        }
+        // TT_FATAL(
+        //     bias_tile_offset < bias_ntiles || !has_bias,
+        //     "bias_tile_offset {} should be less than bias_ntiles {}",
+        //     bias_tile_offset,
+        //     bias_ntiles);
 
         std::vector<uint32_t> sender_rt_args = {
-            weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset, (uint32_t)noop_core};
-
+            weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset};
         if (block_sharded) {
+            bool is_noop_core = !output_cores.contains(core);
+            log_debug(tt::LogOp, "ws core {}, is_noop_core {}", core, is_noop_core);
+            sender_rt_args.push_back(static_cast<uint32_t>(is_noop_core));  // is_no_op_core
+
             // 2D multicast setup
             if (transpose_mcast) {
-                CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core_y_i};
-                auto right_core_physical = device->worker_core_from_logical_core(right_core);
+                CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
+                CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
 
-                if (core_x_i == 0) {  // sender
-                    auto mcast_coords = setup_mcast_args(
-                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                        top_left_core_plus_one_physical.x,
-                        right_core_physical.y,
-                        bottom_right_core_physical.x,
-                        right_core_physical.y);
-
-                    sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
-                    sender_rt_args.insert(
-                        sender_rt_args.end(),
-                        {num_cores_x - 1,
-                         num_cores_x - 1,  // mcast_num_dests, mcast_num_cores
-                         weights_mcast_sender_semaphore_id,
-                         weights_mcast_receiver_semaphore_id,
-                         output.buffer()->aligned_page_size()});
-                    SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
-                } else {  // receiver
-                    auto receiver_args = create_receiver_args(top_left_core_physical.x, right_core_physical.y);
-                    SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);
-                }
-            } else {
-                CoreCoord top_core = {(std::size_t)core_x_i, 0};
-                auto top_core_physical = device->worker_core_from_logical_core(top_core);
-
-                if (core_y_i == 0) {  // sender
-                    auto mcast_coords = setup_mcast_args(
-                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                        top_core_physical.x,
-                        top_left_core_plus_one_physical.y,
-                        top_core_physical.x,
-                        bottom_right_core_physical.y);
-
-                    sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
-                    sender_rt_args.insert(
-                        sender_rt_args.end(),
-                        {num_cores_y - 1,
-                         num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
-                         weights_mcast_sender_semaphore_id,
-                         weights_mcast_receiver_semaphore_id});
-                    SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
-                } else {  // receiver
-                    auto receiver_args = create_receiver_args(top_core_physical.x, top_left_core_physical.y);
-                    SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);
-                }
-            }
-        } else {
-            // 1D multicast setup
-            if (core_x_i == 0 && core_y_i == 0) {  // sender
-                auto mcast_coords = setup_mcast_args(
+                std::vector<uint32_t> mcast_coords = setup_mcast_args(
                     writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                    top_left_core_physical.x,
-                    top_left_core_physical.y,
+                    top_left_core_plus_one_physical.x,
+                    right_core_physical.y,
                     bottom_right_core_physical.x,
+                    right_core_physical.y);
+
+                sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
+
+                sender_rt_args.insert(
+                    sender_rt_args.end(),
+                    {num_cores_x - 1,
+                     num_cores_x - 1,  // mcast_num_dests, mcast_num_cores
+                     weights_mcast_sender_semaphore_id,
+                     weights_mcast_receiver_semaphore_id,
+                     output.buffer()->aligned_page_size()});
+                SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+            } else {
+                CoreCoord top_core = {(std::size_t)core.x, 0};
+                CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
+                TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
+                std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                    writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                    top_core_physical.x,
+                    top_left_core_plus_one_physical.y,
+                    top_core_physical.x,
                     bottom_right_core_physical.y);
 
                 sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
                 sender_rt_args.insert(
                     sender_rt_args.end(),
-                    {total_active_num_cores - 1,
-                     total_num_cores - 1,  // mcast_num_dests, mcast_num_cores
+                    {num_cores_y - 1,
+                     num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
                      weights_mcast_sender_semaphore_id,
                      weights_mcast_receiver_semaphore_id});
                 SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
-            } else {  // receiver
-                auto receiver_args = create_receiver_args(top_left_core_physical.x, top_left_core_physical.y);
-                SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);
+            }
+        } else {
+            // 1D multicast setup
+            std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                top_left_core_physical.x,
+                top_left_core_physical.y,
+                bottom_right_core_physical.x,
+                bottom_right_core_physical.y);
+
+            sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
+            sender_rt_args.insert(
+                sender_rt_args.end(),
+                {total_active_num_cores - 1,
+                 total_num_cores - 1,  // mcast_num_dests, mcast_num_cores
+                 weights_mcast_sender_semaphore_id,
+                 weights_mcast_receiver_semaphore_id});
+            SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+        }
+    }
+
+    // Setup receiver args second
+    for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
+        // Helper lambda to create receiver runtime args
+        auto create_receiver_args = [&](bool is_noop_core, uint32_t sender_noc_x, uint32_t sender_noc_y) {
+            return std::vector<uint32_t>{
+                static_cast<uint32_t>(is_noop_core),
+                sender_noc_x,
+                sender_noc_y,
+                weights_mcast_sender_semaphore_id,
+                weights_mcast_receiver_semaphore_id};
+        };
+
+        for (const CoreCoord& core : core_range) {
+            std::vector<uint32_t> receiver_args;
+            if (block_sharded) {
+                bool is_noop_core = !output_cores.contains(core);
+                if (transpose_mcast) {
+                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.x};
+                    CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                    receiver_args = create_receiver_args(is_noop_core, top_left_core_physical.x, right_core_physical.y);
+                } else {
+                    CoreCoord top_core = {(std::size_t)core.x, 0};
+                    CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
+                    receiver_args = create_receiver_args(is_noop_core, top_core_physical.x, top_left_core_physical.y);
+                }
+            } else {
+                bool is_no_op_core = !input_cores.contains(core);
+                receiver_args = std::vector<uint32_t>{
+                    static_cast<uint32_t>(is_no_op_core),
+                    top_left_core_physical.x,
+                    top_left_core_physical.y,
+                    weights_mcast_sender_semaphore_id,
+                    weights_mcast_receiver_semaphore_id};
+            }
+            SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);
+        }
+    }
+
+    if (input_cores != output_cores) {
+        CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
+        uint32_t end_coord_x = bottom_right_core_out.x;
+        // log_info(tt::LogOp, "end_coord_x: {}", end_coord_x);
+        for (const CoreRange range : all_cores.ranges()) {
+            for (const CoreCoord core : range) {
+                bool skip_compute = core.x > end_coord_x;
+                // log_info(tt::LogOp, "Setting skip_compute {} for core {}", skip_compute, core);
+                SetRuntimeArgs(
+                    program, compute_kernel_id, core, std::vector<uint32_t>{static_cast<uint32_t>(skip_compute)});
             }
         }
-    }  // for core_ium_cores
+    }
 
     std::vector<CoreCoord> mcast_sender_cores_vec =
         grid_to_cores(mcast_sender_cores.start_coord, mcast_sender_cores.end_coord, true);

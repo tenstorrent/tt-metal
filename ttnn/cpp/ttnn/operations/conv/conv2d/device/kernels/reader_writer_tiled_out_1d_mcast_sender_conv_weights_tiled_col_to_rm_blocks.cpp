@@ -4,7 +4,6 @@
 
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
-#include "debug/debug.h"
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -47,11 +46,6 @@ void kernel_main() {
 
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
-
-    uint32_t noop = get_arg_val<uint32_t>(i++);
-    if (noop) {
-        return;
-    }
 
     if constexpr (split_reader && needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_second_reader>();
