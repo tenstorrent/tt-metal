@@ -283,13 +283,11 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->default_linker_opt_level_ = "O3";
         this->includes_ += "-I" + env_.gpp_include_dir_ + " ";
         this->process_defines_at_compile_ = false;
-    } else if (build_config.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-        if (build_config.is_cooperative) {
-            // Only cooperative active ethernet needs "-L <root>/tt_metal/hw/toolchain",
-            // because its linker script depends on some files in that directory.
-            // Maybe we should move the dependencies to runtime/hw/toolchain/<arch>/?
-            fmt::format_to(std::back_inserter(this->lflags_), "-L{}/tt_metal/hw/toolchain/ ", env_.root_);
-        }
+    } else if (build_config.core_type == HalProgrammableCoreType::ACTIVE_ETH && build_config.is_cooperative) {
+        // Only cooperative active ethernet needs "-L <root>/tt_metal/hw/toolchain",
+        // because its linker script depends on some files in that directory.
+        // Maybe we should move the dependencies to runtime/hw/toolchain/<arch>/?
+        fmt::format_to(std::back_inserter(this->lflags_), "-L{}/tt_metal/hw/toolchain/ ", env_.root_);
     }
 
     HalJitBuildQueryInterface::Params params{

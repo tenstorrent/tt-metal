@@ -582,7 +582,7 @@ bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    auto build_states = BuildEnvManager::get_instance().get_kernel_build_states(
+    const auto build_states = BuildEnvManager::get_instance().get_kernel_build_states(
         device->build_id(), tensix_core_type, compute_class_idx);
 
     const std::string output_path = build_states[0].get_out_path();
