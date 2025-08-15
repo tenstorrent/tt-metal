@@ -4,6 +4,8 @@
 
 #include "fd_mesh_command_queue.hpp"
 
+#include <tracy/Tracy.hpp>
+
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
