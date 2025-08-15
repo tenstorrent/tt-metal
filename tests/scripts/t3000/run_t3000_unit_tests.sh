@@ -503,6 +503,9 @@ run_t3000_qwen25_vl_unit_tests() {
     echo "LOG_METAL: Unit tests in test_wrapped_model.py for $qwen_dir on T3K completed"
   done
 
+  MESH_DEVICE=T3K pytest models/demos/qwen25_vl/tests/test_windowed_sdpa.py -k "basic or medium or large" --timeout 100 || fail=1
+  echo "LOG_METAL: Unit tests in test_windowed_sdpa.py for T3K completed"
+
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
