@@ -49,7 +49,6 @@ FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
 void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto num_devices = cluster.number_of_devices();
 
     // Get logical fabric mux cores from the first available device (same for all devices), except for TG
     const bool is_TG =
@@ -73,19 +72,13 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     // Initialize translated mux cores (coordinates should be same across devices)
     auto device = tt::DevicePool::instance().get_active_device(device_id);
     TT_FATAL(device != nullptr, "Device {} not found in DevicePool", device_id);
-    if (device != nullptr) {
-        for (const auto& logical_core : logical_fabric_mux_cores_) {
-            CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
-            translated_fabric_or_dispatch_mux_cores_.insert(translated_core);
-        }
-        for (const auto& logical_core : logical_dispatch_mux_cores_) {
-            CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
-            translated_fabric_or_dispatch_mux_cores_.insert(translated_core);
-        }
-        log_info(
-            tt::LogTest,
-            "DEBUG: Initialized {} translated fabric mux cores",
-            translated_fabric_or_dispatch_mux_cores_.size());
+    for (const auto& logical_core : logical_fabric_mux_cores_) {
+        CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
+        translated_fabric_or_dispatch_mux_cores_.insert(translated_core);
+    }
+    for (const auto& logical_core : logical_dispatch_mux_cores_) {
+        CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
+        translated_fabric_or_dispatch_mux_cores_.insert(translated_core);
     }
 
     // Get maximum number of active ethernet channels from control plane across all devices
