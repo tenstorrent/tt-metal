@@ -30,6 +30,13 @@
 
 namespace tt {
 
+// Convert "x,y" to YAML::Node sequence [x, y]
+inline YAML::Node string_to_yaml_node(const std::string& input) {
+    // Format as YAML sequence: "[x, y]"
+    std::string yaml_seq = "[" + input + "]";
+    return YAML::Load(yaml_seq);
+}
+
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
@@ -70,15 +77,6 @@ inline std::string get_core_descriptor_file(
                                             ? "wormhole_b0_80_arch_eth_dispatch.yaml"
                                             : "wormhole_b0_80_arch.yaml");
             case tt::ARCH::BLACKHOLE:
-                if (getenv("BH_ARCH_YAML_TODEPRECATE")) {
-                    if (!std::filesystem::exists(core_desc_dir + getenv("BH_ARCH_YAML_TODEPRECATE"))) {
-                        TT_THROW(
-                            "Blackhole core descriptor variant {} does not exist in {}",
-                            getenv("BH_ARCH_YAML_TODEPRECATE"),
-                            core_desc_dir);
-                    }
-                    return core_desc_dir + getenv("BH_ARCH_YAML_TODEPRECATE");
-                }
                 return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
                                             ? "blackhole_140_arch_eth_dispatch.yaml"
                                             : "blackhole_140_arch.yaml");
@@ -167,6 +165,41 @@ const core_descriptor_t& get_core_descriptor_config(
     TT_ASSERT(compute_with_storage_start.IsSequence() and compute_with_storage_end.IsSequence());
     TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
     TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
+    // chose what core grid to use based on the environment variable
+    if (getenv("CORE_GRID_OVERRIDE_TODEPRECATE")) {
+        auto compute_with_storage_end_override = string_to_yaml_node(getenv("CORE_GRID_OVERRIDE_TODEPRECATE"));
+        TT_FATAL(
+            compute_with_storage_end_override.IsSequence(),
+            "compute_with_storage_end_override must be a YAML sequence");
+        TT_FATAL(
+            (compute_with_storage_end[0].as<int>() >= compute_with_storage_end_override[0].as<int>()),
+            "compute_with_storage_end[0].as<int>(): {} should be >= compute_with_storage_end_override[0].as<int>(): {}",
+            compute_with_storage_end[0].as<int>(),
+            compute_with_storage_end_override[0].as<int>());
+        TT_FATAL(
+            compute_with_storage_end[1].as<int>() >= compute_with_storage_end_override[1].as<int>(),
+            "compute_with_storage_end[1].as<int>(): {} should be >= compute_with_storage_end_override[1].as<int>(): {}",
+            compute_with_storage_end[1].as<int>(),
+            compute_with_storage_end_override[1].as<size_t>());
+        TT_FATAL(
+            compute_with_storage_end_override[0].as<int>() >= compute_with_storage_start[0].as<int>(),
+            "compute_with_storage_end_override[0].as<int>(): {} should be >= compute_with_storage_start[0].as<int>(): "
+            "{}",
+            compute_with_storage_end_override[0].as<int>(),
+            compute_with_storage_start[0].as<int>());
+        TT_FATAL(
+            compute_with_storage_end_override[1].as<int>() >= compute_with_storage_start[1].as<int>(),
+            "compute_with_storage_end_override[1].as<int>(): {} should be >= compute_with_storage_start[1].as<int>(): "
+            "{}",
+            compute_with_storage_end_override[1].as<int>(),
+            compute_with_storage_start[1].as<int>());
+        compute_with_storage_end = compute_with_storage_end_override;
+        log_warning(
+            tt::LogDevice,
+            "Overrided compute_with_storage_end [x, y]=[{}, {}]",
+            compute_with_storage_end[0].as<std::string>(),
+            compute_with_storage_end[1].as<std::string>());
+    }
     CoreCoord compute_grid_size(
         (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
         (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1);
