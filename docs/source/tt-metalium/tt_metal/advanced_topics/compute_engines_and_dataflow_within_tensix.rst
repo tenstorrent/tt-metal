@@ -113,7 +113,7 @@ A typical compute loop follows this synchronization pattern:
 
     Even if a kernel does not pack any data, ``tile_regs_commit`` and ``tile_regs_release`` must still be called in sequence after computation to correctly manage the register state. Failure to do so results in undefined behavior.
 
-The capacity and behavior of the ``Dst`` register set are configured on the host through the ``ComputeKernelConfig`` struct when creating a kernel. Two key parameters control its operation:
+The capacity and behavior of the ``Dst`` register set are configured on the host through the ``ComputeKernelConfig`` struct when creating a kernel. Two key parameters control its operation. Assuming using the standard 32x32 tiles:
 
 * ``fp32_dest_acc_en``: Configures the data width of the ``Dst`` registers.
 
@@ -154,6 +154,8 @@ The number of available tiles is determined by the combination of these two sett
             .dst_full_sync_en = false  // Enable double-buffering
         }
     );
+
+    // Number of Dst registers can be checked using ttnn::get_dest_reg_count(const ComputeKernelConfig&)
 
 .. warning::
 
