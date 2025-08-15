@@ -132,9 +132,7 @@ struct fabric_connection_info_t {
     uint8_t edm_noc_x;
     uint8_t edm_noc_y;
     uint8_t num_buffers_per_channel;
-    // NOTE: This padding can be removed once "non device-init fabric"
-    //       is completely removed
-    uint8_t padding[2];
+    uint16_t worker_free_slots_stream_id;
 } __attribute__((packed));
 
 static_assert(sizeof(fabric_connection_info_t) == 28, "Struct size mismatch!");

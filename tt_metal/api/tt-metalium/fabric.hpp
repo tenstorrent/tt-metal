@@ -97,7 +97,8 @@ tt::tt_fabric::Topology get_fabric_topology();
 void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-    std::optional<uint8_t> num_routing_planes = std::nullopt);
+    std::optional<uint8_t> num_routing_planes = std::nullopt,
+    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
 
 FabricConfig GetFabricConfig();
 

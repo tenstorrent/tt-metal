@@ -150,6 +150,9 @@ public:
 
     void clear_fabric_context();
 
+    // Initialize fabric tensix config (call after routing tables are configured)
+    void initialize_fabric_tensix_datamover_config();
+
     // Check if ANY managed chip supports intermesh links
     bool system_has_intermesh_links() const;
 
@@ -274,6 +277,14 @@ private:
     void write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const;
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
+
+    // Helper to populate fabric connection info for both router and mux configurations
+    void populate_fabric_connection_info(
+        tt::tt_fabric::fabric_connection_info_t& connection_info,
+        tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
+        chip_id_t physical_chip_id,
+        chan_id_t eth_channel_id,
+        eth_chan_directions router_direction) const;
 
     // TODO: remove once UMD can provide all intermesh links
     // Populate the local intermesh link to remote intermesh link table
