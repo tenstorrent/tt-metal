@@ -11,6 +11,7 @@ runs:
   steps:
     - name: Ensure Blackhole links are online
       shell: bash
+      working-directory: /work
       run: |
         # Health check loop. Needed due to the following issues:
         # https://tenstorrent.atlassian.net/browse/SYS-1634
