@@ -47,7 +47,7 @@ static Tensor create_config_tensor(
     uint16_t stick_offset_start =
         0;  // Tracks starting stick offset within the core before adding in_w sticks, used when scale_factor_h > 1
     uint32_t stick_cnt =
-        0;  // Counts the number of sticks processed, used for splitting output sticks accross NCRISC and BRISC
+        0;  // Counts the number of sticks processed, used for splitting output sticks across NCRISC and BRISC
     uint16_t ch_start_core = 0;   // Starting core index where channels are distributed
     uint16_t ch_end_core = 0;     // Ending core index where channels are distributed
     uint16_t nhw_start_core = 0;  // Starting core index for NHW distribution

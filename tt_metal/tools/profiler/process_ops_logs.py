@@ -924,7 +924,7 @@ def analyzeNoCTraces(logFolder):
         logger.warning("Could not import tt-npe module. Ensure tt-npe is built, then source 'tt-npe/ENV_SETUP'")
         return None
     except Exception as e:
-        logger.error("Unexpected error occured when analyzing noc traces, aborting ... ")
+        logger.error("Unexpected error occurred when analyzing noc traces, aborting ... ")
         logger.error(" ↳ " + repr(e))
         return None
 

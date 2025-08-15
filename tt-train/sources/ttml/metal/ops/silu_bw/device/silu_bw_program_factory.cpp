@@ -39,7 +39,7 @@ constexpr uint32_t kOneMinusSigmoidCbIndex = tt::CBIndex::c_4;
 constexpr uint32_t kTimesInputPlusOneCbIndex = tt::CBIndex::c_5;
 constexpr uint32_t kTimesSigmoidCbIndex = tt::CBIndex::c_6;
 
-// Some of the below constants are set to 2U because we might need to push a new value before poping the old one.
+// Some of the below constants are set to 2U because we might need to push a new value before popping the old one.
 constexpr uint32_t kNumOneTiles =
     1U;  // in the end we do not want to have one in CB - to be figured later how to handle it
 

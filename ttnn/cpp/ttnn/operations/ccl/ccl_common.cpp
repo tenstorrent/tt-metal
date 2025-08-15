@@ -80,11 +80,11 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
     return workload_with_callbacks;
 }
 
-SenderRecieverConfig get_device_sender_receiver_config(
+SenderReceiverConfig get_device_sender_receiver_config(
     const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
-    SenderRecieverConfig config;
+    SenderReceiverConfig config;
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == target_device) {
             config.device_index = i;
@@ -105,12 +105,12 @@ SenderRecieverConfig get_device_sender_receiver_config(
     return config;
 }
 
-SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord,
     const distributed::MeshDevice* mesh_device,
     uint32_t cluster_axis,
     int ring_size) {
-    SenderRecieverConfig config;
+    SenderReceiverConfig config;
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),

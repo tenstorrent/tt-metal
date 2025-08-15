@@ -54,7 +54,7 @@ void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h
 }
 
 void kernel_main() {
-    // same arg indices as in reader_binary_diff_lenghts for compat
+    // same arg indices as in reader_binary_diff_lengths for compat
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);

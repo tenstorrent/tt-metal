@@ -28,7 +28,7 @@ uint32_t get_nearest_supported_k_value(uint32_t k) {
 }
 
 // one stop for all transformations needed after executing top-k
-// do we need seperate function for each case? revisit this later
+// do we need separate function for each case? revisit this later
 std::vector<Tensor> post_topk_transform_tensor(
     const Tensor& input_tensor,
     std::vector<Tensor>& result,

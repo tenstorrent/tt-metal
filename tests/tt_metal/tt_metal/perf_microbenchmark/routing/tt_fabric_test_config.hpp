@@ -1377,7 +1377,7 @@ private:
         TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear because no devices were found.");
 
         for (const auto& src_node : devices) {
-            // instantiate N/S E/W traffic on seperate senders to avoid bottlnecking on sender.
+            // instantiate N/S E/W traffic on separate senders to avoid bottlenecking on sender.
             for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
                 // Skip dimensions with only one device
                 if (this->route_manager_.get_mesh_shape()[dim] < 2) {

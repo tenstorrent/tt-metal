@@ -1831,7 +1831,7 @@ void reserve_space_in_kernel_config_buffer(
     }
 
     if (program_binary_status == ProgramBinaryStatus::InFlight) {
-        // Program binary not commited to DRAM. Sync on all workers before dispatching kernel
+        // Program binary not committed to DRAM. Sync on all workers before dispatching kernel
         // binaries for this program. This requires freeing the entire kernel config buffer.
         config_buffer_mgr.free(expected_num_workers_completed);
     } else {

@@ -47,7 +47,7 @@ constexpr auto kRecipRmsACbIndex = tt::CBIndex::c_9;
 constexpr auto kScaleCbIndex = tt::CBIndex::c_10;
 constexpr auto kScaleBcastedCbIndex = tt::CBIndex::c_11;
 
-// Some of the below constants are set to 2U because we might need to push a new value before poping the old one.
+// Some of the below constants are set to 2U because we might need to push a new value before popping the old one.
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumRmsATiles = 2U;

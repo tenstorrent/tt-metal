@@ -110,7 +110,7 @@ public:
 
     static constexpr uint32_t DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES = 64;
 
-    // dispatch_s CB page size is 256 bytes. This should currently be enough to accomodate all commands that
+    // dispatch_s CB page size is 256 bytes. This should currently be enough to accommodate all commands that
     // are sent to it. Change as needed.
     static constexpr uint32_t DISPATCH_S_BUFFER_LOG_PAGE_SIZE = 8;
 

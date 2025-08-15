@@ -989,7 +989,7 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
                             const uint32_t substr_len = pos_after_newline - cptr;
 
                             // strchr returns nullptr if it encounters a null terminator,
-                            // so we can guarentee that this is valid data since it was
+                            // so we can guarantee that this is valid data since it was
                             // already checked. We don't need to append a '\0' because
                             // the stream operator only takes upto '\0' when passed
                             // a char* (wrt the previous impl)

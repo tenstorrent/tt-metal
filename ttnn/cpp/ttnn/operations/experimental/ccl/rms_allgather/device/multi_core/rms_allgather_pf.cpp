@@ -741,7 +741,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     std::string sender_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_sender_reader.cpp";
-    std::string reciever_reader_kernel_file =
+    std::string receiver_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_receiver_reader.cpp";
 
     std::map<std::string, std::string> writer_defines;
@@ -765,7 +765,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     if (use_mcast) {
         reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
             program,
-            reciever_reader_kernel_file,
+            receiver_reader_kernel_file,
             all_to_all_workers_except_sender,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -778,7 +778,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     if (num_none_all_to_all_workers > 0) {
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
-            reciever_reader_kernel_file,
+            receiver_reader_kernel_file,
             not_all_to_all_workers,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,

@@ -501,12 +501,12 @@ void syncAllDevices(chip_id_t host_connected_device) {
             }
             for (auto& timePair : timePairs) {
                 double senderTime = timePair.first - senderBase;
-                double recieverTime = timePair.second - receiverBase;
+                double receiverTime = timePair.second - receiverBase;
 
-                receiverSum += recieverTime;
+                receiverSum += receiverTime;
                 senderSum += senderTime;
-                receiverSquareSum += (recieverTime * recieverTime);
-                senderReceiverProductSum += (senderTime * recieverTime);
+                receiverSquareSum += (receiverTime * receiverTime);
+                senderReceiverProductSum += (senderTime * receiverTime);
             }
 
             uint16_t accumulateSampleCount = timePairs.size();
@@ -594,7 +594,7 @@ void ProfilerSync(ProfilerSyncState state) {
                 }
             }
         }
-        // If at least one sender reciever pair has been found
+        // If at least one sender receiver pair has been found
         if (first_connected_device_id != -1) {
             syncAllDevices(first_connected_device_id);
         }
@@ -606,7 +606,7 @@ void ProfilerSync(ProfilerSyncState state) {
             auto deviceToSync = tt::DevicePool::instance().get_active_device(synced_with_host_device.first);
             syncDeviceHost(deviceToSync, SYNC_CORE, false);
         }
-        //  If at least one sender reciever pair has been found
+        //  If at least one sender receiver pair has been found
         if (first_connected_device_id != -1) {
             syncAllDevices(first_connected_device_id);
         }

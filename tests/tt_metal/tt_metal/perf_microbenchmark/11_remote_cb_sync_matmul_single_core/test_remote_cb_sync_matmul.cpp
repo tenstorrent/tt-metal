@@ -380,7 +380,7 @@ create_programs(
     }
     tt_metal::SetRuntimeArgs(sender_program, in1_writer_kernel, dram_reader_core_coord, writer_rt_args);
 
-    // in1 reciever rt
+    // in1 receiver rt
     for (uint32_t i = 0; i < num_receivers; ++i) {
         std::vector<uint32_t> receiver_rt_args = {
             (std::uint32_t)vc & 0x3,

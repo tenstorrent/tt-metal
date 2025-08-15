@@ -165,7 +165,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
 
-    // Need a seperate signaler for the sender workers, to handle the first tensor slice that is locally available
+    // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_backward;
