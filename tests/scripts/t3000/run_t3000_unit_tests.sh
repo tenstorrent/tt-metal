@@ -487,10 +487,12 @@ run_t3000_qwen25_vl_unit_tests() {
   # run unit tests
   MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
 
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: Unit tests for $qwen25_vl_72b on T3K completed in $duration seconds"
+  MESH_DEVICE=T3K pytest models/demos/qwen25_vl/tests/test_windowed_sdpa.py -k "basic or medium or large" --timeout 100 || fail=1
+  echo "LOG_METAL: Unit tests in test_windowed_sdpa.py for T3K completed"
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
 }
 
 run_t3000_tests() {
