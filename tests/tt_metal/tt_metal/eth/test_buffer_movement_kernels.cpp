@@ -199,11 +199,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     const uint32_t& max_transfer_size) {
     bool pass = true;
 
-    const uint32_t input0_cb_index = 0;
-    const uint32_t output_cb_index = 16;
-
     TT_FATAL(cfg.num_pages * cfg.page_size_bytes == cfg.size_bytes, "Error");
-    constexpr uint32_t num_pages_cb = 1;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device

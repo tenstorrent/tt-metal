@@ -121,7 +121,7 @@ public:
 
     int get_watcher_kernel_id() const { return watcher_kernel_id_; }
 
-    HalProgrammableCoreType get_kernel_programmable_core_type() const;
+    HalProgrammableCoreType get_kernel_programmable_core_type() const { return this->programmable_core_type_; }
     CoreType get_kernel_core_type() const;
     void set_full_name(const std::string& s) { kernel_full_name_ = s; }
     void add_defines(const std::map<std::string, std::string>& defines);
@@ -130,6 +130,8 @@ public:
     bool is_idle_eth() const;
 
 protected:
+    HalProgrammableCoreType programmable_core_type_;
+
     int watcher_kernel_id_;
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
@@ -153,6 +155,7 @@ private:
     void register_kernel_with_watcher();
 
     Kernel(
+        HalProgrammableCoreType programmable_core_type,
         const KernelSource& kernel_src,
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,

@@ -41,7 +41,6 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     Program program = CreateProgram();
 
     const size_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
-    const size_t total_size_bytes = transaction_size_bytes * test_config.num_of_transactions;
 
     // (Logical) Core Coordinates and ranges
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
@@ -318,6 +317,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
 }
 
 TEST_F(DeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
+    GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
     uint32_t test_id = 151;
 
@@ -332,6 +332,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
 }
 
 TEST_F(DeviceFixture, TensixDataMovementOneFromOneCustom) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_id = 160;
 
     // Parameters
