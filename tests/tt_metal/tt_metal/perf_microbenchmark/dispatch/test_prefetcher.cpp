@@ -1594,6 +1594,83 @@ void gen_smoke_test(
     // gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 0, 32, 64, 128);
 }
 
+void gen_relay_linear_h_test(
+    IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, DeviceData& device_data) {
+    static constexpr uint32_t min_read_size = 128;
+    static constexpr uint32_t max_read_size = 4096;  // Keep reasonable size for test
+
+    bool done = false;
+    while (!done) {
+        // Generate random read size, ensure it's aligned
+        auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+        uint32_t length = tt::align(std::max(min_read_size, std::rand() % max_read_size), dram_alignment);
+
+        if (device_data.size() * sizeof(uint32_t) + length > DEVICE_DATA_SIZE) {
+            // Close to the end, finish up
+            done = true;
+        } else {
+            // Generate the dispatcher write command first
+            vector<uint32_t> dispatch_cmds;
+            gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, first_worker_g, device_data, length);
+
+            // Add the CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH with the dispatch command as payload
+            add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
+
+            // Now generate the CQ_PREFETCH_CMD_RELAY_LINEAR_H command to fetch data from NOC
+            auto prior_end = prefetch_cmds.size();
+
+            // Create the relay linear H command
+            CQPrefetchCmd cmd{};
+            cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
+
+            // Set up the source NOC address - we'll read from DRAM where data is initialized
+            // Use DRAM bank 0 for simplicity
+            const uint32_t dram_bank_id = 0;
+            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            CoreCoord dram_logical_core = device->logical_core_from_dram_channel(dram_channel);
+            CoreCoord dram_physical_core = tt::tt_metal::MetalContext::instance()
+                                               .get_cluster()
+                                               .get_soc_desc(device->id())
+                                               .get_preferred_worker_core_for_dram_view(dram_channel, NOC::NOC_0);
+            cmd.relay_linear_h.noc_xy_addr = device->get_noc_unicast_encoding(NOC::NOC_0, dram_physical_core);
+
+            [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, dram_bank_id);
+            // Read from DRAM result data address where data is stored
+            // DeviceData uses the logical coordinates as keys
+            cmd.relay_linear_h.addr = DRAM_DATA_BASE_ADDR + offset;
+            cmd.relay_linear_h.length = length;
+
+            // Add the command
+            update_cmd_sizes(prefetch_cmds, cmd_sizes, [&]() { add_bare_prefetcher_cmd(prefetch_cmds, cmd, true); });
+
+            // Update device data to simulate the data that would be written
+            // For relay linear H, we're reading from DRAM which should already be populated.
+            // We need to simulate writing that DRAM data to the target worker core.
+            uint32_t length_words = length / sizeof(uint32_t);
+
+            // Ensure DRAM data exists
+            TT_FATAL(
+                device_data.core_and_bank_present(dram_logical_core, dram_bank_id),
+                "DRAM core {} bank {} not present in device data",
+                dram_logical_core.str(),
+                dram_bank_id);
+            TT_FATAL(
+                length_words <= device_data.size_at(dram_logical_core, dram_bank_id),
+                "Requested length {} words exceeds available DRAM data {} words at core {} bank {}",
+                length_words,
+                device_data.size_at(dram_logical_core, dram_bank_id),
+                dram_logical_core.str(),
+                dram_bank_id);
+
+            for (uint32_t i = 0; i < length_words; i++) {
+                // Get the actual data from DRAM - it must exist
+                uint32_t data_value = device_data.at(dram_logical_core, dram_bank_id, i);
+                device_data.push_one(first_worker_g, data_value);
+            }
+        }
+    }
+}
+
 void gen_prefetcher_cmds(
     IDevice* device,
     vector<uint32_t>& prefetch_cmds,
@@ -1616,6 +1693,7 @@ void gen_prefetcher_cmds(
         case 6: gen_host_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         case 7: gen_packed_read_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         case 8: gen_ringbuffer_read_test(device, prefetch_cmds, cmd_sizes, device_data); break;
+        case 9: gen_relay_linear_h_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         default:
             log_fatal(tt::LogTest, "Unknown test: {}", test_type_g);
             exit(0);
@@ -2050,7 +2128,7 @@ void configure_for_single_chip(
         prefetch_defines["DOWNSTREAM_CB_SEM_ID"] = std::to_string(prefetch_d_upstream_cb_sem);
         prefetch_defines["CMDDAT_Q_BASE"] = std::to_string(cmddat_q_base);
         prefetch_defines["CMDDAT_Q_SIZE"] = std::to_string(cmddat_q_size_g);
-        prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(0);
+        prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(scratch_db_base);
         CoreCoord phys_prefetch_h_downstream_core = phys_prefetch_d_core;
         configure_kernel_variant<false, true>(
             program,
