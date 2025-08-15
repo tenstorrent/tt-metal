@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,9 +90,10 @@ void MorehSoftmaxOperation::validate_inputs(
     TT_FATAL(input.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((input.layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_FATAL(
-        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B,
-        "Inputs must be of bfloat16 or bfloat8_b type");
-
+        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||
+            input.dtype() == DataType::FLOAT32,
+        "Inputs must be of bfloat16, bfloat8_b or float32 type. Received: {}",
+        input.dtype());
     const auto rank = input.logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
