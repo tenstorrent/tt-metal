@@ -47,8 +47,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
 
-    const uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
-
     tt_metal::IDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -61,7 +59,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     bool in_sharded = input.shard_spec().has_value();
-    bool out_sharded = output.shard_spec().has_value();
     std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
 
     const uint32_t num_input_tiles = 2 * head_dim_t;
@@ -97,19 +94,19 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         tt_metal::CircularBufferConfig(
             input_cb_num_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, input_single_tile_size);
-    auto cb_input = tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
 
     uint32_t cos_cb_index = CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_cos_config =
         tt_metal::CircularBufferConfig(num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
             .set_page_size(cos_cb_index, cos_single_tile_size);
-    auto cb_cos = tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_config);
 
     uint32_t sin_cb_index = CBIndex::c_2;
     tt_metal::CircularBufferConfig cb_sin_config =
         tt_metal::CircularBufferConfig(num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
             .set_page_size(sin_cb_index, sin_single_tile_size);
-    auto cb_sin = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
 
     uint32_t trans_mat_cb_index = CBIndex::c_3;
     // We only take one tile of trans_mat
@@ -118,7 +115,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         tt_metal::CircularBufferConfig(
             num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
             .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size);
-    auto cb_trans_mat = tt_metal::CreateCircularBuffer(program, all_cores, cb_trans_mat_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_trans_mat_config);
 
     uint32_t num_interm_tiles = head_dim_t;
     uint32_t rotated_input_interm_cb_index = CBIndex::c_24;
@@ -126,28 +123,28 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
             .set_page_size(rotated_input_interm_cb_index, input_single_tile_size);
-    auto cb_rotated_input_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_interm_config);
 
     uint32_t cos_interm_cb_index = CBIndex::c_25;
     tt_metal::CircularBufferConfig cb_cos_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * cos_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
             .set_page_size(cos_interm_cb_index, cos_single_tile_size);
-    auto cb_cos_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
 
     uint32_t sin_interm_cb_index = CBIndex::c_26;
     tt_metal::CircularBufferConfig cb_sin_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * sin_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
             .set_page_size(sin_interm_cb_index, sin_single_tile_size);
-    auto cb_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
 
     uint32_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     std::map<std::string, std::string> kernel_defines;
     kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
@@ -246,7 +243,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
         for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
             uint32_t core_idx = batch_parallel * seq_parallel_factor + seq_parallel;
-            const CoreCoord& core = cores.at(core_idx);
             uint32_t start_batch = batch_parallel * batch_per_core;
             uint32_t end_batch = std::min(start_batch + batch_per_core, batch);
             uint32_t start_seq = seq_parallel * seq_per_core;
@@ -357,7 +353,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     bool in_sharded = input.shard_spec().has_value();
-    bool out_sharded = output.shard_spec().has_value();
     std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
 
     const uint32_t batch = input.padded_shape()[1];
@@ -430,21 +425,21 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
             .set_page_size(rotated_input_interm_cb_index, input_single_tile_size);
-    auto cb_rotated_input_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_interm_config);
 
     uint32_t cos_interm_cb_index = CBIndex::c_25;
     tt_metal::CircularBufferConfig cb_cos_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
             .set_page_size(cos_interm_cb_index, cos_single_tile_size);
-    auto cb_cos_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
 
     uint32_t sin_interm_cb_index = CBIndex::c_26;
     tt_metal::CircularBufferConfig cb_sin_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
             .set_page_size(sin_interm_cb_index, sin_single_tile_size);
-    auto cb_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
 
     uint32_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
     tt_metal::CircularBufferConfig cb_output_config =
@@ -468,7 +463,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
         (std::uint32_t)n_heads_t,
     };
 
-    auto rotary_embedding_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
         "rotary_embedding_llama_sharded.cpp",

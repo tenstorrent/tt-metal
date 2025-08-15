@@ -5,9 +5,9 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt = get_compile_time_arg_val(2);
+    constexpr uint32_t Ht = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr auto src_args = TensorAccessorArgs<2>();
 
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t col_start_tile_id =
@@ -21,15 +21,13 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat data_format = get_dataformat(cb_id_in0);
 
 #ifdef DO_MASK_H
     constexpr uint32_t cb_id_mask_h = 1;
     generate_int_mask_h(cb_id_mask_h, mask_h);
 #endif
 
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
     uint32_t w = curr_col_in_batch;
 
