@@ -160,7 +160,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
 std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> GenerateAllValidCombinations(
     BaseFabricFixture* fixture) {
     std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> combinations;
-    auto devices = fixture->get_devices();
+    const auto& devices = fixture->get_devices();
 
     if (devices.empty()) {
         return combinations;
