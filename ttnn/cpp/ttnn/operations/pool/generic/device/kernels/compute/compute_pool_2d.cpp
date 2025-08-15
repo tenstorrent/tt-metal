@@ -177,12 +177,7 @@ void MAIN {
                 tilize_uninit(tmp_cb_id, out_cb_id);
                 // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
                 UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                    in_cb_id_0,
-                    curr_scalar_cb_id,
-                    partial_iter_output_tiles,
-                    num_faces_in_output_tile,
-                    face_r_dim,
-                    1)));
+                    in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
                 tilize_stick_counter = 0;
                 row = 0;
             }

@@ -362,7 +362,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tt::constants::TILE_HW * params.nbytes;  // there is just one row of channels after each reduction (or 1
                                                  // block of c if its greater than 8 tiles)
     const uint32_t out_cb_npages =
-        params.in_ntiles_c * output.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
+        output.shard_spec().value().shape[0] * output.shard_spec().value().shape[1] / tt::constants::TILE_HW;
 
     //     const uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) *
     //                                  params.nbytes;  // there is just one row of channels after each reduction (or 1
