@@ -15,6 +15,7 @@ on:
 permissions:
   checks: write
   contents: read
+  packages: write
 
 jobs:
   build-images:
