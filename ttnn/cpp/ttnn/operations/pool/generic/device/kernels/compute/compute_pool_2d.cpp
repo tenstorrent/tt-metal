@@ -43,7 +43,9 @@ void MAIN {
         if (n == 0) {
             UNPACK(DPRINT << "IN CB " << ENDL());
             UNPACK(tt::compute::common::print_full_tile(in_idx_cb, 0));
+            UNPACK(DPRINT << ENDL());
         }
+        tensix_sync();
 
         tilize_init(in_data_cb, topk_output_tiles, tile_data_cb);
         // reconfig_data_format_srca(tile_data_cb);
@@ -51,9 +53,7 @@ void MAIN {
         tilize_block(in_data_cb, topk_output_tiles, tile_data_cb, topk_cb_tile_idx, topk_cb_tile_idx);
         tilize_uninit_with_dt(in_data_cb, in_idx_cb, tile_idx_cb);
 
-        cb_reserve_back(tile_data_cb, topk_output_tiles);
-        cb_push_back(tile_data_cb, topk_output_tiles);
-        cb_wait_front(tile_data_cb, topk_output_tiles);
+        tensix_sync();
 
         tilize_init_short_with_dt(in_data_cb, in_idx_cb, topk_output_tiles, tile_idx_cb);
         // reconfig_data_format_srca(tile_idx_cb);
@@ -61,17 +61,12 @@ void MAIN {
         tilize_block(in_idx_cb, topk_output_tiles, tile_idx_cb, topk_cb_tile_idx, topk_cb_tile_idx);
         tilize_uninit_with_dt(in_idx_cb, in_data_cb, tile_data_cb);
 
-        cb_reserve_back(tile_idx_cb, topk_output_tiles);
-        cb_push_back(tile_idx_cb, topk_output_tiles);
-        cb_wait_front(tile_idx_cb, topk_output_tiles);
-
+        tensix_sync();
         if (n == 0) {
             PACK(DPRINT << "TILE CB " << ENDL());
             PACK(tt::compute::common::print_full_tile(tile_idx_cb, 0));
+            PACK(DPRINT << ENDL());
         }
-
-        cb_pop_front(tile_data_cb, topk_output_tiles);
-        cb_pop_front(tile_idx_cb, topk_output_tiles);
 
         cb_pop_front(in_data_cb, 1);
         cb_pop_front(in_idx_cb, 1);

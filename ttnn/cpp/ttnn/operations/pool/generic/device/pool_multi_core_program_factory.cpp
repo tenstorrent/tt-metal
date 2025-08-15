@@ -368,7 +368,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
     const uint32_t in_cb_npages = params.multi_buffering_factor;
 
-    printf("in_cb_pagesize: %d, in_cb_npages: %d\n", in_cb_pagesize, in_cb_npages);
+    printf("\n");
+    printf("in_cb pagesize: %d, in_cb npages: %d\n", in_cb_pagesize, in_cb_npages);
+
+    // Print data type of in_cb
+    const char* in_cb_data_type_str = "invalid";
+    if (params.data_format == tt::DataFormat::Float16_b) {
+        in_cb_data_type_str = "bfloat16";
+    } else if (params.data_format == tt::DataFormat::UInt16) {
+        in_cb_data_type_str = "uint16";
+    }
+    printf("in_cb datatype: %s\n", in_cb_data_type_str);
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
@@ -400,7 +410,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         tile_tmp_cb_id = next_cb_index++;
-        printf("tile_tmp cb_page_size: %d, tile_tmp num pages: %d\n", params.nbytes * tile_elems, 1);
+        printf("tile_cb pagesize: %d, tile_cb npages: %d\n", params.nbytes * tile_elems, 1);
+
+        // Print data type of tile_cb
+        const char* tile_cb_data_type_str = "invalid";
+        if (params.data_format == tt::DataFormat::Float16_b) {
+            tile_cb_data_type_str = "bfloat16";
+        } else if (params.data_format == tt::DataFormat::UInt16) {
+            tile_cb_data_type_str = "uint16";
+        }
+        printf("tile_cb datatype: %s\n\n", tile_cb_data_type_str);
+
         tt::tt_metal::create_cb(tile_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.data_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_tmp_cb_id, params.nbytes * tile_elems, 1);
         tile_idx_tmp_cb_id = next_cb_index++;
