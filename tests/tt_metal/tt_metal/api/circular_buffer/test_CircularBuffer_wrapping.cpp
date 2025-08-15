@@ -10,8 +10,7 @@
 #include "tt_metal.hpp"
 #include "circular_buffer.hpp"
 
-using namespace tt;
-using namespace tt::tt_metal;
+namespace tt::tt_metal {
 
 /**
  *
@@ -99,3 +98,5 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
 }
+
+}  // namespace tt::tt_metal
