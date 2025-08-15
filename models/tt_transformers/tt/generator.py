@@ -1188,7 +1188,9 @@ class Generator:
             messages, add_generation_prompt=True, tokenize=True, return_dict=True
         )
         vision_images = extract_images_from_messages(messages) or None
-        vision_mask = create_vision_mask(model_input["input_ids"][0], self.preprocessor.image_token_id) or None
+        vision_mask = None
+        if vision_images is not None:
+            vision_mask = create_vision_mask(model_input["input_ids"][0], self.preprocessor.image_token_id) or None
 
         tokens = []
 
@@ -1226,10 +1228,12 @@ class Generator:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
         vision_images = []
-        text = encode_content(content, vision_images, self.preprocessor.image_token)
+        text = encode_content(content, vision_images, getattr(self.preprocessor, "image_token", None))
         vision_images = vision_images or None
         model_input = self.preprocessor(text=text, images=vision_images, add_special_tokens=False)
-        vision_mask = create_vision_mask(model_input["input_ids"][0], self.preprocessor.image_token_id) or None
+        vision_mask = None
+        if vision_images is not None:
+            vision_mask = create_vision_mask(model_input["input_ids"][0], self.preprocessor.image_token_id) or None
 
         tokens = []
 

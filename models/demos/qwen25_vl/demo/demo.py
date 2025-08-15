@@ -346,7 +346,7 @@ def test_demo(
     )
 
     tokenizer = model_args.tokenizer
-    generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
+    generator = Generator(model, model_args, mesh_device, preprocessor=tokenizer)
 
     # Load vision model and processor
     # reduce the number of layers to 1 for fast ci runs (also useful for debugging)

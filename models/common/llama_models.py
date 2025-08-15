@@ -103,6 +103,7 @@ def create_vision_mask(
 def encode_content(content, images, image_token):
     if isinstance(content, Image):
         images.append(content)
+        assert image_token is not None
         return image_token
     if isinstance(content, str):
         return content
@@ -115,6 +116,7 @@ def encode_content(content, images, image_token):
         if content_type == "image":
             # TBD: support url
             images.append(content["image"])
+            assert image_token is not None
             return image_token
     raise ValueError(f"Unknown content format: {content}")
 

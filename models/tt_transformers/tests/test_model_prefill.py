@@ -152,7 +152,7 @@ def test_model_inference(
         expec_kv_cache_pcc = kv_cache_pcc_map.get(model_args.model_name, default_expec_kv_cache_pcc)
 
     tokenizer = model_args.tokenizer
-    generator = Generator([tt_model], [model_args], mesh_device, tokenizer=tokenizer)
+    generator = Generator([tt_model], [model_args], mesh_device, preprocessor=tokenizer)
     logger.info("Finished loading TT model.")
 
     # Create page table if paged attention is enabled

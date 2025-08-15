@@ -6,12 +6,11 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
-from llama_models.llama3.api.chat_format import ChatFormat
-from llama_models.llama3.api.tokenizer import Tokenizer
 from loguru import logger
 from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
 from termcolor import cprint
+from transformers import AutoProcessor
 
 import ttnn
 
@@ -59,8 +58,7 @@ def test_multimodal_demo_text(
     max_gen_len: Optional[int] = 200,
     model_parallel_size: Optional[int] = None,
 ):
-    ckpt_dir = os.environ["LLAMA_DIR"]
-    tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
+    ckpt_dir = os.environ["HF_MODEL"]
 
     logger.info(f"Creating reference model from checkpoint in '{ckpt_dir}'")
     if target == "cpu":
@@ -71,9 +69,8 @@ def test_multimodal_demo_text(
         model_args, model, _ = create_multimodal_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len
         )
-        tokenizer = Tokenizer(model_path=tokenizer_path)
-        formatter = ChatFormat(tokenizer)
-        generator = Generator([model], [model_args], mesh_device, tokenizer=tokenizer, formatter=formatter)
+        preprocessor = AutoProcessor.from_pretrained(ckpt_dir)
+        generator = Generator([model], [model_args], mesh_device, preprocessor=preprocessor)
 
     with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")

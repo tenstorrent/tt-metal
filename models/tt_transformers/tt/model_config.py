@@ -2059,7 +2059,7 @@ class ModelArgs:
             return Tokenizer(self.tokenizer_path)
         else:
             # Create a HuggingFace AutoTokenizer
-            from transformers import AutoTokenizer
+            from transformers import AutoProcessor
 
             # Mapping of base model names to their known tokenizer paths
             # These are the original models that have proper tokenizers
@@ -2086,7 +2086,8 @@ class ModelArgs:
 
             try:
                 # Try to load tokenizer from the original model path
-                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                # If there is no Processor, it will return Tokenizer (useful for multimodal models)
+                tokenizer = AutoProcessor.from_pretrained(self.TOKENIZER_PATH)
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
@@ -2125,7 +2126,7 @@ class ModelArgs:
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                     try:
-                        tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
+                        tokenizer = AutoProcessor.from_pretrained(fallback_tokenizer_path)
                         logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                     except Exception as fallback_e:
                         logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
@@ -2136,7 +2137,11 @@ class ModelArgs:
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
+                tokenizer.stop_tokens = []
+                if hasattr(tokenizer, "eos_token_id"):
+                    tokenizer.stop_tokens.append(tokenizer.eos_token_id)
+                elif hasattr(tokenizer, "tokenizer"):
+                    tokenizer.stop_tokens.append(tokenizer.tokenizer.eos_token_id)
             return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
