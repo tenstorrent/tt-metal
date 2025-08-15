@@ -21,6 +21,7 @@
 using tt::tt_metal::IDevice;
 using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
+using namespace tt::tt_metal;
 
 namespace tt::test::buffer::detail {
 bool SimpleDramReadOnly(std::shared_ptr<distributed::MeshDevice> mesh_device, size_t local_address, size_t byte_size) {
