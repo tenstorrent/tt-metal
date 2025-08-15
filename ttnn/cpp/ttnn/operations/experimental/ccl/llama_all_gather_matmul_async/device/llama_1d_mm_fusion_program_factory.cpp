@@ -321,40 +321,40 @@ process_agmm_fusion_program_and_create_override_variables(
 
     /* Compile time args for multicast receiver */
     std::vector<uint32_t> in0_multicast_receiver_compile_time_args = {
-        (std::uint32_t)multicast_chunk_width_in_tiles,  // 1/4 of K per step
-        (std::uint32_t)per_core_M,                      // in0_shard_height_in_tiles
-        (std::uint32_t)batch,                           // batch
-        (std::uint32_t)num_multicast_steps,             // 4 steps instead of ring_size
-        (std::uint32_t)in0_signal_semaphore_id,
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src2_cb_index,  // Keep for compatibility, though not used
-        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[0],  // Step 0
-        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[1],  // Step 1
-        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[2],  // Step 2
-        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[3],  // Step 3
-        (std::uint32_t)ring_index,                                                 // first chunk index
-        (std::uint32_t)(ring_index - 1 + ring_size) % ring_size,                   // second chunk index
-        (std::uint32_t)(ring_index - 2 + ring_size) % ring_size,                   // third chunk index
-        (std::uint32_t)(ring_index - 3 + ring_size) % ring_size,                   // fourth chunk index
+        static_cast<std::uint32_t>(multicast_chunk_width_in_tiles),  // 1/4 of K per step
+        static_cast<std::uint32_t>(per_core_M),                      // in0_shard_height_in_tiles
+        static_cast<std::uint32_t>(batch),                           // batch
+        static_cast<std::uint32_t>(num_multicast_steps),             // 4 steps instead of ring_size
+        static_cast<std::uint32_t>(in0_signal_semaphore_id),
+        static_cast<std::uint32_t>(src0_cb_index),
+        static_cast<std::uint32_t>(src2_cb_index),  // Keep for compatibility, though not used
+        static_cast<std::uint32_t>(fused_op_signaler->fused_op_receiver_signal_semaphores[0]),  // Step 0
+        static_cast<std::uint32_t>(fused_op_signaler->fused_op_receiver_signal_semaphores[1]),  // Step 1
+        static_cast<std::uint32_t>(fused_op_signaler->fused_op_receiver_signal_semaphores[2]),  // Step 2
+        static_cast<std::uint32_t>(fused_op_signaler->fused_op_receiver_signal_semaphores[3]),  // Step 3
+        static_cast<std::uint32_t>(ring_index),                                                 // first chunk index
+        static_cast<std::uint32_t>((ring_index - 1 + ring_size) % ring_size),                   // second chunk index
+        static_cast<std::uint32_t>((ring_index - 2 + ring_size) % ring_size),                   // third chunk index
+        static_cast<std::uint32_t>((ring_index - 3 + ring_size) % ring_size),                   // fourth chunk index
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        (std::uint32_t)in1_is_dram_interleaved,    // in1_is_dram_interleaved
-        (std::uint32_t)in1_is_dram_sharded,        // in1_is_dram_sharded
-        (std::uint32_t)in1_block_height_in_tiles,  // in1_block_height_in_tiles
-        (std::uint32_t)per_core_N,                 // in1_block_width_in_tiles
-        (std::uint32_t)in1_tensor_width_in_tiles,  // in1_tensor_width_in_tiles
-        (std::uint32_t)num_blocks,                 // num_blocks
-        (std::uint32_t)batch,                      // batch
-        (std::uint32_t)in1_block_page_size,
-        (std::uint32_t)in1_block_page_size_last,
-        (std::uint32_t)in1_block_width_num_pages,
-        (std::uint32_t)in1_shard_width_in_dram,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)sync_cb_index,
-        (std::uint32_t)sync_cb2_index,
-        (std::uint32_t)remote_cb_index,
-        (std::uint32_t)0,  // no need to signaler for the fused op
+        static_cast<std::uint32_t>(in1_is_dram_interleaved),    // in1_is_dram_interleaved
+        static_cast<std::uint32_t>(in1_is_dram_sharded),        // in1_is_dram_sharded
+        static_cast<std::uint32_t>(in1_block_height_in_tiles),  // in1_block_height_in_tiles
+        static_cast<std::uint32_t>(per_core_N),                 // in1_block_width_in_tiles
+        static_cast<std::uint32_t>(in1_tensor_width_in_tiles),  // in1_tensor_width_in_tiles
+        static_cast<std::uint32_t>(num_blocks),                 // num_blocks
+        static_cast<std::uint32_t>(batch),                      // batch
+        static_cast<std::uint32_t>(in1_block_page_size),
+        static_cast<std::uint32_t>(in1_block_page_size_last),
+        static_cast<std::uint32_t>(in1_block_width_num_pages),
+        static_cast<std::uint32_t>(in1_shard_width_in_dram),
+        static_cast<std::uint32_t>(src1_cb_index),
+        static_cast<std::uint32_t>(sync_cb_index),
+        static_cast<std::uint32_t>(sync_cb2_index),
+        static_cast<std::uint32_t>(remote_cb_index),
+        static_cast<std::uint32_t>(0),  // no need to signaler for the fused op
     };
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
 
@@ -499,12 +499,12 @@ process_agmm_fusion_program_and_create_override_variables(
             auto core_type = CORE_TYPE::IDLE_CORE;                    // idle core
             // in0
             std::vector<uint32_t> mm_kernel_in0_args;
-            mm_kernel_in0_args.push_back((std::uint32_t)core_type);
+            mm_kernel_in0_args.push_back(static_cast<std::uint32_t>(core_type));
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_kernel_in0_args);
 
             // in1
             std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
-            mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
+            mm_kernel_in1_sender_writer_args.push_back(static_cast<std::uint32_t>(core_type));
             if (fused_op_signaler.has_value() &&
                 fused_op_signaler.value().fused_op_type ==
                     ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
@@ -516,7 +516,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
             // compute
             std::vector<uint32_t> mm_kernel_args;
-            mm_kernel_args.push_back((std::uint32_t)core_type);
+            mm_kernel_args.push_back(static_cast<std::uint32_t>(core_type));
             tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_args);
         }
     }
@@ -558,9 +558,9 @@ process_agmm_fusion_program_and_create_override_variables(
         auto core_type = CORE_TYPE::WORKER_CORE;  // worker core
 
         std::vector<uint32_t> mm_in0_args = {
-            (std::uint32_t)core_type,
-            (std::uint32_t)ring_index,           // Core index for multicast addressing
-            (std::uint32_t)num_multicast_steps,  // 4 steps
+            static_cast<std::uint32_t>(core_type),
+            static_cast<std::uint32_t>(ring_index),           // Core index for multicast addressing
+            static_cast<std::uint32_t>(num_multicast_steps),  // 4 steps
             // No next_core coordinates needed for multicast reception
             // Multicast sender coordinates would be determined elsewhere
         };
@@ -571,7 +571,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
         /* in1 */
         std::vector<uint32_t> mm_in1_args = {
-            (std::uint32_t)core_type,
+            static_cast<std::uint32_t>(core_type),
             in1_buffer->address(),  // in1_tensor_addr
             i,                      // ring_idx
         };
@@ -593,9 +593,9 @@ process_agmm_fusion_program_and_create_override_variables(
                     vc = (vc + 1) & 0x3;
                 }
             }
-            mm_in1_args.push_back((std::uint32_t)bank_id);
-            mm_in1_args.push_back((std::uint32_t)vc);
-            mm_in1_args.push_back((std::uint32_t)dram_read_offset);
+            mm_in1_args.push_back(static_cast<std::uint32_t>(bank_id));
+            mm_in1_args.push_back(static_cast<std::uint32_t>(vc));
+            mm_in1_args.push_back(static_cast<std::uint32_t>(dram_read_offset));
         }
         if (fused_op_signaler.has_value() &&
             fused_op_signaler.value().fused_op_type ==
@@ -607,7 +607,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
-            (std::uint32_t)core_type,
+            static_cast<std::uint32_t>(core_type),
             ring_index,  // core_idx (not ring_idx anymore)
         };
         // No need for unpadded widths since all steps process uniform 1/4 chunks
@@ -625,15 +625,15 @@ process_agmm_fusion_program_and_create_override_variables(
 
         /* in0 - hop cores not needed for multicast, but keeping for compatibility */
         std::vector<uint32_t> mm_in0_args = {
-            (std::uint32_t)core_type,
-            (std::uint32_t)i,  // Core index
+            static_cast<std::uint32_t>(core_type),
+            static_cast<std::uint32_t>(i),  // Core index
             // Hop cores may not be needed for multicast approach
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
         // in1
         std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
-        mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
+        mm_kernel_in1_sender_writer_args.push_back(static_cast<std::uint32_t>(core_type));
         if (fused_op_signaler.has_value() &&
             fused_op_signaler.value().fused_op_type ==
                 ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
@@ -644,7 +644,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
         // compute
         std::vector<uint32_t> mm_kernel_args;
-        mm_kernel_args.push_back((std::uint32_t)core_type);
+        mm_kernel_args.push_back(static_cast<std::uint32_t>(core_type));
         tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_args);
     }
     std::vector<tt::tt_metal::CBHandle> shared_cbs = {cb_src0, cb_src1};
@@ -854,12 +854,6 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     if (!gather_in0) {
         TT_FATAL(hop_cores.empty(), "Hop cores are not supported for any mode besides gather_in0.");
     }
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Buffer* out_buffer = output.buffer();
-    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
