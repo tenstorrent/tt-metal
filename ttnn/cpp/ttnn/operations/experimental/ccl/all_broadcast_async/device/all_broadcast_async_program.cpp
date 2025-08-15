@@ -50,8 +50,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const GlobalSemaphore& barrier_semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool using_persistent_buffers) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
 
     auto mesh_device = input_tensor.mesh_device();
@@ -255,7 +254,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             drain_sync_core.x,                               // out_ready_sem_noc0_x
             drain_sync_core.y,                               // out_ready_sem_noc0_y
             out_ready_sem_wait_value,                        // out_ready_sem_wait_value
-            !using_persistent_buffers,                       // use_barrier
             barrier_semaphore.address(),                     // barrier_sem
             barrier_core.x,                                  // barrier_sem_noc0_x
             barrier_core.y                                   // barrier_sem_noc0_y
@@ -313,7 +311,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output_tensors[ring_index].buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
-                worker_writer_sender_runtime_args[10] = barrier_semaphore.address();
+                worker_writer_sender_runtime_args[9] = barrier_semaphore.address();
             }
         };
 
