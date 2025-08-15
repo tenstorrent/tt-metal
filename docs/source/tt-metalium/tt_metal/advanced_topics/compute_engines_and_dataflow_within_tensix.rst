@@ -151,11 +151,11 @@ For example, to perform matrix multiplication pairwise:
 
     // Repeated computation can be performed without re-initialization
     for(int i=0;i<8;i++) {
-        // Make sure dst registers are available for the math core
-        tile_regs_acquire();
-
         // Wait for data to be available in the input circular buffers
         cb_wait_front(CBIndex::c_0, 1); cb_wait_front(CBIndex::c_1, 1);
+
+        // Make sure dst registers are available for the math core
+        tile_regs_acquire();
 
         // Perform matrix multiplication by taking tile 0 from CB 0, tile 0 from CB 1
         // and put into Dst tile 0.
@@ -204,8 +204,8 @@ For example, to compute the sine of a tile (duplicated comments from the above e
     add_binary_tile_init();
 
     for(int i=0;i<8;i++) {
-        tile_regs_acquire();
         cb_wait_front(CBIndex::c_0, 1); cb_wait_front(CBIndex::c_1, 1);
+        tile_regs_acquire();
 
         // Unpack the first tile from the CB into the first tile in DST
         // This function involves both the unpacker and math core to ensure
