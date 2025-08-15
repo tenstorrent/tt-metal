@@ -36,6 +36,7 @@
 #include "umd/device/types/xy_pair.h"
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 namespace unit_tests::runtime_args {
 

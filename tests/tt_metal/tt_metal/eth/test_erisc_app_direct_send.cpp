@@ -62,6 +62,7 @@ struct erisc_info_t {
 
 using namespace tt;
 using namespace tt::test_utils;
+using namespace tt::tt_metal;
 
 namespace unit_tests::erisc::direct_send {
 size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& max) {
