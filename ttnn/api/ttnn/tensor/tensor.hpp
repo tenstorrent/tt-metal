@@ -165,6 +165,7 @@ public:
     template <typename T>
     [[nodiscard]] T item(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
+    // TODO: #26832 - Use `mem_config` argument as an optional argument.
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
         const MemoryConfig& mem_config = MemoryConfig{},
