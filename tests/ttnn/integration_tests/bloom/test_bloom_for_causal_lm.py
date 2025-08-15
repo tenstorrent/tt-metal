@@ -8,7 +8,7 @@ from loguru import logger
 from transformers import BloomConfig, BloomForCausalLM, BloomTokenizerFast
 
 
-from models import generation_utils
+from models.common import generation_utils
 from models.demos.grayskull.functional_bloom.reference import torch_functional_bloom
 from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
 from models.common.utility_functions import is_wormhole_b0, skip_for_grayskull, is_blackhole
