@@ -58,6 +58,8 @@ class RotaryEmbedding(nn.Module):
         emb = torch.cat((freqs, freqs), dim=-1)
         cos = emb.cos()
         sin = emb.sin()
+        self.register_buffer("freqs_cis", torch.complex(cos, sin).to(dtype), persistent=False)
+
         cos, sin = self.permute_to_meta_format(cos, sin)
         self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
         self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
