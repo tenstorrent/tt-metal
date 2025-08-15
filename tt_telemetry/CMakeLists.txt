@@ -53,4 +53,5 @@ target_link_libraries(
         tt_metal
         telemetry_libs
         httplib::httplib # Link httplib only to the server executable
+        cxxopts::cxxopts
 )
