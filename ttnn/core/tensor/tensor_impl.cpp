@@ -92,7 +92,7 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
     const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
 
@@ -524,51 +524,6 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
 }
 
 template <typename T>
-Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
-    TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
-    auto device_buffer = tensor.buffer();
-    auto device = tensor.device();
-    TT_FATAL(device != nullptr, "Need device to be set copy data from device to host!");
-    uint32_t size_in_bytes = device_buffer->size();
-    std::vector<T> data_vec;
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        data_vec.resize(size_in_bytes / sizeof(T));
-        read_data_from_device_buffer<T>(device->command_queue(*cq_id), *device_buffer, data_vec.data(), blocking);
-    } else {
-        read_data_from_device_buffer<T>(*device_buffer, data_vec);
-    }
-    auto output_buffer = HostBuffer(std::move(data_vec));
-    return Tensor(std::move(output_buffer), tensor.tensor_spec());
-}
-
-template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
-    if (tensor.storage_type() == StorageType::DEVICE) {
-        return to_host_helper<T>(tensor, blocking, cq_id);
-    } else {
-        return tensor;
-    }
-}
-
-template Tensor to_host<bfloat16>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
-template Tensor to_host<float>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
-template Tensor to_host<int32_t>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
-template Tensor to_host<uint32_t>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
-template Tensor to_host<uint16_t>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
-template Tensor to_host<uint8_t>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
-
-template <>
-Tensor to_host<bfloat4_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
-    return to_host<uint32_t>(tensor, blocking, cq_id);
-}
-
-template <>
-Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
-    return to_host<uint32_t>(tensor, blocking, cq_id);
-}
-
-template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.device_storage();
@@ -612,24 +567,6 @@ Tensor to_host_mesh_tensor<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn:
 // ======================================================================================
 //                               .to_device() details
 // ======================================================================================
-
-template <typename T>
-void write_data_to_device_buffer(
-    CommandQueue& cq, tt::stl::Span<const T> host_buffer, std::shared_ptr<Buffer> device_buffer) {
-    ZoneScoped;
-    // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
-    // And effectively get rid of any additional allocation
-    EnqueueWriteBuffer(cq, device_buffer, host_buffer.data(), false);
-}
-
-template <typename T>
-void write_data_to_device_buffer(tt::stl::Span<const T> host_buffer, Buffer& device_buffer) {
-    ZoneScoped;
-    ::detail::WriteToBuffer(
-        device_buffer,
-        tt::stl::Span<const uint8_t>(
-            reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(T)));
-}
 
 namespace {
 
@@ -721,7 +658,7 @@ Tensor to_device_mesh_tensor(
     TensorSpec tensor_spec(
         tensor.logical_shape(), tensor.tensor_spec().tensor_layout().with_memory_config(memory_config));
 
-    auto mesh_buffer = allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
+    auto mesh_buffer = allocate_device_buffer(mesh_device, tensor_spec);
     DeviceStorage mesh_storage =
         to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, tensor_spec, *tensor.tensor_attributes, cq_id);
     return Tensor(std::move(mesh_storage), tensor_spec, tensor.distributed_tensor_config(), tensor.tensor_topology());

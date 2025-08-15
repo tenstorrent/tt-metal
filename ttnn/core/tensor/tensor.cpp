@@ -715,7 +715,7 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 }
 
 Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
-    auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
     std::vector<distributed::MeshCoordinate> coords;
     coords.reserve(device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {

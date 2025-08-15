@@ -51,17 +51,10 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
-    if (input_tensor.mesh_device_.has_value()) {
-        auto output = tensor_impl::to_host_mesh_tensor_wrapper(input_tensor, blocking, cq_id);
-        output = tt::tt_metal::set_tensor_id(output);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    }
-
-    Tensor host_tensor = tensor_impl::to_host_wrapper(input_tensor, blocking, cq_id);
-    host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
-    GraphTracker::instance().track_function_end(host_tensor);
-    return host_tensor;
+    auto output = tensor_impl::to_host_mesh_tensor_wrapper(input_tensor, blocking, cq_id);
+    output = tt::tt_metal::set_tensor_id(output);
+    GraphTracker::instance().track_function_end(output);
+    return output;
 }
 
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout) {
