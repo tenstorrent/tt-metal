@@ -29,6 +29,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     std::optional<const Tensor> cur_pos_tensor,
     std::optional<const Tensor> page_table_tensor,
     std::optional<const Tensor> attn_mask,
+    std::optional<const Tensor> attention_sink,
     const Tensor& output_tensor,
     bool is_causal,
     const std::vector<uint32_t>& cur_pos_ids,
