@@ -410,15 +410,6 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
         {{"float32", DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
         {{"float32", DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32, "int32" }},
 
-        // Below cases require on-device ROW-MAJOR -> TILE conversion and suffer from the precision loss described at
-        // #23405. Once the issue is resolved the cases can be re-enabled
-        // {{"float32", DataType::UINT8,      Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32, std::nullopt }},
-        // {{"float32", DataType::UINT16,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32, std::nullopt }},
-        // {{"float32", DataType::BFLOAT16,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32, std::nullopt }},
-        // {{"float32", DataType::BFLOAT4_B,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32, std::nullopt }},
-        // {{"float32", DataType::BFLOAT8_B,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32, std::nullopt }},
-        // {{"float32", DataType::FLOAT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32, std::nullopt }},
-
         // int32 conversion can be safely done on device
         {{"int32",   DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
         {{"int32",   DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
@@ -476,10 +467,12 @@ Tensor convert_python_tensor_to_tt_tensor_on_device(
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper,
     const PyTensorPreparedConversion& strategy) {
+    ZoneScoped;
     py::object contiguous_py_tensor = py_tensor.attr("contiguous")();
     py::object torch = py::module_::import("torch");
 
     if (strategy.torch_convert_dtype) {
+        ZoneScopedN("Convert type on device");
         contiguous_py_tensor =
             contiguous_py_tensor.attr("to")(torch.attr(strategy.torch_convert_dtype.value().c_str()));
     }
@@ -543,6 +536,7 @@ Tensor convert_python_tensor_to_tt_tensor_on_host(
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
+    ZoneScoped;
     auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
