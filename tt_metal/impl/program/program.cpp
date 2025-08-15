@@ -364,7 +364,9 @@ namespace {
 std::bitset<MAX_PROCESSOR_TYPES_COUNT> get_kernel_processor_set(const Kernel& kernel) {
     std::bitset<MAX_PROCESSOR_TYPES_COUNT> set;
     for (int i = 0; i < kernel.expected_num_binaries(); i++) {
-        set.set(kernel.get_kernel_processor_type(i));
+        int processor_id = kernel.get_kernel_processor_type(i);
+        TT_ASSERT(0 <= processor_id && processor_id < MAX_PROCESSOR_TYPES_COUNT);
+        set.set(processor_id);
     }
     return set;
 }

@@ -107,14 +107,16 @@ public:
             }
             total_stats.Update(processor_stats);
 
-            if (processor != std::nullopt) {
+            // Only for binaries, print for each RISC type
+            if (type == DISPATCH_DATA_BINARY) {
+                TT_ASSERT(processor != std::nullopt);
                 outfile << "\t  " << *processor << " binary data:\n";
                 processor_stats.Dump(outfile, processor_data);
             }
         }
 
         // For types other than binaries, just print once
-        if (total_data.size() > 1) {
+        if (type == DISPATCH_DATA_BINARY) {
             outfile << "\t  Overall binaries data:\n";
         }
         total_stats.Dump(outfile, total_data);
