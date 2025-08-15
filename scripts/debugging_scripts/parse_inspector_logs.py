@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     )
 
 
-# Note: This method is parsing enty by entry and should be used only for debugging large log files.
+# Note: This method is parsing entry by entry and should be used only for debugging large log files.
 def fast_parse_yaml_log_file(log_file: str):
     log_entry = ""
     with open(log_file, "r") as f:

@@ -811,8 +811,8 @@ After that, the UI will usually delete your branch.
 
 ### A recommended development flow for model writers
 
-Please refer to documentation for [adding a model](./models/MODEL_ADD.md) and
-for [graduating](./models/MODEL_GRADUATION.md) it.
+Please refer to documentation for [adding a model](./models/docs/MODEL_ADD.md) and
+for [graduating](./models/docs/MODEL_GRADUATION.md) it.
 
 ### New feature and design specifications
 

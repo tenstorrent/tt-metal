@@ -51,8 +51,8 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // core_type: core type which the worker will be running on
 //
 // Constraints:
-// 1. Currently the sender and reciever chip should be physically adjacent (for 1D)
-// 2. Currently the sender and reciever chip should be on the same mesh (for 1D)
+// 1. Currently the sender and receiver chip should be physically adjacent (for 1D)
+// 2. Currently the sender and receiver chip should be on the same mesh (for 1D)
 // 3. When connecting with 1D fabric routers, users are responsible for setting up the
 // connection appropriately. The API will not perform any checks to ensure that the
 // connection is indeed a 1D connection b/w all the workers.
