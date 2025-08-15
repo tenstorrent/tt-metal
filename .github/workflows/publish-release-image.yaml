@@ -62,7 +62,7 @@ jobs:
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/Dockerfile
-          target: ${{matrix.image}}
+          target: ${{ matrix.image }}
 
   smoke-test-docker-image:
     needs: create-docker-release-image
