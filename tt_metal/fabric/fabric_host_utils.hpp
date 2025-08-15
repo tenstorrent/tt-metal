@@ -23,13 +23,10 @@ namespace tt::tt_fabric {
 class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
-uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology);
-uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology);
-
 void set_routing_mode(uint16_t routing_mode);
 void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_config, uint32_t dimension = 1);
 
-FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, tt::tt_metal::ClusterType cluster_type);
+FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config);
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction);

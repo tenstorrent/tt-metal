@@ -1550,8 +1550,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
 
     const auto& fabric_context = this->get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();
-    const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = topology == Topology::Mesh;
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
 

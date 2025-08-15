@@ -99,34 +99,23 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config);
 }
 
-uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology) {
-    if (topology == Topology::Mesh) {
-        return FabricEriscDatamoverConfig::num_sender_channels_2d;
-    } else {
-        return FabricEriscDatamoverConfig::num_sender_channels_1d;
+FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
+    switch (fabric_config) {
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return FabricType::TORUS_XY;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X: return FabricType::TORUS_X;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y: return FabricType::TORUS_Y;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return FabricType::TORUS_XY;
+        default: return FabricType::MESH;
     }
-}
-
-uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology) {
-    if (topology == Topology::Mesh) {
-        return FabricEriscDatamoverConfig::num_downstream_edms_2d;
-    } else {
-        return FabricEriscDatamoverConfig::num_downstream_edms;
-    }
-}
-
-FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, tt::tt_metal::ClusterType cluster_type) {
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY &&
-        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
-        return FabricType::TORUS_XY;
-    }
-    return FabricType::MESH;
 }
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const bool is_2d_fabric = control_plane.get_fabric_context().get_fabric_topology() == Topology::Mesh;
+    const bool is_2d_fabric = control_plane.get_fabric_context().is_2D_routing_enabled();
 
     const std::vector<chan_id_t>& fabric_channels =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
@@ -210,8 +199,11 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
         mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
     } else if (topology == Topology::Mesh) {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
+    } else if (topology == Topology::Torus) {
+        mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
     }
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+
+    if (tt::tt_fabric::FabricContext::is_dynamic_routing_config(fabric_config)) {
         mode |= ROUTING_MODE_DYNAMIC;
     } else {
         mode |= ROUTING_MODE_LOW_LATENCY;
