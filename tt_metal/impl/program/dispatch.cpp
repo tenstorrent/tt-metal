@@ -58,7 +58,6 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
-#include "util.hpp"
 #include "vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
@@ -1113,7 +1112,10 @@ public:
                         program.get_id(),
                         DISPATCH_DATA_BINARY,
                         kg_transfer_info.lengths[kernel_idx],
-                        kg_transfer_info.riscvs[kernel_idx]);
+                        HalProcessorIdentifier{
+                            kg_transfer_info.core_type,
+                            kg_transfer_info.processor_class,
+                            kg_transfer_info.processor_ids[kernel_idx]});
                     // Difference between prefetch total relayed pages and dispatch write linear
                     if (not using_prefetcher_cache) {
                         uint32_t relayed_bytes =
@@ -1188,7 +1190,13 @@ public:
                             .num_mcast_dests = (uint8_t)num_mcast_dests,
                             .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK});
                         RecordDispatchData(
-                            program.get_id(), DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
+                            program.get_id(),
+                            DISPATCH_DATA_BINARY,
+                            write_length,
+                            HalProcessorIdentifier{
+                                kg_transfer_info.core_type,
+                                kg_transfer_info.processor_class,
+                                kg_transfer_info.processor_ids[kernel_idx]});
                         kernel_config_buffer_offset += write_length;
 
                         if (not using_prefetcher_cache) {

@@ -87,11 +87,13 @@ KernelSource::KernelSource(const std::string& source, const SourceType& source_t
 
 Kernel::Kernel(
     HalProgrammableCoreType programmable_core_type,
+    HalProcessorClassType processor_class,
     const KernelSource& kernel_src,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& compile_args,
     const std::map<std::string, std::string>& defines) :
     programmable_core_type_(programmable_core_type),
+    processor_class_(processor_class),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
     max_runtime_args_per_core_(0),
@@ -243,6 +245,21 @@ const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_ke
             this->name());
     }
     return iter->second;
+}
+
+uint32_t DataMovementKernel::get_kernel_processor_type(int index) const {
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    return enchantum::to_underlying(this->config_.processor);
+}
+
+uint32_t EthernetKernel::get_kernel_processor_type(int index) const {
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    return enchantum::to_underlying(this->config_.processor);
+}
+
+uint32_t ComputeKernel::get_kernel_processor_type(int index) const {
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    return index;
 }
 
 std::string DataMovementKernel::config_hash() const {
