@@ -78,8 +78,9 @@ inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::u
 
     // Reset the values to default in unpack AB common.
     TT_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
-    TTI_REG2FLOP(
-        1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    TTI_NOP;  // Wait for WRCFG to complete (takes 2 cycles)
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xFFFF>(1);
     cfg_reg_rmw_tensix<
         UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32,
