@@ -1202,38 +1202,27 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     IDevice* device = a.device();
 
-    // Compute optimal core grid
-    uint32_t num_virtual_cols = grid_size.y;  // TODO: Fix frame of reference. X/Y flipped
-    while (num_groups % (TILE_WIDTH * num_virtual_cols) != 0) {
-        num_virtual_cols -= 1;
-    }
-    uint32_t num_actual_cols =
-        (grid_size.y / num_virtual_cols) *
-        num_virtual_cols;  // Largest multiple of virtual cols < 8 //TODO: Fix frame of reference. X/Y flipped
-    uint32_t num_actual_rows = grid_size.x;  // TODO: Fix frame of reference. X/Y flipped
-    uint32_t num_virtual_rows =
-        (grid_size.y / num_virtual_cols) * num_actual_rows;  // TODO: Assert if we don't have enough data
-
-    uint32_t num_cores = num_actual_cols * num_actual_rows;
-    auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
-
-    TT_FATAL(
-        num_groups % num_virtual_cols == 0, "num_groups: {} must divide cores_y: {}", num_groups, num_virtual_cols);
-    TT_FATAL(
-        ((num_groups / num_virtual_cols) * (num_channels / num_groups)) % TILE_WIDTH == 0,
-        "(num_groups: {}/virtual_cols: {})*(num_channels: {}/num_groups: {}) must be divisible by {}",
-        num_groups,
-        num_virtual_cols,
-        W,
-        num_groups,
-        TILE_WIDTH);
-    const q
-        // tensor shape
-        auto& shape = a.padded_shape();
+    // tensor shape
+    const auto& shape = a.padded_shape();
     uint32_t H = shape[1] * shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
+    // Compute optimal core grid
+    uint32_t num_virtual_cols = grid_size.x;  // TODO: Fix frame of reference. X/Y flipped
+    while ((W / num_virtual_cols) % TILE_WIDTH != 0) {
+        num_virtual_cols -= 1;
+    }
+    uint32_t num_actual_cols =
+        (grid_size.x / num_virtual_cols) *
+        num_virtual_cols;  // Largest multiple of virtual cols < 8 //TODO: Fix frame of reference. X/Y flipped
+    uint32_t num_actual_rows = grid_size.y;  // TODO: Fix frame of reference. X/Y flipped
+    uint32_t num_virtual_rows =
+        (grid_size.x / num_virtual_cols) * num_actual_rows;  // TODO: Assert if we don't have enough data
+
+    uint32_t num_cores = num_actual_cols * num_actual_rows;
+    auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
+
     uint32_t per_core_M_group_1 = H / num_virtual_rows;
     uint32_t per_core_M_group_2 = 0;
     uint32_t per_core_N = W / num_virtual_cols;
@@ -1252,6 +1241,17 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t num_batches_per_core_group_1 = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_batches_per_core_group_2 = num_batches_per_core_group_1;  // need this to be non-zero even if unused
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
+
+    TT_FATAL(
+        num_groups % num_virtual_cols == 0, "num_groups: {} must divide cores_y: {}", num_groups, num_virtual_cols);
+    TT_FATAL(
+        ((num_groups / num_virtual_cols) * (W / num_groups)) % TILE_WIDTH == 0,
+        "(num_groups: {}/virtual_cols: {})*(num_channels: {}/num_groups: {}) must be divisible by {}",
+        num_groups,
+        num_virtual_cols,
+        W,
+        num_groups,
+        TILE_WIDTH);
 
     // subblock
     uint32_t num_rows_per_batch_per_core_group_1 = per_core_M_group_1 / num_batches_per_core_group_1;
@@ -1348,8 +1348,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     log_debug(tt::LogOp, "num_datum_row_per_group: {}", num_datum_row_per_group);
     log_debug(tt::LogOp, "num_batches: {}", num_batches);
     log_debug(tt::LogOp, "num_groups: {}", num_groups);
-    log_debug(tt::LogOp, "num_cores_r: {}", num_cores_r);
-    log_debug(tt::LogOp, "num_cores_c: {}", num_cores_c);
+    log_debug(tt::LogOp, "num_virtual_rows: {}", num_virtual_rows);
+    log_debug(tt::LogOp, "num_virtual_cols: {}", num_virtual_cols);
+    log_debug(tt::LogOp, "num_actual_cols: {}", num_actual_cols);
+    log_debug(tt::LogOp, "num_actual_rows: {}", num_actual_rows);
     log_debug(tt::LogOp, "num_cores_per_batch: {}", num_cores_per_batch);
     log_debug(tt::LogOp, "num_cores_per_group: {}", num_cores_per_group);
     log_debug(tt::LogOp, "num_batches_per_core_group_1: {}", num_batches_per_core_group_1);
@@ -1534,15 +1536,16 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t start_core_y = 0;
 
     // create a vector of cores, in either RM or CM
-    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_cores_r, num_cores_c, false);
+    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_rows, num_actual_cols, false);
+    std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_rows, num_virtual_cols, false);
     for (int i = 0; i < core_coords.size(); ++i) {
         log_debug(tt::LogOp, "worker coord: {} {}", core_coords[i].x, core_coords[i].y);
     }
     std::set<CoreRange> all_cores_group_1_core_ranges;
     std::set<CoreRange> all_cores_group_2_core_ranges;
     for (int i = 0; i < num_cores; ++i) {
-        CoreCoord core = core_coords[i];
-        if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+        CoreCoord virtual_core = virtual_core_coords[i];
+        if (equal_batches_per_core || (virtual_core.x <= last_row_with_extra_batch)) {
             all_cores_group_1_core_ranges.insert(CoreRange(core_coords[i]));
         } else {
             all_cores_group_2_core_ranges.insert(CoreRange(core_coords[i]));
@@ -1551,17 +1554,23 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     CoreRangeSet all_cores_group_1 = CoreRangeSet(all_cores_group_1_core_ranges);
     CoreRangeSet all_cores_group_2 = CoreRangeSet(all_cores_group_2_core_ranges);
 
+    // TODO: Update to use virtual core coords
+    /*
     std::vector<std::vector<CoreCoord>> core_coords2D;
-    for (int j = 0; j < num_cores_c; ++j) {
-        for (int i = 0; i < num_cores_r / num_cores_per_group; ++i) {
+    for (int j = 0; j < num_virtual_cols; ++j) {
+        for (int i = 0; i < num_virtual_rows / num_cores_per_group; ++i) {
             std::vector<CoreCoord> temp;
             temp.reserve(num_cores_per_group);
             for (int k = 0; k < num_cores_per_group; ++k) {
-                temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
+                //convert to real cord space
+                uint32_t coord_idx = (j*num_virtual_rows) + (k + i * num_cores_per_group);
+                temp.push_back(core_coords[coord_idx]);
+                //temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
             }
             core_coords2D.push_back(temp);
         }
     }
+    */
 
     // one mcast core per batch per group
     std::set<CoreRange> mcast_sender_core_ranges_group_1;
@@ -1572,20 +1581,20 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     std::set<CoreRange> mcast_receiver_core_ranges_all;
     uint32_t core_index = 0;
     uint32_t core_index_offset = 0;
-    uint32_t sender_groups_count = equal_batches_per_core ? (num_batches / num_batches_per_core_group_1) : num_cores_r;
+    uint32_t sender_groups_count =
+        equal_batches_per_core ? (num_batches / num_batches_per_core_group_1) : num_virtual_rows;
     for (int i = 0; i < sender_groups_count; ++i) {
         uint32_t core_index = core_index_offset;
         for (int j = 0; j < num_groups / num_groups_per_core; ++j) {
             mcast_sender_core_ranges_all.insert(CoreRange(core_coords[core_index]));
-            CoreCoord core = core_coords[core_index];
-            if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+            if (equal_batches_per_core || (virtual_core_coords[core_index].x <= last_row_with_extra_batch)) {
                 mcast_sender_core_ranges_group_1.insert(CoreRange(core_coords[core_index]));
             } else {
                 mcast_sender_core_ranges_group_2.insert(CoreRange(core_coords[core_index]));
             }
-            core_index += num_cores_per_group;
-            core_index_offset += num_cores_per_batch * num_cores_per_group;
+            core_index += num_virtual_rows;
         }
+        core_index_offset += num_cores_per_batch;
     }
     for (auto& coord : mcast_sender_core_ranges_all) {
         log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
@@ -1600,8 +1609,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         // not found in mcast sender
         if (mcast_sender_core_ranges_all.find(CoreRange(core_coords[i])) == mcast_sender_core_ranges_all.end()) {
             mcast_receiver_core_ranges_all.insert(CoreRange(core_coords[i]));
-            CoreCoord core = core_coords[i];
-            if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+            if (equal_batches_per_core || (virtual_core_coords[i].x <= last_row_with_extra_batch)) {
                 mcast_receiver_core_ranges_group_1.insert(CoreRange(core_coords[i]));
             } else {
                 mcast_receiver_core_ranges_group_2.insert(CoreRange(core_coords[i]));
@@ -1624,6 +1632,16 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // mcast groups
     std::vector<std::vector<CoreCoord>> mcast_groups;
     int group_index = -1;
+    for (int i = 0; i < core_coords.size(); ++i) {
+        if (mcast_sender_core_ranges_all.find(CoreRange(core_coords[i])) != mcast_sender_core_ranges_all.end()) {
+            group_index += 1;
+        }
+        if (group_index >= mcast_groups.size()) {
+            mcast_groups.push_back(std::vector<CoreCoord>());  // Add a new group
+        }
+        mcast_groups[group_index].push_back(core_coords[i]);
+    }
+    /*
     for (int i = 0; i < core_coords2D.size(); ++i) {
         for (int j = 0; j < core_coords2D[i].size(); ++j) {
             if (mcast_sender_core_ranges_all.find(CoreRange(core_coords2D[i][j])) !=
@@ -1635,7 +1653,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             }
             mcast_groups[group_index].push_back(core_coords2D[i][j]);
         }
-    }
+    }*/
     for (int i = 0; i < mcast_groups.size(); ++i) {
         for (int j = 0; j < mcast_groups[i].size(); ++j) {
             log_debug(tt::LogOp, "mcast group: {} coord: {} {}", i, mcast_groups[i][j].x, mcast_groups[i][j].y);
@@ -2508,6 +2526,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                                        (input_mask.value().physical_volume() / TILE_HW);
         }
     }
+    log_debug(tt::LogOp, " End groupnorm factory", -1);
     auto override_runtime_args_callback =
         [writer_kernel_ids, reader_sender_kernel_ids, reader_receiver_kernel_ids, num_cores, grid_size, mcast_groups](
             const void* operation,
