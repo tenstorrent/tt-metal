@@ -9,10 +9,10 @@ import numpy as np
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 
-def test_exp2_arange_masking(device):
-    # Exp2 Working range - Overflow from 128(inf), Underflow till -127(<0)
-    low = -126.0
-    high = 127.0
+def test_exp_arange_masking(device):
+    # Exp Working range - Overflow from 88.5(inf), Underflow till -87(<0)
+    low = -87.0
+    high = 88.5
 
     # Generate all possible bit pattersn for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
@@ -31,10 +31,10 @@ def test_exp2_arange_masking(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden_function = ttnn.get_golden_function(ttnn.exp)
     golden = golden_function(input_tensor, device=device)
 
-    tt_result = ttnn.exp2(tt_in)
+    tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_with_ulp(golden, result, 1)
 
@@ -51,15 +51,15 @@ def test_exp2_arange_masking(device):
     "low, high",
     [
         (-5, 5),
-        (-126, 127),
+        (-87.0, 88.5),
     ],
 )
-def test_exp2_ULP(input_shapes, low, high, device):
+def test_exp_ULP(input_shapes, low, high, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
 
-    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden_function = ttnn.get_golden_function(ttnn.exp)
     golden = golden_function(torch_input, device=device)
 
     tt_in = ttnn.from_torch(
@@ -70,7 +70,7 @@ def test_exp2_ULP(input_shapes, low, high, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    tt_result = ttnn.exp2(tt_in)
+    tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_with_ulp(golden, result, 1)
 
@@ -86,15 +86,15 @@ def test_exp2_ULP(input_shapes, low, high, device):
 @pytest.mark.parametrize(
     "low, high",
     [
-        (-127, -126),
+        (-89, -87),
     ],
 )
-def test_exp2_atol(input_shapes, low, high, device):
+def test_exp_atol(input_shapes, low, high, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
 
-    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden_function = ttnn.get_golden_function(ttnn.exp)
     golden = golden_function(torch_input, device=device)
 
     tt_in = ttnn.from_torch(
@@ -105,6 +105,6 @@ def test_exp2_atol(input_shapes, low, high, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    tt_result = ttnn.exp2(tt_in)
+    tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_allclose(tt_result, golden, rtol=1e-2, atol=1e-3)
