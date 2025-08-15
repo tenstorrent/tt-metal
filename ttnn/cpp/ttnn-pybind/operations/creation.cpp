@@ -116,7 +116,7 @@ auto create_pybind_from_buffer_overload() {
                 case DataType::INVALID: {
                     // convert_to_data_type() in types.hpp has not an implementation for bfloat8_b and bfloat4_b
                     // Both are empty structs, so let's not allow users to use them for this particular operation
-                    TT_THROW("Unsupported DataType!");
+                    TT_THROW("Unreachable");
                 }
             }
         },
