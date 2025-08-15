@@ -527,7 +527,7 @@ class OpTest(BaseModel):
 # This model is only adopted by TTNN (Steven) side.
 class OpRun(BaseModel):
     """
-    High-level metadata describing a sweep run session (spanning many vectors) or unit
+    High-level metadata describing a sweep run session or unit
     test run.
     """
 

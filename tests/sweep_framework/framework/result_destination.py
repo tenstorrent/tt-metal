@@ -19,7 +19,7 @@ from framework.database import (
 from framework.serialize import serialize, serialize_structured
 from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
-from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam
+from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam, OpRun, RunStatus
 
 
 class ResultDestination(ABC):
@@ -240,12 +240,31 @@ class FileResultDestination(ResultDestination):
             self.export_dir = pathlib.Path(__file__).parent.parent / "results_export"
         else:
             self.export_dir = export_dir
+        # In-memory aggregation for building OpRun at finalize_run
+        self._run_metadata: Optional[Dict[str, Any]] = None
+        self._collected_tests: List[Dict[str, Any]] = []
+        self._run_id: Optional[str] = None
 
     def initialize_run(self, run_metadata: Dict[str, Any]) -> Optional[str]:
-        """Ensure export directory exists"""
+        """Prepare export directory and initialize run aggregation context."""
         if not self.export_dir.exists():
             self.export_dir.mkdir(parents=True)
-        return None
+
+        self._run_metadata = run_metadata
+        # Generate a simple deterministic run id based on host and start timestamp
+        try:
+            host = str(run_metadata.get("host", "unknown"))
+            run_contents = str(run_metadata.get("run_contents", "unknown"))
+            start_ts = run_metadata.get("start_time_ts") or run_metadata.get("run_start_ts") or dt.datetime.now()
+            ts_str = start_ts.strftime("%Y%m%d_%H%M%S")
+            self._run_id = f"{host}_{run_contents}_{ts_str}"
+        except Exception:
+            self._run_id = None
+
+        # Reset any previously collected tests
+        self._collected_tests = []
+
+        return self._run_id
 
     def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
         """Export results to JSON file using Pydantic validation (OpTest)."""
@@ -320,7 +339,6 @@ class FileResultDestination(ResultDestination):
             header = header_info[i]
             raw = results[i]
 
-            exception = raw.get("exception", None)
             mapped_status = _map_status(raw.get("status"))
             is_success = mapped_status in (TestStatus.success, TestStatus.passed)
             is_skipped = mapped_status == TestStatus.skipped
@@ -360,6 +378,20 @@ class FileResultDestination(ResultDestination):
                 else:
                     op_param_list.append(OpParam(param_name=k, param_value_text=str(coerced_value)))
 
+            # Derive op_kind/op_name from full_test_name (sweep_name): first and second segments before dots
+            full_name = header.get("sweep_name")
+            try:
+                _parts = str(full_name).split(".") if full_name is not None else []
+            except Exception:
+                _parts = []
+            _op_kind = _parts[0] if len(_parts) > 0 and _parts[0] else (header.get("op_kind") or "unknown")
+            if len(_parts) > 1 and _parts[1]:
+                _op_name = _parts[1]
+            elif len(_parts) > 0 and _parts[0]:
+                _op_name = _parts[0]
+            else:
+                _op_name = header.get("op_name") or "unknown"
+
             record = OpTest(
                 github_job_id=run_context.get("github_job_id", None),
                 full_test_name=header.get("sweep_name"),
@@ -373,8 +405,8 @@ class FileResultDestination(ResultDestination):
                 config=None,
                 frontend="ttnn.op",
                 model_name="n/a",
-                op_kind=header.get("sweep_name"),
-                op_name=header.get("sweep_name"),
+                op_kind=_op_kind,
+                op_name=_op_name,
                 framework_op_name="sweep",
                 inputs=None,
                 outputs=None,
@@ -423,12 +455,74 @@ class FileResultDestination(ResultDestination):
         with open(export_path, "w") as file:
             json.dump(validated_records, file, indent=2)
 
+        # Aggregate for OpRun export at finalize_run
+        try:
+            self._collected_tests.extend(validated_records)
+        except Exception:
+            # Do not fail the run on aggregation errors; file export already succeeded
+            pass
+
         logger.info(f"Successfully exported {len(results)} results to {export_path}")
         return "success"
 
     def finalize_run(self, run_id: Optional[str], final_status: str) -> None:
-        """No specific run finalization needed for file export"""
-        pass
+        """Validate and write a run-level JSON conforming to OpRun schema."""
+        if self._run_metadata is None:
+            return
+
+        # Map runner final status to OpRun.RunStatus
+        try:
+            status_map = {
+                "success": RunStatus.passed,
+                "failure": RunStatus.fail,
+            }
+            run_status = status_map.get(str(final_status).lower(), RunStatus.exception)
+        except Exception:
+            run_status = RunStatus.exception
+
+        # Build OpRun record
+        try:
+            run_start_ts = (
+                self._run_metadata.get("start_time_ts") or self._run_metadata.get("run_start_ts") or dt.datetime.now()
+            )
+            run_end_ts = dt.datetime.now()
+            card_type = self._run_metadata.get("device") or self._run_metadata.get("card_type") or "unknown"
+
+            oprun = OpRun(
+                initiated_by=self._run_metadata.get("initiated_by", "unknown"),
+                host=self._run_metadata.get("host", "unknown"),
+                card_type=str(card_type),
+                run_type=self._run_metadata.get("run_type", "sweeps"),
+                run_contents=self._run_metadata.get("run_contents", "all_sweeps"),
+                git_author=self._run_metadata.get("git_author", "unknown"),
+                git_branch_name=self._run_metadata.get("git_branch_name", "unknown"),
+                git_sha=(
+                    self._run_metadata.get("git_commit_sha") or self._run_metadata.get("git_commit_hash") or "unknown"
+                ),
+                github_pipeline_id=self._run_metadata.get(
+                    "github_pipeline_id",
+                ),
+                run_start_ts=run_start_ts,
+                run_end_ts=run_end_ts,
+                status=run_status,
+                tests=self._collected_tests,
+            )
+
+            # Serialize for JSON output
+            run_dict = oprun.model_dump(mode="json")
+
+            # Choose filename based on generated run_id when available
+            run_id_str = run_id or self._run_id or run_start_ts.strftime("%Y%m%d_%H%M%S")
+            run_path = self.export_dir / f"oprun_{run_id_str}.json"
+
+            with open(run_path, "w") as file:
+                json.dump(run_dict, file, indent=2)
+
+            logger.info(f"Successfully exported run metadata to {run_path}")
+        except Exception as e:
+            logger.error(f"Failed to export run metadata: {e}")
+            # Do not raise to avoid masking test execution failures
+            return
 
     def validate_connection(self) -> bool:
         """Validate that the export directory exists or can be created"""

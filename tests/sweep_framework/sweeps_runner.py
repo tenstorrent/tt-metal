@@ -461,7 +461,7 @@ def run_sweeps(
 ):
     pbar_manager = enlighten.get_manager()
 
-    # Create vector source based on config
+    # Set up vector source based on config
     source_kwargs = {}
     if config.vector_source == "elastic":
         source_kwargs = {
@@ -476,7 +476,7 @@ def run_sweeps(
         }
     vector_source = VectorSourceFactory.create_source(config.vector_source, **source_kwargs)
 
-    # Create result destination based on config
+    # Set up result destination based on config
     result_kwargs = {}
     if config.result_destination == "elastic":
         result_kwargs = {
@@ -499,14 +499,15 @@ def run_sweeps(
         run_metadata = {
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
+            "card_type": ttnn.get_arch_name(),
+            "run_type": "sweeps",
+            "run_contents": config.run_contents,
             "git_author": get_git_author(),
             "git_branch_name": get_git_branch(),
-            "git_commit_hash": git_hash(),
-            "start_time_ts": dt.datetime.now(),
-            "status": "success",
-            "run_contents": config.run_contents,
-            "device": ttnn.get_arch_name(),
+            "git_commit_sha": git_hash(),
             "github_pipeline_id": get_github_pipeline_id(),
+            "run_start_ts": dt.datetime.now(),
+            "status": "success",
         }
         run_id = result_dest.initialize_run(run_metadata)
         if run_id:
@@ -514,11 +515,11 @@ def run_sweeps(
 
     # Unified processing regardless of source
     # Summary counters
-    total_vectors_run = 0
-    total_tests_run = 0  # number of module-suite combinations
-    module_suite_breakdown = {}  # module_name -> {suite_name: count}
+    total_vectors_run = 0  # total number of test cases (vectors)
+    total_tests_run = 0  # total number of suites executed
+    module_suite_test_count = {}  # module_name -> {suite_name: count}
+    max_test_cases_module = None  # find the module with the most test cases
     max_test_cases_per_module = 0
-    max_test_cases_module = None
 
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
@@ -533,12 +534,12 @@ def run_sweeps(
                 # Update summary counters
                 total_vectors_run += len(vectors)
                 total_tests_run += 1
-                module_suite_breakdown.setdefault(module_name, {})
-                module_suite_breakdown[module_name][suite] = module_suite_breakdown[module_name].get(suite, 0) + len(
+                module_suite_test_count.setdefault(module_name, {})
+                module_suite_test_count[module_name][suite] = module_suite_test_count[module_name].get(suite, 0) + len(
                     vectors
                 )
-                # Track max per module (useful for dry run summary)
-                module_total = builtins.sum(module_suite_breakdown[module_name].values())
+                # Track max per module (for dry run summary)
+                module_total = builtins.sum(module_suite_test_count[module_name].values())
                 if module_total > max_test_cases_per_module:
                     max_test_cases_per_module = module_total
                     max_test_cases_module = module_name
@@ -590,13 +591,13 @@ def run_sweeps(
                 logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
 
             # Detailed breakdown by module and suite
-            if module_suite_breakdown:
+            if module_suite_test_count:
                 logger.info("\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
-                for mod in sorted(module_suite_breakdown.keys()):
-                    module_total = builtins.sum(module_suite_breakdown[mod].values())
+                for mod in sorted(module_suite_test_count.keys()):
+                    module_total = builtins.sum(module_suite_test_count[mod].values())
                     logger.info(f"Module: {mod} (Total: {module_total} test cases)")
-                    for suite_name in sorted(module_suite_breakdown[mod].keys()):
-                        test_count = module_suite_breakdown[mod][suite_name]
+                    for suite_name in sorted(module_suite_test_count[mod].keys()):
+                        test_count = module_suite_test_count[mod][suite_name]
                         logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
 
             # Extra dry-run insight: max test cases per module
@@ -608,23 +609,38 @@ def run_sweeps(
 
 def get_module_names(config: SweepsConfig):
     """Extract module names based on configuration"""
-    if config.module_name:
-        # Always support comma-separated module names now
-        if "," in config.module_name:
-            module_names = [name.strip() for name in config.module_name.split(",")]
-            logger.info(f"Running multiple modules: {module_names}")
-        else:
-            module_names = [config.module_name]
-            logger.info(f"Running module: {module_names}")
-    else:
+    if not config.module_name:
         module_names = list(get_all_modules())
         logger.info(f"Running all modules.")
         if config.skip_modules:
             skip_modules_set = {name.strip() for name in config.skip_modules.split(",")}
             module_names = [name for name in module_names if name not in skip_modules_set]
             logger.info(f"But skipping: {', '.join(skip_modules_set)}")
+        return module_names
 
-    return module_names
+    # Parse selectors and expand directory-like prefixes to all contained modules
+    selectors = [name.strip() for name in config.module_name.split(",") if name.strip()]
+    all_modules = list(get_all_modules())
+
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for sel in selectors:
+        # Exact matches first
+        matches = [m for m in all_modules if m == sel or m.startswith(sel + ".")]
+        if not matches:
+            logger.warning(f"No modules matched selector '{sel}'.")
+            continue
+        for m in matches:
+            if m not in seen:
+                expanded.append(m)
+                seen.add(m)
+
+    if not expanded:
+        logger.error("No modules matched any provided selectors.")
+        exit(1)
+
+    logger.info(f"Expanded module selectors {selectors} to {len(expanded)} modules to run.")
+    return expanded
 
 
 def get_run_contents(config: SweepsConfig):
@@ -672,7 +688,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--module-name",
         required=False,
-        help="Test Module Name(s). When vector source is 'elastic' or 'vectors_export', this can be a comma-separated list (e.g., 'eltwise.unary.relu.relu,matmul.short.matmul').",
+        help=(
+            "Module selector(s). Comma-separated. Accepts full module names (e.g. 'eltwise.unary.relu.relu') "
+            "or directory-like prefixes to run all contained modules (e.g. 'eltwise', 'eltwise.unary', 'matmul')."
+        ),
     )
     parser.add_argument("--suite-name", required=False, help="Suite of Test Vectors to run, or all tests if omitted.")
 
