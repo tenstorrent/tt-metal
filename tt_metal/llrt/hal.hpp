@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <tuple>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -31,6 +32,9 @@ namespace tt {
 enum class ARCH;
 
 namespace tt_metal {
+
+using HalProcessorIdentifier = std::tuple<HalProgrammableCoreType, HalProcessorClassType, int>;
+static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
@@ -116,7 +120,9 @@ inline uint32_t HalCoreInfoType::get_processor_classes_count() const { return th
 
 inline uint32_t HalCoreInfoType::get_processor_types_count(uint32_t processor_class_idx) const {
     TT_ASSERT(processor_class_idx < this->processor_classes_.size());
-    return this->processor_classes_[processor_class_idx].size();
+    uint32_t count = this->processor_classes_[processor_class_idx].size();
+    TT_ASSERT(count <= MAX_PROCESSOR_TYPES_COUNT);
+    return count;
 }
 
 inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(

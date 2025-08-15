@@ -7,16 +7,19 @@
 #include <core_coord.hpp>
 #include <kernel.hpp>
 #include <enchantum/enchantum.hpp>
+#include <enchantum/iostream.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <map>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
 
 #include "assert.hpp"
 #include "dev_msgs.h"
+#include "hal_types.hpp"
 #include "tt-metalium/program.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "impl/context/metal_context.hpp"
@@ -26,6 +29,11 @@ using namespace tt::tt_metal;
 
 using tt::tt_metal::detail::ProgramImpl;
 namespace {
+
+std::ostream& operator<<(std::ostream& os, const HalProcessorIdentifier& id) {
+    using enchantum::iostream_operators::operator<<;
+    return os << std::get<0>(id) << "_" << std::get<1>(id) << "_" << std::get<2>(id);
+}
 
 // Class to track stats for DispatchData
 class DispatchStats {
@@ -68,12 +76,14 @@ public:
     DispatchData(data_collector_t type) : type(type) {}
     DispatchData(int type_int) : DispatchData(static_cast<data_collector_t>(type_int)) {}
 
-    void Update(uint32_t transaction_size, RISCV riscv) { data[riscv][transaction_size]++; }
+    void Update(uint32_t transaction_size, std::optional<HalProcessorIdentifier> processor) {
+        data[processor][transaction_size]++;
+    }
 
     void Merge(const DispatchData& other) {
-        for (auto& riscv_and_data : other.data) {
-            for (auto& size_and_count : riscv_and_data.second) {
-                this->data[riscv_and_data.first][size_and_count.first] += size_and_count.second;
+        for (auto& [processor, processor_data] : other.data) {
+            for (auto& [size, count] : processor_data) {
+                this->data[processor][size] += count;
             }
         }
     }
@@ -88,31 +98,31 @@ public:
         // Track stats for all RISCS, as well as per RISC
         DispatchStats total_stats;
         std::map<uint32_t, uint32_t> total_data;
-        for (auto& riscv_and_data : data) {
+        for (auto& [processor, processor_data] : data) {
             // Go through all data and update stats
-            DispatchStats riscv_stats;
-            for (auto& size_and_count : riscv_and_data.second) {
-                riscv_stats.Update(size_and_count.first, size_and_count.second);
-                total_data[size_and_count.first] += size_and_count.second;
+            DispatchStats processor_stats;
+            for (auto& [size, count] : processor_data) {
+                processor_stats.Update(size, count);
+                total_data[size] += count;
             }
-            total_stats.Update(riscv_stats);
+            total_stats.Update(processor_stats);
 
-            // Only for binaries, print for each RISC type
-            if (type == DISPATCH_DATA_BINARY) {
-                outfile << "\t  " << riscv_and_data.first << " binary data:\n";
-                riscv_stats.Dump(outfile, riscv_and_data.second);
+            if (processor != std::nullopt) {
+                outfile << "\t  " << *processor << " binary data:\n";
+                processor_stats.Dump(outfile, processor_data);
             }
         }
 
         // For types other than binaries, just print once
-        if (type == DISPATCH_DATA_BINARY) {
+        if (total_data.size() > 1) {
             outfile << "\t  Overall binaries data:\n";
         }
         total_stats.Dump(outfile, total_data);
     }
 
 private:
-    std::map<RISCV, std::map<uint32_t, uint32_t>> data;  // RISCV -> transaction size -> count
+    // processor -> transaction size -> count
+    std::map<std::optional<HalProcessorIdentifier>, std::map<uint32_t, uint32_t>> data;
     data_collector_t type;
 };
 
@@ -128,7 +138,11 @@ public:
     };
     ~DataCollector() { inst = nullptr; };
 
-    void RecordData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv);
+    void RecordData(
+        uint64_t program_id,
+        data_collector_t type,
+        uint32_t transaction_size,
+        std::optional<HalProcessorIdentifier> processor);
     void RecordKernelGroups(ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups);
     void RecordProgramRun(uint64_t program_id);
     void DumpData();
@@ -140,18 +154,20 @@ private:
     std::map<uint64_t, int> program_id_to_call_count;
 };
 
-void DataCollector::RecordData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
-    if (program_id_to_dispatch_data.count(program_id) == 0) {
+void DataCollector::RecordData(
+    uint64_t program_id,
+    data_collector_t type,
+    uint32_t transaction_size,
+    std::optional<HalProcessorIdentifier> processor) {
+    auto& dispatch_data = program_id_to_dispatch_data[program_id];
+    if (dispatch_data.empty()) {
         // If no existing data for this program, initialize starting values.
-        program_id_to_dispatch_data[program_id] = std::vector<DispatchData>();
+        dispatch_data.reserve(DISPATCH_DATA_COUNT);
         for (int idx = 0; idx < DISPATCH_DATA_COUNT; idx++) {
-            data_collector_t curr_type = static_cast<data_collector_t>(idx);
-            DispatchData data(curr_type);
-            program_id_to_dispatch_data[program_id].push_back(data);
+            dispatch_data.emplace_back(idx);
         }
     }
-
-    program_id_to_dispatch_data[program_id].at(type).Update(transaction_size, riscv);
+    dispatch_data.at(type).Update(transaction_size, processor);
 }
 
 void DataCollector::RecordKernelGroups(
@@ -266,14 +282,18 @@ void InitDataCollector() {
 
 namespace tt {
 
-void RecordDispatchData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
+void RecordDispatchData(
+    uint64_t program_id,
+    data_collector_t type,
+    uint32_t transaction_size,
+    std::optional<HalProcessorIdentifier> processor) {
     // Do nothing if we're not enabling data collection.
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
     InitDataCollector();
-    DataCollector::inst->RecordData(program_id, type, transaction_size, riscv);
+    DataCollector::inst->RecordData(program_id, type, transaction_size, processor);
 }
 
 void RecordKernelGroups(ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
