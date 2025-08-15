@@ -749,7 +749,7 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) 
         dst.storage_type());
 
     if (is_device_tensor(src)) {
-        tensor_impl::copy_to_host_tensor_wrapper(src, dst, blocking, cq_id);
+        tensor_impl::copy_to_host_wrapper(src, dst, blocking, cq_id);
         return;
     }
 
@@ -759,7 +759,7 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) 
 
     auto mesh_buffer = dst.device_storage().mesh_buffer;
     TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
-    tensor_impl::copy_to_device_tensor_wrapper(src, dst, cq_id);
+    tensor_impl::copy_to_device_wrapper(src, dst, cq_id);
 }
 
 Tensor set_tensor_id(const Tensor& tensor) {

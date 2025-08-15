@@ -180,21 +180,21 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 // ======================================================================================
 
 template <typename T>
-Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-void copy_to_host_tensor(
+void copy_to_host(
     const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-Tensor to_device_mesh_tensor(
+Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
     const MemoryConfig& memory_config,
     QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-void copy_to_device_tensor(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
 
 // ======================================================================================
 //                                  .to_layout()
