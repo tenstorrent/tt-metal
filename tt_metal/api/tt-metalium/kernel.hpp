@@ -121,16 +121,24 @@ public:
 
     int get_watcher_kernel_id() const { return watcher_kernel_id_; }
 
+    // Get the corresponding core type, processor class, and processor type of the kernel as defined by HAL.
+    // The processor type is per-binary, where 0 <= index < expected_num_binaries.
     HalProgrammableCoreType get_kernel_programmable_core_type() const { return this->programmable_core_type_; }
+    HalProcessorClassType get_kernel_processor_class() const { return this->processor_class_; }
+    virtual uint32_t get_kernel_processor_type(int index) const = 0;
+
     CoreType get_kernel_core_type() const;
     void set_full_name(const std::string& s) { kernel_full_name_ = s; }
     void add_defines(const std::map<std::string, std::string>& defines);
+
+    virtual uint8_t expected_num_binaries() const = 0;
     virtual uint32_t get_binary_packed_size(IDevice* device, int index) const = 0;
 
     bool is_idle_eth() const;
 
 protected:
     HalProgrammableCoreType programmable_core_type_;
+    HalProcessorClassType processor_class_;
 
     int watcher_kernel_id_;
     KernelSource kernel_src_;
@@ -156,6 +164,7 @@ private:
 
     Kernel(
         HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
         const KernelSource& kernel_src,
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
