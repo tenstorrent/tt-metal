@@ -14,10 +14,11 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
+        (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
         (4, [1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
         (2, [1, 1, 256, 256], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
-    ids=["4_device_ring", "2_device_line"],
+    ids=["4 device line", "4_device_ring", "2_device_line"],
 )
 @pytest.mark.parametrize(
     "ag_input_dtype",
@@ -104,31 +105,38 @@ def test_ccl_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    if (8 == ttnn.get_num_devices()) and (all_gather_topology == ttnn.Topology.Ring):
+        pytest.skip("Rackbox is a mesh not a torus so ring wouldn't work")
     if p150_mesh_device.shape[cluster_axis] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform in this axis")
     if (p150_mesh_device.shape[cluster_axis] != num_devices) and (all_gather_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires the entire row or column so it loops around")
-    if cluster_axis == 0:
-        submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    else:
-        submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
-    run_all_gather_impl(
-        submesh_device,
-        num_devices,
-        ag_output_shape,
-        dim,
-        num_links,
-        ag_input_dtype,
-        layout,
-        mem_config_input,
-        mem_config_ag,
-        all_gather_topology=all_gather_topology,
-        enable_trace=enable_trace,
-        num_iters=num_iters,
-        cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
-        allowed_pcc=0.9999,
-    )
+    for i in range(p150_mesh_device.shape[(cluster_axis - 1) % 2]):
+        if cluster_axis == 0:
+            submesh_device = p150_mesh_device.create_submesh(
+                ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, i)
+            )
+        else:
+            submesh_device = p150_mesh_device.create_submesh(
+                ttnn.MeshShape((1, num_devices)), offset=ttnn.MeshCoordinate(i, 0)
+            )
+        run_all_gather_impl(
+            submesh_device,
+            num_devices,
+            ag_output_shape,
+            dim,
+            num_links,
+            ag_input_dtype,
+            layout,
+            mem_config_input,
+            mem_config_ag,
+            all_gather_topology=all_gather_topology,
+            enable_trace=enable_trace,
+            num_iters=num_iters,
+            cluster_axis=cluster_axis,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
+            allowed_pcc=0.9999,
+        )
     ttnn.ReadDeviceProfiler(submesh_device)
