@@ -1794,7 +1794,7 @@ FabricContext& ControlPlane::get_fabric_context() const {
 
 void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
 
-void ControlPlane::initialize_fabric_tensix_config() {
+void ControlPlane::initialize_fabric_tensix_datamover_config() {
     TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
     this->fabric_context_->initialize_tensix_config();
 }

@@ -501,7 +501,7 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->fabric_reliability_mode_);
 }
 
-void MetalContext::initialize_fabric_tensix_config() {
+void MetalContext::initialize_fabric_tensix_datamover_config() {
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
         return;
     }
@@ -509,7 +509,7 @@ void MetalContext::initialize_fabric_tensix_config() {
     // Initialize fabric tensix config after routing tables are configured and devices are available
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         auto& control_plane = this->get_control_plane();
-        control_plane.initialize_fabric_tensix_config();
+        control_plane.initialize_fabric_tensix_datamover_config();
     }
 }
 
