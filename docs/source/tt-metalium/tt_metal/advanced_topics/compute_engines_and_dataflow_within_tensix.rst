@@ -54,81 +54,112 @@ Due to the separation of concerns, invoking the matrix and vector engine often c
 
 Dst register
 ------------
+The ``Dst`` register set is the primary workspace for compute kernels and the only register set directly exposed through the compute APIs. It serves as the destination for the matrix engine and as both a source and destination for the vector engine.
 
-The ``Dst`` registers are the only register set that is exposed and visible to the users through public APIs. It can either be viewed as holding 16 tiles of 16-bit data or 8 tiles of 32-bit data. The active mode used by the kernel is controlled by the ``fp32_dest_acc_en`` field in ``ComputeKernelConfig`` when setting up the kernel on the host side.
+Moving data between L1 memory and the ``Dst`` registers is handled by the unpacker and packer, respectively. The kernel library provides functions for these operations:
 
 .. code-block:: c++
 
+    // copy_tile: Unpacks a tile from a circular buffer into a Dst register.
+    // Before calling, ensure the source circular buffer has data (e.g., using cb_wait_front).
+    copy_tile(CBIndex::c_0, /*tile_offset_in_cb*/0, /*dst_idx*/0);
+
+    // pack_tile: Packs a tile from a Dst register into a circular buffer.
+    // Before calling, ensure the destination circular buffer has space (e.g., using cb_reserve_back).
+    pack_tile(/*dst_idx*/0, CBIndex::c_16, /*tile_offset_in_cb*/0);
+
+Since the unpacker, packer, and compute engines operate concurrently on different RISC-V cores, access to the ``Dst`` registers must be synchronized. The kernel library provides a set of functions to manage this, ensuring that different hardware components do not access the registers simultaneously.
+
+A typical compute loop follows this synchronization pattern:
+
+.. code-block:: c++
+
+    // 0. Wait for input data to be available in the input circular buffers
+    // e.g. cb_wait_front(...)
+
+    // 1. Acquire Dst registers for the unpacker and math core.
+    //    This must happen after waiting for input data to be available.
+    tile_regs_acquire();
+
+    // Unpack data and perform math operations.
+    // e.g., copy_tile(...), matmul_tiles(...), add_tiles(...)
+
+    // 2. Commit the results, transferring ownership of Dst registers to the packer.
+    tile_regs_commit();
+
+    // At this point, the kernel can pop from input CBs and reserve space in output CBs.
+    // This overlaps communication with the packer's work.
+    // e.g. cb_pop_front(...), cb_reserve_back(...)
+
+    // 3. Wait for the packer to be ready to access the Dst registers.
+    tile_regs_wait();
+
+    // Pack results from Dst registers to output circular buffers.
+    // e.g., pack_tile(...)
+
+    // 4. Release the Dst registers, making them available for the next iteration's acquire step.
+    tile_regs_release();
+
+    // Announce that data has been written to the output CBs.
+    // e.g., cb_push_back(...)
+
+.. note::
+
+    The ordering of circular buffer operations (``cb_wait_front``, ``cb_pop_front``, ``cb_reserve_back``, ``cb_push_back``) is flexible but constrained by data dependencies. The pattern shown in the example minimizes stalls by overlapping communication with the packer's computation. Unpacking from a circular buffer requires that the ``Dst`` registers are first acquired, and packing can only begin after waiting for the packer to be ready.
+
+    The ``acquire_dst`` and ``release_dst`` functions are deprecated. The ``tile_regs_*`` family of functions provides more explicit control and should be used instead.
+
+.. warning::
+
+    Even if a kernel does not pack any data, ``tile_regs_commit`` and ``tile_regs_release`` must still be called in sequence after computation to correctly manage the register state. Failure to do so results in undefined behavior.
+
+The capacity and behavior of the ``Dst`` register set are configured on the host through the ``ComputeKernelConfig`` struct when creating a kernel. Two key parameters control its operation:
+
+* ``fp32_dest_acc_en``: Configures the data width of the ``Dst`` registers.
+
+  *   ``false`` (default): ``Dst`` holds 16 tiles of 16-bit data.
+  *   ``true``: ``Dst`` holds 8 tiles of 32-bit data.
+
+* ``dst_full_sync_en``: Controls a double-buffering mechanism for the ``Dst`` registers.
+
+  *   ``false`` (default): Enables double-buffering. Only half of the ``Dst`` registers are available to the kernel at a time. This allows the packer to work on one half while the math core and unpacker work on the other, overlapping computation and packing to improve performance.
+  *   ``true``: Disables double-buffering. The entire ``Dst`` register set is available to the kernel. This serializes computation and packing, which may be simpler but can reduce throughput.
+
+The number of available tiles is determined by the combination of these two settings:
+
+.. list-table:: Number of Dst Tiles Available
+    :header-rows: 1
+    :stub-columns: 1
+    :widths: 34 33 33
+
+    * -
+      - ``dst_full_sync_en = false`` (Double-Buffering ON)
+      - ``dst_full_sync_en = true`` (Double-Buffering OFF)
+    * - ``fp32_dest_acc_en = false`` (16-bit)
+      - 8
+      - 16
+    * - ``fp32_dest_acc_en = true`` (32-bit)
+      - 4
+      - 8
+
+.. code-block:: c++
+
+    // Example host-side kernel configuration
     auto kernel_id = tt::tt_metal::CreateKernel(
         program,
         "path/to/your/compute/kernel.cpp",
         core,
         tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = true      // Dst is viewed as eight tiles of 32-bit data
-            // fp32_dest_acc_en = false   // Dst is viewed as sixteen tiles of 16-bit data
+            .fp32_dest_acc_en = true, // Use 32-bit Dst registers
+            .dst_full_sync_en = false  // Enable double-buffering
         }
     );
 
-Note that ``fp32_dest_acc_en`` being enabled DOES NOT guarantee that all computations are performed at 32-bit accuracy. It only means that the ``Dst`` registers will have 32 bits of storage per element for results. For example, the matrix engine may still compute and output in bfloat16, but the results are stored in 32-bit slots. If further processing is done by the vector engine, the final result will be a 32-bit value representing the processed bfloat16 data.
-
-As the compute kernel is expected to run on all 3 cores at the same time, extra care is needed to avoid racing between the cores and users of the ``Dst`` register. Metalium provides mechanisms to ensure safe access to the ``Dst`` registers through 4 functions:
-
-.. code-block:: c++
-
-    // Wait for input to be available via circular buffers (e.g., using cb_wait_front).
-    // ...
-
-    // Acquire Dst registers, making them available for unpacking and math operations.
-    tile_regs_acquire();
-
-    // Perform unpacking and math operations here.
-    // e.g., copy_tile(...), matmul_tiles(...), add_tiles(...)
-    // ...
-
-    // Commit the results, transferring ownership of Dst registers to the packer.
-    tile_regs_commit();
-
-    // Release input CBs and reserve space in output CBs.
-    // e.g., cb_pop_front(...), cb_reserve_back(...)
-    // ...
-
-    // Wait until the packer can safely access the Dst registers.
-    tile_regs_wait();
-
-    // Perform packing operations.
-    // e.g., pack_tile(...)
-    // ...
-
-    // Release the Dst registers, as they are no longer needed for this iteration.
-    tile_regs_release();
-
-    // Announce that data has been written to the output CBs.
-    // e.g., cb_push_back(...)
-    // ...
-
-.. note::
-
-    The ordering of circular buffer operations (``cb_wait_front``, ``cb_pop_front``, ``cb_reserve_back``, ``cb_push_back``) can be adjusted, but their placement is constrained by data dependencies. The pattern shown in the example is designed to minimize stalls by overlapping waiting for space and computation by different threads. Note that unpacking from a circular buffer can only occur after the ``Dst`` registers have been acquired, and packing can only begin after the packer is ready to access them.
-
-    The ``acquire_dst`` and ``release_dst`` functions also control access to the ``Dst`` registers but are now deprecated. They offer coarse-grained control and have been superseded by the more explicit ``tile_regs_*`` family of functions, which should be used instead.
-
 .. warning::
 
-    Even when no packing is performed, ``tile_regs_commit`` and ``tile_regs_release`` must still be called in sequence. Failure to do so results in undefined behavior.
+    Setting ``fp32_dest_acc_en = true`` only allocates 32-bit per-element storage space in the ``Dst`` registers; it does not guarantee that computations are performed in 32-bit precision. For example, the matrix engine might still compute in bfloat16 and store the result in a 32-bit container.
 
-The above construction is often used in a loop to perform consecutive computation. Moving data from and to the ``Dst`` registers is performed using the ``copy_tile`` and ``pack_tile`` functions.
-
-
-.. code-block:: c++
-
-    // Before calling copy_tile, ensure the circular buffer contains data (use cb_wait_front).
-    // copy_tile transfers a tile from the circular buffer at the specified tile_offset_in_cb
-    // into the destination tile at the given index.
-    copy_tile(CBIndex::c_0, /*tile_offset_in_cb*/0, /*dst_idx*/0);
-
-    // pack_tile performs the opposite operation, transferring a tile from the Dst register
-    // to the circular buffer at the specified tile_offset_in_cb.
-    pack_tile(/*dst_idx*/0, CBIndex::c_16, /*tile_offset_in_cb*/0);
+    Accessing ``Dst`` register tiles beyond the number available for the current configuration results in undefined behavior.
 
 Matrix engine/FPU
 -----------------
@@ -213,7 +244,7 @@ For example, to compute the sine of a tile (duplicated comments from the above e
         // This function involves both the unpacker and math core to ensure
         // synchronization
         copy_tile(CBIndex::c_0, /*tile_offset_in_cb*/0, /*dst_idx*/0);
-        // DITTO but into the second tile in Dst
+        // Same as above but into the second tile in Dst
         copy_tile(CBIndex::c_1, /*tile_offset_in_cb*/0, /*dst_idx*/1);
 
         // Add tile 0 and 1 in the dst registers together. Store result back
