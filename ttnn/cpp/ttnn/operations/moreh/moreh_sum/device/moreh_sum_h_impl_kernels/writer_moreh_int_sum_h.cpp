@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto dst_args = TensorAccessorArgs<0>();
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
@@ -16,10 +16,8 @@ void kernel_main() {
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
 
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {

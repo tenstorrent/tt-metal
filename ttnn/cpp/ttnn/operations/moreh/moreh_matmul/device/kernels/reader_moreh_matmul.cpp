@@ -30,18 +30,18 @@ inline void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idxes, ui
 
 void kernel_main() {
     // compile-time args
-    constexpr bool input_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool other_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t Kt = get_compile_time_arg_val(2);
-    bool transpose_input = (get_compile_time_arg_val(3) == 1);
-    bool transpose_other = (get_compile_time_arg_val(4) == 1);
-    uint32_t input_mask_h = get_compile_time_arg_val(5);
-    uint32_t input_mask_w = get_compile_time_arg_val(6);
-    uint32_t other_mask_h = get_compile_time_arg_val(7);
-    uint32_t other_mask_w = get_compile_time_arg_val(8);
+    constexpr uint32_t Kt = get_compile_time_arg_val(0);
+    bool transpose_input = (get_compile_time_arg_val(1) == 1);
+    bool transpose_other = (get_compile_time_arg_val(2) == 1);
+    uint32_t input_mask_h = get_compile_time_arg_val(3);
+    uint32_t input_mask_w = get_compile_time_arg_val(4);
+    uint32_t other_mask_h = get_compile_time_arg_val(5);
+    uint32_t other_mask_w = get_compile_time_arg_val(6);
+    constexpr auto input_args = TensorAccessorArgs<7>();
+    constexpr auto other_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
-    constexpr bool bias_is_dram = (get_compile_time_arg_val(9) == 1);
-    bool is_scalar_bias = (get_compile_time_arg_val(10) == 1);
+    bool is_scalar_bias = (get_compile_time_arg_val(other_args.next_compile_time_args_offset()) == 1);
+    constexpr auto bias_args = TensorAccessorArgs<other_args.next_compile_time_args_offset() + 1>();
     bool scalar_bias_loaded = false;
 #endif
 
@@ -86,21 +86,14 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
-    const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-    const InterleavedAddrGenFast<input_is_dram> s0 = {
-        .bank_base_address = input_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
-
-    const InterleavedAddrGenFast<other_is_dram> s1 = {
-        .bank_base_address = other_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
+    const auto s0 = TensorAccessor(input_args, input_addr, in0_tile_bytes);
+    const auto s1 = TensorAccessor(other_args, other_addr, in1_tile_bytes);
 
 #ifdef FUSE_BIAS
     const uint32_t in4_tile_bytes = get_tile_size(cb_id_in4);
-    const DataFormat in4_data_format = get_dataformat(cb_id_in4);
-    const InterleavedAddrGenFast<bias_is_dram> s_bias = {
-        .bank_base_address = bias_addr, .page_size = in4_tile_bytes, .data_format = in4_data_format};
+    const auto s_bias = TensorAccessor(bias_args, bias_addr, in4_tile_bytes);
 #endif
 
     // mask

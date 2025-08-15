@@ -7,17 +7,17 @@
 void kernel_main() {
     int i{0};
     const auto gamma_grad_addr = get_arg_val<uint32_t>(i++);
-    const bool gamma_grad_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const bool gamma_grad_has_value = get_arg_val<uint32_t>(i++) == 1;
-
     const auto beta_grad_addr = get_arg_val<uint32_t>(i++);
-    const bool beta_grad_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const bool beta_grad_has_value = get_arg_val<uint32_t>(i++) == 1;
 
     const auto tile_offset = get_arg_val<uint32_t>(i++);
     const auto num_channels_per_core = get_arg_val<uint32_t>(i++);
     const auto num_inner_tiles = get_arg_val<uint32_t>(i++);
     const auto batch = get_arg_val<uint32_t>(i++);
+
+    constexpr bool gamma_grad_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr bool beta_grad_has_value = get_compile_time_arg_val(1) == 1;
+    constexpr auto gamma_grad_args = TensorAccessorArgs<2>();
+    constexpr auto beta_grad_args = TensorAccessorArgs<gamma_grad_args.next_compile_time_args_offset()>();
 
     const auto HtWt = num_inner_tiles / batch;
 
@@ -27,27 +27,11 @@ void kernel_main() {
 
     // gamma_grad
     const uint32_t gamma_grad_tile_bytes = get_tile_size(cb_id_gamma_grad);
-    const auto gamma_grad_data_format = get_dataformat(cb_id_gamma_grad);
-
-    const InterleavedAddrGenFast<true> dram_gamma_grad_addrg = {
-        .bank_base_address = gamma_grad_addr,
-        .page_size = gamma_grad_tile_bytes,
-        .data_format = gamma_grad_data_format};
-
-    const InterleavedAddrGenFast<false> l1_gamma_grad_addrg = {
-        .bank_base_address = gamma_grad_addr,
-        .page_size = gamma_grad_tile_bytes,
-        .data_format = gamma_grad_data_format};
+    const auto gamma_grad_addrg = TensorAccessor(gamma_grad_args, gamma_grad_addr, gamma_grad_tile_bytes);
 
     // beta_grad
     const uint32_t beta_grad_tile_bytes = get_tile_size(cb_id_beta_grad);
-    const auto beta_grad_data_format = get_dataformat(cb_id_beta_grad);
-
-    const InterleavedAddrGenFast<true> dram_beta_grad_addrg = {
-        .bank_base_address = beta_grad_addr, .page_size = beta_grad_tile_bytes, .data_format = beta_grad_data_format};
-
-    const InterleavedAddrGenFast<false> l1_beta_grad_addrg = {
-        .bank_base_address = beta_grad_addr, .page_size = beta_grad_tile_bytes, .data_format = beta_grad_data_format};
+    const auto beta_grad_addrg = TensorAccessor(beta_grad_args, beta_grad_addr, beta_grad_tile_bytes);
 
     constexpr uint32_t onetile = 1;
 
@@ -74,9 +58,7 @@ void kernel_main() {
                 auto gamma_grad_ptr = reinterpret_cast<uint16_t*>(gamma_grad_l1_read_ptr);
                 gamma_grad_ptr[tilized_gamma_beta_idx_in_tile] = gamma_grad_ptr[0];
             }
-            const auto gamma_grad_noc_addr = gamma_grad_is_dram
-                                                 ? get_noc_addr(gamma_beta_tile_idx, dram_gamma_grad_addrg)
-                                                 : get_noc_addr(gamma_beta_tile_idx, l1_gamma_grad_addrg);
+            const auto gamma_grad_noc_addr = get_noc_addr(gamma_beta_tile_idx, gamma_grad_addrg);
             noc_async_write(
                 gamma_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
                 gamma_grad_noc_addr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
@@ -93,8 +75,7 @@ void kernel_main() {
                 auto beta_grad_ptr = reinterpret_cast<uint16_t*>(beta_grad_l1_read_ptr);
                 beta_grad_ptr[tilized_gamma_beta_idx_in_tile] = beta_grad_ptr[0];
             }
-            const auto beta_grad_noc_addr = beta_grad_is_dram ? get_noc_addr(gamma_beta_tile_idx, dram_beta_grad_addrg)
-                                                              : get_noc_addr(gamma_beta_tile_idx, l1_beta_grad_addrg);
+            const auto beta_grad_noc_addr = get_noc_addr(gamma_beta_tile_idx, beta_grad_addrg);
             noc_async_write(
                 beta_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
                 beta_grad_noc_addr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
