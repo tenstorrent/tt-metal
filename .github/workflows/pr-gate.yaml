@@ -184,7 +184,7 @@ jobs:
 
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
-  models-chart-sync:
+  model-charts-sync:
     needs: [find-changed-files]
     if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
     runs-on: ubuntu-latest
@@ -195,10 +195,10 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-    - name: Run models chart sync Python script
+    - name: Run model charts sync Python script
       run: |
         # Run script that compares the models chart in README.md with the models chart in models/README.md
-        python .github/scripts/utils/models-chart-sync.py
+        python .github/scripts/utils/model-charts-sync.py
 
 
   # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
@@ -293,13 +293,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, clang-tidy-light, models-chart-sync]
+    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, clang-tidy-light, model-charts-sync]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, models-chart-sync"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, model-charts-sync"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
