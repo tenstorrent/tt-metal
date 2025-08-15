@@ -32,48 +32,6 @@ void AllBroadcastAsync::validate_with_output_tensors(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
-
-    if (output_tensors.size() > 0) {
-        TT_FATAL(output_tensors.size() == this->ring_size, "Need a persistent output buffer for each output tensor");
-
-        for (uint32_t k = 0; k < output_tensors.size(); k++) {
-            TT_FATAL(output_tensors[k].has_value(), "Persistent output buffer must have value");
-            const auto& output_tensor = output_tensors[k].value();
-
-            TT_FATAL(
-                output_tensor.storage_type() == StorageType::DEVICE, "Operands to all_broadcast need to be on device!");
-            TT_FATAL(
-                output_tensor.layout() == layout,
-                "Error, Output tensor layout should be same as input tensor layout but has {}",
-                output_tensor.layout());
-            TT_FATAL(
-                output_tensor.dtype() == dtype,
-                "Error, Output tensor dtype should be same as input tensor dtype but has {}",
-                output_tensor.dtype());
-            TT_FATAL(
-                output_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
-                "Error, Output tensor page config should be same as input tensor page config but has {}",
-                output_tensor.tensor_spec().page_config());
-            TT_FATAL(
-                output_tensor.memory_config() == this->output_mem_config,
-                "Error, Output tensor memory config should be same as output_mem_config but has {}",
-                output_tensor.memory_config());
-
-            // check the output tensor size
-            auto output_shape = output_tensor.padded_shape();
-            const auto& input_shape = input_tensor.padded_shape();
-            TT_FATAL(
-                output_shape.size() == input_shape.size(),
-                "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
-                output_shape.size());
-
-            // check memory layout
-            TT_FATAL(
-                output_tensor.memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
-                "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
-                output_tensor.memory_config().memory_layout());
-        }
-    }
 }
 
 std::vector<ttnn::TensorSpec> AllBroadcastAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -164,8 +122,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
         this->topology,
         final_barrier_semaphore,
         init_barrier_semaphore,
-        this->sub_device_id,
-        this->using_persistent_buffers);
+        this->sub_device_id);
 }
 
 tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -180,7 +137,6 @@ tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std:
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
-        this->using_persistent_buffers,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -221,9 +177,6 @@ std::vector<Tensor> all_broadcast_async_impl(
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    // all_broadcast_async currently doesn't support using persistent buffers
-    bool using_persistent_buffers = true;
-
     return tt::tt_metal::operation::run(
         ttnn::AllBroadcastAsync(
             devices,
@@ -232,8 +185,7 @@ std::vector<Tensor> all_broadcast_async_impl(
             memory_config.value_or(input_tensor.memory_config()),
             ccl_topology,
             sub_device_id,
-            cluster_axis,
-            using_persistent_buffers),
+            cluster_axis),
         {input_tensor});
 }
 

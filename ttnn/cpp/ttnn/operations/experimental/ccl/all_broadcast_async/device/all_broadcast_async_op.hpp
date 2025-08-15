@@ -33,7 +33,6 @@ struct AllBroadcastAsync {
     const ccl::Topology topology;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
-    bool using_persistent_buffers;
 
     AllBroadcastAsync(
         std::vector<IDevice*> devices,
@@ -42,16 +41,14 @@ struct AllBroadcastAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        std::optional<uint32_t> cluster_axis,
-        bool using_persistent_buffers) :
+        std::optional<uint32_t> cluster_axis) :
         devices(std::move(devices)),
         num_links(num_links),
         ring_size(ring_size),
         output_mem_config(output_mem_config),
         topology(topology),
         sub_device_id(sub_device_id),
-        cluster_axis(cluster_axis),
-        using_persistent_buffers(using_persistent_buffers) {}
+        cluster_axis(cluster_axis) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -94,8 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const GlobalSemaphore& barrier_semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool using_persistent_buffers);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
 namespace operations::experimental::ccl {
 
