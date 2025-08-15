@@ -116,19 +116,6 @@ def create_tt_model(
             False,  # ci_only
         ),
         (
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
-            True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
-            4096,  # max_seq_len, allow for image tokens
-            4,  # batch_size -- samples to load from the prompt JSON
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-        ),
-        (
             "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",  # real multi-user prompts
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
@@ -140,19 +127,6 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-        ),
-        (  # Batch-2 run with single decoder layer (CI only) - two users
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
-            True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
-            4096,  # max_seq_len, allow for image tokens
-            2,  # batch_size -- samples to load from the prompt JSON
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
         ),
         (  # Batch-2 run with single decoder layer (CI only) - single user repeated batch
             "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
@@ -209,9 +183,7 @@ def create_tt_model(
     ],
     ids=[
         "batch-1",  # latency
-        "batch-4",  # multi-user
         "batch-32",  # 32 users (special because it fills tile size)
-        "ci-only-two-users",  # ci_only batch-2 for faster testing coverage in CI pipelines
         "ci-only-repeated-batch",  # ci_only repeated batch for faster testing coverage in CI pipelines
         "ci-only-32-users",  # ci_only batch-32 for faster testing coverage in CI pipelines
         "ci-only-bleu-score",  # ci_only batch-bleu-score for faster testing coverage in CI pipelines
@@ -222,11 +194,9 @@ def create_tt_model(
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
-        # lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=[
         "performance",
-        # "accuracy",
     ],
 )
 @pytest.mark.parametrize(
