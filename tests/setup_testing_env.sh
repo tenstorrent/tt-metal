@@ -127,7 +127,12 @@ main() {
 
     # Get chip architecture
     local chip_arch
-    chip_arch=$(get_chip_architecture)
+    if [[ -n "${CHIP_ARCH:-}" ]]; then
+        chip_arch="$CHIP_ARCH"
+        echo "Using CHIP_ARCH environment variable: $chip_arch"
+    else
+        chip_arch=$(get_chip_architecture)
+    fi
 
     # Download headers
     download_headers "$chip_arch"
