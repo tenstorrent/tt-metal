@@ -12,9 +12,9 @@ from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_ti
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh
 
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -105,7 +105,7 @@ def run(
 
     for i in range(num_iters):
         # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
-        return [("skipped", LEGACY_SKIP), None]
+        return [("skipped", LEGACY_CCL_SKIP), None]
         # start_time = start_measuring_time()
         # tt_out_tensor = ttnn.all_gather(
         #     input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear

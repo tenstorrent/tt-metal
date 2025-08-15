@@ -9,9 +9,9 @@ import transformers
 import pytest
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
 CLUSTER_AXIS_X = 1
 
@@ -43,7 +43,7 @@ class TtFalconMLP:
         return ff2_linear
 
 
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_tensor_parallel_falcon_mlp():
     if ttnn.get_num_devices() < 8:
         pytest.skip()

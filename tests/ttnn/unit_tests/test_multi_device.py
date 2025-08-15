@@ -9,11 +9,9 @@ import ttnn
 import tempfile
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
-
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
 
 #######
@@ -210,7 +208,7 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_ttnn_multi_device_all_gather(pcie_mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation"""
     if pcie_mesh_device.get_num_devices() <= 1:
@@ -493,7 +491,7 @@ def test_max(mesh_device):
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation for full 8-device T3K"""
 
@@ -671,7 +669,7 @@ def test_visualize_mesh_device(t3k_mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_all_gather_multiple_submeshes(mesh_device):
     """Test all_gather with multiple submeshes"""
     if mesh_device.get_num_devices() < 8:
@@ -700,7 +698,7 @@ def test_all_gather_multiple_submeshes(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8_line")], indirect=True)
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_line_all_gather_after_reshape(mesh_device):
     if mesh_device.get_num_devices() < 8:
         pytest.skip()

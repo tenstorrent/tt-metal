@@ -8,8 +8,7 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
 def rms_norm(x, dim, gamma, beta, eps):
@@ -128,7 +127,7 @@ def test_layernorm_perf(mesh_device, num_devices_fractured, input_dim, input_cor
     tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=ln_prg_cfg)
 
     # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
-    pytest.skip(LEGACY_SKIP)
+    pytest.skip(LEGACY_CCL_SKIP)
     # All gather stats
     # tt_stats = ttnn.all_gather(
     #     tt_stats,

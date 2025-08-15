@@ -23,10 +23,8 @@ from models.utility_functions import (
     comp_allclose,
 )
 
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
-
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_grok_attention_inference(t3k_mesh_device, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b

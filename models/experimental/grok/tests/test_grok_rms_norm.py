@@ -22,11 +22,10 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
-
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_grok_rms_norm_inference(t3k_mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
@@ -75,7 +74,7 @@ def test_grok_rms_norm_inference(t3k_mesh_device, reset_seeds):
     assert passing, f"Grok_rms_norm output does not meet PCC requirement {0.99}."
 
 
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_grok_rms_norm_sharded_inference(t3k_mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 

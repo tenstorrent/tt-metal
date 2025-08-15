@@ -9,6 +9,7 @@ import ttnn
 import tempfile
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 from ttnn import (
     ShardTensorToMesh,
@@ -19,8 +20,6 @@ from ttnn import (
     MeshToTensor,
 )
 from models.utility_functions import nearest_32
-
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
 
 @pytest.mark.skip("1D device mesh not supported")
@@ -1203,7 +1202,7 @@ def test_device_submesh(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4_grid")], indirect=True)
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_device_line_all_gather_1x4(mesh_device):
     rows, cols, tile_size = 1, 4, 32
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
@@ -1223,7 +1222,7 @@ def test_device_line_all_gather_1x4(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 1), id="8x1_grid")], indirect=True)
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_device_line_all_gather_8x1(mesh_device):
     rows, cols, tile_size = 8, 1, 32
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
@@ -1246,7 +1245,7 @@ def test_device_line_all_gather_8x1(mesh_device):
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", (0, 1))
 @pytest.mark.parametrize("dim", (2, 3))
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: int):
     """
     Test the line-all-gather operation on a 8x4 mesh.
@@ -1400,7 +1399,7 @@ def test_shard_and_concat_2d_non_divisible(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 1), id="8x1_grid")], indirect=True)
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_line_all_gather_column_major(mesh_device):
     """
     The input tensor is size [1, 1, 32, 32*8] and it will get sharded onto an 8-row (8x1) device-mesh as follows:
@@ -1438,7 +1437,7 @@ def test_line_all_gather_column_major(mesh_device):
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", (1,))
 @pytest.mark.parametrize("dim", (0,))
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: int):
     """
     Test the line-all-gather operation on a 8x4 mesh.
@@ -1508,7 +1507,7 @@ def rms_norm(x, gamma, eps):
 @pytest.mark.parametrize("eps", [1e-5])
 @pytest.mark.parametrize("core_grid", [(4, 8)])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.skip(reason=LEGACY_SKIP)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_sharded_distributed_layernorm(mesh_device, input_width, input_height, core_grid, eps):
     rows, cols = mesh_device.shape
     input_shape = (1, 1, input_height, input_width)
