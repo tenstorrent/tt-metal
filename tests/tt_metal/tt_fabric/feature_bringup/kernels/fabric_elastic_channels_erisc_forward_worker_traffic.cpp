@@ -20,6 +20,7 @@ constexpr size_t CHUNK_N_PKTS = get_compile_time_arg_val(2);
 constexpr size_t PACKET_SIZE_BYTES = get_compile_time_arg_val(3);
 constexpr bool BIDIRECTIONAL_MODE = get_compile_time_arg_val(4);
 constexpr size_t N_SRC_CHANS = get_compile_time_arg_val(5);
+constexpr size_t FABRIC_MCAST_FACTOR = get_compile_time_arg_val(6);
 
 using noc_addr_t = uint64_t;
 
@@ -122,7 +123,6 @@ void process_send_side(
     uint32_t& messages_acked,
     uint32_t messages_to_send,
     std::array<size_t, RX_N_PKTS>& receiver_buffer_addresses,
-    // std::BarrelIterator<size_t, RX_N_PKTS>& receiver_buffer_addresses,
     tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS>& sender_view_rx_buf_wr_ptr,
     uint32_t message_size) {
     // Process Ack
@@ -158,7 +158,7 @@ void process_send_side(
 
     auto num_unprocessed_acks = get_sender_num_unprocessed_acks(local_src_ch_ack_stream_id);
     if (num_unprocessed_acks > 0) {
-        uint64_t start_cycles = eth_read_wall_clock();
+        // uint64_t start_cycles = eth_read_wall_clock();
         bool can_release_chunk = current_chunk_ack_index.get() == CHUNK_N_PKTS - 1;
         if (can_release_chunk) {  // 22 cycles!??!?! (44 -> 22 if I don't include the branch condition in the timing)
             auto chunk = open_chunks_cb.pop();  // avg 7.3 cycles
@@ -169,9 +169,9 @@ void process_send_side(
         }
         sender_mark_ack_processed(local_src_ch_ack_stream_id);
 
-        uint64_t end_cycles = eth_read_wall_clock();
-        timing_stats->release_count++;
-        timing_stats->total_release_cycles += (end_cycles - start_cycles);
+        // uint64_t end_cycles = eth_read_wall_clock();
+        // timing_stats->release_count++;
+        // timing_stats->total_release_cycles += (end_cycles - start_cycles);
         messages_acked++;
         unacked_sends--;
     }
@@ -180,29 +180,31 @@ void process_send_side(
     if ((open_chunks_cb.is_empty() || current_chunk_ptr.is_done()) && !send_pool.is_empty()) {
         DPRINT << "Acquiring new chunk\n";
         // Acquire new chunk - measure timing
-        uint64_t start_cycles = eth_read_wall_clock();
+        // uint64_t start_cycles = eth_read_wall_clock();
         auto new_chunk = send_pool.get_free_chunk();
 
         // Currently we only support one-deep open chunks
         size_t new_chunk_base_address = new_chunk->get_buffer_address(BufferIndex{0});
         size_t new_chunk_field_for_sender = tt::tt_fabric::FabricChunkMessageAvailableMessage::pack(new_chunk_base_address);
         // notify the worker about new chunk availability
-        noc_inline_dw_write(remote_src_new_chunk_noc_addr, new_chunk_field_for_sender);
+        // auto start_misc = eth_read_wall_clock();
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
+            remote_src_new_chunk_noc_addr, new_chunk_field_for_sender);  // 34 cycles?
+        // auto end_misc = eth_read_wall_clock();
+        // timing_stats->total_misc_cycles += (end_misc - start_misc);
+        // timing_stats->misc_count++;
 
         current_chunk_ptr.reset_to(reinterpret_cast<uint32_t*>(new_chunk_base_address));
 
         open_chunks_cb.push(new_chunk);
-        uint64_t end_cycles = eth_read_wall_clock();
-
-        timing_stats->total_acquire_cycles += (end_cycles - start_cycles);
-        timing_stats->acquire_count++;
+        // uint64_t end_cycles = eth_read_wall_clock();
+        // timing_stats->total_acquire_cycles += (end_cycles - start_cycles);
+        // timing_stats->acquire_count++;
     }
-    DPRINT << "end func\n";
 }
 
 void main_loop(
     volatile TimingStats* timing_stats,
-    size_t fabric_mcast_factor,
     bool is_sender_offset_0,
     uint32_t total_messages_target,
     std::array<size_t, RX_N_PKTS>& recv_buffer_addresses,
@@ -242,7 +244,6 @@ void main_loop(
     std::array<bool, N_SRC_CHANS> completed_sender_channels;
     std::array<size_t, N_SRC_CHANS> sender_channels_acks_received;
     std::array<BufferIndex, N_SRC_CHANS> current_chunk_ack_indices;
-    // DPRINT << "almost Main loop N_SRC_CHANS: " << (uint32_t)N_SRC_CHANS << "\n";
     for (size_t i = 0; i < N_SRC_CHANS; i++) {
         completed_sender_channels[i] = false;
         sender_channels_acks_received[i] = 0;
@@ -300,15 +301,25 @@ void main_loop(
                             auto buffer_index = receiver_wr_ptr.get_buffer_index();
                             size_t packet_src_addr = recv_buffer_addresses[buffer_index];
                             auto trid = buffer_index;
-                            for (size_t i = 0; i < fabric_mcast_factor; i++) {
+#pragma unroll
+                            auto start_misc = eth_read_wall_clock();
+                            for (size_t i = 0; i < FABRIC_MCAST_FACTOR; i++) {
+                                auto cmd_buf = write_cmd_buf;
+                                auto noc_id = noc_index;
+                                // average 29 cycle stall if alternating cmd_buf and noc_id
+                                // while (!noc_cmd_buf_ready(noc_id, cmd_buf));
                                 noc_async_write_one_packet_with_trid(
-                                    packet_src_addr, fabric_fwd_addrs[i], message_size, trid);
+                                    packet_src_addr, fabric_fwd_addrs[i], message_size, trid, cmd_buf, noc_id);
                             }
+                            auto end_misc = eth_read_wall_clock();
+                            timing_stats->total_misc_cycles += (end_misc - start_misc);
+                            timing_stats->misc_count++;
                             send_ack_to_sender(remote_src_ack_stream_id);
                             receiver_wr_ptr.increment();
                             messages_received++;
+
                         } else {
-                            write_outs_remaining = fabric_mcast_factor;
+                            write_outs_remaining = FABRIC_MCAST_FACTOR;
                             send_ack = write_outs_remaining == 0;
                             if (send_ack) {
                                 receiver_wr_ptr.increment();
@@ -337,7 +348,6 @@ void main_loop(
                             auto trid = buffer_index;
                             noc_async_write_one_packet_with_trid(
                                 packet_src_addr, fabric_fwd_addrs[0], message_size, trid);
-                            DPRINT << "WRITE OUT\n";
 
                             write_outs_remaining--;
                             made_progress = true;
@@ -352,11 +362,8 @@ void main_loop(
                             auto buffer_index = receiver_rd_ptr.get_buffer_index();
                             auto trid = buffer_index;
                             if (ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid)) {
-                                DPRINT << "SEND ACK\n";
-
                                 size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
                                 auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
-                                DPRINT << "\tSending ack to stream id(" << (uint32_t)remote_src_ack_stream_id << ")\n";
                                 send_ack_to_sender(remote_src_ack_stream_id);
                                 receiver_rd_ptr.increment();
                                 send_ack = false;
@@ -406,7 +413,6 @@ void kernel_main() {
 
     // Where receiver will write to
     uint32_t receiver_channel_write_out_l1_bank_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t fabric_mcast_factor = get_arg_val<uint32_t>(arg_idx++);
 
     // DPRINT << "Checkpoint 2\n";
     auto remote_src_noc_x_ords = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
@@ -436,7 +442,7 @@ void kernel_main() {
         dest_noc_write_addrs[i] =
             get_noc_addr(remote_src_noc_x_ords[i], remote_src_noc_y_ords[i], dest_noc_buffer_addrs[i]);
     }
-    for (size_t i = 0; i < fabric_mcast_factor; i++) {
+    for (size_t i = 0; i < FABRIC_MCAST_FACTOR; i++) {
         fabric_fwd_addrs[i] = get_noc_addr(
             remote_src_noc_x_ords[i % N_SRC_CHANS],
             remote_src_noc_y_ords[i % N_SRC_CHANS],
@@ -449,6 +455,8 @@ void kernel_main() {
     timing_stats->total_release_cycles = 0;
     timing_stats->acquire_count = 0;
     timing_stats->release_count = 0;
+    timing_stats->total_misc_cycles = 0;
+    timing_stats->misc_count = 0;
 
     // Initialize pools dynamically based on N_CHUNKS
     std::array<size_t, N_CHUNKS> send_chunk_base_addresses;
@@ -478,7 +486,6 @@ void kernel_main() {
 
         main_loop(
             timing_stats,
-            fabric_mcast_factor,
             is_sender_offset_0,
             total_messages_target,
             recv_buffer_addresses,

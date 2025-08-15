@@ -16,13 +16,12 @@
 #include <numeric>
 #include <string>
 #include <thread>
-#include <tuple>
 #include <unordered_set>
-#include <utility>
 #include <variant>
 #include <vector>
 #include <chrono>
 #include <cstring>
+#include <iostream>
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -31,13 +30,10 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "fabric.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
-
-#include <tt-metalium/kernel_types.hpp>
-
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -47,7 +43,7 @@ struct TimingStats {
     uint64_t total_acquire_cycles = 0;
     uint64_t total_release_cycles = 0;
     uint64_t total_test_cycles = 0;
-    uint32_t total_misc_cycles = 0;
+    uint64_t total_misc_cycles = 0;
     uint32_t acquire_count = 0;
     uint32_t release_count = 0;
     uint32_t misc_count = 0;
@@ -62,6 +58,7 @@ struct WorkerTimingStats {
 class N300TestDevice {
 public:
     N300TestDevice() : device_open(false) {
+        tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
@@ -69,7 +66,9 @@ public:
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
             std::vector<chip_id_t> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
+            tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
             devices_ = tt::tt_metal::detail::CreateDevices(ids);
+            tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
 
         } else {
             TT_THROW("This suite can only be run on N300 Wormhole devices");
@@ -109,6 +108,103 @@ struct TestConfig {
     uint32_t fabric_mcast_factor;
 };
 
+/**
+ * Parse a simple JSON string into TestConfig
+ * Expected format: {"n_chunks": 1, "chunk_n_pkts": 2, "rx_chunk_n_pkts": 10, "packet_size": 4352, "bidirectional_mode":
+ * true, "message_size": 16, "total_messages": 10000, "n_workers": 1, "fabric_mcast_factor": 1}
+ */
+TestConfig parse_json_config(const std::string& json_str) {
+    TestConfig config = {};
+
+    // Simple JSON parser - look for key-value pairs
+    auto find_value = [&json_str](const std::string& key) -> std::string {
+        std::string search_key = "\"" + key + "\"";
+        auto pos = json_str.find(search_key);
+        if (pos == std::string::npos) {
+            throw std::runtime_error("Key '" + key + "' not found in JSON");
+        }
+
+        // Find the colon after the key
+        pos = json_str.find(':', pos);
+        if (pos == std::string::npos) {
+            throw std::runtime_error("Malformed JSON - no colon after key '" + key + "'");
+        }
+
+        // Skip whitespace after colon
+        pos++;
+        while (pos < json_str.length() && std::isspace(json_str[pos])) {
+            pos++;
+        }
+
+        // Extract the value until comma or closing brace
+        size_t end_pos = pos;
+        while (end_pos < json_str.length() && json_str[end_pos] != ',' && json_str[end_pos] != '}') {
+            end_pos++;
+        }
+
+        std::string value = json_str.substr(pos, end_pos - pos);
+
+        // Trim whitespace
+        auto trim_start = value.find_first_not_of(" \t\n\r");
+        if (trim_start != std::string::npos) {
+            value = value.substr(trim_start);
+        }
+        auto trim_end = value.find_last_not_of(" \t\n\r");
+        if (trim_end != std::string::npos) {
+            value = value.substr(0, trim_end + 1);
+        }
+
+        return value;
+    };
+
+    try {
+        config.n_chunks = std::stoul(find_value("n_chunks"));
+        config.chunk_n_pkts = std::stoul(find_value("chunk_n_pkts"));
+        config.rx_chunk_n_pkts = std::stoul(find_value("rx_chunk_n_pkts"));
+        config.packet_size = std::stoul(find_value("packet_size"));
+
+        std::string bidir_str = find_value("bidirectional_mode");
+        config.bidirectional_mode = (bidir_str == "true" || bidir_str == "1");
+
+        config.message_size = std::stoul(find_value("message_size"));
+        config.total_messages = std::stoul(find_value("total_messages"));
+        config.n_workers = std::stoul(find_value("n_workers"));
+        config.fabric_mcast_factor = std::stoul(find_value("fabric_mcast_factor"));
+
+    } catch (const std::exception& e) {
+        throw std::runtime_error("Failed to parse JSON config: " + std::string(e.what()));
+    }
+
+    return config;
+}
+
+/**
+ * Parse TestConfig from command line arguments (traditional mode)
+ */
+TestConfig parse_cli_config(int argc, char** argv) {
+    if (argc != 10) {
+        log_error(
+            tt::LogTest,
+            "Usage: {} <n_chunks> <chunk_n_pkts> <rx_chunk_n_pkts> <packet_size> <bidirectional> <message_size> "
+            "<total_messages> <n_workers> <fabric_mcast_factor>",
+            argv[0]);
+        throw std::runtime_error("Invalid number of command line arguments");
+    }
+
+    TestConfig config;
+    size_t arg_idx = 1;
+    config.n_chunks = std::stoi(argv[arg_idx++]);
+    config.chunk_n_pkts = std::stoi(argv[arg_idx++]);
+    config.rx_chunk_n_pkts = std::stoi(argv[arg_idx++]);
+    config.packet_size = std::stoi(argv[arg_idx++]);
+    config.bidirectional_mode = std::stoi(argv[arg_idx++]) != 0;
+    config.message_size = std::stoi(argv[arg_idx++]);
+    config.total_messages = std::stoi(argv[arg_idx++]);
+    config.n_workers = std::stoi(argv[arg_idx++]);
+    config.fabric_mcast_factor = std::stoi(argv[arg_idx++]);
+
+    return config;
+}
 
 struct DeviceTestResources {
     tt_metal::IDevice* device;
@@ -133,10 +229,7 @@ void create_worker_kernels(
     std::vector<tt_metal::KernelHandle>& local_sender_worker_kernels,
     std::vector<tt_metal::KernelHandle>& remote_sender_worker_kernels,
     const TestConfig& config) {
-    std::vector<uint32_t> ct_args = {
-        config.n_chunks,
-        config.chunk_n_pkts,
-    };
+    std::vector<uint32_t> ct_args = {config.n_chunks, config.chunk_n_pkts};
 
     auto local_sender_worker_kernel = tt_metal::CreateKernel(
         test_resources.local_device.program,
@@ -182,7 +275,8 @@ void build(
         config.chunk_n_pkts,        // CHUNK_N_PKTS
         config.packet_size,         // PACKET_SIZE
         config.bidirectional_mode,  // BIDIRECTIONAL_MODE
-        config.n_workers            // N_SRC_CHANS
+        config.n_workers,           // N_SRC_CHANS
+        config.fabric_mcast_factor  // FABRIC_MCAST_FACTOR
     };
 
     auto erisc_kernel_name = config.n_workers > 0
@@ -325,8 +419,7 @@ void run_test(
             send_buffer_base,
             recv_buffer_base,
             timing_stats_addr,
-            device_resources.worker_src_buffer_address,
-            config.fabric_mcast_factor};
+            device_resources.worker_src_buffer_address};
 
         for (size_t i = 0; i < config.n_workers; i++) {
             auto translated =
@@ -586,68 +679,27 @@ void validate_test_config(const TestConfig& config) {
     }
 }
 
-int main(int argc, char** argv) {
-    // Command line argument parsing
-    // Usage: fabric_elastic_channels_host_test <n_chunks> <chunk_n_pkts> <packet_size> <bidirectional> <message_size>
-    // <total_messages>
-    if (argc != 10) {
-        log_error(
-            tt::LogTest,
-            "Usage: {} <n_chunks> <chunk_n_pkts> <rx_chunk_n_pkts> <packet_size> <bidirectional> <message_size> "
-            "<total_messages> <n_workers> <fabric_mcast_factor>",
-            argv[0]);
-        return -1;
-    }
-
-    TestConfig config;
-    size_t arg_idx = 1;
-    config.n_chunks = std::stoi(argv[arg_idx++]);
-    config.chunk_n_pkts = std::stoi(argv[arg_idx++]);
-    config.rx_chunk_n_pkts = std::stoi(argv[arg_idx++]);
-    config.packet_size = std::stoi(argv[arg_idx++]);
-    config.bidirectional_mode = std::stoi(argv[arg_idx++]) != 0;
-    config.message_size = std::stoi(argv[arg_idx++]);
-    config.total_messages = std::stoi(argv[arg_idx++]);
-    config.n_workers = std::stoi(argv[arg_idx++]);
-    config.fabric_mcast_factor = std::stoi(argv[arg_idx++]);
-
-    if (config.packet_size % 16 != 0) {
-        log_warning(tt::LogTest, "Packet size is not aligned to 16 bytes. Aligning to 16 bytes.");
-        config.packet_size = tt::align(config.packet_size, 16);
-    }
-
-    validate_test_config(config);
-
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    if (num_devices < 2) {
-        log_error(tt::LogTest, "Need at least 2 devices to run this test");
-        return -1;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_error(tt::LogTest, "Test must be run on WH");
-        return -1;
-    }
-
-    N300TestDevice test_fixture;
-
-    const auto& device_0 = test_fixture.devices_.at(0);
-    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    auto eth_sender_core_iter = active_eth_cores.begin();
-    TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
-    while (eth_sender_core_iter != active_eth_cores.end() and
-           not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), *eth_sender_core_iter)) {
-        eth_sender_core_iter++;
-    }
-    TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
-    auto eth_sender_core = *eth_sender_core_iter;
-    TT_FATAL(device_0->is_active_ethernet_core(eth_sender_core), "Not an active ethernet core {}", eth_sender_core);
-
-    auto [device_id, eth_receiver_core] = device_0->get_connected_ethernet_core(eth_sender_core);
-    const auto& device_1 = test_fixture.devices_.at(device_id);
-
-    bool success = false;
+/**
+ * Run a single test case with the given configuration
+ */
+int run_test_case(const TestConfig& config, N300TestDevice& test_fixture) {
     try {
+        const auto& device_0 = test_fixture.devices_.at(0);
+        const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
+        auto eth_sender_core_iter = active_eth_cores.begin();
+        TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
+        while (eth_sender_core_iter != active_eth_cores.end() and
+               not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                   device_0->id(), *eth_sender_core_iter)) {
+            eth_sender_core_iter++;
+        }
+        TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
+        auto eth_sender_core = *eth_sender_core_iter;
+        TT_FATAL(device_0->is_active_ethernet_core(eth_sender_core), "Not an active ethernet core {}", eth_sender_core);
+
+        auto [device_id, eth_receiver_core] = device_0->get_connected_ethernet_core(eth_sender_core);
+        const auto& device_1 = test_fixture.devices_.at(device_id);
+
         log_info(tt::LogAlways, "Building programs...");
         tt_metal::KernelHandle local_kernel;
         tt_metal::KernelHandle remote_kernel;
@@ -673,13 +725,117 @@ int main(int argc, char** argv) {
             remote_sender_worker_kernels,
             config);
 
-        success = true;
+        log_info(tt::LogAlways, "Test completed successfully");
+        return 0;
     } catch (std::exception& e) {
         log_error(tt::LogTest, "Test failed with exception: {}", e.what());
-        test_fixture.TearDown();
+        return -1;
+    }
+}
+
+int main(int argc, char** argv) {
+    // Check for pipe mode flag
+    bool pipe_mode = false;
+    if (argc >= 2 && std::string(argv[1]) == "--pipe-mode") {
+        pipe_mode = true;
+        log_info(tt::LogAlways, "Running in pipe mode - reading test configurations from stdin");
+    }
+
+    // Check hardware prerequisites
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    if (num_devices < 2) {
+        log_error(tt::LogTest, "Need at least 2 devices to run this test");
+        return -1;
+    }
+    if (arch == tt::ARCH::GRAYSKULL) {
+        log_error(tt::LogTest, "Test must be run on WH");
         return -1;
     }
 
-    log_info(tt::LogAlways, "Test completed successfully");
-    return success ? 0 : -1;
+    N300TestDevice test_fixture;
+
+    if (pipe_mode) {
+        // Pipe mode: read JSON configurations from stdin
+        std::string line;
+        int test_count = 0;
+        int successful_tests = 0;
+
+        log_info(
+            tt::LogAlways, "Ready to receive test configurations. Send JSON configs via stdin, empty line to finish.");
+
+        while (std::getline(std::cin, line)) {
+            // Trim whitespace
+            line.erase(0, line.find_first_not_of(" \t\n\r\f\v"));
+            line.erase(line.find_last_not_of(" \t\n\r\f\v") + 1);
+
+            // Empty line signals end of configurations
+            if (line.empty()) {
+                log_info(tt::LogAlways, "Received empty line - finishing test session");
+                break;
+            }
+
+            // Skip comment lines
+            if (line[0] == '#') {
+                continue;
+            }
+
+            test_count++;
+            log_info(tt::LogAlways, "Processing test case #{}", test_count);
+
+            try {
+                TestConfig config = parse_json_config(line);
+
+                // Align packet size if needed
+                if (config.packet_size % 16 != 0) {
+                    log_warning(tt::LogTest, "Packet size is not aligned to 16 bytes. Aligning to 16 bytes.");
+                    config.packet_size = tt::align(config.packet_size, 16);
+                }
+
+                validate_test_config(config);
+
+                int result = run_test_case(config, test_fixture);
+                if (result == 0) {
+                    successful_tests++;
+                    log_info(tt::LogAlways, "Test case #{} completed successfully", test_count);
+                } else {
+                    log_error(tt::LogTest, "Test case #{} failed", test_count);
+                }
+
+                // Flush output to ensure immediate visibility
+                std::cout.flush();
+                std::cerr.flush();
+
+            } catch (const std::exception& e) {
+                log_error(tt::LogTest, "Failed to parse or run test case #{}: {}", test_count, e.what());
+            }
+        }
+
+        log_info(tt::LogAlways, "Pipe mode finished: {}/{} test cases successful", successful_tests, test_count);
+        return (successful_tests == test_count && test_count > 0) ? 0 : -1;
+
+    } else {
+        // Traditional CLI mode: single test from command line arguments
+        TestConfig config;
+        try {
+            config = parse_cli_config(argc, argv);
+
+            // Align packet size if needed
+            if (config.packet_size % 16 != 0) {
+                log_warning(tt::LogTest, "Packet size is not aligned to 16 bytes. Aligning to 16 bytes.");
+                config.packet_size = tt::align(config.packet_size, 16);
+            }
+
+            validate_test_config(config);
+
+        } catch (const std::exception& e) {
+            log_error(tt::LogTest, "Configuration error: {}", e.what());
+            log_info(tt::LogTest, "For pipe mode, use: {} --pipe-mode", argv[0]);
+            return -1;
+        }
+
+        // Run single test case
+        int result = run_test_case(config, test_fixture);
+        return result;
+    }
 }
