@@ -128,7 +128,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-bh-links-online
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@williamly/bh-health-check-loop
         with:
           runner-label: ${{ inputs.runner-label }}
       - name: Run demo regression tests

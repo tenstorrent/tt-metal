@@ -131,7 +131,7 @@ jobs:
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
-        uses: ./.github/actions/ensure-bh-links-online
+        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@williamly/bh-health-check-loop
         with:
           runner-label: ${{ matrix.test-group.runner-label }}
 
