@@ -31,12 +31,7 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
     } else {
         Application();
     }
-    // Fence and flush before returning to base firmware
     __asm__ volatile("fence");
-#pragma GCC unroll 2048
-    for (int i = 0; i < 2048; i++) {
-        __asm__ volatile("nop");
-    }
 }
 
 static void return_to_base_fw() {
