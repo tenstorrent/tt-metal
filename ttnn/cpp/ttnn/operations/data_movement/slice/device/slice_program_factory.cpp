@@ -210,8 +210,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     constexpr uint32_t src0_cb_index = 0;
 
     const auto [cb_page_size, num_read_per_barrier, misalignment] =
@@ -592,8 +590,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    uint32_t num_padded_sticks = a.physical_volume() / a.padded_shape()[-1];
-    uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
+    [[maybe_unused]] uint32_t num_padded_sticks = a.physical_volume() / a.padded_shape()[-1];
+    [[maybe_unused]] uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
     // stick sizes
     uint32_t W_padded = a.logical_shape()[-1];
@@ -605,8 +603,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     auto shard_spec_padded = a.shard_spec().value();
     uint32_t shard_height_padded = shard_spec_padded.shape[0];
 
-    auto& all_cores_padded = shard_spec_padded.grid;
-    uint32_t num_cores_padded = shard_spec_padded.num_cores();
+    [[maybe_unused]] auto& all_cores_padded = shard_spec_padded.grid;
+    [[maybe_unused]] uint32_t num_cores_padded = shard_spec_padded.num_cores();
     auto bbox_padded = shard_spec_padded.grid.bounding_box();
     CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y + 1};
     uint32_t num_cores_x_padded = grid_size_padded.x;

@@ -48,7 +48,6 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto experts_per_device = output_mapping_tensor.logical_shape()[-1];
 
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
     const auto mapping_page_size_bytes = mapping_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
@@ -81,7 +80,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_mapping_tensor_config =
         CircularBufferConfig(aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size_bytes);
-    const auto mapping_cb_handle = CreateCircularBuffer(program, total_cores, cb_mapping_tensor_config);
+    CreateCircularBuffer(program, total_cores, cb_mapping_tensor_config);
 
     // scratch space to store and share indices of per device experts
     const auto local_experts_cb_id = tt::CBIndex::c_1;
@@ -93,7 +92,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_local_experts_config =
         CircularBufferConfig(aligned_local_expert_page_size_bytes, {{local_experts_cb_id, local_experts_dataformat}})
             .set_page_size(local_experts_cb_id, aligned_local_expert_page_size_bytes);
-    const auto local_experts_cb_handle = CreateCircularBuffer(program, total_cores, cb_local_experts_config);
+    CreateCircularBuffer(program, total_cores, cb_local_experts_config);
 
     // metadata page buffer
     constexpr uint32_t metadata_buffer_factor = 1;
@@ -103,7 +102,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         CircularBufferConfig(
             metadata_buffer_factor * aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
             .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
-    const auto metadata_cb_handle = CreateCircularBuffer(program, total_cores, cb_metadata_config);
+    CreateCircularBuffer(program, total_cores, cb_metadata_config);
 
     // topk page buffer
     constexpr uint32_t topk_buffer_factor = 2;
@@ -112,7 +111,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_topk_config =
         CircularBufferConfig(topk_buffer_factor * aligned_topk_page_size_bytes, {{topk_cb_id, topk_data_format}})
             .set_page_size(topk_cb_id, aligned_topk_page_size_bytes);
-    const auto topk_cb_handle = CreateCircularBuffer(program, total_cores, cb_topk_config);
+    CreateCircularBuffer(program, total_cores, cb_topk_config);
 
     // output mapping staging buffer
     const auto output_mapping_data_format = datatype_to_dataformat_converter(output_mapping_tensor.dtype());
@@ -120,7 +119,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_output_mapping_config =
         CircularBufferConfig(output_mapping_page_size_bytes, {{output_mapping_cb_id, output_mapping_data_format}})
             .set_page_size(output_mapping_cb_id, output_mapping_page_size_bytes);
-    const auto output_mapping_cb_handle = CreateCircularBuffer(program, total_cores, cb_output_mapping_config);
+    CreateCircularBuffer(program, total_cores, cb_output_mapping_config);
 
     // output reduced staging buffer
     const auto output_reduced_data_format = datatype_to_dataformat_converter(output_reduced_tensor.dtype());
@@ -128,7 +127,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_output_reduced_config =
         CircularBufferConfig(output_reduced_page_size_bytes, {{output_reduced_cb_id, output_reduced_data_format}})
             .set_page_size(output_reduced_cb_id, output_reduced_page_size_bytes);
-    const auto output_reduced_cb_handle = CreateCircularBuffer(program, total_cores, cb_output_reduced_config);
+    CreateCircularBuffer(program, total_cores, cb_output_reduced_config);
 
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
@@ -162,7 +161,6 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
-
 
     const auto output_datum_size_bytes = tt::datum_size(output_mapping_data_format);
     const auto reduction_size = operation_attributes.reduction_size;

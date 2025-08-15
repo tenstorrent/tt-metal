@@ -38,9 +38,6 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::UINT32);
-    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool out_is_dram_0 = out_num_indices.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool out_is_dram_1 = out_indices.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t page_size = actual_elements * input.element_size();
     uint32_t rounded_page_size = round_up_to_mul32(page_size);

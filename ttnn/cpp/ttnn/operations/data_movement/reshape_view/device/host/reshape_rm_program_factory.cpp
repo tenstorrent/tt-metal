@@ -68,7 +68,6 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     }
     const uint32_t write_jump = (responsibility * source_page_size_bytes) / dest_page_size_bytes;
     const uint32_t offset_jump = (responsibility * source_page_size_bytes) % dest_page_size_bytes;
-    uint32_t src0_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     const uint32_t cb_size0 = source_read_size_bytes;
     const uint32_t cb_size1 = ((dest_page_size_bytes - 1) & MASK_64) + 80;
 
@@ -82,10 +81,6 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
         tt::tt_metal::CircularBufferConfig(cb_size1, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, cb_size1);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-    bool source_page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(source_page_size_bytes);
-    uint32_t source_page_pow_2 = source_page_is_pow_2 ? (std::uint32_t)std::log2(source_page_size_bytes) : 0;
-    bool dest_page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(dest_page_size_bytes);
-    uint32_t dest_page_pow_2 = dest_page_is_pow_2 ? (std::uint32_t)std::log2(dest_page_size_bytes) : 0;
     std::vector<uint32_t> compile_time_args = {
         (std::uint32_t)(source_page_size_bytes % 64 == 0) ? 1 : 0,
         (std::uint32_t)(source_page_size_bytes % 16 == 0) ? 1 : 0,
