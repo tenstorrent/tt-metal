@@ -61,18 +61,31 @@ inline std::string get_core_descriptor_file(
             case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
         };
     } else {
+        // Check if fabric tensix is enabled based on fabric tensix config
+        tt_fabric::FabricTensixConfig fabric_tensix_config =
+            tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+        bool use_fabric_tensix = (fabric_tensix_config == tt_fabric::FabricTensixConfig::MUX);
+
         switch (arch) {
             default:
                 throw std::runtime_error(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::WORMHOLE_B0:
-                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
-                                            ? "wormhole_b0_80_arch_eth_dispatch.yaml"
-                                            : "wormhole_b0_80_arch.yaml");
+                if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+                    return core_desc_dir + "wormhole_b0_80_arch_eth_dispatch.yaml";
+                } else if (use_fabric_tensix) {
+                    return core_desc_dir + "wormhole_b0_80_arch_fabric_mux.yaml";
+                } else {
+                    return core_desc_dir + "wormhole_b0_80_arch.yaml";
+                }
             case tt::ARCH::BLACKHOLE:
-                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
-                                            ? "blackhole_140_arch_eth_dispatch.yaml"
-                                            : "blackhole_140_arch.yaml");
+                if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+                    return core_desc_dir + "blackhole_140_arch_eth_dispatch.yaml";
+                } else if (use_fabric_tensix) {
+                    return core_desc_dir + "blackhole_140_arch_fabric_mux.yaml";
+                } else {
+                    return core_desc_dir + "blackhole_140_arch.yaml";
+                }
             case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
         };
     }
@@ -81,12 +94,14 @@ inline std::string get_core_descriptor_file(
 
 const core_descriptor_t& get_core_descriptor_config(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    // {arch : {product : {dispatch core axis: {num hardware command queues : config}}}}
+    // {arch : {product : {dispatch core axis: {fabric tensix config: {num hardware command queues : config}}}}}
     static std::unordered_map<
         ARCH,
         std::unordered_map<
             std::string,
-            std::unordered_map<tt_metal::DispatchCoreConfig, std::unordered_map<uint8_t, core_descriptor_t>>>>
+            std::unordered_map<
+                tt_metal::DispatchCoreConfig,
+                std::unordered_map<tt_fabric::FabricTensixConfig, std::unordered_map<uint8_t, core_descriptor_t>>>>>
         config_by_arch;
 
     ARCH arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
@@ -112,8 +127,10 @@ const core_descriptor_t& get_core_descriptor_config(
         }
     }
 
+    tt_fabric::FabricTensixConfig fabric_tensix_config =
+        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     std::unordered_map<uint8_t, core_descriptor_t>& config_by_num_cqs =
-        config_by_arch[arch][product_name][dispatch_core_config];
+        config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
     if (config_by_num_cqs.count(num_hw_cqs)) {
         return config_by_num_cqs.at(num_hw_cqs);
     }

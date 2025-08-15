@@ -86,6 +86,10 @@ public:
     void initialize_fabric_config();
     tt_fabric::FabricConfig get_fabric_config() const;
 
+    // Fabric tensix configuration
+    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
+    tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
+
     distributed::multihost::DistributedContext& global_distributed_context();
 
 private:
@@ -101,6 +105,8 @@ private:
 
     void reset_cores(chip_id_t device_id);
     void assert_cores(chip_id_t device_id);
+
+    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
 
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord);
