@@ -24,6 +24,7 @@ import sys
 import yaml
 from datetime import datetime, timedelta, timezone
 from docopt import docopt
+import utils
 
 if TYPE_CHECKING:
     from inspector_data import (
@@ -57,6 +58,9 @@ def fast_parse_yaml_log_file(log_file: str):
 
 
 def read_yaml(yaml_path: str):
+    if not os.path.exists(yaml_path):
+        utils.WARN(f"  {yaml_path} file does not exist.")
+        return []
     try:
         # Try to use ryml for faster parsing if available
         import ryml
