@@ -2116,6 +2116,11 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto board_id = chip_id_to_asic_id_.at(physical_chip_id);
     auto intermesh_links = this->get_intermesh_eth_links(physical_chip_id);
+    fmt::println(
+        "INTERMESH LINKS: {} MESH ID {} CHIP_ID {}",
+        intermesh_links.size(),
+        fabric_node_id.mesh_id,
+        fabric_node_id.chip_id);
 
     // Used to track the number of directions that could be assigned to intermesh links on this node
     uint32_t num_directions_assigned = 0;
@@ -2124,6 +2129,10 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
         auto intermesh_routing_direction = RoutingDirection::NONE;
         auto curr_eth_chan_desc = EthChanDescriptor{.board_id = board_id, .chan_id = eth_chan};
         const auto& remote_eth_chan_desc = intermesh_link_table_.intermesh_links.at(curr_eth_chan_desc);
+        fmt::println(
+            "DEBUG: remote_eth_chan_desc {} intermesh connectivity {}",
+            remote_eth_chan_desc,
+            inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id].size());
         for (const auto& [connected_mesh_id, edge] :
              inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
             bool connection_found = false;
@@ -2131,8 +2140,16 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
             auto connected_host_rank_id = this->routing_table_generator_->mesh_graph
                                               ->get_host_rank_for_chip(connected_mesh_id, fabric_node_id.chip_id)
                                               .value();
+            fmt::println("DEBUG: CONNECTED HOST RANK ID: {}", connected_host_rank_id);
             for (const auto& [candidate_desc, candidate_peer_desc] :
                  peer_intermesh_link_tables_[connected_mesh_id][connected_host_rank_id]) {
+                fmt::println(
+                    "COMPARE: candidate desc {} remote_eth_chan_desc {} candidate_peer_desc {} curr_eth_chan_desc {}",
+                    candidate_desc,
+                    remote_eth_chan_desc,
+                    candidate_peer_desc,
+                    curr_eth_chan_desc);
+
                 if (candidate_desc == remote_eth_chan_desc && candidate_peer_desc == curr_eth_chan_desc) {
                     // Found the matching intermesh link
                     num_directions_assigned++;
