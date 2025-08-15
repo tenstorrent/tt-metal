@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -69,13 +68,48 @@ def timer(description="Operation"):
         (1, 1, 128, 96, 128, [0, 16, 20, 24, 64, 68, 72, 76, 80, 128]),
         (1, 1, 4096, 96, 256, [0, 1024, 2048, 3072, 4076, 4092, 4096]),
         # real-world cases
-        # -------------- from Qwen2.5-VL-3B-Instruct --------------
-        (1, 16, 8192, 96, 256, lambda: get_cu_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14)),
-        (1, 16, 8192, 96, 256, lambda: get_cu_window_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14)),
-        (1, 16, 14336, 96, 256, lambda: get_cu_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14)),
-        (1, 16, 14336, 96, 256, lambda: get_cu_window_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14)),
-        (1, 16, 43008, 96, 256, lambda: get_cu_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14)),
-        (1, 16, 43008, 96, 256, lambda: get_cu_window_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14)),
+        # -------------- from Qwen2.5-VL-3B/72B-Instruct --------------
+        (1, 16, 8192, 96, 256, lambda: get_cu_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14)),  # full attn
+        (
+            1,
+            16,
+            8192,
+            96,
+            256,
+            lambda: get_cu_window_seqlens(7296, torch.tensor([[1, 64, 114]]), 80, 2, 112, 14),
+        ),  # windowed attn
+        (
+            1,
+            16,
+            14336,
+            96,
+            256,
+            lambda: get_cu_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14),
+        ),  # full attn
+        (
+            1,
+            16,
+            14336,
+            96,
+            256,
+            lambda: get_cu_window_seqlens(14308, torch.tensor([[1, 98, 146]]), 80, 2, 112, 14),
+        ),  # windowed attn
+        (
+            1,
+            16,
+            43008,
+            96,
+            256,
+            lambda: get_cu_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14),
+        ),  # full attn
+        (
+            1,
+            16,
+            43008,
+            96,
+            256,
+            lambda: get_cu_window_seqlens(42952, torch.tensor([[1, 236, 182]]), 80, 2, 112, 14),
+        ),  # windowed attn
     ],
     ids=[
         "basic-1",
@@ -167,7 +201,7 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
                 k_chunk_size=qk_chunk_size,
             ),
         )
-        output_standard = ttnn.to_torch(output_standard_tt)
+        output_standard = ttnn.to_torch(ttnn.get_device_tensors(output_standard_tt.cpu())[0])
 
     # sleep for 1 seconds
     time.sleep(1)
@@ -200,7 +234,7 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
 
         # Convert back to torch for verification
         # NOTE: there is an implicit synchronization during the to_torch call, so the call getting here is not a guarantee that the computation above is complete.
-        output = ttnn.to_torch(output_tt)
+        output = ttnn.to_torch(ttnn.get_device_tensors(output_tt.cpu())[0])
 
     # sleep for 1 seconds
     time.sleep(1)
