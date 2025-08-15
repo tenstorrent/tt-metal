@@ -142,19 +142,24 @@ void MAIN {
                     // }
 
                     tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
+                    // reconfig_data_format_srca(tile_tmp_cb_id);
+                    // pack_reconfig_data_format(tile_tmp_cb_id);
                     tilize_block(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id, tile_idx_tmp_cb_id);
 
+                    cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
+                    cb_push_back(tile_tmp_cb_id, topk_output_tiles);
+                    cb_wait_front(tile_tmp_cb_id, topk_output_tiles);
+
                     tilize_init_short_with_dt(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
+                    // reconfig_data_format_srca(tile_idx_tmp_cb_id);
+                    // pack_reconfig_data_format(tile_idx_tmp_cb_id);
                     tilize_block(
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt(curr_in_idx_cb_id, curr_in_cb_id, tile_tmp_cb_id);
 
-                    cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
                     cb_reserve_back(tile_idx_tmp_cb_id, topk_output_tiles);
-                    cb_push_back(tile_tmp_cb_id, topk_output_tiles);
                     cb_push_back(tile_idx_tmp_cb_id, topk_output_tiles);
-                    cb_wait_front(tile_tmp_cb_id, topk_output_tiles);
                     cb_wait_front(tile_idx_tmp_cb_id, topk_output_tiles);
 
                     // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
