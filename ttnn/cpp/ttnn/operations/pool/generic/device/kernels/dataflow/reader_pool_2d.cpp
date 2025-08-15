@@ -17,6 +17,8 @@
 
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
+#define FACE_WIDTH 16
+#define FACE_HEIGHT 16
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
@@ -67,7 +69,7 @@ template <
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
-    uint32_t in_nbytes_c,
+    uint32_t in_nbytes_leftover,  // in_aligned_nbytes_c
     uint32_t in_c,
     uint32_t max_sticks_for_reduction,
     uint32_t total_elems_to_reduce,
@@ -75,28 +77,27 @@ template <
     bool wide_reduction,
     uint32_t clear_value_cb_id,
     uint32_t in_cb_ntiles,
-    bool is_large_kernel>
+    uint32_t in_nbytes_c,
+    bool is_large_kernel,
+    bool last_tile_is_partial>
 ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // otherwise we can reduce 8 tiles at a time.
     constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
-    static_assert(in_c % TILE_WIDTH == 0 || in_c == 16, "in_c must be a multiple of TILE_WIDTH or 16");
     constexpr uint32_t in_ntiles_c = in_c / TILE_WIDTH;
-    constexpr bool tilize_reconfig =
-        in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 && (window_h * window_w) <= 16;
-    constexpr uint32_t max_write_inc =
-        wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_BYTES_PER_REDUCTION for wide reductions
+    constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
+                                     (window_h * window_w) <= 16 && !last_tile_is_partial;
+    constexpr uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
 
     uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
+
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-        uint32_t read_bytes;
+        uint32_t read_bytes = in_nbytes_c;
         if constexpr (wide_reduction) {
-            const bool last_c_block = c_i == in_nblocks_c - 1;
-            read_bytes = !last_c_block ? MAX_BYTES_PER_REDUCTION : in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION;
-        } else {
-            read_bytes = in_nbytes_c;
+            read_bytes =
+                (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
         }
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         uint32_t processed_sticks = 0;
@@ -140,12 +141,18 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 }
             };
 
-            bool use_contiguous_read = !wide_reduction;
+            // Case where in_nbytes_leftover and in_nbytes_c is different is when we are dealing with
+            // tesnors that have last tile as partial. Cb page size is multiple of tile but when the last
+            // tile is partial we have to read the smaller stick width. Therefore we need to write out the next stick
+            // right bellow the previous one and this is when increment of the write pointer and the read stick size is
+            // not compliant.
+            bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c;
             if constexpr (is_large_kernel) {
                 bool whole_row_remaining =
                     window_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
                 use_contiguous_read &= whole_row_remaining;
             }
+
             if (use_contiguous_read) {  // read entire row as one chunk
                 process_h(0, window_w);
             } else {  // read rows stick by stick
@@ -204,7 +211,7 @@ void kernel_main() {
     constexpr int32_t pad_w = get_compile_time_arg_val(3);
 
     // channel size in bytes
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(4);
+    constexpr uint32_t in_aligned_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
     constexpr int32_t in_w = get_compile_time_arg_val(5);
@@ -231,8 +238,15 @@ void kernel_main() {
     constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(22);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(25);
+    constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(26);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(28);
+    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
+
+    if constexpr (last_tile_is_partial) {
+        clear_out_tiles<in_cb_id, clear_value_cb_id>();
+    }
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -243,18 +257,16 @@ void kernel_main() {
     uint32_t scalar_value = 0;
 
     constexpr uint32_t window_size_hw = window_h * window_w;
-    constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
-    constexpr bool is_partial_tile = in_c < 32;
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile                                           ? 1
-                                                 : (max_sticks_for_reduction < 32 || window_size_hw <= 16) ? 2
-                                                                                                           : 4;
+    constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
+    constexpr uint32_t num_faces_in_input_tile =
+        (max_sticks_for_reduction < TILE_WIDTH || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
     constexpr bool is_large_kernel = (window_h * window_w) > max_sticks_for_reduction;
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
     // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
-    constexpr bool need_to_initialize_in_cb = remaining_elems && face_r_dim == 16 &&
-                                              (num_faces_in_input_tile == 4 || is_partial_tile) &&
+    constexpr bool need_to_initialize_in_cb = remaining_elems && face_r_dim == FACE_HEIGHT &&
+                                              (num_faces_in_input_tile == 4 || last_tile_is_partial) &&
                                               interm_reduction_chunks <= multi_buffering_factor;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
@@ -340,7 +352,7 @@ void kernel_main() {
                 window_h,
                 window_w,
                 in_w_padded,
-                in_nbytes_c,
+                in_aligned_nbytes_c,
                 in_c,
                 max_sticks_for_reduction,
                 total_elems_to_reduce,
@@ -348,7 +360,9 @@ void kernel_main() {
                 wide_reduction,
                 clear_value_cb_id,
                 in_cb_ntiles,
-                is_large_kernel>(ind, in_l1_read_base_addr);
+                in_nbytes_padded_c,
+                is_large_kernel,
+                last_tile_is_partial>(ind, in_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -366,7 +380,7 @@ void kernel_main() {
             window_h,
             window_w,
             in_w_padded,
-            in_nbytes_c,
+            in_aligned_nbytes_c,
             in_c,
             max_sticks_for_reduction,
             total_elems_to_reduce,
@@ -374,6 +388,8 @@ void kernel_main() {
             wide_reduction,
             clear_value_cb_id,
             in_cb_ntiles,
-            is_large_kernel>(0, in_l1_read_base_addr);
+            in_nbytes_padded_c,
+            is_large_kernel,
+            last_tile_is_partial>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()

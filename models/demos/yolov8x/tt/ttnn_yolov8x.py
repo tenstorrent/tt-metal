@@ -342,19 +342,21 @@ class TtSppf:
         cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
         y = [cv1]
 
+        output = y[-1]
         for i in range(3):
             output = ttnn.max_pool2d(
-                input_tensor=y[-1],
+                input_tensor=output,
                 batch_size=self.batch_size,
                 input_h=out_h,
                 input_w=out_w,
-                channels=y[-1].shape[-1],
+                channels=output.shape[-1],
                 kernel_size=[5, 5],
                 stride=[1, 1],
                 padding=[2, 2],
                 dilation=[1, 1],
             )
-            y.append(output)
+            output_interleaved = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+            y.append(output_interleaved)
 
         x = sharded_concat(y)
         for i in range(len(y)):
