@@ -16,7 +16,7 @@ from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 from models.utility_functions import comp_pcc, skip_for_grayskull
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-1layer-performance-max128k-32768-page_params0-paged_attention-8]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-1layer-performance-max128k-3k-page_params0-default_attention-8]
 
 
 def convert2ref(state_dict):
@@ -94,6 +94,7 @@ def test_model_inference(
     is_ci_env,
     request,
 ):
+    mesh_device.disable_and_clear_program_cache()
     test_id = request.node.callspec.id
     num_layers = 1
     if is_ci_env:
@@ -215,7 +216,6 @@ def test_model_inference(
     )
     prompt_lens = [seq_len]
     start_pos = 0
-
     # Run TT model
     logger.info(f"Running TT model...")
     tt_output_torch = generator.prefill_forward_text(
@@ -236,9 +236,8 @@ def test_model_inference(
 
         # Measure PCC if also running reference model
         all_tests_pass = True
-
         # Check output pcc
-        passing, pcc_message = comp_pcc(ref_output.view(batch_size, seq_len, -1), tt_output_torch, expec_out_pcc)
+        passing, pcc_message = comp_pcc(ref_output, tt_output_torch, expec_out_pcc)
         logger.info(f"Output PCC: {pcc_message}")
         if not passing:
             all_tests_pass = False
@@ -281,7 +280,7 @@ def test_model_inference(
                             ]
                         )
                 else:
-                    for layer_past in tt_model.layers[i].attention.layer_past_list[0]:
+                    for layer_past in tt_model.layers[i].attention.layer_past:
                         tt_layer_present.append(
                             ttnn.to_torch(
                                 layer_past,

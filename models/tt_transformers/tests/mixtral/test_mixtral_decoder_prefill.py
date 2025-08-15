@@ -9,7 +9,7 @@ from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerB
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py::test_mixtral_decoder_inference[wormhole_b0-True-16]
 
 
 def convert2ref(state_dict):
@@ -41,10 +41,12 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
     dtype = ttnn.bfloat8_b
     mode = "prefill"
     batch = 1
-    max_seq_len = 128
+    max_seq_len = 4096
 
     model_args = ModelArgs(t3k_mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
     model_args.n_layers = 1
+
+    t3k_mesh_device.disable_and_clear_program_cache()
 
     state_dict = model_args.load_state_dict()
 
@@ -135,13 +137,13 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
         logger.info(pcc_message)
 
         if passing:
-            logger.info("Mistral Decoder Block Passed!")
+            logger.info("Mixtral Decoder Block Passed!")
         else:
-            logger.warning("Mistral Decoder Block Failed!")
+            logger.warning("Mixtral Decoder Block Failed!")
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info(f"All {generation_length} Mistral decode iterations Passed!")
+        logger.info(f"All {generation_length} Mixtral decode iterations Passed!")
     else:
-        logger.warning("One or more iterations of Mistral decode Failed!")
+        logger.warning("One or more iterations of Mixtral decode Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

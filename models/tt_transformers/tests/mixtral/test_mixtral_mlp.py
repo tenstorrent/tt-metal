@@ -3,13 +3,14 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.rmsnorm import RMSNorm as TtRMSNorm
 from models.demos.t3000.mixtral8x7b.reference.model import FeedForward, RMSNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_mlp.py::test_mixtral_mlp_inference[wormhole_b0-True-prefill]
 
 
 def convert2ref(state_dict):
@@ -21,6 +22,8 @@ def convert2ref(state_dict):
 
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
 def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
+    seqlen = 32
+    t3k_mesh_device.disable_and_clear_program_cache()
     dtypes = {
         "w1": ttnn.bfloat4_b,
         "w2": ttnn.bfloat8_b,
@@ -30,6 +33,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
     model_args = ModelArgs(t3k_mesh_device)
     model_args.n_layers = 32
     state_dict = model_args.load_state_dict()
+    state_dict_prefix = model_args.get_state_dict_prefix("", 0)
 
     tt_model = TtMixtralMLP(
         mesh_device=t3k_mesh_device, state_dict=state_dict, args=model_args, layer_num=0, dtypes=dtypes
@@ -40,7 +44,6 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
         k: v for k, v in state_dict.items() if (k.startswith("layers.0.") and "attention" not in k and "norm" not in k)
     }
     partial_state_dict_ref = {k[32:]: v for k, v in partial_state_dict.items() if f"experts.{0}" in k}
-
     reference_model = FeedForward(model_args)
     reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
 
@@ -48,8 +51,20 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
     rms = RMSNorm(dim=model_args.dim)
     rms.load_state_dict(rms_state_dict)
 
-    torch_input = (torch.rand(1, 1, 32, model_args.dim) * 2) - 1
-    torch_input = rms(torch_input)  # apply rmsnorm to input
+    tt_norm = TtRMSNorm(
+        device=t3k_mesh_device,
+        dim=model_args.dim,
+        state_dict=state_dict,
+        state_dict_prefix=state_dict_prefix,
+        weight_key=f"ffn_norm",
+        weight_dtype=ttnn.bfloat16,
+        is_distributed=model_args.is_distributed_norm,
+        sharded_program_config=model_args.get_model_config()["SHARDED_NORM_MLP_PRGM_CFG"],
+        sharded_output_config=model_args.get_model_config()["SHARDED_MLP_INPUT_MEMCFG"],
+    )
+
+    original_input = (torch.rand(1, 1, seqlen, model_args.dim) * 2) - 1
+    torch_input = rms(original_input)  # apply rmsnorm to input
 
     reference_output = reference_model(torch_input)
 
@@ -58,7 +73,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}  # 8 cores: x=0 to x=7, y=0
         )
 
-        shard_shape = [32, 512]
+        shard_shape = [seqlen, 512]
 
         shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
 
@@ -67,7 +82,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
         )
 
         tt_input = ttnn.as_tensor(
-            torch_input,
+            original_input,
             dtype=ttnn.bfloat16,  # or your desired dtype
             layout=ttnn.TILE_LAYOUT,
             device=t3k_mesh_device,
@@ -75,7 +90,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
         )
     else:
         tt_input = ttnn.from_torch(
-            torch_input,
+            original_input,
             dtype=ttnn.bfloat16,  # or your desired dtype
             layout=ttnn.TILE_LAYOUT,
             device=t3k_mesh_device,

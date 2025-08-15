@@ -31,7 +31,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
-    standardize_hf_keys_qwen25_vl,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
@@ -591,6 +590,8 @@ class ModelArgs:
         ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
+        elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
+            self.prefill_len_cutoff = 512
 
         if callable(optimizations):
             self.optimizations = optimizations(self)
@@ -796,7 +797,23 @@ class ModelArgs:
                 grid_size=mlp2_grid(seq_len),
                 per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
             )
-
+            self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                k=self.dim // self.cluster_shape[0],
+                n=n_w1_w3,
+                grid_size=mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
+                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
+                per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
+                fused_activation=ttnn.UnaryOpType.SILU,
+            )
+            self.model_config["PREFILL_MIXTRAL_MLP_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                k=self.dim // self.cluster_shape[0],
+                n=n_w1_w3,
+                grid_size=mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
+                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
+                per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
+            )
             # Attention output is not necessarily the same dimension as the self.dim, e.g. in Mistral
             k_dim = (
                 (self.n_heads * self.head_dim) // self.cluster_shape[0]

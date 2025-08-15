@@ -10,7 +10,7 @@ from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_moe.py
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_moe.py::test_mixtral_moe_inference[wormhole_b0-True-prefill]
 
 
 def convert2ref(state_dict):
@@ -30,6 +30,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode):
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b
+    t3k_mesh_device.disable_and_clear_program_cache()
 
     model_args = ModelArgs(t3k_mesh_device)
     state_dict = model_args.load_state_dict()
@@ -72,7 +73,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode):
 
     all_tests_pass = True
 
-    seqlen = 1
+    seqlen = 32
     batch = 32
 
     for i in range(iterations):

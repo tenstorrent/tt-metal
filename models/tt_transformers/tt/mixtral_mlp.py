@@ -66,13 +66,21 @@ class TtMixtralMLP(LightweightModule):
         """
         if mode == "prefill":
             seq_len = x.shape[-2]
+            original_shape = x.shape
             compute_kernel_config = self.prefill_mlp_config
-            if seq_len >= 2048 // 2:  # Too big to compute. Set different program configs based on seqlen
+            if (
+                seq_len >= self.model_args.prefill_len_cutoff
+            ):  # Too big to compute. Set different program configs based on seqlen
                 # Reshape input to to fit on device and parallelize computation
-                x = ttnn.reshape(x, [1, seq_len // 1024, 1024, self.model_args.dim])
-                pc_1 = self.model_config["FF1_OUTPUT_PROGCFG"]
-                pc_2 = self.model_config["FF2_OUTPUT_PROGCFG"]
-                pc_3 = self.model_config["FF3_OUTPUT_PROGCFG"]
+                x = ttnn.reshape(
+                    x, [1, seq_len // self.model_args.prefill_len_cutoff, self.model_args.prefill_len_cutoff, -1]
+                )
+                # pc_1 = self.model_config["FF1_OUTPUT_PROGCFG"]
+                # pc_2 = self.model_config["FF2_OUTPUT_PROGCFG"]
+                # pc_3 = self.model_config["FF3_OUTPUT_PROGCFG"]
+                pc_1 = self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"](seq_len)
+                pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
+                pc_3 = self.model_config["PREFILL_MIXTRAL_MLP_W3_PRG_CONFIG"](seq_len)
             else:
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
@@ -114,6 +122,8 @@ class TtMixtralMLP(LightweightModule):
             )
 
             ttnn.deallocate(w2_in)
+
+            w2_out = ttnn.reshape(w2_out, original_shape)
 
         else:  # Decode
             w1_out = ttnn.matmul(
