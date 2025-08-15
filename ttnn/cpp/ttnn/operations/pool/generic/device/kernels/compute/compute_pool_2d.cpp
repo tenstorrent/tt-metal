@@ -116,13 +116,13 @@ void MAIN {
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
                 }
             }
-            tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
                     cb_wait_front(curr_in_idx_cb_id, 1);
                 }
                 if constexpr (!return_indices) {
+                    tile_regs_acquire();
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
                         curr_scalar_cb_id,
@@ -133,6 +133,7 @@ void MAIN {
                     for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     }
+                    tile_regs_commit();
                 } else {
                     tensix_sync();  // make sure tensix is idle
                     unary_op_init_common(in_cb_id_0, tile_tmp_cb_id);
@@ -169,6 +170,8 @@ void MAIN {
                     //      PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id, 0));
                     //  }
 
+                    tile_regs_acquire();
+
                     copy_tile_init(tile_tmp_cb_id);
                     copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
 
@@ -186,6 +189,8 @@ void MAIN {
                     cb_pop_front(tile_tmp_cb_id, topk_output_tiles);
                     cb_pop_front(tile_idx_tmp_cb_id, topk_output_tiles);
 
+                    tile_regs_commit();
+
                     // dprint_tensix_dest_reg(0);
                     // dprint_tensix_dest_reg(2);
                 }
@@ -194,7 +199,6 @@ void MAIN {
                     cb_pop_front(curr_in_idx_cb_id, 1);
                 }
             }
-            tile_regs_commit();
             tile_regs_wait();
             if constexpr (!return_indices) {
                 if (last_c_block) {
@@ -209,17 +213,13 @@ void MAIN {
                 tensix_sync();  // make sure tensix is idle
                 pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
 
-                pack_reconfig_data_format(out_cb_id);
                 pack_untilize_dest<topk_output_tiles>(
                     out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, data_dst_idx);
                 cb_push_back(out_cb_id, topk_output_tiles);
+
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_untilize_dest<topk_output_tiles>(
                     out_idx_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, index_dst_idx);
-                // if (n == 0) {
-                //     PACK(DPRINT << "OUT CB " << ENDL());
-                //     PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
-                // }
                 cb_push_back(out_idx_cb_id, topk_output_tiles);
 
                 pack_untilize_uninit(out_cb_id);
