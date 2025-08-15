@@ -130,23 +130,23 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
         tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size, {{program_attributes.src_cb_index, program_attributes.data_format}})
             .set_page_size(program_attributes.src_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t num_output_tiles = 1;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{program_attributes.output_cb_index, program_attributes.data_format}})
             .set_page_size(program_attributes.output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    auto unary_reader_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = program_attributes.reader_processor, .noc = program_attributes.reader_noc});
 
-    auto unary_writer_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
@@ -157,7 +157,7 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
         uint(program_attributes.num_tiles)  // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core,
@@ -399,8 +399,6 @@ int main(int argc, char** argv) {
     try {
         int device_id = 0;
         IDevice* device = CreateDevice(device_id);
-
-        constexpr bool profile_device = true;
 
         pass &= test_compile_program_in_loop(device);
 
