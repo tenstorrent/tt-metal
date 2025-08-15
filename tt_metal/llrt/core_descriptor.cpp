@@ -173,24 +173,22 @@ const core_descriptor_t& get_core_descriptor_config(
             "compute_with_storage_end_override must be a YAML sequence");
         TT_FATAL(
             (compute_with_storage_end[0].as<int>() >= compute_with_storage_end_override[0].as<int>()),
-            "compute_with_storage_end[0].as<int>(): {} should be >= compute_with_storage_end_override[0].as<int>(): {}",
+            "compute_with_storage_end[0]= {} should be >= compute_with_storage_end_override[0]= {}",
             compute_with_storage_end[0].as<int>(),
             compute_with_storage_end_override[0].as<int>());
         TT_FATAL(
             compute_with_storage_end[1].as<int>() >= compute_with_storage_end_override[1].as<int>(),
-            "compute_with_storage_end[1].as<int>(): {} should be >= compute_with_storage_end_override[1].as<int>(): {}",
+            "compute_with_storage_end[1]= {} should be >= compute_with_storage_end_override[1]= {}",
             compute_with_storage_end[1].as<int>(),
             compute_with_storage_end_override[1].as<size_t>());
         TT_FATAL(
             compute_with_storage_end_override[0].as<int>() >= compute_with_storage_start[0].as<int>(),
-            "compute_with_storage_end_override[0].as<int>(): {} should be >= compute_with_storage_start[0].as<int>(): "
-            "{}",
+            "compute_with_storage_end_override[0]= {} should be >= compute_with_storage_start[0]= {}",
             compute_with_storage_end_override[0].as<int>(),
             compute_with_storage_start[0].as<int>());
         TT_FATAL(
             compute_with_storage_end_override[1].as<int>() >= compute_with_storage_start[1].as<int>(),
-            "compute_with_storage_end_override[1].as<int>(): {} should be >= compute_with_storage_start[1].as<int>(): "
-            "{}",
+            "compute_with_storage_end_override[1]= {} should be >= compute_with_storage_start[1]= {}",
             compute_with_storage_end_override[1].as<int>(),
             compute_with_storage_start[1].as<int>());
         compute_with_storage_end = compute_with_storage_end_override;
