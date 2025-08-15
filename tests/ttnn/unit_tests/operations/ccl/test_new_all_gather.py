@@ -765,20 +765,20 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
 
 
 # Related to issue #26672
-@pytest.mark.parametrize("device", [pytest.param((1, 4), id="1x4_grid")], indirect=True)
-def test_all_gather_async_segfault(device):
-    num_devices = 4
-    if mesh_device.get_num_devices() < 4:
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
+def test_all_gather_async_segfault(mesh_device):
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not enough devices for this test!")
 
+    num_devices = 4
     input_tensor = torch.arange(32 * 32).reshape(1, 1, 32, 32)
     output_tensor = input_tensor.repeat([1, 1, 1, num_devices])
     tensor = ttnn.from_torch(
         input_tensor,
-        device=device,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -795,29 +795,37 @@ def test_all_gather_async_segfault(device):
 
     tensor_ag = ttnn.experimental.all_gather_async(
         tensor,
-        mesh_device=device,
+        mesh_device=mesh_device,
         cluster_axis=1,
         dim=-1,
         topology=ttnn.Topology.Linear,
         memory_config=memory_config,
         barrier_semaphore=ttnn.create_global_semaphore(
-            device,
+            mesh_device,
             ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.core_grid.x - 1, device.core_grid.y - 1))}
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mesh_device.core_grid.x - 1, mesh_device.core_grid.y - 1)
+                    )
+                }
             ),
             0,
         ),
         multi_device_global_semaphore=ttnn.create_global_semaphore(
-            device,
+            mesh_device,
             ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.core_grid.x - 1, device.core_grid.y - 1))}
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mesh_device.core_grid.x - 1, mesh_device.core_grid.y - 1)
+                    )
+                }
             ),
             0,
         ),
     )
 
     tt_output_tensor = ttnn.to_torch(
-        tensor_ag, mesh_composer=ConcatMesh2dToTensor(device, mesh_shape=(1, num_devices), dims=(0, 3))
+        tensor_ag, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=(1, num_devices), dims=(0, 3))
     )
     output_golden = torch.zeros(tt_output_tensor.shape)
     repeat_factor = [1, 1, 1, num_devices]
