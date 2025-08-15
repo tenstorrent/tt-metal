@@ -4,6 +4,7 @@
 
 #include "moreh_dot_backward_device_operation.hpp"
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot_backward {
@@ -51,8 +52,10 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     bool has_input_grad = input_grad.has_value();
     bool has_other_grad = other_grad.has_value();
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)is_dram(src0_buffer), (std::uint32_t)is_dram(src1_buffer), (std::uint32_t)is_dram(src2_buffer)};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src2_buffer).append_to(reader_compile_time_args);
 
     bool dst0_is_dram = false;
     bool dst1_is_dram = false;
@@ -78,9 +81,10 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)CBIndex::c_16,
         (std::uint32_t)CBIndex::c_17,
-        (std::uint32_t)dst0_is_dram,
-        (std::uint32_t)dst1_is_dram,
     };
+
+    TensorAccessorArgs(has_input_grad ? input_grad.value().buffer() : nullptr).append_to(writer_compile_time_args);
+    TensorAccessorArgs(has_other_grad ? other_grad.value().buffer() : nullptr).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/reader_moreh_dot_backward.cpp";

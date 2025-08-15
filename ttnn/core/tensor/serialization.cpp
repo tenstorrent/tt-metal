@@ -4,6 +4,7 @@
 
 #include "ttnn/tensor/serialization.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -283,6 +284,8 @@ DistributedStorage load_storage(
     return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
 }
 
+constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
+
 }  // namespace
 
 Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
@@ -418,6 +421,10 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
     std::vector<HostBuffer> buffers;
     flatbuffers::FlatBufferBuilder builder;
     auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
+    // To be able to read flatbuffer data with `mmap` safely, make sure the serialized flatbuffer is aligned to at least
+    // 8 bytes, just like `header_size`. Individual `buffers` are aligned according to their element size, which is
+    // already what we need for `mmap` to work.
+    builder.Align(kFlatbufferAlignment);
     builder.Finish(tensor_offset);
 
     uint64_t header_size = builder.GetSize();
@@ -458,8 +465,12 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
     const uint64_t data_offset = sizeof(header_size) + header_size;
     const uint64_t data_size = file_size - data_offset;
 
-    Tensor tensor =
-        ttnn::from_flatbuffer(fb_tensor, tt::stl::Span<std::byte>(file_data + data_offset, data_size), memory_pin);
+    std::byte* data_region = file_data + data_offset;
+    TT_FATAL(
+        (reinterpret_cast<uintptr_t>(data_region) & (kFlatbufferAlignment - 1)) == 0,
+        "Tensor data pointer must be 8-byte aligned!");
+
+    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, tt::stl::Span<std::byte>(data_region, data_size), memory_pin);
     if (device != nullptr) {
         tensor = tensor.to_device(device);
     }
