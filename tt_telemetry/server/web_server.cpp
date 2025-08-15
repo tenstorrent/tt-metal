@@ -120,7 +120,7 @@ private:
         // Serialize
         json j = *snapshot;
         std::string message = "data: " + j.dump() + "\n\n";
-        
+
         // Send to all, removing any disconnected clients
         std::lock_guard<std::mutex> lock(clients_mutex_);
         auto it = sse_clients_.begin();
@@ -160,10 +160,7 @@ private:
     }
 
 public:
-    TelemetryServer()
-        : started_at_(std::chrono::steady_clock::now()) 
-    {
-    }
+    TelemetryServer() : started_at_(std::chrono::steady_clock::now()) {}
 
     void setup_routes() {
         // Enable CORS for all routes
@@ -322,4 +319,3 @@ std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_web_serve
     auto future = std::async(std::launch::async, web_server_thread, server, port);
     return std::make_pair(std::move(future), subscriber);
 }
-

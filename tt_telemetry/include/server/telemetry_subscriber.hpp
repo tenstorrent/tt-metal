@@ -12,4 +12,4 @@ class TelemetrySubscriber {
 public:
     virtual ~TelemetrySubscriber() = default;
     virtual void on_telemetry_ready(std::shared_ptr<TelemetrySnapshot> telemetry) = 0;
- };
+};

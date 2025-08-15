@@ -32,15 +32,14 @@
  };
 
  static inline void to_json(nlohmann::json &j, const TelemetrySnapshot &t) {
-    j = nlohmann::json {
-        { "bool_metric_ids", t.bool_metric_ids },
-        { "bool_metric_names", t.bool_metric_names }, 
-        { "bool_metric_values", t.bool_metric_values },
-        { "uint_metric_ids", t.uint_metric_ids },
-        { "uint_metric_names", t.uint_metric_names }, 
-        { "uint_metric_values", t.uint_metric_values },
-        { "is_absolute", t.is_absolute }
-    };
+     j = nlohmann::json{
+         {"bool_metric_ids", t.bool_metric_ids},
+         {"bool_metric_names", t.bool_metric_names},
+         {"bool_metric_values", t.bool_metric_values},
+         {"uint_metric_ids", t.uint_metric_ids},
+         {"uint_metric_names", t.uint_metric_names},
+         {"uint_metric_values", t.uint_metric_values},
+         {"is_absolute", t.is_absolute}};
 }
 
 static inline void from_json(const nlohmann::json &j, TelemetrySnapshot &t) {

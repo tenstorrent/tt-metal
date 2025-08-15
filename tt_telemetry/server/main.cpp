@@ -1,12 +1,12 @@
 /*
  * main.cpp
  * tt-telemetry main server app.
- * 
+ *
  * Notes
  * -----
  * - Ethernet connections returned by tt::Cluster::get_ethernet_connections() are discovered in
  *   TopologyDiscovery::discover_remote_chips() in topology_discovery.cpp. This function seems to
- *   exclude connections that are not active. So if a link is inactive at the time topology 
+ *   exclude connections that are not active. So if a link is inactive at the time topology
  *   discovery runs, it will never be known. test_system_health.cpp checks that an expected number
  *   of active connections per chip are present (without identifying their specific channel). We
  *   will eventually have to use a system descriptor file to discover required connections rather
@@ -49,12 +49,9 @@ static void test_print_link_health() {
     const tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
     const tt::Cluster &cluster = instance.get_cluster();
     const std::map<
-        tt::umd::chip_id_t, 
-        std::map<
-            tt::umd::ethernet_channel_t, 
-            std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>
-        >
-    > ethernet_connections = get_ordered_ethernet_connections(cluster);
+        tt::umd::chip_id_t,
+        std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
+        ethernet_connections = get_ordered_ethernet_connections(cluster);
     tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
 
     std::cout << "Cluster Type: " << cluster_type << std::endl;
@@ -65,10 +62,12 @@ static void test_print_link_health() {
             tt::umd::chip_id_t remote_chip_id;
             tt::umd::ethernet_channel_t remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
-            std::cout << "  Channel " << channel << " -> [" << get_chip_identifier_from_umd_chip_id(cluster, remote_chip_id) 
-                      << "], Channel " << remote_channel 
-                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, chip_id, channel) ? "UP" : "DOWN") << '/' << (is_ethernet_endpoint_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN") <<  ')'
-                      << std::endl;
+            std::cout << "  Channel " << channel << " -> ["
+                      << get_chip_identifier_from_umd_chip_id(cluster, remote_chip_id) << "], Channel "
+                      << remote_channel
+                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, chip_id, channel) ? "UP" : "DOWN")
+                      << '/' << (is_ethernet_endpoint_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN")
+                      << ')' << std::endl;
         }
     }
 
@@ -111,7 +110,7 @@ int main() {
 
     // Telemetry
     run_telemetry_provider({ web_server_subscriber, web_server2_subscriber });
-    
+
     // Run until finished
     bool web_server_succeeded = web_server.get();
     bool web_server2_succeeded = web_server2.get();

@@ -29,11 +29,11 @@ std::ostream &operator<<(std::ostream &os, const EthernetEndpoint &ep);
 
 size_t hash_value(const EthernetEndpoint &ep);
 
-namespace tt { 
-    namespace umd {
-       size_t hash_value(const xy_pair &xy);
-    }
+namespace tt {
+namespace umd {
+size_t hash_value(const xy_pair& xy);
 }
+}  // namespace tt
 
 namespace std {
     template<>
@@ -44,4 +44,4 @@ namespace std {
     };
 }
 
-std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(const tt::Cluster &cluster);
+std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(const tt::Cluster& cluster);

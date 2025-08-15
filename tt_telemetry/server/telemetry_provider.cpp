@@ -10,7 +10,7 @@
  *   We should instead use either a different separator (like "/") or encode paths as vectors.
  *   For future exporters that need to export a single string, these can be formed when exporting.
  */
- 
+
 #include <future>
 #include <queue>
 #include <unistd.h>
@@ -114,7 +114,7 @@ static void send_initial_snapshot(
 ) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
     snapshot->is_absolute = true;
-    
+
     for (size_t i = 0; i < bool_metrics.size(); i++) {
         std::string path = get_cluster_wide_telemetry_path(*bool_metrics[i]);
         size_t id = bool_metrics[i]->id;

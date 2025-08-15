@@ -13,6 +13,4 @@
 
 using EthernetLink = std::pair<EthernetEndpoint, EthernetEndpoint>;
 
-std::vector<EthernetLink> get_ethernet_links(const tt::Cluster &cluster);
-
-
+std::vector<EthernetLink> get_ethernet_links(const tt::Cluster& cluster);
