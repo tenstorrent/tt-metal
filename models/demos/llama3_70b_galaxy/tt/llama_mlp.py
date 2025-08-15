@@ -49,6 +49,16 @@ class TtLlamaMLP(LightweightModule):
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
+
+        # pad w2 to 3840
+        w2_name = f"{state_dict_prefix}.w2.weight"
+
+        w4_name = f"{state_dict_prefix}.w4.weight"
+        w4 = self.state_dict[w2_name]
+
+        self.state_dict[w4_name] = F.pad(w4, (0, 8 * 3840 - w4.shape[-1]), mode="constant", value=0)
+        print(f"w2: {self.state_dict[w4_name].shape}")
+
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         if args.dummy_weights:
             cache_name = lambda _: None
@@ -67,8 +77,8 @@ class TtLlamaMLP(LightweightModule):
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
-            memory_config=w2_mem_config if "w2" in name else w1_w3_mem_config,
-            cache_file_name=cache_name(name),
+            memory_config=w2_mem_config if "w4" in name else w1_w3_mem_config,
+            # cache_file_name=cache_name(name),
         )
 
         as_interleaved_tensor = lambda name, type, dim: ttnn.as_tensor(
@@ -91,7 +101,9 @@ class TtLlamaMLP(LightweightModule):
         self.w1 = as_sharded_tensor(
             "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
+
+        self.w2 = as_sharded_tensor("w4_sharded", ttnn.bfloat8_b, dim=w2_dim)  #
+        print(f"w2: {self.w2.shape}")
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
         self.w1_interleaved = as_interleaved_tensor(
@@ -160,28 +172,23 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
-        w2_in = self.tt_ccl.line_all_gather(
+        # Use all gather + matmul op that will be defined in tt_ccl.py
+        w2_out = self.tt_ccl.all_gather_matmul(
             ff1ff3,
+            self.w2,
             dim=3,
             cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            buffer_key="BINARY_MUL",
-            use_optimal_ccl_for_llama=False if mode == "prefill" else True,
-        )
-        ttnn.deallocate(ff1ff3)
-
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2,
+            ag_memory_config=self.model_config["AG_MM_RECV_MEMCFG"],
+            mm_memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],  # self.model_config["AG_MM_MATMUL_MEMCFG"],
+            num_links=4,  # TODO: Check if this is correct
+            # program_config=self.model_config["AG_MM_PROG_CONFIG"],
+            compute_kernel_config=self.args.compute_kernel_config_hifi2,  # self.model_config["AG_MM_COMPUTE_KERNEL_CONFIG"],
             dtype=ttnn.bfloat8_b,
-            program_config=pc_2,
-            memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            buffer_key="AG_MM",
         )
+
+        ttnn.deallocate(ff1ff3)
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,

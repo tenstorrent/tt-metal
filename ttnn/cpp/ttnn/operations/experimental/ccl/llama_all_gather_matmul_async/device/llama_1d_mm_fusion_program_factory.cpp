@@ -33,6 +33,7 @@ process_agmm_fusion_program_and_create_override_variables(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     const std::vector<tt::tt_metal::Tensor>& b_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -78,7 +79,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
     /* Core setup */
     constexpr bool row_major = true;
-    CoreRangeSet all_worker_cores = b.shard_spec().value().grid;
+    CoreRangeSet all_worker_cores = output_tensors[0].shard_spec().value().grid;
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
@@ -875,6 +876,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         program,
         a,
         b_tensors,
+        output_tensors,
         device,
         math_fidelity,
         fp32_dest_acc_en,
