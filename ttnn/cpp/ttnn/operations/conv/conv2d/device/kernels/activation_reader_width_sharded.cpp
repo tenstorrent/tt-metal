@@ -79,7 +79,7 @@ void kernel_main() {
     uint32_t num_cores_x = get_arg_val<uint32_t>(i);
     i += 1;
 
-    // X and Y lookup are independant.
+    // X and Y lookup are independent.
     // X Lookup table for translating logical to physical cores.
     tt_l1_ptr uint32_t* act_mcast_x_lookup = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
     i += num_cores_x;

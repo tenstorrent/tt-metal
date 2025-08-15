@@ -329,7 +329,7 @@ def shapes_and_datagen(
 
                 dim = random.randint(0, 3)
 
-                # Concatinating dim is different
+                # Concatenating dim is different
                 b_shape[dim] = shape[4 + dim]
 
                 return [a_shape, b_shape]

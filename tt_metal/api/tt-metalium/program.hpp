@@ -70,7 +70,7 @@ class Internal_;
 enum class ProgramBinaryStatus : uint8_t {
     NotSent = 0,    // Binaries have not been written
     InFlight = 1,   // Fast Dispatch Commands to write the binaries to DRAM has been issued
-    Committed = 2,  // Binaries have been commited to DRAM
+    Committed = 2,  // Binaries have been committed to DRAM
 };
 
 class Program {

@@ -47,7 +47,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
         input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(mesh_coord) : input_tensor.device();
     const auto& devices_to_use = input_tensor.mesh_device() ? input_tensor.mesh_device()->get_devices() : this->devices;
 
-    ccl::SenderRecieverConfig config =
+    ccl::SenderReceiverConfig config =
         ccl::get_device_sender_receiver_config(target_device, devices_to_use, this->topology);
 
     return ccl::barrier::detail::barrier_with_workers(

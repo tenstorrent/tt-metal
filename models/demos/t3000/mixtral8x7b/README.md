@@ -84,7 +84,7 @@ To facilitate this, we provide a very large input with over 100k tokens (the maj
 - For context lengths higher than 16k tokens, we support a maximum batch size of 4.
 - For context lengths higher than 8k tokens, we support a maximum batch size of 8.
 - For context lengths higher than 4k tokens, we support a maximum batch size of 16.
-- For context lenghts below 4k tokens, we support a maximum batch size of 32.
+- For context lengths below 4k tokens, we support a maximum batch size of 32.
 
 All input files are provided inside `models/demos/t3000/mixtral8x7b/demo/`.
 

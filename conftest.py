@@ -703,7 +703,7 @@ def pytest_addoption(parser):
         "--grid-size",
         action="store",
         default=None,
-        help="Size of chip grid for the test to run on. Grid size is defined by nubmer of cores in row x number of cores in column, e.g., 8x8",
+        help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
 
 

@@ -1333,7 +1333,7 @@ if __name__ == "__main__":
         "--tag",
         required=False,
         default=os.getenv("USER"),
-        help="Custom tag for the vectors you are running. This is to keep copies seperate from other people's test vectors. By default, this will be your username. You are able to specify a tag when generating tests using the generator.",
+        help="Custom tag for the vectors you are running. This is to keep copies separate from other people's test vectors. By default, this will be your username. You are able to specify a tag when generating tests using the generator.",
     )
     parser.add_argument(
         "--read-file", required=False, help="Read and execute test vectors from a specified file path instead of ES."

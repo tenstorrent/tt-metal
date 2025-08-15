@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Dispatch Kernel (subordinate)
-// Required to asynchronously send go signals to workers, upon recieving a program
+// Required to asynchronously send go signals to workers, upon receiving a program
 // completion signal. This allows program dispatch (for subsequent programs) to overlap
 // with worker execution (for current program), leading to a lower dispatch latency.
 // - Handles the following commands:

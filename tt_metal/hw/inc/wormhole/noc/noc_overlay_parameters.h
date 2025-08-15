@@ -517,7 +517,7 @@
 #define DISABLE_DEST_READY_TABLE (DEBUG_STATUS_STREAM_ID_SEL + DEBUG_STATUS_STREAM_ID_SEL_WIDTH)
 #define DISABLE_DEST_READY_TABLE_WIDTH 1
 
-// Debugging: Non-zero value indicates an invalid stream operation occured.
+// Debugging: Non-zero value indicates an invalid stream operation occurred.
 // Sticky, write 1 to clear.
 #define STREAM_DEBUG_ASSERTIONS_REG_INDEX 46
 
@@ -579,7 +579,7 @@
 #define STREAM_PHASE_AUTO_CFG_PTR_BASE_REG_INDEX 245
 
 // Reading this register will give you a stream id of a stream that finished its blob (according to
-// STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX) Subsequent reads will give you the next stream, untill all streams are read,
+// STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX) Subsequent reads will give you the next stream, until all streams are read,
 // after which it will loop This register is only valid if BLOB_NEXT_AUTO_CFG_DONE_VALID is set (i.e. if
 // STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX non-zero) Exists only in stream 0
 #define STREAM_BLOB_NEXT_AUTO_CFG_DONE_REG_INDEX 246
