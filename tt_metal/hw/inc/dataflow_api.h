@@ -520,7 +520,8 @@ inline void noc_async_read(uint64_t src_noc_addr, uint32_t dst_local_l1_addr, ui
     } else {
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+        // ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+        noc_fast_read_any_len<noc_mode, read_cmd_buf>(noc, src_noc_addr, dst_local_l1_addr, size);
         WAYPOINT("NARD");
     }
 }

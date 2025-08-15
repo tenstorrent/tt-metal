@@ -153,7 +153,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc, NCRISC_WR_REG_CMD_BUF);
     }
 
-    noc_inline_dw_write_with_state<flags, wait, send>(dst_addr, val, be);
+    noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, flags, wait, send>(dst_addr, val, be);
 #endif
 }
 
@@ -182,7 +182,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(
         noc, (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
 
-    noc_inline_dw_write_init_state<cmd_flags>(noc, static_vc);
+    noc_inline_dw_write_init_state<NCRISC_WR_REG_CMD_BUF, cmd_flags>(noc, static_vc);
     cq_noc_inline_dw_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send>(dst_addr, val, be);
 #endif
 }
