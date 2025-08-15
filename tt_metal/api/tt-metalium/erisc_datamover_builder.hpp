@@ -110,6 +110,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD = 8;
 
     static constexpr std::size_t dateline_sender_channel_skip_idx = 2;
+    static constexpr std::size_t dateline_sender_channel_skip_idx_2d = 4;
     static constexpr std::size_t dateline_receiver_channel_skip_idx = 0;
     static constexpr std::size_t dateline_upstream_sender_channel_skip_idx = 1;
     static constexpr std::size_t dateline_upstream_receiver_channel_skip_idx = 1;

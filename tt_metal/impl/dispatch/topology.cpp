@@ -826,13 +826,19 @@ void configure_dispatch_cores(IDevice* device) {
 
 std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDatamoverAxis> get_fabric_edm_type(
     const tt::tt_fabric::ControlPlane& control_plane,
-    tt_fabric::Topology topology,
+    const tt::tt_fabric::RoutingDirection direction,
     tt::tt_fabric::MeshId mesh_id,
     chip_id_t chip0,
     chip_id_t chip1,
     bool wrap_around_mesh) {
-    if (topology != tt_fabric::Topology::Ring) {
-        return {tt::tt_fabric::FabricEriscDatamoverType::Default, tt::tt_fabric::FabricEriscDatamoverAxis::Short};
+    auto fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
+    auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
+
+    const auto& fabric_context = control_plane.get_fabric_context();
+
+    const auto eth_chan_direction = control_plane.routing_direction_to_eth_direction(direction);
+    if (!fabric_context.need_deadlock_avoidance_support(eth_chan_direction)) {
+        return {fabric_edm_type, fabric_edm_axis};
     }
 
     auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
@@ -840,8 +846,6 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
 
     auto mesh_num_rows = physical_mesh_shape[0];
     auto mesh_num_columns = physical_mesh_shape[1];
-    auto fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
-    auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
 
     auto smaller_chip_id = std::min(chip0, chip1);
     auto larger_chip_id = std::max(chip0, chip1);
@@ -892,6 +896,7 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
              chip1 == chip0 - mesh_num_columns);
         bool is_edm_along_row = ((larger_chip_id - smaller_chip_id) == mesh_num_columns) ||
                                 (smaller_chip_id == larger_chip_id % mesh_num_columns);
+
         // Column dateline
         if (is_dateline_edm_along_column) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
@@ -934,6 +939,18 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
         }
     }
 
+    if (fabric_context.is_2D_routing_enabled()) {
+        // for 2D fabric, we need to re-work the buffer space optimization, cannot use 1D optimizations because
+        // of more number of sender channels in 2D
+        // only handling default and dateline edm types for now
+        if (fabric_edm_type != tt::tt_fabric::FabricEriscDatamoverType::Default &&
+            fabric_edm_type != tt::tt_fabric::FabricEriscDatamoverType::Dateline) {
+            // reset to default if set to a non-dateline config
+            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
+            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
+        }
+    }
+
     return {fabric_edm_type, fabric_edm_axis};
 }
 
@@ -947,8 +964,10 @@ void build_tt_fabric_program(
     const bool is_TG =
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG);
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto& edm_config = fabric_context.get_fabric_router_config();
+    const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
+
     const auto configure_edm_builder_for_dispatch = [&](tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder) {
         constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
         // Dispatch requires a higher context switching freq to service slow dispatch / UMD / debug tools
@@ -957,6 +976,7 @@ void build_tt_fabric_program(
     };
 
     if (is_TG && device->is_mmio_capable()) {
+        const auto& edm_config = fabric_context.get_fabric_router_config();
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
             // remote_fabric_node_id is only used to determine the handshake master, no functional impact
@@ -984,8 +1004,6 @@ void build_tt_fabric_program(
     std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors;
     uint32_t num_intra_chip_neighbors = 0;
-    const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2D_routing = topology == Topology::Mesh;
 
     const auto device_has_dispatch_tunnel = [&]() -> bool {
         auto mmio_device_id =
@@ -1052,7 +1070,7 @@ void build_tt_fabric_program(
     for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
         const auto& [fabric_edm_type, fabric_edm_axis] = get_fabric_edm_type(
             control_plane,
-            topology,
+            direction,
             fabric_node_id.mesh_id,
             fabric_node_id.chip_id,
             remote_fabric_node_id.chip_id,
@@ -1085,6 +1103,7 @@ void build_tt_fabric_program(
         }
     }
 
+    const auto topology = fabric_context.get_fabric_topology();
     const bool is_galaxy =
         tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
 
@@ -1174,8 +1193,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     }
 
     std::map<std::string, std::string> defines = {};
-    const auto topology = fabric_context.get_fabric_topology();
-    if (topology == tt::tt_fabric::Topology::Mesh) {
+    if (fabric_context.is_2D_routing_enabled()) {
         defines["FABRIC_2D"] = "";
     }
 
