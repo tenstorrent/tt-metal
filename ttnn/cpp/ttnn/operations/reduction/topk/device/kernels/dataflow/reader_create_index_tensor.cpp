@@ -56,19 +56,18 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_intermed_index = get_compile_time_arg_val(1);
-    constexpr bool src_is_dram = get_compile_time_arg_val(2) == 1;
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr bool uint16_output = get_compile_time_arg_val(5) == 1;
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);
+    constexpr uint32_t Wt = get_compile_time_arg_val(3);
+    constexpr bool uint16_output = get_compile_time_arg_val(4) == 1;
+
+    constexpr auto s_args = TensorAccessorArgs<5>();
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(s_args, src_addr, tile_bytes);
 
     // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute
     // and we need two tiles for the bitonic sort llk We could load in an entire row of tiles at a time but that would

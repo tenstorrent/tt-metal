@@ -18,30 +18,31 @@ void kernel_main() {
     // -----------------
     constexpr uint32_t src_cb_idx = get_compile_time_arg_val(0);
     constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
-    constexpr bool src_is_dram = (bool)get_compile_time_arg_val(2);
-    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(3);
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t dst_page_size = get_compile_time_arg_val(3);
 
     // This is the number of elements in the output, excluding the last two dimensions.
     // i.e. for an input tensor of shape (.., N, C, H, W), this is (.. * N * C)
     // It also depends on the `keepdim`
-    constexpr uint32_t outer_dim_units = get_compile_time_arg_val(6);
+    constexpr uint32_t outer_dim_units = get_compile_time_arg_val(4);
 
     // This is the number of elements in the last dimension of the output
     // i.e. for an input tensor of shape (.., N, C, H, W), this is H.
     // This dictates the page size in the output cb
-    constexpr uint32_t inner_dim_units = get_compile_time_arg_val(7);
+    constexpr uint32_t inner_dim_units = get_compile_time_arg_val(5);
 
     // This is the number of elements in the input tensor along the reduction dim (W)
-    constexpr uint32_t red_dim_units = get_compile_time_arg_val(8);
+    constexpr uint32_t red_dim_units = get_compile_time_arg_val(6);
 
     // Boolean to indicate if we reduce across _all_ dimensions or just on the reduction dim (last dim)
-    constexpr bool reduce_all = (bool)get_compile_time_arg_val(9);
+    constexpr bool reduce_all = (bool)get_compile_time_arg_val(7);
+
+    constexpr auto s_src_args = TensorAccessorArgs<8>();
+    constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
 
     //-------------------------------------------------------------------------
-    const auto s_src = get_interleaved_addr_gen<src_is_dram, src_page_size>(src_base_addr);
-    const auto s_dst = get_interleaved_addr_gen<dst_is_dram, dst_page_size>(dst_base_addr);
+    const auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
+    const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
 
     // CB in L1 memory for storing input
     const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
