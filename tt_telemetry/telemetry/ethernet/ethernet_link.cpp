@@ -11,9 +11,9 @@ static std::unordered_map<EthernetEndpoint, EthernetEndpoint> map_endpoints_to_r
 
     for (const auto &[chip_id, remote_chip_and_channel_by_channel]: cluster.get_ethernet_connections()) {
         ChipIdentifier from_chip = get_chip_identifier_from_umd_chip_id(cluster, chip_id);
-        
+
         auto ethernet_channel_to_core_coord = map_ethernet_channel_to_core_coord(cluster, chip_id);
-        
+
         for (const auto &[channel, remote_chip_and_channel]: remote_chip_and_channel_by_channel) {
             TT_ASSERT(ethernet_channel_to_core_coord.count(channel) != 0, "Channel {} missing in ethernet_channel_to_core_coord map for {}", channel, from_chip);
 

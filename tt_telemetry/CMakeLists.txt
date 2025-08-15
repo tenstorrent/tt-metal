@@ -5,12 +5,7 @@ find_package(Threads REQUIRED)
 
 # Fetch cpp-httplib (much simpler, no complex dependencies)
 include(FetchContent)
-FetchContent_Declare(
-    httplib
-    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-    GIT_TAG v0.14.1
-    GIT_SHALLOW TRUE
-)
+FetchContent_Declare(httplib GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git GIT_TAG v0.14.1 GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(httplib)
 
 add_library(telemetry_libs INTERFACE)
@@ -25,7 +20,7 @@ target_link_libraries(
         Boost::algorithm
         Taskflow::Taskflow
         TT::Metalium
-        # httplib will be linked directly to the executable
+    # httplib will be linked directly to the executable
 )
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/tt_telemetry")
@@ -57,5 +52,5 @@ target_link_libraries(
     PRIVATE
         tt_metal
         telemetry_libs
-        httplib::httplib  # Link httplib only to the server executable
+        httplib::httplib # Link httplib only to the server executable
 )

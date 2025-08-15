@@ -42,7 +42,7 @@ namespace std {
             return hash_value(g);
         }
     };
-    
+
     template<>
     struct hash<ChipIdentifier> {
         size_t operator()(const ChipIdentifier &c) const noexcept {
@@ -51,4 +51,4 @@ namespace std {
     };
 }
 
-ChipIdentifier get_chip_identifier_from_umd_chip_id(const tt::Cluster &cluster, chip_id_t chip_id);
+ChipIdentifier get_chip_identifier_from_umd_chip_id(const tt::Cluster& cluster, chip_id_t chip_id);
