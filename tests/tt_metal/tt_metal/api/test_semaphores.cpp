@@ -118,7 +118,7 @@ void create_and_read_max_num_semaphores(
             for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
                 std::vector<uint32_t> single_val;
                 uint32_t semaphore_addr =
-                    program.get_sem_base_addr(device, logical_core, CoreType::WORKER) +
+                    workload.get_sem_base_addr(mesh_device, logical_core, CoreType::WORKER) +
                     (tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1) * i);
                 uint32_t semaphore_size = sizeof(uint32_t);
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
