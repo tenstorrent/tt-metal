@@ -36,9 +36,9 @@ namespace tt_metal {
 
 // Struct of core type, processor class, and processor type to uniquely identify any processor.
 struct HalProcessorIdentifier {
-    HalProgrammableCoreType core_type;
-    HalProcessorClassType processor_class;
-    int processor_type;
+    HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX;
+    HalProcessorClassType processor_class = HalProcessorClassType::DM;
+    int processor_type = 0;
 };
 
 std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
