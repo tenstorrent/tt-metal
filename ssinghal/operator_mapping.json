@@ -306,16 +306,16 @@
     "torch_function": "torch.nn.functional.interpolate",
     "num_inputs": 1,
     "category": "shape",
-    "supported": false,
-    "note": "May not be directly supported"
+    "supported": true,
+    "note": "Nearest mode supported; input expected NHWC on device"
   },
   "upsamplenearest2d": {
-    "ttnn_function": "ttnn.upsample_nearest2d",
+    "ttnn_function": "ttnn.upsample",
     "torch_function": "torch.nn.functional.interpolate",
     "num_inputs": 1,
     "category": "shape",
-    "supported": false,
-    "note": "May not be directly supported"
+    "supported": true,
+    "note": "Maps to ttnn.upsample with nearest mode"
   },
   "Dropout": {
     "ttnn_function": "ttnn.dropout",

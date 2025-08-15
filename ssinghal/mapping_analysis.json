@@ -1,8 +1,8 @@
 {
   "statistics": {
     "total_operators": 57,
-    "supported": 42,
-    "unsupported": 15,
+    "supported": 44,
+    "unsupported": 13,
     "meta_operations": 6,
     "by_category": {
       "activation": {
@@ -22,8 +22,8 @@
         "unsupported": 3
       },
       "shape": {
-        "supported": 6,
-        "unsupported": 4
+        "supported": 8,
+        "unsupported": 2
       },
       "tensor_ops": {
         "supported": 2,
@@ -131,8 +131,8 @@
         "torch_function": "torch.nn.functional.interpolate",
         "num_inputs": 1,
         "category": "shape",
-        "supported": false,
-        "note": "May not be directly supported"
+        "supported": true,
+        "note": "Nearest mode supported; input expected NHWC on device"
       }
     },
     "SiLU": {
@@ -392,12 +392,12 @@
     "upsamplenearest2d": {
       "occurrences": 2,
       "mapping": {
-        "ttnn_function": "ttnn.upsample_nearest2d",
+        "ttnn_function": "ttnn.upsample",
         "torch_function": "torch.nn.functional.interpolate",
         "num_inputs": 1,
         "category": "shape",
-        "supported": false,
-        "note": "May not be directly supported"
+        "supported": true,
+        "note": "Maps to ttnn.upsample with nearest mode"
       }
     },
     "relu": {

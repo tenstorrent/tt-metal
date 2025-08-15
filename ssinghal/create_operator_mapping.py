@@ -322,16 +322,16 @@ def create_pytorch_to_ttnn_mapping():
             "torch_function": "torch.nn.functional.interpolate",
             "num_inputs": 1,
             "category": "shape",
-            "supported": False,
-            "note": "May not be directly supported",
+            "supported": True,
+            "note": "Nearest mode supported; input expected NHWC on device",
         },
         "upsamplenearest2d": {
-            "ttnn_function": "ttnn.upsample_nearest2d",
+            "ttnn_function": "ttnn.upsample",
             "torch_function": "torch.nn.functional.interpolate",
             "num_inputs": 1,
             "category": "shape",
-            "supported": False,
-            "note": "May not be directly supported",
+            "supported": True,
+            "note": "Maps to ttnn.upsample with nearest mode",
         },
         # Other operations
         "Dropout": {
