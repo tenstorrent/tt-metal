@@ -159,7 +159,7 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord
 
         CoreCoord worker_core = fixture->delayed_cores[CoreType::WORKER][0]; // Just check that the first delayed core has the feedback set
         CoreCoord virtual_core = device->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);
-        read_vec = tt::llrt::read_hex_vec_from_core(
+        read_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device->id(),
             virtual_core,
             device->get_dev_addr(virtual_core, HalL1MemAddrType::WATCHER) +

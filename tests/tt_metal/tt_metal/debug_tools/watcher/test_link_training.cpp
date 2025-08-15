@@ -52,7 +52,8 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
         // Only force a retrain on odd-numbered eth cores
         if (eth_core.y % 2) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
-            tt::llrt::write_hex_vec_to_core(device->id(), virtual_core, reset_val, retrain_force_addr);
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                device->id(), virtual_core, reset_val, retrain_force_addr);
         }
     }
 

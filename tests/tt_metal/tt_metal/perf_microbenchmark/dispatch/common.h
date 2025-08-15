@@ -12,6 +12,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 
+#include "tt_metal.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 #include "llrt.hpp"
@@ -394,7 +395,8 @@ inline bool DeviceData::validate_one_core(
         tt::tt_metal::detail::ReadFromDeviceDRAMChannel(device, bank_id, result_addr, size_bytes, results);
     } else {
         result_addr += bank_offset;
-        results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
+        results = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device->id(), phys_core, result_addr, size_bytes);
     }
 
     log_info(
