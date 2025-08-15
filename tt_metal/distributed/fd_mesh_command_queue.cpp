@@ -223,7 +223,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // in the dispatch infra. This support should eventually be deprecated.
         // This function currently assumes a uniform number of ethernet cores across all physical devices in the mesh
         // through the num_virtual_eth_cores() function.
-        // The physical device itself may have less etherent cores than what is queried here and will dispatch
+        // The physical device itself may have less ethernet cores than what is queried here and will dispatch
         // accordingly.
         num_virtual_eth_cores = mesh_device_->num_virtual_eth_cores(sub_device_id);
         num_workers += num_virtual_eth_cores;
@@ -448,6 +448,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 }
 
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("FDMeshCommandQueue::finish_nolock");
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);

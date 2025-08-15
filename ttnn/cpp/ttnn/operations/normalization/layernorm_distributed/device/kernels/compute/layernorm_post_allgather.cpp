@@ -6,7 +6,7 @@
  * This kernel computes layernorm or rmsnorm, dependent on the RMSNORM define.
  * For layernorm it receives E(x**2) and E(x) and computes the remaining normalization based on gamma, beta and epsilon.
  *   E(x**2) and E(x) are contained in a two tile wide tensor containing E(x**2) and E(x) in the left most columns per
- * tile. For rmsnorm it receives E(x**2) and computes teh remaining normalization based on gamma, beta and epsilon.
+ * tile. For rmsnorm it receives E(x**2) and computes the remaining normalization based on gamma, beta and epsilon.
  *   E(x**2) is contained in a one tile wide tensor containing E(x**2) in the left most column.
  */
 

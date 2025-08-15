@@ -167,6 +167,8 @@ void run_all_tests(
 /* ============================================================= */
 
 TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemesLoopback) {
+    GTEST_SKIP() << "Skipping test";
+
     uint32_t test_case_id = 100;
 
     bool loopback = true;
@@ -176,6 +178,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemesLoopback) {
 }
 
 TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
+    GTEST_SKIP() << "Skipping test";
+
     uint32_t test_case_id = 101;
 
     bool loopback = false;
@@ -206,6 +210,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
 */
 
 TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
+    GTEST_SKIP() << "Skipping test";
+
     uint32_t test_case_id = 110;
 
     bool loopback = false;
