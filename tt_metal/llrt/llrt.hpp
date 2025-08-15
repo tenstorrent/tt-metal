@@ -84,8 +84,13 @@ void write_hex_vec_to_core(
     uint64_t addr,
     HostWriteType type = HostWriteType::COMBINED) {
     bool bypass_wc = type == HostWriteType::IMMEDIATE;
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, bypass_wc);
+    if (bypass_wc) {
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
+            hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
+    } else {
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
+    }
 }
 template <typename DType>
 void write_hex_vec_to_core(
@@ -95,8 +100,13 @@ void write_hex_vec_to_core(
     uint64_t addr,
     HostWriteType type = HostWriteType::COMBINED) {
     bool bypass_wc = type == HostWriteType::IMMEDIATE;
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, bypass_wc);
+    if (bypass_wc) {
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
+            hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
+    } else {
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
+    }
 }
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size);
