@@ -70,6 +70,11 @@ def get_parser():
         action="store_true",
         help="Disable torch summary output. Useful for models that do not support torch summary.",
     )
+    parser.add_argument(
+        "--no-infer",
+        action="store_true",
+        help="Disable inference during tracing.",
+    )
     return parser
 
 
@@ -178,7 +183,11 @@ def main(args_dict):
         print("Finished torch summary.\n\n\n")
     print("Started info tracing: ")
     operation_graph = trace_torch_model(
-        torch_model, args.input_shape, input_dtypes=args.input_dtype, dump_visualization=True
+        torch_model,
+        args.input_shape,
+        input_dtypes=args.input_dtype,
+        dump_visualization=True,
+        save_original_tensors=not args.no_infer,
     )
     pytorch_graph = PytorchGraph(operation_graph)
     pytorch_graph.dump_to_python_file("graph.py", True)

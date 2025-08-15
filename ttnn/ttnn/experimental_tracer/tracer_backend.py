@@ -37,12 +37,13 @@ def no_dispatch() -> Iterator[None]:
 
 
 class TracerData:
-    def __init__(self):
+    def __init__(self, save_original_tensors=False):
         self.graph_output_to_input: Dict[str, List[TrackableTensorArgument]] = {}
         self.graph_output_to_node: Dict[str, Dict[str, Any]] = {}
         self.post_run_output_to_input: Dict[str, List[TrackableTensorArgument]] = {}
         self.post_run_output_to_node: Dict[str, Dict[str, Any]] = {}
         self.id = 0
+        self.save_original_tensors = save_original_tensors
 
     def get_next_id(self):
         current_id = self.id
@@ -169,12 +170,14 @@ class Trackable_Tensor(torch.Tensor):
             # TODO: clone storage aliasing
             dtype=elem.dtype,
             layout=elem.layout,
-            device=elem.device,
+            device=elem.device if Trackable_Tensor.tracer_data.save_original_tensors else "meta",
             requires_grad=elem.requires_grad,
         )
         # ...the real tensor is held as an element on the tensor.
         r.module_name = None  # Initialize module_name
-        r.elem = elem
+        r.elem = elem if Trackable_Tensor.tracer_data.save_original_tensors else None
+        r.trackable_shape = elem.shape
+        r.trackable_dtype = elem.dtype
         r.id = "-1"
         return r
 
@@ -204,7 +207,16 @@ class Trackable_Tensor(torch.Tensor):
         )
 
         def unwrap(e):
-            return e.elem if isinstance(e, Trackable_Tensor) else e
+            res = e
+            if isinstance(e, Trackable_Tensor):
+                if Trackable_Tensor.tracer_data.save_original_tensors:
+                    res = e.elem
+                else:
+                    res = torch.empty(*e.trackable_shape, device="meta", dtype=e.trackable_dtype)
+            else:
+                if isinstance(e, torch.Tensor) and not Trackable_Tensor.tracer_data.save_original_tensors:
+                    res = torch.empty(*e.shape, device="meta", dtype=e.dtype)
+            return res
 
         def wrap(e):
             return Trackable_Tensor(e) if isinstance(e, torch.Tensor) else e
@@ -223,34 +235,34 @@ class Trackable_Tensor(torch.Tensor):
         for index, argument in enumerate(args):
             if isinstance(argument, Trackable_Tensor):
                 graph_output_to_input[local_id].append(TrackableTensorArgument(argument, index))
-                input_shapes.append(argument.elem.shape)
-                input_dtypes.append(str(argument.elem.dtype))
+                input_shapes.append(argument.trackable_shape)
+                input_dtypes.append(str(argument.trackable_dtype))
             elif isinstance(argument, (list, tuple)):
                 for index2, arg in enumerate(argument):
                     if isinstance(arg, Trackable_Tensor):
                         graph_output_to_input[local_id].append(TrackableTensorArgument(arg, index, index2))
-                        input_shapes.append(arg.elem.shape)
-                        input_dtypes.append(str(arg.elem.dtype))
+                        input_shapes.append(arg.trackable_shape)
+                        input_dtypes.append(str(arg.trackable_dtype))
         output_shapes = []
         output_dtypes = []
         if isinstance(rs, Trackable_Tensor):
             rs.set_id(local_id)
-            output_shapes.append(rs.elem.shape)
-            output_dtypes.append(str(rs.elem.dtype))
+            output_shapes.append(rs.trackable_shape)
+            output_dtypes.append(str(rs.trackable_dtype))
         elif isinstance(rs, (list, tuple)):
             for index, r in enumerate(rs):
                 if isinstance(r, Trackable_Tensor):
                     # Setting global info for the result
                     r.set_id(local_id + "_" + str(index))
-                    output_shapes.append(r.elem.shape)
-                    output_dtypes.append(str(r.elem.dtype))
+                    output_shapes.append(r.trackable_shape)
+                    output_dtypes.append(str(r.trackable_dtype))
 
                     # Setting local info for the result
                     meta = {}
                     meta["i_shapes"] = input_shapes
                     meta["i_dtypes"] = input_dtypes
-                    meta["o_shapes"] = [r.elem.shape]
-                    meta["o_dtypes"] = [str(r.elem.dtype)]
+                    meta["o_shapes"] = [r.trackable_shape]
+                    meta["o_dtypes"] = [str(r.trackable_dtype)]
                     new_tensor = Trackable_Tensor(r)
                     new_tensor.set_id(local_id)
                     tracer.post_run_output_to_node[local_id + "_" + str(index)] = {
@@ -839,7 +851,7 @@ def set_is_graph_output(outputs, index=0):
 
 
 def trace_torch_model(
-    model, input_shapes, input_dtypes=None, dump_visualization=False, wrap_operations=True
+    model, input_shapes, input_dtypes=None, dump_visualization=False, wrap_operations=True, save_original_tensors=True
 ) -> OperationGraph:
     """
     Trace the PyTorch model with the given input tensor.
@@ -858,7 +870,7 @@ def trace_torch_model(
 
     assert len(input_shapes) > 0, "Input shapes must be provided"
 
-    tracer = TracerData()
+    tracer = TracerData(save_original_tensors=save_original_tensors)
     Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor
     input_tensors = []
     if input_dtypes is None:
