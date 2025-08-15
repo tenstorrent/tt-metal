@@ -369,7 +369,7 @@ class TT_CCL:
         N_per_shard = (
             (16 * 1024) // num_cores_after_lm_head * cluster_shape[cluster_axis]
             if not self.use_qwen_mlp
-            else (16 * 1536) // num_cores_after_lm_head * cluster_shape[cluster_axis]
+            else (155648 // 8) // num_cores_after_lm_head * cluster_shape[cluster_axis]
         )  # LM Head
         self.lm_head_buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,

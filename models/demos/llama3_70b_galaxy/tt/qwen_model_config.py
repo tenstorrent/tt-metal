@@ -1050,7 +1050,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
             LM_HEAD_RING_SIZE = 24
             # self.lm_head_shape = (self.dim // 4, 151936 // 8)
-            self.lm_head_shape = (6144 // 4, 24576)
+            self.lm_head_shape = (6144 // 4, 155648 // 8)
 
             lm_head_ring_core_range_set = ttnn.CoreRangeSet(
                 [
@@ -1107,14 +1107,14 @@ class TtQwenModelArgs(TtModelArgs):
             )
             self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 # shape=(32, 16896 // LM_HEAD_RING_SIZE),  # padded shape
-                shape=(32, 24576 // LM_HEAD_RING_SIZE),  # padded shape
+                shape=(32, 19968 // LM_HEAD_RING_SIZE),  # padded shape
                 core_grid=lm_head_ring_core_output_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
             self.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.lm_head_shape[1] // 32),  # (32, 608)
+                shape=(32, self.lm_head_shape[1] // 32),
                 core_grid=lm_head_ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1126,7 +1126,8 @@ class TtQwenModelArgs(TtModelArgs):
                 # self.dim // 4,
                 6144 // 4,
                 # 16896,  # use padded shape
-                19200,
+                # 155648 // 8,
+                19968,
                 LM_HEAD_RING_SIZE,
                 prefetch=False,
             )
@@ -1135,7 +1136,7 @@ class TtQwenModelArgs(TtModelArgs):
                 # in0_shape=(1, 1, 32, 2048),
                 in0_shape=(1, 1, 32, 1280),
                 # in1_shape=(1, 1, 2048, 16384),
-                in1_shape=(1, 1, 2048, 151936 // 8),
+                in1_shape=(1, 1, 2048, 196608 // 8),
                 grid=ttnn.CoreGrid(x=7, y=7),  # (7,10) leads to hangs
                 act=None,
                 is_fp32_accumulate=False,
@@ -1477,7 +1478,7 @@ class TtQwenModelArgs(TtModelArgs):
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
         # self.padded_vocab_size = 128 * 1024
-        self.padded_vocab_size = 151936
+        self.padded_vocab_size = 155648
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
         if is_hf:
             self.max_context_len = params.get("max_position_embeddings")
@@ -1901,8 +1902,8 @@ class TtQwenModelArgs(TtModelArgs):
         out_block_w = N // num_cores // ttnn.TILE_SIZE  # 24
 
         num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1  # 1
-        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # 25
-        num_blocks_total = num_blocks_y * num_blocks_x  # 25
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # 24
+        num_blocks_total = num_blocks_y * num_blocks_x  # 24
 
         if num_blocks_total != num_cores:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"

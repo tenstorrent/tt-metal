@@ -306,7 +306,8 @@ def run_all_reduce_impl(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
-        ([1, 1, 32, 1280], 0, 1, 24, RING_CRS, 20, NORM_CRS_20),  # FF2/DO all reduce - Qwen3
+        ([1, 1, 32, 155648 // 8], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # FF2/DO all reduce - Qwen3
+        # ([1, 1, 32, 1280], 0, 1, 24, RING_CRS, 20, NORM_CRS_20),  # FF2/DO all reduce - Qwen3
         # ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
         # ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
         # ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
