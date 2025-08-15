@@ -10,9 +10,9 @@ import tempfile
 from loguru import logger
 import os
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
 NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 
@@ -20,7 +20,7 @@ NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 @pytest.mark.parametrize(
     "shape", [(1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 32, 32), (1, 1, 256, 256), (1, 3, 512, 512), (1, 3, 128, 128)]
 )
-@pytest.mark.parametrize("use_all_gather", [pytest.param(True, marks=pytest.mark.skip(reason=LEGACY_SKIP)), False])
+@pytest.mark.parametrize("use_all_gather", [pytest.param(True, marks=pytest.mark.skip(reason=LEGACY_CCL_SKIP)), False])
 @pytest.mark.parametrize("enable_multi_cq", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 60000, "num_command_queues": 2}], indirect=True)
 def test_multi_device_single_trace(t3k_mesh_device, shape, use_all_gather, enable_multi_cq):
@@ -125,7 +125,7 @@ def test_multi_device_single_trace(t3k_mesh_device, shape, use_all_gather, enabl
     "shape",
     [(1, 1, 256, 256), (1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 512, 512), (1, 3, 32, 32)],
 )
-@pytest.mark.parametrize("use_all_gather", [pytest.param(True, marks=pytest.mark.skip(reason=LEGACY_SKIP)), False])
+@pytest.mark.parametrize("use_all_gather", [pytest.param(True, marks=pytest.mark.skip(reason=LEGACY_CCL_SKIP)), False])
 @pytest.mark.parametrize("enable_multi_cq", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000, "num_command_queues": 2}], indirect=True)
 def test_multi_device_multi_trace(t3k_mesh_device, shape, use_all_gather, enable_multi_cq):

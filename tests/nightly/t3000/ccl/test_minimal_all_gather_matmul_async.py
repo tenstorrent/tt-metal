@@ -9,10 +9,9 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
 
 def create_global_semaphores(t3k_mesh_device, num_devices, cores, initial_value):
@@ -201,7 +200,7 @@ def run_all_gather_impl(
     def run_op(i):
         if use_non_fused:
             if use_legacy_allgather:
-                pytest.skip(LEGACY_SKIP)
+                pytest.skip(LEGACY_CCL_SKIP)
                 # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
                 # tt_all_gather_out_tensor = ttnn.all_gather(
                 #     input_tensor_mesh_list[i],
@@ -390,7 +389,7 @@ def run_all_gather_impl(
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
         pytest.param(
-            {"trace_region_size": 90112}, True, ttnn.Topology.Ring, marks=pytest.mark.skip(reason=LEGACY_SKIP)
+            {"trace_region_size": 90112}, True, ttnn.Topology.Ring, marks=pytest.mark.skip(reason=LEGACY_CCL_SKIP)
         ),
     ],
     indirect=["device_params"],

@@ -7,10 +7,9 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from models.utility_functions import skip_for_grayskull
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
-
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
 
 def report_mismatches(golden, actual, max_printable=None):
@@ -61,7 +60,7 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    pytest.skip(LEGACY_SKIP)
+    pytest.skip(LEGACY_CCL_SKIP)
     # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # tt_out_tensor = ttnn.reduce_scatter(
     #     input_tensor,
@@ -79,7 +78,7 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        pytest.skip(LEGACY_SKIP)
+        pytest.skip(LEGACY_CCL_SKIP)
         # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
         # tt_out_tensor = ttnn.reduce_scatter(
         #     input_tensor,
@@ -293,7 +292,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     subdevice_id=worker_sub_device_id,
                 )
             else:
-                pytest.skip(LEGACY_SKIP)
+                pytest.skip(LEGACY_CCL_SKIP)
                 # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
                 # ttnn_tensor_out = ttnn.reduce_scatter(
                 #     ttnn_tensor,

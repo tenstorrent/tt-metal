@@ -7,9 +7,8 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from models.utility_functions import skip_for_grayskull
-
-LEGACY_SKIP = "Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations"
 
 
 def is_unsupported_case(input_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
@@ -41,7 +40,7 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    pytest.skip(LEGACY_SKIP)
+    pytest.skip(LEGACY_CCL_SKIP)
     # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # output_tensor_mesh = ttnn.reduce_scatter(
     #     input_tensor_mesh,
@@ -59,7 +58,7 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
     for i in range(num_iters):
-        pytest.skip(LEGACY_SKIP)
+        pytest.skip(LEGACY_CCL_SKIP)
         # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
         # output_tensor_mesh = ttnn.reduce_scatter(
         #     input_tensor_mesh,
@@ -144,7 +143,7 @@ def run_reduce_scatter_test(
         )
     else:
         for i in range(num_iters):
-            pytest.skip(LEGACY_SKIP)
+            pytest.skip(LEGACY_CCL_SKIP)
             # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             # output_tensor_mesh = ttnn.reduce_scatter(
             #     input_tensor_mesh,
@@ -477,7 +476,7 @@ def run_reduce_scatter_sharded_test(
         )
     else:
         for i in range(num_iters):
-            pytest.skip(LEGACY_SKIP)
+            pytest.skip(LEGACY_CCL_SKIP)
             # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             # output_tensor_mesh = ttnn.reduce_scatter(
             #     input_tensor_mesh,

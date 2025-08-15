@@ -9,9 +9,8 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case_t3k
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn.distributed.distributed import ShardTensorToMesh
-
-LEGACY_SKIP = "Legacy CCL implementation disabled. Skipping all_gather until replaced."
 
 
 def sharded_impl(
@@ -32,7 +31,7 @@ def sharded_impl(
     num_iter,
     tile=(32, 32),
 ):
-    pytest.skip(LEGACY_SKIP)
+    pytest.skip(LEGACY_CCL_SKIP)
     if device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
     n_worker = None
@@ -155,7 +154,7 @@ def run_normal(
 def run_with_trace(
     device, all_gather_topology, input_tensor_mesh, dim, num_links, output_mem_config, n_worker, n_buffer, num_iter
 ):
-    pytest.skip(LEGACY_SKIP)
+    pytest.skip(LEGACY_CCL_SKIP)
     # Compile Run
     logger.info("Compiling model")
     # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
