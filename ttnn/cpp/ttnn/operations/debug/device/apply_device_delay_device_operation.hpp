@@ -31,7 +31,7 @@ struct ApplyDeviceDelayDeviceOperation {
 
     // We need a dummy tensor args that can provide mesh device info
     struct tensor_args_t {
-        std::vector<ttnn::Tensor> input_tensors;
+        ttnn::Tensor input_tensor;
     };
 
     // Return a minimal dummy tensor since the infrastructure doesn't support void
@@ -73,6 +73,7 @@ struct ApplyDeviceDelayDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const ttnn::Tensor& tensor,  // need a dummy tensor or else op infra just dies
         const ttnn::MeshDevice& mesh_device,
         const std::vector<std::vector<uint32_t>>& delays,
         const CoreRangeSet& subdevice_core_range_set);

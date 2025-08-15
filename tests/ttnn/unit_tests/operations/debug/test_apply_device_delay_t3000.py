@@ -33,7 +33,6 @@ def run_apply_device_delay_test(
             ttnn.apply_device_delay(
                 mesh_device,
                 delays,
-                queue_id=queue_id,
             )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
