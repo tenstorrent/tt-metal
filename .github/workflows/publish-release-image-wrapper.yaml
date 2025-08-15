@@ -21,6 +21,8 @@ jobs:
         run: |
           echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
   publish-release-image:
+    permissions:
+      packages: write
     needs:
       - build-artifact
       - create-image-tag-name
