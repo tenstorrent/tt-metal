@@ -55,72 +55,6 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     return diff > 0;
 }
 
-// The fast CQ noc commands write a subset of the NOC registers for each transaction
-// leveraging the fact that many transactions re-use certain values (eg, length)
-// Since there are a variety of dispatch paradigms, which values get reused
-// depend on the fn
-// Making template fns w/ a long list of booleans makes understanding what
-// is/not sent tedious
-// This is an attempt to pack that data in a way thats ~easy to visually parse
-// S/s: send, do not send src address
-// N/n: send, do not send noc address
-// D/d: send, do not send dst address
-// L/l: send, do not send length
-constexpr uint32_t CQ_NOC_FLAG_SRC = 0x01;
-constexpr uint32_t CQ_NOC_FLAG_NOC = 0x02;
-constexpr uint32_t CQ_NOC_FLAG_DST = 0x04;
-constexpr uint32_t CQ_NOC_FLAG_LEN = 0x08;
-
-constexpr uint32_t CQ_NOC_INLINE_FLAG_VAL = 0x10;
-constexpr uint32_t CQ_NOC_INLINE_FLAG_BE = 0x20;
-
-enum CQNocFlags {
-    CQ_NOC_sndl = 0,
-    CQ_NOC_sndL = CQ_NOC_FLAG_LEN,
-    CQ_NOC_snDl = CQ_NOC_FLAG_DST,
-    CQ_NOC_snDL = CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
-    CQ_NOC_sNdl = CQ_NOC_FLAG_NOC,
-    CQ_NOC_sNdL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
-    CQ_NOC_sNDl = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
-    CQ_NOC_sNDL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
-    CQ_NOC_Sndl = CQ_NOC_FLAG_SRC,
-    CQ_NOC_SndL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_LEN,
-    CQ_NOC_SnDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST,
-    CQ_NOC_SnDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
-    CQ_NOC_SNdl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC,
-    CQ_NOC_SNdL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
-    CQ_NOC_SNDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
-    CQ_NOC_SNDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
-};
-
-enum CQNocInlineFlags {
-    CQ_NOC_INLINE_ndvb = 0,
-    CQ_NOC_INLINE_ndvB = CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_ndVb = CQ_NOC_INLINE_FLAG_VAL,
-    CQ_NOC_INLINE_ndVB = CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_nDvb = CQ_NOC_FLAG_DST,
-    CQ_NOC_INLINE_nDvB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_nDVb = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
-    CQ_NOC_INLINE_nDVB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_Ndvb = CQ_NOC_FLAG_NOC,
-    CQ_NOC_INLINE_NdvB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_NdVb = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL,
-    CQ_NOC_INLINE_NdVB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_NDvb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
-    CQ_NOC_INLINE_NDvB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
-    CQ_NOC_INLINE_NDVb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
-    CQ_NOC_INLINE_NDVB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
-};
-
-enum CQNocWait {
-    CQ_NOC_wait = 0,
-    CQ_NOC_WAIT = 1,
-};
-enum CQNocSend {
-    CQ_NOC_send = 0,
-    CQ_NOC_SEND = 1,
-};
-
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
 template <
@@ -137,31 +71,10 @@ FORCE_INLINE void cq_noc_async_write_with_state(
         WAYPOINT("CNSD");
     }
 
-    //     if constexpr (flags & CQ_NOC_FLAG_SRC) {
-    //         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
-    //     }
-    //     if constexpr (flags & CQ_NOC_FLAG_DST) {
-    //         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
-    //     }
-    //     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-    // #ifdef ARCH_BLACKHOLE
-    //         // Handles writing to PCIe
-    //         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32) & 0x1000000F);
-    // #endif
-    //         NOC_CMD_BUF_WRITE_REG(
-    //             noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) &
-    //             NOC_COORDINATE_MASK);
-    //     }
-    //     if constexpr (flags & CQ_NOC_FLAG_LEN) {
-    //         ASSERT(size <= NOC_MAX_BURST_SIZE);
-    //         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
-    //     }
     if constexpr (send) {
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc, cmd_buf);
-        // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
 
-    // cq_noc_fast_write_with_state<flags, send, cmd_buf>(src_addr, dst_addr, size, ndests, noc);
     noc_write_with_state<DM_DEDICATED_NOC, cmd_buf, flags, send, CQ_NOC_wait, update_counters>(
         noc, src_addr, dst_addr, size, ndests);
 }
@@ -181,29 +94,17 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
         src_addr += NOC_MAX_BURST_SIZE;
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
-        // if constexpr (update_counters) {
-        //     noc_nonposted_writes_num_issued[noc] += 1;
-        //     noc_nonposted_writes_acked[noc] += ndests;
-        // }
         while (size > NOC_MAX_BURST_SIZE) {
             cq_noc_async_write_with_state<CQ_NOC_SnDl, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
                 src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests, noc);
             src_addr += NOC_MAX_BURST_SIZE;
             dst_addr += NOC_MAX_BURST_SIZE;
             size -= NOC_MAX_BURST_SIZE;
-            // if constexpr (update_counters) {
-            //     noc_nonposted_writes_num_issued[noc] += 1;
-            //     noc_nonposted_writes_acked[noc] += ndests;
-            // }
         }
     }
     if constexpr (write_last_packet) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
             src_addr, dst_addr, size, ndests, noc);
-        // if constexpr (update_counters) {
-        //     noc_nonposted_writes_num_issued[noc] += 1;
-        //     noc_nonposted_writes_acked[noc] += ndests;
-        // }
         return 0;
     } else {
         return size;
@@ -220,19 +121,11 @@ FORCE_INLINE void cq_noc_async_write_init_state(
     }
     WAYPOINT("CNID");
 
-    // constexpr bool multicast_path_reserve = true;
     constexpr bool posted = false;
     constexpr uint32_t vc = mcast ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
 
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, mcast ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
-    // constexpr uint32_t noc_cmd_field =
-    //     NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
-    //     (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
-    //     (posted ? 0 : NOC_CMD_RESP_MARKED);
 
-    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-
-    // cq_noc_fast_write_init_state<mcast, linked, cmd_buf>();
     noc_write_init_state<cmd_buf, mcast, linked, posted>(noc, vc);
     cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size);
 }

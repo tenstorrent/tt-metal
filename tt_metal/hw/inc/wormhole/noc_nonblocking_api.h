@@ -1114,6 +1114,13 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
  * N/n: write, do not write to noc coordinates register (NOC_RET_ADDR_COORDINATE)
  * D/d: write, do not write to dst address register (NOC_RET_ADDR_LO)
  * L/l: write, do not write to length register (NOC_AT_LEN_BE)
+ *
+ * V/v: write, do not write to value register (NOC_AT_DATA)
+ * B/b: write, do not write to byte-enable register (NOC_AT_LEN_BE)
+ *
+ * M/m: write, do not write to multicast register (NOC_CMD_BRCST_PACKET)
+ * K/k: write, do not write to linked register (NOC_CMD_VC_LINKED)
+ * P/p: write, do not write to posted register (NOC_CMD_RESP_MARKED)
  */
 // clang-format on
 constexpr uint32_t CQ_NOC_FLAG_SRC = 0x01;
@@ -1123,6 +1130,10 @@ constexpr uint32_t CQ_NOC_FLAG_LEN = 0x08;
 
 constexpr uint32_t CQ_NOC_INLINE_FLAG_VAL = 0x10;
 constexpr uint32_t CQ_NOC_INLINE_FLAG_BE = 0x20;
+
+constexpr uint32_t CQ_NOC_CMD_FLAG_MCAST = 0x01;
+constexpr uint32_t CQ_NOC_CMD_FLAG_LINKED = 0x02;
+constexpr uint32_t CQ_NOC_CMD_FLAG_POSTED = 0x04;
 
 enum CQNocFlags {
     CQ_NOC_sndl = 0,
@@ -1141,6 +1152,17 @@ enum CQNocFlags {
     CQ_NOC_SNdL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
     CQ_NOC_SNDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
     CQ_NOC_SNDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+};
+
+enum CQNocCmdFlags {
+    CQ_NOC_mkp = 0,
+    CQ_NOC_mkP = CQ_NOC_CMD_FLAG_POSTED,
+    CQ_NOC_mKp = CQ_NOC_CMD_FLAG_LINKED,
+    CQ_NOC_mKP = CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
+    CQ_NOC_Mkp = CQ_NOC_CMD_FLAG_MCAST,
+    CQ_NOC_MkP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_POSTED,
+    CQ_NOC_MKp = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED,
+    CQ_NOC_MKP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
 };
 
 // enum CQNocInlineFlags {
@@ -1171,13 +1193,15 @@ enum CQNocSend {
     CQ_NOC_SEND = 1,
 };
 
-template <uint32_t cmd_buf = NCRISC_WR_CMD_BUF, bool mcast = false, bool linked = false, bool posted = false>
+template <uint32_t cmd_buf = NCRISC_WR_CMD_BUF, enum CQNocCmdFlags flags = CQ_NOC_mkp>
 inline __attribute__((always_inline)) void noc_write_init_state(uint8_t noc, uint32_t vc) {
     constexpr bool multicast_path_reserve = true;
     uint32_t noc_cmd_field =
-        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
-        (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
-        (posted ? 0 : NOC_CMD_RESP_MARKED);
+        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+        ((flags & CQ_NOC_CMD_FLAG_LINKED) ? NOC_CMD_VC_LINKED : 0x0) |
+        ((flags & CQ_NOC_CMD_FLAG_MCAST) ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET)
+                                         : 0x0) |
+        ((flags & CQ_NOC_CMD_FLAG_POSTED) ? 0 : NOC_CMD_RESP_MARKED);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
 }
@@ -1215,6 +1239,7 @@ inline __attribute__((always_inline)) void noc_write_with_state(
             noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        // TODO: Runtime assert for size < MAX_BURST_SIZE
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
     }
     if constexpr (send) {
@@ -1279,43 +1304,3 @@ inline __attribute__((always_inline)) void noc_fast_write_any_len(
     noc_fast_write<noc_mode, cmd_buf, true /* update_counter */, use_trid>(
         noc, src_addr, dest_addr, len_bytes, num_dests, vc, trid);
 }
-
-// template <bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
-// FORCE_INLINE void cq_noc_fast_write_init_state(uint8_t noc = noc_index) {
-//     constexpr bool multicast_path_reserve = true;
-//     constexpr bool posted = false;
-//     constexpr uint32_t vc = mcast ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
-
-//     constexpr uint32_t noc_cmd_field =
-//         NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
-//         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
-//         (posted ? 0 : NOC_CMD_RESP_MARKED);
-
-//     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-// }
-
-// template <
-//     enum NocFlags flags,
-//     enum NocSend send = NOC_SEND,
-//     uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
-// FORCE_INLINE void cq_noc_fast_write_with_state(
-//     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
-//     if constexpr (flags & NOC_FLAG_SRC) {
-//         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
-//     }
-//     if constexpr (flags & NOC_FLAG_DST) {
-//         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
-//     }
-//     if constexpr (flags & NOC_FLAG_COORD) {
-//         NOC_CMD_BUF_WRITE_REG(
-//             noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) &
-//             NOC_COORDINATE_MASK);
-//     }
-//     if constexpr (flags & NOC_FLAG_LEN) {
-//         ASSERT(size <= NOC_MAX_BURST_SIZE);
-//         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
-//     }
-//     if constexpr (send) {
-//         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-//     }
-// }
