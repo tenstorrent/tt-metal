@@ -1393,7 +1393,7 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction
     return {};
 }
 
-static void write_to_worker_or_fabric_tensix_cores(
+void write_to_worker_or_fabric_tensix_cores(
     const void* fabric_data,
     const void* tensix_data,
     size_t size,
@@ -1448,7 +1448,7 @@ static void write_to_worker_or_fabric_tensix_cores(
     }
 }
 
-static void write_to_all_tensix_cores(
+void write_to_all_tensix_cores(
     const void* data, size_t size, tt::tt_metal::HalL1MemAddrType addr_type, chip_id_t physical_chip_id) {
     TT_FATAL(
         size ==
