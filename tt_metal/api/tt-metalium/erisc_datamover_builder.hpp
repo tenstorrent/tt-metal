@@ -61,8 +61,7 @@ enum class FabricEriscDatamoverType {
     Dateline = 1,
     DatelineUpstream = 2,
     DatelineUpstreamAdjacentDevice = 3,
-    DatelineUpstreamAdjacentDeviceUpstream = 4,
-    Invalid = 5,
+    Invalid = 4,
 };
 
 enum class FabricEriscDatamoverAxis : std::size_t {
@@ -258,6 +257,35 @@ struct FabricEriscDatamoverConfig {
     // emd vcs
     std::size_t edm_noc_vc = 0;
 
+    // Stream IDs
+    // Packet send/ack/complete stream IDs
+    static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
+    static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
+    static constexpr uint32_t to_sender_0_pkts_acked_id = 2;
+    static constexpr uint32_t to_sender_1_pkts_acked_id = 3;
+    static constexpr uint32_t to_sender_2_pkts_acked_id = 4;
+    static constexpr uint32_t to_sender_3_pkts_acked_id = 5;
+    static constexpr uint32_t to_sender_4_pkts_acked_id = 6;
+    static constexpr uint32_t to_sender_0_pkts_completed_id = 7;
+    static constexpr uint32_t to_sender_1_pkts_completed_id = 8;
+    static constexpr uint32_t to_sender_2_pkts_completed_id = 9;
+    static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
+    static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
+    // Receiver channel free slots stream IDs
+    static constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
+    static constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+    // Sender channel free slots stream IDs
+    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
+    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
+    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
+    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
+    static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    // Multi-RISC teardown synchronization stream ID
+    static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
+
 private:
     void configure_buffer_slots_helper(
         Topology topology,
@@ -265,8 +293,7 @@ private:
         std::array<size_t, num_sender_channels>& num_sender_buffer_slots,
         std::array<size_t, num_sender_channels>& num_remote_sender_buffer_slots,
         std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
-        std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
-        std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots);
+        std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots);
 
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
@@ -367,7 +394,7 @@ public:
         const FabricEriscDatamoverConfig& config,
         eth_chan_directions direction,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false);
+        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -377,7 +404,7 @@ public:
         const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false,
+        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     static FabricEriscDatamoverBuilder build(
@@ -388,7 +415,7 @@ public:
         chip_id_t peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false,
+        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
@@ -487,6 +514,7 @@ public:
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
+    FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default;
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
 };
