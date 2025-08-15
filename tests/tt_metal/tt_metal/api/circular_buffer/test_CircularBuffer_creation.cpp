@@ -163,7 +163,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
     EXPECT_ANY_THROW(CreateCircularBuffer(program, cr_set, config2));
 }
 
-TEST_F(DeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
+TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
     Program program;
     CBConfig cb_config;
 
