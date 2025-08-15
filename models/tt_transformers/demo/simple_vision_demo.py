@@ -338,7 +338,7 @@ def test_multimodal_demo_text(
                     content = " ".join(
                         str(value) for content in msg["content"] for key, value in content.items() if key != "type"
                     )
-                    print(f"{msg["role"].capitalize()}: {content}\n")
+                    print(f"{msg['role'].capitalize()}: {content}\n")
             batch_inputs = [
                 processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
                 for messages in batch_dialogs
