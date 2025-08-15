@@ -11,17 +11,18 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager_v2.hpp"
 #include "tt-metalium/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::linear::experimental {
 
-template <size_t num_conn_mgrs>
+template <size_t num_send_dir>
 FORCE_INLINE void open_connections(
-    FabricConnectionManager (&connection_managers)[num_conn_mgrs], uint8_t route_id, size_t& rt_arg_idx) {
-    for (size_t i = 0; i < num_conn_mgrs; i++) {
-        connection_managers[i] =
-            FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx);
-    }
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager, uint8_t route_id, size_t& rt_arg_idx) {
+    uint32_t header_count = PacketHeaderPool::get_num_headers(route_id);
+    ASSERT(header_count == num_send_dir);
+    connection_manager = tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>::template build_from_args<
+        tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx);
 
 #ifdef FABRIC_2D
     uint32_t ew_dim = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -46,11 +47,9 @@ FORCE_INLINE void open_connections(
 #endif
 }
 
-template <size_t num_conn_mgrs>
-FORCE_INLINE void close_connections(FabricConnectionManager (&connection_managers)[num_conn_mgrs]) {
-    for (size_t i = 0; i < num_conn_mgrs; i++) {
-        connection_managers[i].close();
-    }
+template <size_t num_send_dir>
+FORCE_INLINE void close_connections(tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager) {
+    connection_manager.close();
 }
 
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
@@ -67,33 +66,18 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
     uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_unicast_noc_unicast_write(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                src_addr,
-                size,
-                noc_unicast_command_header,
-                num_hops[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_unicast_noc_unicast_write(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                src_addr,
-                size,
-                noc_unicast_command_header,
-                num_hops[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_unicast_noc_unicast_write(
+            &sender, packet_header, src_addr, size, noc_unicast_command_header, num_hops[i]);
     });
 }
 
@@ -108,27 +92,16 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_unicast_noc_unicast_atomic_inc(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                noc_unicast_atomic_inc_command_header,
-                num_hops[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_unicast_noc_unicast_atomic_inc(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                noc_unicast_atomic_inc_command_header,
-                num_hops[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_unicast_noc_unicast_atomic_inc(
+            &sender, packet_header, noc_unicast_atomic_inc_command_header, num_hops[i]);
     });
 }
 
@@ -146,33 +119,18 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
     uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_unicast_noc_scatter_write(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                src_addr,
-                size,
-                noc_unicast_scatter_command_header,
-                num_hops[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_unicast_noc_scatter_write(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                src_addr,
-                size,
-                noc_unicast_scatter_command_header,
-                num_hops[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_unicast_noc_scatter_write(
+            &sender, packet_header, src_addr, size, noc_unicast_scatter_command_header, num_hops[i]);
     });
 }
 
@@ -187,27 +145,16 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_unicast_noc_unicast_inline_write(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                noc_unicast_inline_write_command_header,
-                num_hops[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_unicast_noc_unicast_inline_write(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                noc_unicast_inline_write_command_header,
-                num_hops[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_unicast_noc_unicast_inline_write(
+            &sender, packet_header, noc_unicast_inline_write_command_header, num_hops[i]);
     });
 }
 
@@ -225,33 +172,18 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
     uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_unicast_noc_fused_unicast_with_atomic_inc(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                src_addr,
-                size,
-                noc_fused_unicast_atomic_inc_command_header,
-                num_hops[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_unicast_noc_fused_unicast_with_atomic_inc(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                src_addr,
-                size,
-                noc_fused_unicast_atomic_inc_command_header,
-                num_hops[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_unicast_noc_fused_unicast_with_atomic_inc(
+            &sender, packet_header, src_addr, size, noc_fused_unicast_atomic_inc_command_header, num_hops[i]);
     });
 }
 
@@ -270,36 +202,19 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_unicast_write(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
     uint8_t* start_distance,
     uint8_t* range) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_multicast_noc_unicast_write(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                src_addr,
-                size,
-                noc_unicast_command_header,
-                start_distance[i],
-                range[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_multicast_noc_unicast_write(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                src_addr,
-                size,
-                noc_unicast_command_header,
-                start_distance[i + 1],
-                range[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_multicast_noc_unicast_write(
+            &sender, packet_header, src_addr, size, noc_unicast_command_header, start_distance[i], range[i]);
     });
 }
 
@@ -315,30 +230,17 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t* start_distance,
     uint8_t* range) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_multicast_noc_unicast_atomic_inc(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                noc_unicast_atomic_inc_command_header,
-                start_distance[i],
-                range[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_multicast_noc_unicast_atomic_inc(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                noc_unicast_atomic_inc_command_header,
-                start_distance[i + 1],
-                range[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_multicast_noc_unicast_atomic_inc(
+            &sender, packet_header, noc_unicast_atomic_inc_command_header, start_distance[i], range[i]);
     });
 }
 
@@ -357,36 +259,19 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_scatter_write(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
     uint8_t* start_distance,
     uint8_t* range) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_multicast_noc_scatter_write(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                src_addr,
-                size,
-                noc_unicast_scatter_command_header,
-                start_distance[i],
-                range[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_multicast_noc_scatter_write(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                src_addr,
-                size,
-                noc_unicast_scatter_command_header,
-                start_distance[i + 1],
-                range[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_multicast_noc_scatter_write(
+            &sender, packet_header, src_addr, size, noc_unicast_scatter_command_header, start_distance[i], range[i]);
     });
 }
 
@@ -402,30 +287,17 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t* start_distance,
     uint8_t* range) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_multicast_noc_unicast_inline_write(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                noc_unicast_inline_write_command_header,
-                start_distance[i],
-                range[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_multicast_noc_unicast_inline_write(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                noc_unicast_inline_write_command_header,
-                start_distance[i + 1],
-                range[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_multicast_noc_unicast_inline_write(
+            &sender, packet_header, noc_unicast_inline_write_command_header, start_distance[i], range[i]);
     });
 }
 
@@ -444,36 +316,25 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
-    tt_l1_ptr FabricConnectionManager* connection_managers,
+    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
     uint8_t* start_distance,
     uint8_t* range) {
-    PacketHeaderPool::for_each_header<2>(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        const uint8_t mgr = i / 2;
-        if (connection_managers[mgr].has_forward_connection()) {
-            fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                &connection_managers[mgr].get_forward_connection(),
-                packet_header,
-                src_addr,
-                size,
-                noc_fused_unicast_atomic_inc_command_header,
-                start_distance[i],
-                range[i]);
-        }
-        if (connection_managers[mgr].has_backward_connection()) {
-            fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                &connection_managers[mgr].get_backward_connection(),
-                packet_header + 1,
-                src_addr,
-                size,
-                noc_fused_unicast_atomic_inc_command_header,
-                start_distance[i + 1],
-                range[i + 1]);
-        }
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& sender = connection_manager.get(i);
+        fabric_multicast_noc_fused_unicast_with_atomic_inc(
+            &sender,
+            packet_header,
+            src_addr,
+            size,
+            noc_fused_unicast_atomic_inc_command_header,
+            start_distance[i],
+            range[i]);
     });
 }
 

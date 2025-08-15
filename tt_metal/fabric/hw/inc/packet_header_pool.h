@@ -76,7 +76,7 @@ public:
         return route_id_ - 1;  // return the route_id of the allocated header
     }
 
-    template <uint8_t stride = 1, typename Func>
+    template <typename Func>
     FORCE_INLINE static void for_each_header(uint8_t route_id, Func&& func) {
         ASSERT(route_id < route_id_);
         if (route_id >= route_id_) {
@@ -91,10 +91,18 @@ public:
             }  // hang intentionally
         }
         auto [packet_headers, num_headers] = header_table[route_id];
-        for (uint8_t i = 0; i < num_headers; i += stride) {
+        for (uint8_t i = 0; i < num_headers; i++) {
             func(packet_headers, i);
-            packet_headers += stride;
+            packet_headers++;
         }
+    }
+
+    FORCE_INLINE static uint8_t get_num_headers(uint8_t route_id) {
+        ASSERT(route_id < route_id_);
+        if (route_id >= route_id_) {
+            return 0;
+        }
+        return header_table[route_id].second;
     }
 };
 

@@ -1884,39 +1884,24 @@ void FabricUnicastCommon(
     }
 
     // Append FabricConnectionManager args per manager (pair-ordered)
-    size_t num_mgrs = (dir_configs.size() + 1) / 2;
-    // Helper: push have_fwd/bwd flag and append connection args determined by idx parity
-    auto append_flag_and_conn_by_index_unicast = [&](size_t idx) {
-        bool expect_forward = (idx % 2 == 0);
-        bool have = false;
-        if (idx < dir_configs.size()) {
-            auto [dir, _hops] = dir_configs[idx];
-            have = expect_forward ? (dir == RoutingDirection::E || dir == RoutingDirection::N)
-                                  : (dir == RoutingDirection::W || dir == RoutingDirection::S);
-            sender_runtime_args.push_back(have ? 1 : 0);
-            if (have) {
-                auto first_hop_phys_chip_id = physical_end_device_ids_by_dir[dir][0];
-                const auto dst_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-                uint32_t link_idx = 0;
-                if (topology == Topology::Mesh) {
-                    link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
-                }
-                append_fabric_connection_rt_args(
-                    src_fabric_node_id,
-                    dst_fabric_node_id,
-                    link_idx,
-                    sender_program,
-                    {sender_logical_core},
-                    sender_runtime_args);
-            }
-        } else {
-            sender_runtime_args.push_back(0);
+    // V2 connection args: [tag, WorkerToFabricEdmSender args]
+    for (size_t i = 0; i < dir_configs.size(); ++i) {
+        auto [dir, _hops] = dir_configs[i];
+        (void)_hops;
+        sender_runtime_args.push_back(static_cast<uint32_t>(dir));  // tag (optional)
+        auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
+        const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
+        uint32_t link_idx = 0;
+        if (topology == Topology::Mesh) {
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
         }
-    };
-    for (size_t m = 0; m < num_mgrs; ++m) {
-        append_flag_and_conn_by_index_unicast(2 * m);      // fwd
-        append_flag_and_conn_by_index_unicast(2 * m + 1);  // bwd
+        append_fabric_connection_rt_args(
+            src_fabric_node_id,
+            dst_fabric_node_id,
+            link_idx,
+            sender_program,
+            {sender_logical_core},
+            sender_runtime_args);
     }
 
     // For 2D Mesh, append extra route info
@@ -2104,38 +2089,25 @@ void FabricMulticastCommon(
             .compile_args = compile_time_args,
             .defines = defines});
 
-    size_t num_mgrs = (dir_configs.size() + 1) / 2;
-    auto append_flag_and_conn_by_index_mcast = [&](size_t idx) {
-        bool expect_forward = (idx % 2 == 0);
-        bool have = false;
-        if (idx < dir_configs.size()) {
-            auto [dir, start_distance, range] = dir_configs[idx];
-            have = expect_forward ? (dir == RoutingDirection::E || dir == RoutingDirection::N)
-                                  : (dir == RoutingDirection::W || dir == RoutingDirection::S);
-            sender_runtime_args.push_back(have ? 1 : 0);
-            if (have) {
-                auto first_hop_phys_chip_id = first_hop_phys_chip_ids[idx];
-                const auto dst_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-                uint32_t link_idx = 0;
-                if (topology == Topology::Mesh) {
-                    link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
-                }
-                append_fabric_connection_rt_args(
-                    src_fabric_node_id,
-                    dst_fabric_node_id,
-                    link_idx,
-                    sender_program,
-                    {sender_logical_core},
-                    sender_runtime_args);
-            }
-        } else {
-            sender_runtime_args.push_back(0);
+    // V2 connection args for multicast: [tag, WorkerToFabricEdmSender args]
+    for (size_t i = 0; i < dir_configs.size(); ++i) {
+        auto [dir, start_distance, range] = dir_configs[i];
+        (void)start_distance;
+        (void)range;
+        sender_runtime_args.push_back(static_cast<uint32_t>(dir));  // tag (optional)
+        auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
+        const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
+        uint32_t link_idx = 0;
+        if (topology == Topology::Mesh) {
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
         }
-    };
-    for (size_t m = 0; m < num_mgrs; ++m) {
-        append_flag_and_conn_by_index_mcast(2 * m);      // fwd
-        append_flag_and_conn_by_index_mcast(2 * m + 1);  // bwd
+        append_fabric_connection_rt_args(
+            src_fabric_node_id,
+            dst_fabric_node_id,
+            link_idx,
+            sender_program,
+            {sender_logical_core},
+            sender_runtime_args);
     }
 
     // Append 2D mesh route info only when on Mesh
