@@ -148,7 +148,7 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 #############################################################
 
-FROM base AS ttnn
+FROM base AS release
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -173,7 +173,7 @@ RUN python3 -m venv $PYTHON_ENV_DIR
 
 #############################################################
 
-FROM base AS models
+FROM base AS release-models
 
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv
