@@ -12,6 +12,8 @@ import pytest
 from ...encoders.clip.model_clip import CLIPTextModel
 from ...encoders.clip.config_clip import CLIPTextConfig
 from ...parallel.config import EncoderParallelManager
+from ...parallel.config import EncoderParallelConfig, ParallelFactor
+from ...parallel.manager import CCLManager
 
 
 @pytest.mark.parametrize(
@@ -51,6 +53,9 @@ def test_clip_encoder(
     encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
     encoder_parallel_manager = EncoderParallelManager(encoder_submesh, topology, mesh_axis=1, num_links=1)
+    encoder_parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[1], mesh_axis=1),
+    )
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
     hf_model = CLIPTextModelWithProjection.from_pretrained(
@@ -71,6 +76,12 @@ def test_clip_encoder(
     # create tt model like sd3.5 test pattern
     logger.info("Creating TT CLIP model...")
 
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
+
     config = CLIPTextConfig(
         vocab_size=hf_model.config.vocab_size,
         hidden_size=hf_model.config.hidden_size,
@@ -84,7 +95,12 @@ def test_clip_encoder(
     )
 
     tt_model = CLIPTextModel(
-        config=config, mesh_device=encoder_submesh, with_projection=True, parallel_manager=encoder_parallel_manager
+        config=config,
+        mesh_device=encoder_submesh,
+        with_projection=True,
+        parallel_manager=encoder_parallel_manager,
+        ccl_manager=ccl_manager,
+        parallel_config=encoder_parallel_config,
     )
 
     # load weights
@@ -157,7 +173,8 @@ def test_clip_encoder(
         tt_embeddings,
         mesh_device=encoder_submesh,
         causal_attention_mask=causal_attention_mask,
-        parallel_manager=encoder_parallel_manager,
+        ccl_manager=ccl_manager,
+        parallel_config=encoder_parallel_config,
     )
 
     tt_sequence_output, tt_projected_output = encoder_outputs

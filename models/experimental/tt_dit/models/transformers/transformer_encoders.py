@@ -5,19 +5,24 @@
 import ttnn
 from ...layers.encoder import CLIPEncoderLayer
 from ...utils.substate import indexed_substates
-from ...parallel.config import EncoderParallelManager
+
+# encoderparallel config
+
+# ccl manager
 
 
 class CLIPTextEncoderTransformer:
-    def __init__(self, config, mesh_device=None, parallel_manager=None):
+    def __init__(self, config, mesh_device=None, parallel_manager=None, ccl_manager=None, parallel_config=None):
         self.config = config
         self.mesh_device = mesh_device
         self.parallel_manager = parallel_manager
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
         self._layers = []
         self._d_model = config.hidden_size
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict, ccl_manager=None, parallel_config=None):
         layer_states = indexed_substates(state_dict, "layers")
 
         for layer_state in layer_states:
@@ -33,8 +38,13 @@ class CLIPTextEncoderTransformer:
                     "mesh_device": self.mesh_device,
                 },
             )
-
-            layer = CLIPEncoderLayer(parameters, self.config, self.mesh_device, self.parallel_manager)
+            layer = CLIPEncoderLayer(
+                parameters,
+                self.config,
+                self.mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+            )
             layer.load_state_dict(layer_state)
             self._layers.append(layer)
 
@@ -43,7 +53,9 @@ class CLIPTextEncoderTransformer:
         hidden_states: ttnn.Tensor,
         mesh_device: ttnn.Device,
         causal_attention_mask: ttnn.Tensor = None,
-        parallel_manager: EncoderParallelManager = None,
+        parallel_manager=None,
+        ccl_manager=None,
+        parallel_config=None,
         output_hidden_states: bool = True,
     ):
         all_hidden_states = []
@@ -59,7 +71,9 @@ class CLIPTextEncoderTransformer:
             all_hidden_states.append(hidden_states)
 
         for layer in self._layers:
-            hidden_states = layer(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
+            hidden_states = layer(
+                hidden_states, causal_attention_mask, ccl_manager=ccl_manager, parallel_config=parallel_config
+            )
             if output_hidden_states:
                 all_hidden_states.append(hidden_states)
 

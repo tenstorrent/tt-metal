@@ -4,7 +4,8 @@
 
 from loguru import logger
 from ..models.transformers.attention_encoders import EncoderAttention
-from ..parallel.config import EncoderParallelManager
+
+# from ..parallel.config import EncoderParallelManager
 from ..utils.tensor import bf16_tensor
 from ..utils.substate import substate
 from .feedforward import ParallelFeedForward
@@ -13,10 +14,18 @@ import ttnn
 
 class CLIPEncoderLayer:
     def __init__(
-        self, parameters, config, mesh_device: ttnn.Device, parallel_manager: EncoderParallelManager = None
+        self,
+        parameters,
+        config,
+        mesh_device: ttnn.Device,
+        parallel_manager=None,
+        ccl_manager=None,
+        parallel_config=None,
     ) -> None:
         self.config = config
-        self._parallel_manager = parallel_manager
+        self.parallel_manager = parallel_manager
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
         self.mesh_device = mesh_device
 
         # will be created in load_state_dict
@@ -45,7 +54,9 @@ class CLIPEncoderLayer:
             state_dict["layer_norm2.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
         )
 
-        self._self_attn = EncoderAttention(self.config, self.mesh_device, self._parallel_manager)
+        self._self_attn = EncoderAttention(
+            self.config, self.mesh_device, ccl_manager=self.ccl_manager, parallel_config=self.parallel_config
+        )
 
         # load attention weights
         attn_state = substate(state_dict, "self_attn")
@@ -64,8 +75,8 @@ class CLIPEncoderLayer:
             dim_out=self.config.hidden_size,
             activation_fn=activation_fn,
             mesh_device=self.mesh_device,
-            mesh_axis=self._parallel_manager.tensor_parallel.mesh_axis if self._parallel_manager else 0,
-            ccl_manager=self._parallel_manager,
+            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            ccl_manager=self.ccl_manager,
         )
 
         # load MLP weights
@@ -76,7 +87,8 @@ class CLIPEncoderLayer:
         self,
         hidden_states: ttnn.Tensor,
         causal_attention_mask: ttnn.Tensor,
-        parallel_manager: EncoderParallelManager = None,
+        ccl_manager=None,
+        parallel_config=None,
     ) -> ttnn.Tensor:
         logger.info(f"Starting CLIPEncoderLayer forward pass, input shape: {hidden_states.shape}")
 
@@ -87,7 +99,9 @@ class CLIPEncoderLayer:
         )
         logger.info(f" Layer norm 1 done, shape: {hidden_states.shape}")
 
-        attn_output = self._self_attn(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
+        attn_output = self._self_attn(
+            hidden_states, causal_attention_mask, ccl_manager=ccl_manager, parallel_config=parallel_config
+        )
         logger.info(f"Self-attention done, output shape: {attn_output.shape}")
 
         hidden_states = residual + attn_output
@@ -100,7 +114,7 @@ class CLIPEncoderLayer:
         )
         logger.info(f"Layer norm 2 done, shape: {hidden_states.shape}")
 
-        mlp_output = self._mlp(hidden_states, parallel_manager=parallel_manager)
+        mlp_output = self._mlp(hidden_states)
         logger.info(f"MLP done, output shape: {mlp_output.shape}")
 
         hidden_states_shape = list(mlp_output.shape)
@@ -115,11 +129,11 @@ class CLIPEncoderLayer:
         mlp_output_scattered = ttnn.experimental.reduce_scatter_minimal_async(
             mlp_output,
             dim=3,
-            multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(),
+            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=parallel_manager.topology,
-            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+            topology=ccl_manager.topology,
+            cluster_axis=ccl_manager.tensor_parallel.mesh_axis,
         )
         logger.debug(f"reduce_scatter completed, shape: {mlp_output_scattered.shape}")
 
@@ -127,10 +141,10 @@ class CLIPEncoderLayer:
         mlp_output = ttnn.experimental.all_gather_async(
             mlp_output_scattered,
             dim=3,
-            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
-            mesh_device=parallel_manager.mesh_device,
-            topology=parallel_manager.topology,
-            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            cluster_axis=ccl_manager.tensor_parallel.mesh_axis,
+            mesh_device=ccl_manager.mesh_device,
+            topology=ccl_manager.topology,
+            multi_device_global_semaphore=ccl_manager.get_ping_pong_semaphore(),
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

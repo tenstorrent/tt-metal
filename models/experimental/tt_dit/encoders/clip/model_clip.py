@@ -12,11 +12,22 @@ from ...models.transformers.transformer_encoders import CLIPTextEncoderTransform
 
 
 class CLIPTextModel:
-    def __init__(self, config, mesh_device=None, with_projection=False, init=False, parallel_manager=None):
+    def __init__(
+        self,
+        config,
+        mesh_device=None,
+        with_projection=False,
+        init=False,
+        parallel_manager=None,
+        ccl_manager=None,
+        parallel_config=None,
+    ):
         self.config = config
         self.with_projection = with_projection
         self.mesh_device = mesh_device
         self.parallel_manager = parallel_manager
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
         self.embeddings = TextEmbedding(
             config=config,
@@ -28,7 +39,9 @@ class CLIPTextModel:
         self.encoder = CLIPTextEncoderTransformer(
             config=config,
             mesh_device=mesh_device,
-            parallel_manager=parallel_manager,
+            parallel_manager=self.parallel_manager,
+            ccl_manager=self.ccl_manager,
+            parallel_config=self.parallel_config,
         )
 
     def load_state_dict(self, state_dict):
@@ -42,7 +55,11 @@ class CLIPTextModel:
 
         encoder_state = substate(text_model_state, "encoder")
         if encoder_state:
-            self.encoder.load_state_dict(encoder_state)
+            self.encoder.load_state_dict(
+                encoder_state,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.parallel_config,
+            )
 
 
 class hidden_states:

@@ -13,17 +13,19 @@ from ...utils.substate import substate
 
 
 class EncoderAttention:
-    def __init__(self, config, mesh_device=None, parallel_manager: EncoderParallelManager = None):
+    def __init__(self, config, mesh_device=None, ccl_manager=None, parallel_config=None):
         self.config = config
-        self.parallel_manager = parallel_manager
+        # Store references to managers and device
+        self.ccl_manager = ccl_manager
         self.mesh_device = mesh_device
+        self.parallel_config = parallel_config
 
         self.num_heads = config.num_attention_heads
         self.embed_dim = config.hidden_size
         self.head_dim = self.embed_dim // self.num_heads
         self.scale = self.head_dim**-0.5
-
-        self.tensor_parallel_factor = parallel_manager.tensor_parallel.factor if parallel_manager else 1
+        self.tensor_parallel_factor = self.parallel_config.tensor_parallel.factor
+        logger.debug(f"tensor_parallel_factor: {self.tensor_parallel_factor}")
         self.num_local_heads = self.num_heads // self.tensor_parallel_factor
 
         logger.debug(
@@ -37,21 +39,21 @@ class EncoderAttention:
             out_features=config.hidden_size,
             bias=True,
             mesh_device=self.mesh_device,
-            mesh_axis=parallel_manager.tensor_parallel.mesh_axis if parallel_manager else 0,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis if parallel_config else 0,
         )
         self.k_proj = ColParallelLinear(
             in_features=config.hidden_size,
             out_features=config.hidden_size,
             bias=True,
             mesh_device=self.mesh_device,
-            mesh_axis=parallel_manager.tensor_parallel.mesh_axis if parallel_manager else 0,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis if parallel_config else 0,
         )
         self.v_proj = ColParallelLinear(
             in_features=config.hidden_size,
             out_features=config.hidden_size,
             bias=True,
             mesh_device=self.mesh_device,
-            mesh_axis=parallel_manager.tensor_parallel.mesh_axis if parallel_manager else 0,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis if parallel_config else 0,
         )
 
         self.out_proj = ColParallelLinear(
@@ -59,7 +61,7 @@ class EncoderAttention:
             out_features=config.hidden_size,
             bias=True,
             mesh_device=self.mesh_device,
-            mesh_axis=parallel_manager.tensor_parallel.mesh_axis if parallel_manager else 0,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis if parallel_config else 0,
         )
 
     def load_state_dict(self, state_dict):
@@ -73,6 +75,8 @@ class EncoderAttention:
         hidden_states: ttnn.Tensor,
         causal_attention_mask: ttnn.Tensor = None,
         parallel_manager: EncoderParallelManager = None,
+        ccl_manager=None,
+        parallel_config=None,
     ) -> ttnn.Tensor:
         """
         input is replicated
@@ -80,6 +84,8 @@ class EncoderAttention:
         SDPA executes head-parallel
         output is replicated
         """
+
+        parallel_manager = ccl_manager
 
         orig_shape = hidden_states.shape
         batch_size, seq_length, _ = hidden_states.shape
@@ -153,10 +159,10 @@ class EncoderAttention:
         attn_output = ttnn.experimental.all_gather_async(
             input_tensor=attn_output,
             dim=len(attn_output.shape) - 1,
-            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,  # 1d
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,  # 1d
             mesh_device=parallel_manager.mesh_device,
             topology=parallel_manager.topology,
-            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            multi_device_global_semaphore=parallel_manager.get_ag_ping_pong_semaphore(),
             num_links=parallel_manager.num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -169,10 +175,10 @@ class EncoderAttention:
         dense_out = ttnn.experimental.all_gather_async(
             input_tensor=dense_out,
             dim=len(dense_out.shape) - 1,
-            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,  # 1d
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,  # 1d
             mesh_device=parallel_manager.mesh_device,
             topology=parallel_manager.topology,
-            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(),
             num_links=parallel_manager.num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
