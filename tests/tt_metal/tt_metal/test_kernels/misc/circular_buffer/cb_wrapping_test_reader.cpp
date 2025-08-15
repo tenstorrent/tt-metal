@@ -48,6 +48,7 @@ void kernel_main() {
 
     for (auto i = 0ul; i < 3; i++) {
         cb_wait_front(CB_ID, CB_STEP_SIZE);
+        invalidate_l1_cache();
         result_ptr[i] = read_page()[0];
         cb_pop_front(CB_ID, CB_STEP_SIZE);
     }
