@@ -346,13 +346,36 @@ IntraMeshAdjacencyMap build_mesh_adjacency_map(
 
 std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info) {
     // For consistency across invocations on the same machine always start the DFS on the chip with the lowest id.
-    auto first_chip = std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto eth_coords = cluster.get_user_chip_ethernet_coordinates();
+
+    auto min_eth_chip = std::min_element(eth_coords.begin(), eth_coords.end(),
+    [](const auto& a, const auto& b) {
+        if (a.second.y != b.second.y) {
+            return a.second.y < b.second.y;
+        }
+        return a.second.x < b.second.x;
+    });
+
+    auto first_chip = min_eth_chip->first;
+    auto adjacency_map = topology_info.adjacency_map;
+    for (auto& [chip_id, neighbors] : adjacency_map) {
+        std::sort(neighbors.begin(), neighbors.end(),
+            [&eth_coords](chip_id_t a, chip_id_t b) {
+                const auto& coord_a = eth_coords.at(a);
+                const auto& coord_b = eth_coords.at(b);
+                if (coord_a.y != coord_b.y) {
+                    return coord_a.y < coord_b.y;
+                }
+                return coord_a.x < coord_b.x;
+            });
+    }
 
     // This vector contains a 1D view of devices in the mesh, constructed using DFS. This works since we are using a
     // mesh topology which guarantees connectivity.
     std::vector<chip_id_t> physical_chip_ids;
     create_1d_mesh_view_with_dfs(
-        topology_info.adjacency_map, first_chip, topology_info.ns_size * topology_info.ew_size, physical_chip_ids);
+        adjacency_map, first_chip, topology_info.ns_size * topology_info.ew_size, physical_chip_ids);
     return physical_chip_ids;
 }
 
