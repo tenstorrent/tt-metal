@@ -869,6 +869,7 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
                     common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
                     break;
             }
+            break;
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH:
             unique_args_addr = MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::UNRESERVED);
