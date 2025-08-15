@@ -14,6 +14,9 @@ on:
         required: false
         type: number
         default: 10
+      wheel-artifact-name:
+        required: true
+        type: string
 jobs:
   create-docker-release-image:
     strategy:
@@ -37,7 +40,7 @@ jobs:
       - name: Download wheels
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: ${{ inputs.wheel-artifact-name }}
       - name: Get the name of the wheel and set up env variables
         id: generate-tag-name
         run: |
