@@ -1041,8 +1041,7 @@ void pytensor_module(py::module& m_tensor) {
             "empty",
             [](const Tensor& self) { return self.is_empty(); },
             R"doc(
-                Return true if tensor has not allocated data in the device
-                Shape[0, 0] or empty buffers are considered empty");
+                Tensor is considered empty if its volume is 0 or if is deallocated");
             )doc")
         .def(
             "item",
