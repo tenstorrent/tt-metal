@@ -92,14 +92,9 @@ int main(int argc, char **argv) {
                 device_config.mesh_shape));
         }
     }
-    fmt::println("Aggregator before initialize device");
-    fmt::println("Aggregator mesh device: {}", device_config.mesh_shape);
     three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
-    fmt::println("Aggregator after device creation");
 
     auto socket_manager = SocketManager(config.socket_type);
-
-    fmt::println("Aggregator config setup finished");
 
     auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
     auto *device = &ttml::autograd::ctx().get_device();

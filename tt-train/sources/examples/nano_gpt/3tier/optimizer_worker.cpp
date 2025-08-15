@@ -88,10 +88,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    fmt::println("Optimizer before initialize device");
-    fmt::println("Optimizer mesh shape: {}", device_config.mesh_shape);
     three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
-    fmt::println("Optimizer after device creation");
     auto socket_manager = SocketManager(config.socket_type);
 
     auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
