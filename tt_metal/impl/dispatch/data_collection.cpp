@@ -7,6 +7,7 @@
 #include <core_coord.hpp>
 #include <kernel.hpp>
 #include <enchantum/enchantum.hpp>
+#include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
 #include <algorithm>
 #include <array>
@@ -19,7 +20,6 @@
 
 #include "assert.hpp"
 #include "dev_msgs.h"
-#include "hal_types.hpp"
 #include "tt-metalium/program.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "impl/context/metal_context.hpp"
@@ -57,7 +57,7 @@ public:
         Update(other.max_transaction_size, other.min_transaction_size, other.num_writes, other.total_write_size);
     }
 
-    void Dump(std::ofstream& outfile, std::map<uint32_t, uint32_t>& raw_data) {
+    void Dump(std::ofstream& outfile, const std::map<uint32_t, uint32_t>& raw_data) const {
         outfile << fmt::format("\t\tmax_transaction_size = {}\n", max_transaction_size);
         outfile << fmt::format("\t\tmin_transaction_size = {}\n", min_transaction_size);
         outfile << fmt::format("\t\tnum_writes           = {}\n", num_writes);
@@ -74,7 +74,6 @@ public:
 class DispatchData {
 public:
     DispatchData(data_collector_t type) : type(type) {}
-    DispatchData(int type_int) : DispatchData(static_cast<data_collector_t>(type_int)) {}
 
     void Update(uint32_t transaction_size, std::optional<HalProcessorIdentifier> processor) {
         data[processor][transaction_size]++;
@@ -88,7 +87,7 @@ public:
         }
     }
 
-    void DumpStats(std::ofstream& outfile) {
+    void DumpStats(std::ofstream& outfile) const {
         // Only dump if this has data
         if (data.size() == 0) {
             return;
@@ -164,8 +163,8 @@ void DataCollector::RecordData(
     auto& dispatch_data = program_id_to_dispatch_data[program_id];
     if (dispatch_data.empty()) {
         // If no existing data for this program, initialize starting values.
-        dispatch_data.reserve(DISPATCH_DATA_COUNT);
-        for (int idx = 0; idx < DISPATCH_DATA_COUNT; idx++) {
+        dispatch_data.reserve(enchantum::count<data_collector_t>);
+        for (auto idx : enchantum::values_generator<data_collector_t>) {
             dispatch_data.emplace_back(idx);
         }
     }
@@ -215,52 +214,48 @@ void DataCollector::DumpData() {
     std::ofstream outfile = std::ofstream("dispatch_data.txt");
 
     // Extra DispatchData objects to collect data across programs
-    std::vector<DispatchData*> cross_program_data;
-    cross_program_data.reserve(DISPATCH_DATA_COUNT);
-    for (int idx = 0; idx < DISPATCH_DATA_COUNT; idx++) {
-        cross_program_data.push_back(new DispatchData(idx));
+    std::vector<DispatchData> cross_program_data;
+    cross_program_data.reserve(enchantum::count<data_collector_t>);
+    for (auto idx : enchantum::values_generator<data_collector_t>) {
+        cross_program_data.emplace_back(idx);
     }
 
     // Go through all programs, and dump relevant data
-    for (auto& id_and_data : program_id_to_dispatch_data) {
-        uint64_t program_id = id_and_data.first;
+    for (const auto& [program_id, data] : program_id_to_dispatch_data) {
         outfile << fmt::format("Program {}: Ran {} time(s).\n", program_id, program_id_to_call_count[program_id]);
 
         // Dump kernel ids for each kernel group in this program
-        for (auto& core_type_and_kernel_groups : program_id_to_kernel_groups[program_id]) {
-            CoreType core_type = core_type_and_kernel_groups.first;
-            std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>& kernel_groups = core_type_and_kernel_groups.second;
+        for (const auto& [core_type, kernel_groups] : program_id_to_kernel_groups[program_id]) {
             outfile << fmt::format("\t{} Kernel Groups: {}\n", core_type, kernel_groups.size());
-            for (auto& ids_and_ranges : kernel_groups) {
+            for (const auto& [ids, ranges] : kernel_groups) {
                 // Dump kernel ids in this group
                 outfile << "\t\t{";
                 for (int i = 0; i < DISPATCH_CLASS_MAX; i++) {
                     outfile << DispatchClassToString(static_cast<enum dispatch_core_processor_classes>(i), core_type);
-                    if (ids_and_ranges.first[i]) {
-                        outfile << *ids_and_ranges.first[i];
+                    if (ids[i]) {
+                        outfile << *ids[i];
                     }
                     outfile << " ";
                 }
                 outfile << "} on cores ";
 
                 // Dump the cores this kernel group contains
-                outfile << ids_and_ranges.second.str() << "\n";
+                outfile << ranges.str() << "\n";
             }
         }
 
         // Dump dispatch write stats
-        for (int type_int = 0; type_int != DISPATCH_DATA_COUNT; type_int++) {
-            DispatchData& data = id_and_data.second.at(type_int);
-            cross_program_data[type_int]->Merge(data);
-            data.DumpStats(outfile);
+        for (auto type : enchantum::values_generator<data_collector_t>) {
+            const DispatchData& type_data = data.at(type);
+            cross_program_data[type].Merge(type_data);
+            type_data.DumpStats(outfile);
         }
     }
 
     // Dump cross-program stats
     outfile << "Cross-Program Data:\n";
-    for (int type_int = 0; type_int != DISPATCH_DATA_COUNT; type_int++) {
-        cross_program_data[type_int]->DumpStats(outfile);
-        delete cross_program_data[type_int];
+    for (const auto& type_data : cross_program_data) {
+        type_data.DumpStats(outfile);
     }
     outfile.close();
 }
