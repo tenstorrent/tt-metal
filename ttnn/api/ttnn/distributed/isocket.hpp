@@ -10,6 +10,12 @@
 
 namespace ttnn::distributed {
 
+/**
+ * @brief Abstract interface for distributed tensor communication over sockets.
+ *
+ * Provides methods for sending and receiving tensors between distributed nodes,
+ * along with access to rank information and distributed context.
+ */
 class ISocket {
 public:
     virtual ~ISocket() = default;

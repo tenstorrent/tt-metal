@@ -8,6 +8,16 @@
 
 namespace ttnn::distributed {
 
+/**
+ * @brief Bidirectional fabric-based implementation of distributed tensor communication.
+ * Provides high-performance point-to-point tensor communication using Tenstorrent's
+ * fabric interconnect technology. This implementation leverages the underlying fabric
+ * hardware for direct chip-to-chip communication, offering lower latency and higher
+ * bandwidth compared to traditional network protocols.
+ *
+ * Provides simultaneous send and receive capabilities over fabric.
+ *
+ */
 class BidirectionalFabricSocket : public ISocket {
 public:
     BidirectionalFabricSocket(

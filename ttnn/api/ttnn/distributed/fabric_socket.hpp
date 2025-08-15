@@ -8,6 +8,19 @@
 
 namespace ttnn::distributed {
 
+/**
+ * @brief Fabric-based implementation of distributed tensor communication.
+ *
+ * Provides high-performance point-to-point tensor communication using Tenstorrent's
+ * fabric interconnect technology. This implementation leverages the underlying fabric
+ * hardware for direct chip-to-chip communication, offering lower latency and higher
+ * bandwidth compared to traditional network protocols.
+ *
+ * The FabricSocket wraps a MeshSocket to handle tensor serialization and fabric
+ * message routing. It supports efficient tensor transfer between specific sender
+ * and receiver ranks in a fabric-connected mesh topology, making it ideal for
+ * high-throughput distributed training and inference workloads.
+ */
 class FabricSocket : public ISocket {
 public:
     FabricSocket(const tt::tt_metal::distributed::MeshSocket& mesh_socket);
