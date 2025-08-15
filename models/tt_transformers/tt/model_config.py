@@ -1248,7 +1248,7 @@ class ModelArgs:
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
-            if self.is_vision():
+            if self.is_multimodal:
                 self.VISION_MAX_MM_SEQ = (
                     self.vision_chunk_ntok if "gemma-3" in self.base_model_name else nearest_32(self.vision_chunk_ntok)
                 )
