@@ -5,14 +5,15 @@ import math
 device = ttnn.CreateDevice(0, l1_small_size=8192)
 
 in_n = 1
-in_h = 159
-in_w = 159
-in_c = 32
+in_h = 80
+in_w = 80
+in_c = 384
 kernel_size = [3, 3]
-stride = [1, 1]
+stride = [2, 2]
 padding = [1, 1]
 dilation = [1, 1]
 shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+ceil_mode = True
 tensor_shape = (in_n, in_c, in_h, in_w)  # NCHW format
 
 # Create tensor filled with height and width coordinates
@@ -45,10 +46,11 @@ ttnn_output, indices = ttnn.max_pool2d(
     channels=in_c,
     kernel_size=kernel_size,
     stride=stride,
-    padding=padding,  # ttnn is padding in the order (top, bottom, left, right)
+    padding=padding,
     dilation=dilation,
     applied_shard_scheme=shard_scheme,
     return_indices=True,
+    ceil_mode=ceil_mode,
 )
 ttnn_outputs_exactly_equal = True
 
@@ -67,16 +69,24 @@ ttnn_output_base = ttnn.max_pool2d(
     channels=in_c,
     kernel_size=kernel_size,
     stride=stride,
-    padding=padding,  # ttnn is padding in the order (top, bottom, left, right)
+    padding=padding,
     dilation=dilation,
     applied_shard_scheme=shard_scheme,
+    ceil_mode=ceil_mode,
+    return_indices=False,
 )
 ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn.to_torch(ttnn_output))
 print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
 
 # Run PyTorch max pool for reference
 torch_output, torch_indices = torch.nn.functional.max_pool2d(
-    torch_input, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=True
+    torch_input,
+    kernel_size=kernel_size,
+    stride=stride,
+    padding=padding,
+    dilation=dilation,
+    ceil_mode=ceil_mode,
+    return_indices=True,
 )
 
 # Reshape torch output to match TTNN format (NCHW -> NHWC)
@@ -94,7 +104,7 @@ ttnn_output_torch = ttnn.to_torch(ttnn_output)
 ttnn_indices_torch = ttnn.to_torch(indices)
 
 # Reshape TTNN outputs to match PyTorch shape for comparison
-# TTNN output is in shape (1, 1, output_h*output_w, channels)
+# TTNN output is in shape (1, 1, out_h*out_w, channels)
 # Calculate output dimensions using the pooling formula
 pad_h = padding[0] * 2  # padding is [top/bottom, left/right] but we need total padding
 pad_w = padding[1] * 2
@@ -105,11 +115,21 @@ kernel_w = kernel_size[1]
 stride_h = stride[0]
 stride_w = stride[1]
 
-output_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-output_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+if ceil_mode:
+    out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
+    out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+    if ((out_h - 1) * stride_h) >= (in_h + padding[0]):
+        ceil_mode_out_shape_adj = True
+        out_h -= 1
+    if ((out_w - 1) * stride_w) >= (in_w + padding[1]):
+        ceil_mode_out_shape_adj = True
+        out_w -= 1
+else:
+    out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
+    out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
 
-ttnn_output_reshaped = ttnn_output_torch.reshape(in_n, output_h, output_w, in_c)
-ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, output_h, output_w, in_c)
+ttnn_output_reshaped = ttnn_output_torch.reshape(in_n, out_h, out_w, in_c)
+ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
 
 output_match = torch.allclose(torch_output_reshaped, ttnn_output_reshaped)
 indices_match = torch.allclose(torch_indices_reshaped.float(), ttnn_indices_reshaped.float())
