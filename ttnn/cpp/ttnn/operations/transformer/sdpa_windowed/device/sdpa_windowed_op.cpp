@@ -4,6 +4,7 @@
 
 #include "sdpa_windowed_op.hpp"
 #include <sys/types.h>
+#include <enchantum/enchantum.hpp>
 
 #include "sdpa_windowed_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
@@ -193,7 +194,7 @@ operation::OpPerformanceModel WindowedScaledDotProductAttention::create_op_perfo
                     ? output_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
-        log_warning(tt::LogOp, "Windowed SDPA perf model does not support tt::arch '{}'", magic_enum::enum_name(arch));
+        log_warning(tt::LogOp, "Windowed SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);
     }
 
