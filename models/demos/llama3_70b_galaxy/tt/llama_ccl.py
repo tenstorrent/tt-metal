@@ -634,8 +634,6 @@ class TT_CCL:
             else:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
 
-            breakpoint()
-
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 persistent_buffer,
@@ -652,8 +650,6 @@ class TT_CCL:
                 use_noc1_only=use_noc1_only,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
             )
-
-            breakpoint()
 
             if lm_head:
                 persistent_buffer.deallocate(True)

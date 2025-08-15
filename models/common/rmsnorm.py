@@ -130,6 +130,8 @@ class RMSNorm(LightweightModule):
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
 
+        breakpoint()
+
         x = norm(
             x,
             epsilon=self.eps,

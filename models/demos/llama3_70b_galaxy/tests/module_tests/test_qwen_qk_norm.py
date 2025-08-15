@@ -159,15 +159,28 @@ def test_qwen3_tg_qk_norm(
     state_dict = {"q_norm.weight": q_norm_weights, "k_norm.weight": k_norm_weights}
 
     norm_mem_cfg = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             ttnn.CoreRangeSet(
                 [
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 7), ttnn.CoreCoord(2, 7))
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 6))
                 ]  # This captures the fact that we are using 1 core (height sharded)
             ),
-            [32, 128],
+            [32, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    norm_program_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 6))
+                ]  # This captures the fact that we are using 1 core (height sharded)
+            ),
+            [32, 32],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -180,6 +193,7 @@ def test_qwen3_tg_qk_norm(
         weight_dtype=ttnn.bfloat16,
         weight_key="q_norm",
         weight_memory_config=norm_mem_cfg,
+        sharded_program_config=norm_program_cfg,
     )
     k_norm = RMSNorm(
         device=mesh_device,
@@ -189,6 +203,7 @@ def test_qwen3_tg_qk_norm(
         weight_dtype=ttnn.bfloat16,
         weight_key="k_norm",
         weight_memory_config=norm_mem_cfg,
+        sharded_program_config=norm_program_cfg,
     )
 
     rm_mem_cfg_qkv = q_heads_pre_rot_1BQD.memory_config()
