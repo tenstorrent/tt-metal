@@ -84,4 +84,19 @@ std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> MPISoc
     return mesh_socket_.get_config().distributed_context;
 }
 
+std::unique_ptr<MPISocket> MPISocket::create(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    tt::tt_metal::distributed::multihost::Rank rank,
+    tt::tt_metal::distributed::SocketConfig socket_config) {
+    if (socket_config.distributed_context->rank() < rank) {
+        socket_config.sender_rank = socket_config.distributed_context->rank();
+        socket_config.receiver_rank = rank;
+    } else {
+        socket_config.sender_rank = rank;
+        socket_config.receiver_rank = socket_config.distributed_context->rank();
+    }
+    auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
+    return std::make_unique<MPISocket>(mesh_socket);
+}
+
 }  // namespace ttnn::distributed

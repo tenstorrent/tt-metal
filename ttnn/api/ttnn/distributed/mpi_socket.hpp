@@ -19,6 +19,11 @@ public:
     tt::tt_metal::distributed::multihost::Rank get_rank() const override;
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context() const override;
 
+    static std::unique_ptr<MPISocket> create(
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+        tt::tt_metal::distributed::multihost::Rank rank,
+        tt::tt_metal::distributed::SocketConfig socket_config);
+
 private:
     tt::tt_metal::distributed::MeshSocket mesh_socket_;
 };

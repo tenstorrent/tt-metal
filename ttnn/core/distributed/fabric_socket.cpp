@@ -54,4 +54,15 @@ std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> Fabric
     return mesh_socket_.get_config().distributed_context;
 }
 
+std::unique_ptr<FabricSocket> FabricSocket::create(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    tt::tt_metal::distributed::multihost::Rank sender_rank,
+    tt::tt_metal::distributed::multihost::Rank receiver_rank,
+    tt::tt_metal::distributed::SocketConfig socket_config) {
+    socket_config.sender_rank = sender_rank;
+    socket_config.receiver_rank = receiver_rank;
+    auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
+    return std::make_unique<FabricSocket>(mesh_socket);
+}
+
 }  // namespace ttnn::distributed

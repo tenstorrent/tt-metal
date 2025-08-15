@@ -33,4 +33,31 @@ BidirectionalFabricSocket::get_distributed_context() const {
     return send_socket_.get_config().distributed_context;
 }
 
+std::unique_ptr<BidirectionalFabricSocket> BidirectionalFabricSocket::create(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    tt::tt_metal::distributed::multihost::Rank rank,
+    tt::tt_metal::distributed::SocketConfig socket_config) {
+    auto sender_socket_config = socket_config;
+    sender_socket_config.sender_rank = socket_config.distributed_context->rank();
+    sender_socket_config.receiver_rank = rank;
+
+    auto recv_socket_config = socket_config;
+    recv_socket_config.sender_rank = rank;
+    recv_socket_config.receiver_rank = socket_config.distributed_context->rank();
+
+    if (sender_socket_config.sender_rank == sender_socket_config.receiver_rank) {
+        throw std::runtime_error("Sender and receiver ranks cannot be the same for bidirectional socket.");
+    }
+
+    // this ensures that sockets can perform handshake in correct order
+    if (sender_socket_config.sender_rank < recv_socket_config.sender_rank) {
+        auto send_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, sender_socket_config);
+        auto recv_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, recv_socket_config);
+        return std::make_unique<BidirectionalFabricSocket>(send_socket, recv_socket);
+    }
+    auto recv_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, recv_socket_config);
+    auto send_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, sender_socket_config);
+    return std::make_unique<BidirectionalFabricSocket>(send_socket, recv_socket);
+}
+
 }  // namespace ttnn::distributed
