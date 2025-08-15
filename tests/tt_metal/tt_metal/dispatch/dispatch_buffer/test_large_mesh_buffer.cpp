@@ -47,29 +47,34 @@ namespace {
 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
+using ElementType = uint64_t;
+constexpr uint32_t ElementSize = sizeof(ElementType);
 
-class ReplicatedMeshBufferTestSuite : public MeshBufferTestSuite,
-                                      public testing::WithParamInterface<std::tuple<uint64_t, uint32_t>> {
+class LargeMeshBufferTestSuiteBase : public MeshBufferTestSuite {
 protected:
-    static constexpr uint64_t max_num_elements_ = 4ull << 30;  // 8GB
-    inline static std::vector<uint16_t> src_vec_;
+    static constexpr uint64_t max_num_elements_ = (8ull << 30) / ElementSize;  // 8GB
+    // A large datatype is used to reduce random shuffle time
+    inline static std::vector<ElementType> src_vec_;
 
-    ReplicatedMeshBufferTestSuite() {
+    LargeMeshBufferTestSuiteBase() {
         if (src_vec_.empty()) {
-            std::cout << "ReplicatedMeshBufferTestSuite ctor: initializing src_vec_" << std::endl;
+            log_info(tt::LogTest, "LargeMeshBufferTestSuiteBase ctor: initializing src_vec_");
             src_vec_.resize(max_num_elements_);
             std::iota(src_vec_.begin(), src_vec_.end(), 0);
-            // std::shuffle(src_vec_.begin(), src_vec_.end(), std::mt19937(std::random_device{}()));
+            std::shuffle(src_vec_.begin(), src_vec_.end(), std::mt19937(std::random_device{}()));
         }
     }
 };
+
+class ReplicatedMeshBufferTestSuite : public LargeMeshBufferTestSuiteBase,
+                                      public testing::WithParamInterface<std::tuple<uint64_t, uint32_t>> {};
 
 TEST_P(ReplicatedMeshBufferTestSuite, DRAMReadback) {
     // - REPLICATED layout for writing, SHARDED with ROW_MAJOR for reading
     // - DRAM, bottom up allocation
     auto [tensor_size, page_size] = GetParam();
     // auto num_devices = mesh_device_->num_devices();
-    tensor_size = tensor_size * sizeof(uint16_t);
+    tensor_size = tensor_size * ElementSize;
 
     const DeviceLocalBufferConfig device_local_config{
         .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
@@ -79,7 +84,7 @@ TEST_P(ReplicatedMeshBufferTestSuite, DRAMReadback) {
     // uint32_t length_adjust = ((std::random_device{}() % page_size) & ~(dram_alignment - 1)) &
     // CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK;
     // tensor_size -= length_adjust;
-    std::cout << "page_size: " << page_size << " tensor_size/device (MB): " << tensor_size / (1 << 20) << std::endl;
+    log_info(tt::LogTest, "page_size: {}, tensor_size/device (MB): {}", page_size, tensor_size / (1 << 20));
 
     const ReplicatedBufferConfig buffer_config{.size = tensor_size};
 
@@ -93,9 +98,9 @@ TEST_P(ReplicatedMeshBufferTestSuite, DRAMReadback) {
     EXPECT_TRUE(mesh_buffer->is_allocated());
 
     // Create test data - use uint16_t for easy verification
-    auto num_elements = tensor_size / sizeof(uint16_t);
+    auto num_elements = tensor_size / ElementSize;
     assert(num_elements <= max_num_elements_);
-    std::vector<uint16_t> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
+    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
     std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
@@ -103,10 +108,10 @@ TEST_P(ReplicatedMeshBufferTestSuite, DRAMReadback) {
         input_shards.push_back({coord, src_vec.data()});
     }
 
-    std::unordered_map<distributed::MeshCoordinate, std::vector<uint16_t>> dst_vec = {};
+    std::unordered_map<distributed::MeshCoordinate, std::vector<ElementType>> dst_vec = {};
     std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
     for (auto& coord : coord_range) {
-        dst_vec[coord] = std::vector<uint16_t>(num_elements, 0);
+        dst_vec[coord] = std::vector<ElementType>(num_elements, 0);
         output_shards.push_back({coord, dst_vec[coord].data()});
     }
 
@@ -122,26 +127,14 @@ INSTANTIATE_TEST_SUITE_P(
     LargeReplicatedReadback,
     ReplicatedMeshBufferTestSuite,
     ::testing::Combine(
-        ::testing::Values(2ull << 30, 4ull << 30),        // tensor sizes
-        ::testing::Values(1024, 2048, 16 << 10, 1 << 20)  // page sizes
+        ::testing::Values(
+            (2ull << 30) / ElementSize, (4ull << 30) / ElementSize, (8ull << 30) / ElementSize),  // tensor sizes
+        ::testing::Values(1024, 2048, 16 << 10, 1 << 20)                                          // page sizes
         ));
 
 class ShardedMeshBufferTestSuite
-    : public MeshBufferTestSuite,
-      public testing::WithParamInterface<std::tuple<Shape2D, uint32_t, TensorMemoryLayout>> {
-protected:
-    static constexpr uint64_t max_num_elements_ = 4ull << 30;  // 8GB
-    inline static std::vector<uint16_t> src_vec_;
-
-    ShardedMeshBufferTestSuite() {
-        if (src_vec_.empty()) {
-            std::cout << "ShardedMeshBufferTestSuite ctor: initializing src_vec_" << std::endl;
-            src_vec_.resize(max_num_elements_);
-            std::iota(src_vec_.begin(), src_vec_.end(), 0);
-            // std::shuffle(src_vec_.begin(), src_vec_.end(), std::mt19937(std::random_device{}()));
-        }
-    }
-};
+    : public LargeMeshBufferTestSuiteBase,
+      public testing::WithParamInterface<std::tuple<Shape2D, uint32_t, TensorMemoryLayout>> {};
 
 TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
     auto [shard_shape, page_size, tensor_layout] = GetParam();
@@ -152,7 +145,7 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
         shard_shape,
         page_size,
         tensor_layout,
-        shard_shape.height() * shard_shape.width() * sizeof(uint16_t) / (1 << 20));
+        shard_shape.height() * shard_shape.width() * ElementSize / (1 << 20));
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
@@ -171,7 +164,7 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
 
     // Configure so that every device loads the specified buffer size
     Shape2D tensor_shape = {shard_shape.height() * rows, shard_shape.width() * cols};
-    uint64_t tensor_size = num_devices * shard_shape.height() * shard_shape.width() * sizeof(uint16_t);
+    uint64_t tensor_size = num_devices * shard_shape.height() * shard_shape.width() * ElementSize;
     ShardedBufferConfig sharded_config{
         .global_size = tensor_size,
         .global_buffer_shape = tensor_shape,
@@ -180,18 +173,18 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
     };
     auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device_.get());
 
-    auto num_elements = tensor_size / num_devices / sizeof(uint16_t);
+    auto num_elements = tensor_size / num_devices / ElementSize;
     assert(num_elements <= max_num_elements_);
-    std::vector<uint16_t> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
+    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
     std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
     for (auto& coord : coord_range) {
         input_shards.push_back({coord, src_vec.data()});
     }
 
-    std::unordered_map<distributed::MeshCoordinate, std::vector<uint16_t>> dst_vec = {};
+    std::unordered_map<distributed::MeshCoordinate, std::vector<ElementType>> dst_vec = {};
     std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
     for (auto& coord : coord_range) {
-        dst_vec[coord] = std::vector<uint16_t>(tensor_size / num_devices / sizeof(uint16_t), 0);
+        dst_vec[coord] = std::vector<ElementType>(tensor_size / num_devices / ElementSize, 0);
         output_shards.push_back({coord, dst_vec[coord].data()});
     }
 
@@ -209,9 +202,9 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         // shard_shape, page_size, tensor_layout
         ::testing::Values(
-            Shape2D(1 << 15, 1 << 15),                     // 2 GB with Uint16
-            Shape2D(1 << 15, 1 << 16),                     // 4 GB with Uint16
-            Shape2D(1 << 16, 1 << 16)),                    // 8 GB with Uint16
+            Shape2D((1 << 14), (1 << 14)),                 // 2 GB with uint64_t
+            Shape2D((1 << 14), (1 << 15)),                 // 4 GB with uint64_t
+            Shape2D((1 << 15), (1 << 15))),                // 8 GB with uint64_t
         ::testing::Values(1024, 2048, 16 << 10, 1 << 20),  // page size
         ::testing::Values(TensorMemoryLayout::BLOCK_SHARDED)));
 
