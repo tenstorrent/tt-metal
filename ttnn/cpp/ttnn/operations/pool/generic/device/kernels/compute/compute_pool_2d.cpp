@@ -135,8 +135,9 @@ void MAIN {
                     }
                     tile_regs_commit();
                 } else {
-                    tensix_sync();  // make sure tensix is idle
-                    unary_op_init_common(in_cb_id_0, tile_tmp_cb_id);
+                    tensix_sync();  // make sure tensix is idle for init
+                    unary_op_init_common(curr_in_cb_id, tile_tmp_cb_id);
+                    tensix_sync();  // make sure tensix is idle for init
 
                     // if (n == 0) {
                     //     UNPACK(DPRINT << "IN CB " << ENDL());
@@ -210,8 +211,9 @@ void MAIN {
                     cb_push_back(out_cb_id, max_tiles_per_iter);
                 }
             } else {
-                tensix_sync();  // make sure tensix is idle
+                tensix_sync();  // make sure tensix is idle for init
                 pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
+                tensix_sync();  // make sure tensix is idle for init
 
                 pack_untilize_dest<topk_output_tiles>(
                     out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, data_dst_idx);

@@ -136,8 +136,8 @@ FactoryParameters get_factory_parameters(
     uint32_t kernel_w,
     Pool2DType pool_type,
     bool return_indices) {
-    uint32_t multi_buffering_factor = 1;
-    bool split_reader = false;
+    uint32_t multi_buffering_factor = 2;
+    bool split_reader = true;
 
     const auto& input_shape = input.padded_shape();
 
