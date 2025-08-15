@@ -8,7 +8,6 @@
 #include <kernel.hpp>
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
-#include <enchantum/iostream.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -29,11 +28,6 @@ using namespace tt::tt_metal;
 
 using tt::tt_metal::detail::ProgramImpl;
 namespace {
-
-std::ostream& operator<<(std::ostream& os, const HalProcessorIdentifier& id) {
-    using enchantum::iostream_operators::operator<<;
-    return os << std::get<0>(id) << "_" << std::get<1>(id) << "_" << std::get<2>(id);
-}
 
 // Class to track stats for DispatchData
 class DispatchStats {

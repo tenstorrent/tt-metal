@@ -9,13 +9,14 @@
 // level APIs
 //
 
+#include <cstddef>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <tuple>
+#include <ostream>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -33,8 +34,17 @@ enum class ARCH;
 
 namespace tt_metal {
 
-// Tuple of core type, processor class, and processor type to unique identify any processor.
-using HalProcessorIdentifier = std::tuple<HalProgrammableCoreType, HalProcessorClassType, int>;
+// Struct of core type, processor class, and processor type to uniquely identify any processor.
+struct HalProcessorIdentifier {
+    HalProgrammableCoreType core_type;
+    HalProcessorClassType processor_class;
+    int processor_type;
+};
+
+std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
+bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
 static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
 
@@ -500,6 +510,11 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
 
 }  // namespace tt_metal
 }  // namespace tt
+
+template <>
+struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
+    std::size_t operator()(const tt::tt_metal::HalProcessorIdentifier&) const;
+};
 
 #define HAL_MEM_L1_BASE                                          \
     ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
