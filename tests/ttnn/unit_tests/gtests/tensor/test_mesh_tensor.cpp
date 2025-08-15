@@ -192,7 +192,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
 
-    Tensor device_tensor = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
+    Tensor device_tensor = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get());
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
@@ -229,8 +229,8 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
 
-    Tensor device_tensor1 = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
-    Tensor device_tensor2 = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
+    Tensor device_tensor1 = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor2 = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get());
 
     auto device_tensors1 = get_device_tensors(device_tensor1);
     auto device_tensors2 = get_device_tensors(device_tensor2);
@@ -317,7 +317,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             write_tensor(input_host_tensor_sharded, device_tensor, /*blocking=*/false);
             return device_tensor;
         } else {
-            return tensor_impl::to_device_wrapper(input_host_tensor_sharded, mesh_device_.get(), MemoryConfig{});
+            return tensor_impl::to_device_wrapper(input_host_tensor_sharded, mesh_device_.get());
         }
     }();
 
