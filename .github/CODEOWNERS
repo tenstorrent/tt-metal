@@ -10,6 +10,8 @@ METALIUM_GUIDE.md @davorchap
 .github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 .github/workflows/tg-deepseek-tests.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
 .github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
+.github/workflows/vllm-nightly-tests.yaml @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra
+.github/workflows/vllm-nightly-tests-impl.yaml @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra
 
 /infra/ @tenstorrent/metalium-developers-infra
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra
