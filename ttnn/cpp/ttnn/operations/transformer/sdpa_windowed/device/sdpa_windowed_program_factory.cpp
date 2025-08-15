@@ -316,7 +316,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
         scale_union.u,
     };
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
