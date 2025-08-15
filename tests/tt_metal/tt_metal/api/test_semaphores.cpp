@@ -107,9 +107,7 @@ void create_and_read_max_num_semaphores(
         ASSERT_TRUE(semaphore_id == i);
     }
 
-    tt_metal::detail::CompileProgram(device, program);
-    program.finalize_offsets(device);
-    ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -154,9 +152,7 @@ TEST_F(MeshDeviceFixture, TensixInitializeLegalSemaphores) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
         CoreRange core_range({0, 0}, {1, 1});
-        unit_tests::initialize_semaphores::initialize_program(devices_.at(id), workload, core_range);
         unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(devices_.at(id), workload, core_range);
     }
 }
@@ -170,7 +166,6 @@ TEST_F(MeshDeviceFixture, TensixInitializeIllegalSemaphores) {
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         auto& program_ = workload.get_programs().at(device_range);
         CoreRange core_range({0, 0}, {1, 1});
-        unit_tests::initialize_semaphores::initialize_program(devices_.at(id), workload, core_range);
         unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
             devices_.at(id), workload, core_range);
     }

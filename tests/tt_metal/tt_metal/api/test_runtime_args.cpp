@@ -601,13 +601,12 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
         auto [workload, kernels] = unit_tests::runtime_args::initialize_program_compute_multi_range_sets(
             mesh_device, {core_range_set_0, core_range_set_1}, 0, common_rtas.size());
         auto& program = workload.get_programs().at(device_range);
-
         for (const auto& kernel : kernels) {
             SetCommonRuntimeArgs(program, kernel, common_rtas);
         }
-
+        std::cout << "error he 4" << std::endl;
         distributed::EnqueueMeshWorkload(cq, workload, false);
-
+        std::cout << "error here 5" << std::endl;
         unit_tests::runtime_args::verify_results(true, mesh_device, workload, {}, common_rtas);
     }
 }
