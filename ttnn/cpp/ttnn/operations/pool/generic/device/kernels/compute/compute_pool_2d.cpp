@@ -157,7 +157,7 @@ void MAIN {
                     // pack_reconfig_data_format(tile_idx_tmp_cb_id);
                     tilize_block(
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt(curr_in_idx_cb_id, curr_in_cb_id, tile_tmp_cb_id);
+                    tilize_uninit(curr_in_idx_cb_id, tile_idx_tmp_cb_id);
 
                     cb_reserve_back(tile_idx_tmp_cb_id, topk_output_tiles);
                     cb_push_back(tile_idx_tmp_cb_id, topk_output_tiles);
@@ -169,12 +169,10 @@ void MAIN {
                     //      PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id, 0));
                     //  }
 
-                    reconfig_data_format_srca(tile_tmp_cb_id);
-                    copy_tile_to_dst_init_short(tile_tmp_cb_id);
+                    copy_tile_init(tile_tmp_cb_id);
                     copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
 
-                    reconfig_data_format_srca(tile_idx_tmp_cb_id);
-                    copy_tile_to_dst_init_short(tile_idx_tmp_cb_id);
+                    copy_tile_to_dst_init_short_with_dt(tile_tmp_cb_id, tile_idx_tmp_cb_id);
                     copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
 
                     // dprint_tensix_dest_reg(0);
