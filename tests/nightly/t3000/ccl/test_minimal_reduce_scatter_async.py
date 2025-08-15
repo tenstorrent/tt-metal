@@ -246,6 +246,7 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
         # Tests for training shapes
         (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
         (8, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
@@ -324,6 +325,9 @@ def test_reduce_scatter_async(
 ):
     if is_training_shape and not use_barrier:
         pytest.skip(f"Barrier semaphore required for training shapes that invoke composite RS")
+
+    if rs_input_dtype == ttnn.bfloat8_b and enable_trace:
+        pytest.skip("bfloat8_b invokes composite RS where we've seen ND pcc when running with trace with bfloat8_b")
 
     run_reduce_scatter_impl(
         t3k_mesh_device,
