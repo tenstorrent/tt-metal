@@ -83,7 +83,7 @@ def run_with_trace(
     # Compile Run
     logger.info("Compiling model")
     pytest.skip(LEGACY_SKIP)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # tt_out_tensor = ttnn.all_gather(
     #     input_tensor_mesh,
     #     dim,
@@ -100,7 +100,7 @@ def run_with_trace(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
         pytest.skip(LEGACY_SKIP)
-        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
         # tt_out_tensor = ttnn.all_gather(
         #     input_tensor_mesh,
         #     dim,
@@ -167,7 +167,7 @@ def run_all_gather_impl(
     else:
         for i in range(num_iters):
             pytest.skip(LEGACY_SKIP)
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             # tt_out_tensor = ttnn.all_gather(
             #     input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
             # )
@@ -1177,7 +1177,7 @@ def run_all_gather_sharded(
         ## Run the actual allgather operation
         for i in range(num_iter):
             pytest.skip(LEGACY_SKIP)
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             # tt_out_tensor = ttnn.all_gather(
             #     input_tensor_mesh,
             #     dim,
@@ -1847,7 +1847,7 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
         ),
     )
     pytest.skip(LEGACY_SKIP)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):

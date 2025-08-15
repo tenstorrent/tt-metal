@@ -223,7 +223,7 @@ class TtLlamaMLP_optimized:
         #     num_links=1,
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         hidden_states_mm.deallocate(True)
 
@@ -273,6 +273,6 @@ class TtLlamaMLP_optimized:
         #     num_links=1,
         #     memory_config=self.model_config["RESIDUAL_16_CORES_OUTPUT_MEMCFG"],
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
         hidden_states.deallocate(True)
         return hidden_states_reduced

@@ -92,8 +92,8 @@ def sharded_impl(
     else:
         ## Alternate between barrier and all gather in a loop
         for i in range(num_iter):
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-            assert False, "Legacy CCL call removed"
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+            assert False, "Legacy ccl call removed until new implementation is done"
             # tt_out_tensor = ttnn.all_gather(
             #     input_tensor_mesh,
             #     dim,
@@ -158,8 +158,8 @@ def run_with_trace(
     pytest.skip(LEGACY_SKIP)
     # Compile Run
     logger.info("Compiling model")
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-    assert False, "Legacy CCL call removed"
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy ccl call removed until new implementation is done"
     # tt_out_tensor = ttnn.all_gather(
     #     input_tensor_mesh,
     #     dim,
@@ -180,8 +180,8 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(num_iter):
-        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-        assert False, "Legacy CCL call removed"
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        assert False, "Legacy ccl call removed until new implementation is done"
         # Alternate between barrier and all gather in a loop
         # tt_out_tensor = ttnn.all_gather(
         #     input_tensor_mesh,

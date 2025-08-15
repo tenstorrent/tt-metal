@@ -130,7 +130,7 @@ class TtMoeLayer(LightweightModule):
 
         # all gather
         # output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
         # sum on each device
         output_11BH_gathered = ttnn.matmul(self.reduce_mask, output_11BH_gathered)
         return output_11BH_gathered

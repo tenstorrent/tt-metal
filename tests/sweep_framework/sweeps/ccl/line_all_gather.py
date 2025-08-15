@@ -104,7 +104,7 @@ def run(
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
     for i in range(num_iters):
-        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
         return [("skipped", LEGACY_SKIP), None]
         # start_time = start_measuring_time()
         # tt_out_tensor = ttnn.all_gather(

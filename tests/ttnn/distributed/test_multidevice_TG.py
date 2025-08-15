@@ -1212,7 +1212,7 @@ def test_device_line_all_gather_1x4(mesh_device):
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1, topology=ttnn.Topology.Linear)
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
@@ -1232,7 +1232,7 @@ def test_device_line_all_gather_8x1(mesh_device):
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # ttnn_tensor = ttnn.all_gather(
     #     ttnn_tensor, dim=2, cluster_axis=0, mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear
     # )
@@ -1276,7 +1276,7 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # ttnn_tensor = ttnn.all_gather(
     #     ttnn_tensor,
     #     dim=dim,
@@ -1425,7 +1425,7 @@ def test_line_all_gather_column_major(mesh_device):
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # ttnn_tensor = ttnn.all_gather(
     #     ttnn_tensor, dim=3, cluster_axis=0, mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear
     # )
@@ -1464,7 +1464,7 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # ttnn_tensor = ttnn.all_gather(
     #     ttnn_tensor,
     #     dim=dim,
@@ -1558,7 +1558,7 @@ def test_sharded_distributed_layernorm(mesh_device, input_width, input_height, c
         strategy=ttnn.ShardStrategy.WIDTH,
     )
 
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # tt_stats = ttnn.all_gather(
     #     tt_stats,
     #     3,

@@ -187,7 +187,7 @@ class TtLlamaDecoder_optimized:
         #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         #     memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # In-place RMSNorm
         attn_norm_replicated = ttnn.rms_norm(
@@ -227,7 +227,7 @@ class TtLlamaDecoder_optimized:
         #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         #     memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # In-place RMSNorm
         ffn_norm_replicated = ttnn.rms_norm(
@@ -265,7 +265,7 @@ class TtLlamaDecoder_optimized:
         #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
@@ -298,7 +298,7 @@ class TtLlamaDecoder_optimized:
         #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # attn_outs is fractured
         attn_outs = self.attention(
@@ -327,7 +327,7 @@ class TtLlamaDecoder_optimized:
         #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         ffn_out = self.mlp(ffn_norm_interleaved, mode="prefill")
 

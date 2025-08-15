@@ -27,7 +27,7 @@ class TtFalconMLP:
         ff1_linear: ttnn.Tensor = ttnn.linear(x, self.dense_h_to_4h_weights)
         gelu = ttnn.gelu(ff1_linear)
 
-        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
         # Effectively invokes CCL Line All Gather for every row of the mesh
         # gelu = ttnn.all_gather(
         #     gelu,

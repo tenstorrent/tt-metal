@@ -309,7 +309,7 @@ class TtGrokAttention(LightweightModule):
         ###
         # All gather
         # dense_outputs_11BH_gathered = ttnn.all_gather(attn_output_11BH, dim=3, num_links=1)
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # return the sum of the outputs
         dense_outputs_11BH = ttnn.matmul(

@@ -219,8 +219,8 @@ def test_ttnn_multi_device_all_gather(pcie_mesh_device):
 
     ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(pcie_mesh_device, dim=3))
     ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_mesh_device)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-    assert False, "Legacy CCL call removed"
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy ccl call removed until new implementation is done"
     # ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
@@ -503,8 +503,8 @@ def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
 
     ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=3))
     ttnn_tensor = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-    assert False, "Legacy CCL call removed"
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy ccl call removed until new implementation is done"
     # ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
@@ -686,8 +686,8 @@ def test_all_gather_multiple_submeshes(mesh_device):
 
         ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(submesh, dim=3))
         ttnn_tensor = ttnn.to_device(ttnn_tensor, submesh)
-        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-        assert False, "Legacy CCL call removed"
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        assert False, "Legacy ccl call removed until new implementation is done"
         # ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
 
         for device_tensor in ttnn.get_device_tensors(ttnn_tensor):
@@ -714,8 +714,8 @@ def test_line_all_gather_after_reshape(mesh_device):
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=list(mesh_device.shape), dims=(2, 3)),
     )
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-    assert False, "Legacy CCL call removed"
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy ccl call removed until new implementation is done"
     # output_tensor = ttnn.all_gather(
     #     mesh_tensor,
     #     dim=2,

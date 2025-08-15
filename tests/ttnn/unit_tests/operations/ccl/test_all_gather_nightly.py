@@ -183,12 +183,12 @@ def run_line_all_gather_instances(
     for loop in range(num_iters):
         for i, devices in enumerate(t3000_device_rows):
             pytest.skip(LEGACY_SKIP)
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             # tt_out_tensor = ttnn.all_gather(
             #     input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
             # )
             # result_mesh_tensors.append(tt_out_tensor)
-            assert False, "Legacy CCL call removed"
+            assert False, "Legacy ccl call removed until new implementation is done"
     for loop in range(num_iters):
         ## Wait for completion
         ttnn.synchronize_device(t3k_mesh_device)

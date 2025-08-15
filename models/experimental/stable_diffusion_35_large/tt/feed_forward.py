@@ -67,6 +67,6 @@ class TtFeedForward:
             #     memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
             #     topology=ttnn.Topology.Ring,
             # )
-            assert False, "Legacy CCL call removed"
+            assert False, "Legacy ccl call removed until new implementation is done"
 
         return result
