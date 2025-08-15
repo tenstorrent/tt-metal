@@ -54,3 +54,17 @@ endif()
 # Build Tracy tools (csvexport and capture) using CMake
 add_subdirectory(${TRACY_HOME}/csvexport)
 add_subdirectory(${TRACY_HOME}/capture)
+
+# Build Tracy profiler WASM project using Emscripten
+add_custom_target(
+    tracy_profiler_wasm
+    ALL
+    COMMAND
+        ${CMAKE_COMMAND} -E echo "Building Tracy profiler WASM..."
+    COMMAND
+        emcmake cmake -DEMSCRIPTEN=ON -B ${CMAKE_BINARY_DIR}/profiler/build_wasm -S ${TRACY_HOME}/profiler
+    COMMAND
+        cmake --build ${CMAKE_BINARY_DIR}/profiler/build_wasm
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Building Tracy profiler WASM with Emscripten"
+)
