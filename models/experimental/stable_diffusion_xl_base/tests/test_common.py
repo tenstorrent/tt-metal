@@ -162,34 +162,16 @@ def run_tt_image_gen(
             #     topology=ttnn.Topology.Linear,
             # )
             # noise_pred = ttnn.to_layout(noise_pred, ttnn.TILE_LAYOUT)
-            # noise_pred = noise_pred[..., :4]
+            # works with this
 
+            # \/ hangs with these changes
             compute_grid_size = ttnn_device.compute_with_storage_grid_size()
             ccl_sub_device_crs = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
             )
             semaphore = ttnn.create_global_semaphore(ttnn_device, ccl_sub_device_crs, 0)
-            print(f"C: {C}, H: {H}, W: {W}, noise_pred shape: {noise_pred.shape}")
-            print(f"noise_pred memory config: {noise_pred.memory_config()}")
-            # persistent_output_buffer = ttnn.from_torch(
-            #     torch.zeros(2, 1, 16384, 32),
-            #     device=ttnn_device,
-            #     layout=ttnn.TILE_LAYOUT,
-            #     dtype=noise_pred.dtype,
-            #     mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device)
-            # )
-            mem_config = ttnn.create_sharded_memory_config(
-                shape=(2, 1, 16384, 32),
-                core_grid=ttnn.CoreGrid(y=8, x=8),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            # persistent_output_buffer = ttnn.to_memory_config(persistent_output_buffer, mem_config)
-            print(f"before all gather")
-            print(f"noise_pred: {noise_pred}")
             noise_pred = ttnn.experimental.all_gather_async(
                 noise_pred,
-                # persistent_output_buffer=persistent_output_buffer,
                 dim=0,
                 multi_device_global_semaphore=semaphore,
                 num_links=1,
@@ -199,21 +181,12 @@ def run_tt_image_gen(
                 topology=ttnn.Topology.Linear,
                 subdevice_id=ttnn.SubDeviceId(0),
             )
-            print(f"noise_pred: {noise_pred}")
-            print(f"after all gather")
+            noise_pred = noise_pred[..., :4]
             noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
         else:
             noise_pred_uncond, noise_pred_text = unet_outputs
         # perform guidance
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-        print(f"after guidance")
-        print(f"noise_pred: {noise_pred}")
-        print(f"noise_pred shape: {noise_pred.shape}")
-        noise_pred = noise_pred[..., :4]
-        print(f"after slicing")
-        print(f"noise_pred: {noise_pred}")
-        print(f"noise_pred shape: {noise_pred.shape}")
 
         ttnn.deallocate(noise_pred_uncond)
         ttnn.deallocate(noise_pred_text)
