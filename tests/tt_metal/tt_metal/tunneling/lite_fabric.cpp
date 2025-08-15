@@ -139,7 +139,6 @@ BEGIN_MAIN_FUNCTION() {
         RECEIVER_NUM_BUFFERS_ARRAY[0],
         NUM_TRANSACTION_IDS,
         0,
-        lite_fabric::local_chip_noc_equals_downstream_noc,
         lite_fabric::edm_to_local_chip_noc,
         lite_fabric::edm_to_downstream_noc>
         receiver_channel_0_trid_tracker;
