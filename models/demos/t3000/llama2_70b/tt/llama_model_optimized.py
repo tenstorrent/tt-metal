@@ -388,7 +388,7 @@ class TtLlamaModel_optimized:
         #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         #     memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # In-place RMSNorm
         norm_out_replicated = ttnn.rms_norm(
@@ -430,7 +430,7 @@ class TtLlamaModel_optimized:
         #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
@@ -479,7 +479,7 @@ class TtLlamaModel_optimized:
         #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # Deallocate original input to rmsnorm
         xs.deallocate(True)

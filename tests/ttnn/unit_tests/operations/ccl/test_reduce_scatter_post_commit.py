@@ -42,7 +42,7 @@ def run_with_trace(
     # Compile Run
     logger.info("Compiling model")
     pytest.skip(LEGACY_SKIP)
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     # output_tensor_mesh = ttnn.reduce_scatter(
     #     input_tensor_mesh,
     #     dim=dim,
@@ -60,7 +60,7 @@ def run_with_trace(
     trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
     for i in range(num_iters):
         pytest.skip(LEGACY_SKIP)
-        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
         # output_tensor_mesh = ttnn.reduce_scatter(
         #     input_tensor_mesh,
         #     dim=dim,
@@ -145,7 +145,7 @@ def run_reduce_scatter_test(
     else:
         for i in range(num_iters):
             pytest.skip(LEGACY_SKIP)
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             # output_tensor_mesh = ttnn.reduce_scatter(
             #     input_tensor_mesh,
             #     dim=dim,
@@ -478,7 +478,7 @@ def run_reduce_scatter_sharded_test(
     else:
         for i in range(num_iters):
             pytest.skip(LEGACY_SKIP)
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             # output_tensor_mesh = ttnn.reduce_scatter(
             #     input_tensor_mesh,
             #     dim=dim,

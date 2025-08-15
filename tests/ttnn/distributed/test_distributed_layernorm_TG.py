@@ -127,7 +127,7 @@ def test_layernorm_perf(mesh_device, num_devices_fractured, input_dim, input_cor
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=ln_prg_cfg)
 
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     pytest.skip(LEGACY_SKIP)
     # All gather stats
     # tt_stats = ttnn.all_gather(

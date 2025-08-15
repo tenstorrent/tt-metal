@@ -35,8 +35,8 @@ def test_multi_device_single_trace(t3k_mesh_device, shape, use_all_gather, enabl
     def run_op_chain(input_0, input_1):
         single_dev_output = ttnn.neg(ttnn.add(ttnn.mul(input_1, ttnn.neg(ttnn.gelu(input_0))), ttnn.relu(input_1)))
         if use_all_gather:
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-            assert False, "Legacy CCL call removed"
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+            assert False, "Legacy ccl call removed until new implementation is done"
             # return ttnn.all_gather(single_dev_output, dim=0, num_links=1)
         return single_dev_output
 
@@ -144,24 +144,24 @@ def test_multi_device_multi_trace(t3k_mesh_device, shape, use_all_gather, enable
             ttnn.add(ttnn.mul(input_1, ttnn.neg(ttnn.gelu(input_0))), ttnn.relu(input_1))
         ) @ ttnn.silu(weight)
         if use_all_gather:
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-            assert False, "Legacy CCL call removed"
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+            assert False, "Legacy ccl call removed until new implementation is done"
             # return ttnn.all_gather(single_dev_output, dim=0, num_links=1)
         return single_dev_output
 
     def run_op_chain_1(input_0, input_1, weight):
         single_dev_output = ttnn.tanh(ttnn.mul(ttnn.sub(input_0, input_1), weight)) @ ttnn.softmax(weight, dim=1)
         if use_all_gather:
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-            assert False, "Legacy CCL call removed"
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+            assert False, "Legacy ccl call removed until new implementation is done"
             # return ttnn.all_gather(single_dev_output, dim=0, num_links=1)
         return single_dev_output
 
     def run_op_chain_2(input_0, input_1, weight):
         single_dev_output = ttnn.neg(ttnn.mul(input_0, input_1)) @ ttnn.gelu(weight)
         if use_all_gather:
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-            assert False, "Legacy CCL call removed"
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+            assert False, "Legacy ccl call removed until new implementation is done"
             # return ttnn.all_gather(single_dev_output, dim=0, num_links=1)
         return single_dev_output
 

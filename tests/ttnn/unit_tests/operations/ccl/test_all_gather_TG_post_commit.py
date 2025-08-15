@@ -86,7 +86,7 @@ def run_with_trace(
             subdevice_id=worker_sub_device_id,
         )
     else:
-        # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
         pytest.skip(LEGACY_SKIP)
         # tt_out_tensor = ttnn.all_gather(
         #     input_tensor,
@@ -124,7 +124,7 @@ def run_with_trace(
                     subdevice_id=worker_sub_device_id,
                 )
             else:
-                # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+                # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
                 pytest.skip(LEGACY_SKIP)
                 # tt_out_tensor = ttnn.all_gather(
                 #     input_tensor,
@@ -325,7 +325,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         subdevice_id=worker_sub_device_id,
                     )
                 else:
-                    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+                    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
                     pytest.skip(LEGACY_SKIP)
                     # ttnn_tensor_out = ttnn.all_gather(
                     #     ttnn_tensor,

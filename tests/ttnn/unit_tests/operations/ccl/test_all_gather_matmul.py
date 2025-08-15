@@ -152,7 +152,7 @@ def run_all_gather_matmul_on_t3000_impl(
     ##### Perform the TT ops #####
     def run_op():
         if USE_NON_FUSED:
-            # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             pytest.skip(LEGACY_SKIP)
             # # all_gather
             # tt_all_gather_out_tensor = ttnn.all_gather(

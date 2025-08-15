@@ -548,7 +548,7 @@ class TtLlamaAttention_optimized:
         #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
-        assert False, "Legacy CCL call removed"
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         _, _, seq_len, _ = attn_output.shape
         max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]

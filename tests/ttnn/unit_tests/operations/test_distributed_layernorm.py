@@ -36,8 +36,8 @@ def tt_distributed_layernorm(inp, gamma, beta, epsilon, is_rmsnorm, compute_kern
     else:
         tt_stats = ttnn.layer_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
 
-    # Legacy call removed - see https://github.com/tenstorrent/tt-metal/issues/26649
-    assert False, "Legacy CCL call removed"
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy ccl call removed until new implementation is done"
     # AllGather stats
     # tt_stats = ttnn.all_gather(tt_stats, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
