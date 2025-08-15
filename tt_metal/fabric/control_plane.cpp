@@ -879,9 +879,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
 
     // When running multi-host workloads, have all hosts in the system exchange their local intermesh link tables
     // with all other hosts in the system. This information is used to assign directions to intermesh links.
-    std::cout << "Calling Exchange Intermesh Link Tables" << std::endl;
     this->exchange_intermesh_link_tables();
-    std::cout << "Done Exchanging Intermesh Link Tables" << std::endl;
 
     const auto& intra_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
@@ -968,7 +966,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                         tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
                     // Look up connected chip's intermesh link table and grab local desc channel
                     // TODO: need to add validate to make sure there is bidrectional traffic
-                    fmt::println("CONTROL PLANE 909: I AM HERE");
                     for (const auto& [local_desc, peer_desc] :
                          peer_intermesh_link_tables_[mesh_id][connected_host_rank_id]) {
                         if (peer_desc.board_id == unique_chip_id) {
@@ -994,7 +991,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
             for (const auto& [_, fabric_chip_id] : local_mesh_chip_id_container) {
                 const auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
                 if (*(distributed_context.size()) > 1) {
-                    fmt::println("Assigning intermesh link directions for M{}D{}", mesh_id, fabric_chip_id);
                     this->assign_intermesh_link_directions_to_remote_host(fabric_node_id);
                 } else {
                     this->assign_intermesh_link_directions_to_local_host(fabric_node_id);
@@ -2020,33 +2016,27 @@ void ControlPlane::exchange_intermesh_link_tables() {
         if (my_rank == bcast_root) {
             // Issue the broadcast from the current process to all other processes in the world
             int local_table_size_bytes = serialized_table.size();  // Send txn size first
-            std::cout << "Broadcast from rank: " << my_rank << " with size: " << local_table_size_bytes << std::endl;
             distributed_context.broadcast(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&local_table_size_bytes), sizeof(local_table_size_bytes)),
                 distributed_context.rank());
-            std::cout << "sending payload" << std::endl;
+
             distributed_context.broadcast(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
                 distributed_context.rank());
-            std::cout << "Done broadcast" << std::endl;
         } else {
             // Acknowledge the broadcast issued by the root
             int remote_table_size_bytes = 0;  // Receive the size of the serialized descriptor
-            std::cout << "Broadcast read from rank: " << bcast_root << " to rank: " << my_rank << std::endl;
             distributed_context.broadcast(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&remote_table_size_bytes), sizeof(remote_table_size_bytes)),
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
-            std::cout << "Remote table size: " << remote_table_size_bytes << std::endl;
             serialized_remote_table.clear();
             serialized_remote_table.resize(remote_table_size_bytes);
-            std::cout << "Read remote table" << std::endl;
             distributed_context.broadcast(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_remote_table.data(), serialized_remote_table.size())),
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
-            std::cout << "Done broadcast read" << std::endl;
             tt_fabric::IntermeshLinkTable deserialized_remote_table =
                 tt::tt_fabric::deserialize_from_bytes(serialized_remote_table);
             peer_intermesh_link_tables_[deserialized_remote_table.local_mesh_id]
@@ -2116,11 +2106,6 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto board_id = chip_id_to_asic_id_.at(physical_chip_id);
     auto intermesh_links = this->get_intermesh_eth_links(physical_chip_id);
-    fmt::println(
-        "INTERMESH LINKS: {} MESH ID {} CHIP_ID {}",
-        intermesh_links.size(),
-        fabric_node_id.mesh_id,
-        fabric_node_id.chip_id);
 
     // Used to track the number of directions that could be assigned to intermesh links on this node
     uint32_t num_directions_assigned = 0;
@@ -2129,10 +2114,6 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
         auto intermesh_routing_direction = RoutingDirection::NONE;
         auto curr_eth_chan_desc = EthChanDescriptor{.board_id = board_id, .chan_id = eth_chan};
         const auto& remote_eth_chan_desc = intermesh_link_table_.intermesh_links.at(curr_eth_chan_desc);
-        fmt::println(
-            "DEBUG: remote_eth_chan_desc {} intermesh connectivity {}",
-            remote_eth_chan_desc,
-            inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id].size());
         for (const auto& [connected_mesh_id, edge] :
              inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
             bool connection_found = false;
@@ -2140,16 +2121,8 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
             auto connected_host_rank_id = this->routing_table_generator_->mesh_graph
                                               ->get_host_rank_for_chip(connected_mesh_id, fabric_node_id.chip_id)
                                               .value();
-            fmt::println("DEBUG: CONNECTED HOST RANK ID: {}", connected_host_rank_id);
             for (const auto& [candidate_desc, candidate_peer_desc] :
                  peer_intermesh_link_tables_[connected_mesh_id][connected_host_rank_id]) {
-                fmt::println(
-                    "COMPARE: candidate desc {} remote_eth_chan_desc {} candidate_peer_desc {} curr_eth_chan_desc {}",
-                    candidate_desc,
-                    remote_eth_chan_desc,
-                    candidate_peer_desc,
-                    curr_eth_chan_desc);
-
                 if (candidate_desc == remote_eth_chan_desc && candidate_peer_desc == curr_eth_chan_desc) {
                     // Found the matching intermesh link
                     num_directions_assigned++;
@@ -2175,10 +2148,6 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
         num_links_requested_on_node += edge.connected_chip_ids.size();
     }
 
-    fmt::println(
-        "DEBUG: NUM DIRECTIONS ASSIGNED {} NUM LINKS REQUESTED ON NODE {}",
-        num_directions_assigned,
-        num_links_requested_on_node);
     TT_FATAL(
         num_directions_assigned == num_links_requested_on_node,
         "Could not bind all edges in the Mesh Graph to an intermesh link.");

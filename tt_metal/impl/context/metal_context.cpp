@@ -476,20 +476,14 @@ void MetalContext::initialize_fabric_config() {
         return;
     }
 
-    fmt::println("BEFORE CONFIGURE ETHERNET CORES FOR FABRIC ROUTERS");
     this->cluster_->configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
-    fmt::println("BEFORE GETTING CONTROL PLANE");
     auto& control_plane = this->get_control_plane();
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
-        fmt::println("BEFORE INITIALIZE FABRIC CONTEXT");
         control_plane.initialize_fabric_context(this->fabric_config_);
-        fmt::println("AFTER INITIALIZE FABRIC CONTEXT");
     }
-    fmt::println("BEFORE CONFIGURE ROUTING TABLES FOR FABRIC ETHERNET CHANNELS");
     control_plane.configure_routing_tables_for_fabric_ethernet_channels(
         this->fabric_config_, this->fabric_reliability_mode_);
-    fmt::println("AFTER CONFIGURE ROUTING TABLES FOR FABRIC ETHERNET CHANNELS");
 }
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }

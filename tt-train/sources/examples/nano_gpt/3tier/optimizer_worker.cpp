@@ -51,13 +51,9 @@ void receive_gradients_from_aggregator(
 }
 
 int main(int argc, char **argv) {
-    std::cout << "Running optimizer worker" << std::endl;
     auto &ctx = ttml::autograd::ctx();
-    std::cout << "Initializing distributed context" << std::endl;
     ctx.initialize_distributed_context(argc, argv);
-    std::cout << "done initializing distributed context" << std::endl;
     auto distributed_ctx = ctx.get_distributed_context();
-    std::cout << "Have distributed context" << std::endl;
     CLI::App app{"Multihost Example"};
     fmt::print("Size {}, Rank {}: Initializing MPI context\n", distributed_ctx->size(), distributed_ctx->rank());
     argv = app.ensure_utf8(argv);
@@ -134,11 +130,7 @@ int main(int argc, char **argv) {
 
     auto optimizer = select_optimizer(config.use_moreh_adamw);
 
-    std::cout << "Aggregator and optimizer ranks: " << aggregator_and_optimizer_ranks[0] << ", "
-              << aggregator_and_optimizer_ranks[1] << std::endl;
     auto aggregator_and_optimizer_ctx = distributed_ctx->create_sub_context(aggregator_and_optimizer_ranks);
-    std::cout << "Created aggregator and optimizer context" << std::endl;
-
     send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
 
     uint32_t global_step = 0;
