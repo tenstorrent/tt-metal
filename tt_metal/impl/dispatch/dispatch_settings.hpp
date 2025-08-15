@@ -15,7 +15,7 @@ enum class CoreType;
 
 namespace tt {
 class Cluster;
-class ClusterBase;
+class Cluster;
 }
 
 namespace tt::tt_metal {
@@ -26,20 +26,20 @@ namespace tt::tt_metal {
 class DispatchSettings {
 public:
     // Returns the default settings for WORKER cores
-    static DispatchSettings worker_defaults(const tt::ClusterBase& cluster, uint32_t num_hw_cqs);
+    static DispatchSettings worker_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the default settings for ETH cores
-    static DispatchSettings eth_defaults(const tt::ClusterBase& cluster, uint32_t num_hw_cqs);
+    static DispatchSettings eth_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the default settings
-    static DispatchSettings defaults(const CoreType& core_type, const tt::ClusterBase& cluster, uint32_t num_hw_cqs);
+    static DispatchSettings defaults(const CoreType& core_type, const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the settings for a core type and number hw cqs. The values can be modified, but customization must occur
     // before command queue kernels are created.
     static DispatchSettings& get(const CoreType& core_type, uint32_t num_hw_cqs);
 
     // Reset the settings
-    static void initialize(const tt::ClusterBase& cluster);
+    static void initialize(const tt::Cluster& cluster);
 
     // Reset the settings for a core type and number hw cqs to the provided settings
     static void initialize(const DispatchSettings& other);

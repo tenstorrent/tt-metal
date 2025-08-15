@@ -226,7 +226,7 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
-std::unique_ptr<ClusterBase> MetalContext::default_cluster_ = nullptr;
+std::unique_ptr<Cluster> MetalContext::default_cluster_ = nullptr;
 
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
@@ -266,14 +266,14 @@ MetalContext::~MetalContext() {
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
-ClusterBase& MetalContext::get_cluster() {
+Cluster& MetalContext::get_cluster() {
     TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
     return *cluster_;
 }
 
 const llrt::RunTimeOptions& MetalContext::rtoptions() const { return rtoptions_; }
 
-const ClusterBase& MetalContext::get_cluster() const {
+const Cluster& MetalContext::get_cluster() const {
     TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
     return *cluster_;
 }

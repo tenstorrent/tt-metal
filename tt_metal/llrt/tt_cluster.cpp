@@ -209,6 +209,23 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
     this->assert_risc_reset();
 }
 
+Cluster::Cluster(tt_ClusterDescriptor* cluster_desc, llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
+    ZoneScoped;
+
+    this->target_type_ = TargetDevice::Mock;
+    this->arch_ = cluster_desc->get_arch(0);
+
+    this->initialize_device_drivers_mock(cluster_desc);
+
+    this->disable_ethernet_cores_with_retrain();
+
+    this->initialize_ethernet_cores_router_mode();
+
+    this->initialize_ethernet_sockets();
+
+    this->set_tunnels_from_mmio_device();
+}
+
 void Cluster::detect_arch_and_target() {
     this->target_type_ = (rtoptions_.get_simulator_enabled()) ? TargetDevice::Simulator : TargetDevice::Silicon;
 
@@ -286,6 +303,41 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
+}
+
+void Cluster::initialize_device_drivers_mock(tt_ClusterDescriptor* cluster_desc) {
+    this->open_driver_mock(cluster_desc);
+    this->generate_cluster_descriptor();
+    this->get_metal_desc_from_tt_desc();
+    this->validate_harvesting_masks();
+
+    for (const auto& [mmio_device_id, controlled_devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
+        this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
+    }
+
+    tt_device_params default_params;
+    this->start_driver(default_params);
+    this->generate_virtual_to_umd_coord_mapping();
+    this->generate_virtual_to_profiler_flat_id_mapping();
+}
+
+void Cluster::open_driver_mock(tt_ClusterDescriptor* cluster_desc) {
+    std::unique_ptr<tt::umd::Cluster> device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+        .chip_type = tt::umd::ChipType::MOCK,
+        .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
+        .cluster_descriptor = cluster_desc,
+    });
+
+    barrier_address_params barrier_params;
+    barrier_params.tensix_l1_barrier_base =
+        hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
+    barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::BARRIER);
+
+    barrier_params.eth_l1_barrier_base =
+        hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
+    device_driver->set_barrier_address_params(barrier_params);
+
+    this->driver_ = std::move(device_driver);
 }
 
 void Cluster::assert_risc_reset() {
@@ -405,7 +457,8 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_all_chip_ethernet_coordi
 }
 
 chip_id_t Cluster::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const {
-    for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) { if (coord == eth_coord) {
+    for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) {
+        if (coord == eth_coord) {
             return physical_chip_id;
         }
     }

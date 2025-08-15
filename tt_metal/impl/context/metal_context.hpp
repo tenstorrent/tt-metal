@@ -47,13 +47,13 @@ public:
     MetalContext(MetalContext&& other) noexcept = delete;
     static MetalContext& instance();
 
-    static std::unique_ptr<ClusterBase> default_cluster_;
-    static void set_default_cluster(std::unique_ptr<ClusterBase> cluster) { default_cluster_ = std::move(cluster); }
+    static std::unique_ptr<Cluster> default_cluster_;
+    static void set_default_cluster(std::unique_ptr<Cluster> cluster) { default_cluster_ = std::move(cluster); }
 
-    ClusterBase& get_cluster();
-    void set_cluster(std::unique_ptr<ClusterBase> cluster) {this->cluster_ = std::move(cluster);}
+    Cluster& get_cluster();
+    void set_cluster(std::unique_ptr<Cluster> cluster) {this->cluster_ = std::move(cluster);}
     llrt::RunTimeOptions& rtoptions();
-    const ClusterBase& get_cluster() const;
+    const Cluster& get_cluster() const;
     const llrt::RunTimeOptions& rtoptions() const;
     const Hal& hal() const;
     dispatch_core_manager& get_dispatch_core_manager();
@@ -140,7 +140,7 @@ private:
     std::unordered_map<chip_id_t, std::vector<uint16_t>> l1_bank_to_noc_xy_;
 
     llrt::RunTimeOptions rtoptions_;
-    std::unique_ptr<ClusterBase> cluster_;
+    std::unique_ptr<Cluster> cluster_;
     std::unique_ptr<Hal> hal_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;

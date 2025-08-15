@@ -61,7 +61,7 @@ DispatchSettingsContainer& get_store() {
 }
 }  // namespace
 
-DispatchSettings DispatchSettings::worker_defaults(const tt::ClusterBase& cluster, const uint32_t num_hw_cqs) {
+DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
     uint32_t prefetch_q_entries;
     if (cluster.is_galaxy_cluster()) {
         prefetch_q_entries = 1532 / num_hw_cqs;
@@ -87,7 +87,7 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::ClusterBase& cluste
         .build();
 }
 
-DispatchSettings DispatchSettings::eth_defaults(const tt::ClusterBase& /*cluster*/, const uint32_t num_hw_cqs) {
+DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, const uint32_t num_hw_cqs) {
     return DispatchSettings()
         .num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::ETH)
@@ -107,7 +107,7 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::ClusterBase& /*cluster
 }
 
 DispatchSettings DispatchSettings::defaults(
-    const CoreType& core_type, const tt::ClusterBase& cluster, const uint32_t num_hw_cqs) {
+    const CoreType& core_type, const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
     if (!num_hw_cqs) {
         TT_THROW("0 CQs is invalid");
     }
@@ -175,7 +175,7 @@ DispatchSettings& DispatchSettings::get(const CoreType& core_type, const uint32_
 }
 
 // Reset the settings
-void DispatchSettings::initialize(const tt::ClusterBase& cluster) {
+void DispatchSettings::initialize(const tt::Cluster& cluster) {
     static constexpr std::array<CoreType, 2> k_SupportedCoreTypes{CoreType::ETH, CoreType::WORKER};
     auto& store = get_store();
     for (const auto& core_type : k_SupportedCoreTypes) {

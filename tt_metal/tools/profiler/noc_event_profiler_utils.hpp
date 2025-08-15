@@ -37,7 +37,7 @@ public:
     FabricRoutingLookup(const IDevice* device) {
         using namespace tt::tt_fabric;
 
-        ClusterBase& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
         // get sorted list of all physical chip ids
         auto physical_chip_id_set = cluster.user_exposed_chip_ids();
@@ -75,7 +75,7 @@ private:
 };
 
 inline void dumpClusterCoordinatesAsJson(const std::filesystem::path& filepath) {
-    ClusterBase& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     nlohmann::ordered_json cluster_json;
     cluster_json["physical_chip_to_eth_coord"] = nlohmann::ordered_json();
@@ -99,7 +99,7 @@ inline void dumpClusterCoordinatesAsJson(const std::filesystem::path& filepath) 
 inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
     nlohmann::ordered_json topology_json;
 
-    const ClusterBase& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     topology_json["mesh_shapes"] = nlohmann::ordered_json::array();
     for (auto [mesh_id, mesh_shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
