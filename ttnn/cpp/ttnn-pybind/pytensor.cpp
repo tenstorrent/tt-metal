@@ -1038,6 +1038,13 @@ void pytensor_module(py::module& m_tensor) {
                 tt_tensor = tt_tensor.cpu()
         )doc")
         .def(
+            "empty",
+            [](const Tensor& self) { return self.is_empty(); },
+            R"doc(
+                Return true if tensor has not allocated data in the device
+                Shape[0, 0] or empty buffers are considered empty");
+            )doc")
+        .def(
             "item",
             [](const Tensor& self) -> py::object {
                 switch (self.dtype()) {

@@ -49,6 +49,7 @@ def test_tensor_creation(shape, tt_dtype, layout, device):
         py_tensor = torch.rand(shape, dtype=dtype)
 
     tt_tensor = ttnn.Tensor(py_tensor, tt_dtype, device, layout)
+    assert tt_tensor.empty() == False
 
     tt_tensor = tt_tensor.cpu()
 
@@ -270,6 +271,9 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     tt_tensor_1 = tt_tensor_1.cpu()
     tt_tensor_2 = tt_tensor_2.cpu()
 
+    assert tt_tensor_1.empty() == False
+    assert tt_tensor_2.empty() == False
+
     py_tensor_after_round_trip_1 = tt_tensor_1.to_torch()
     py_tensor_after_round_trip_2 = tt_tensor_2.to_torch()
     py_tensor_after_round_trip_3 = ttnn.to_torch(tt_tensor_1)
@@ -355,4 +359,5 @@ def test_tensor_creation_with_tensor_spec(tensor_spec, device):
     tt_tensor = ttnn.from_torch(py_tensor, spec=tensor_spec, device=device)
     assert tt_tensor.spec == tensor_spec
     py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
+    assert tt_tensor.empty() == False
     assert torch.allclose(py_tensor, py_tensor_after_round_trip)
