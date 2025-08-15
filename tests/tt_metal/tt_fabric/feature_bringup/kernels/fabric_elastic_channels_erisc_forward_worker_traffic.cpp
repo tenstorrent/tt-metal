@@ -13,6 +13,8 @@
 #include "tt_metal/hw/inc/compile_time_args.h"
 #include "core_config.h"
 
+// #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp"
+
 // Compile-time configuration - passed as compile_args from host
 constexpr size_t N_CHUNKS = get_compile_time_arg_val(0);
 constexpr size_t RX_N_PKTS = get_compile_time_arg_val(1);
@@ -357,6 +359,7 @@ void kernel_main() {
 
     tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> sender_view_rx_buf_wr_ptr;
     tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> receiver_rd_ptr;
+    tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> receiver_wr_ptr;
     uint32_t unacked_sends = 0;
     uint32_t n_sender_channels_done = 0;
     std::array<bool, N_SRC_CHANS> completed_sender_channels;
@@ -414,8 +417,12 @@ void kernel_main() {
                 if (BIDIRECTIONAL_MODE || !is_sender_offset_0) {
                     // Receiver logic - also use ChannelBuffersPool
                     auto num_unprocessed_packets = get_receiver_num_unprocessed_packets();
-                    if (num_unprocessed_packets > 0 && !eth_txq_is_busy() && write_outs_remaining == 0) {
-                        size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
+                    bool start_sends = num_unprocessed_packets > 0 && !eth_txq_is_busy() && write_outs_remaining == 0;
+                    if constexpr (write_out_mode != WRITE_OUT_MODE::ALL_AT_ONCE) {
+                        start_sends = start_sends && !send_ack;
+                    }
+                    if (start_sends) {
+                        size_t packet_src_addr = recv_buffer_addresses[receiver_wr_ptr.get_buffer_index()];
                         DPRINT << "Receiving packet at " << (uint32_t)packet_src_addr << "\n";
                         auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
                         if (remote_src_ack_stream_id < N_SRC_CHANS || remote_src_ack_stream_id >= 2 * N_SRC_CHANS) {
@@ -430,26 +437,49 @@ void kernel_main() {
                         if constexpr (
                             write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE ||
                             write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
+                            auto buffer_index = receiver_wr_ptr.get_buffer_index();
+                            size_t packet_src_addr = recv_buffer_addresses[buffer_index];
+                            auto trid = buffer_index;
                             for (size_t i = 0; i < fabric_mcast_factor; i++) {
-                                noc_async_write(packet_src_addr, fabric_fwd_addrs[i], message_size);
+                                // noc_async_write_one_packet(packet_src_addr, fabric_fwd_addrs[i], message_size);
+                                noc_async_write_one_packet_with_trid(
+                                    packet_src_addr, fabric_fwd_addrs[i], message_size, trid);
                             }
                             DPRINT << "\tSending ack to stream id(" << (uint32_t)remote_src_ack_stream_id << ")\n";
                             if constexpr (write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
                                 send_ack = true;
                             } else {
-                                noc_async_writes_flushed();
+                                // ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
+                                // noc_async_writes_flushed();
                                 send_ack_to_sender(remote_src_ack_stream_id);
-                                receiver_rd_ptr.increment();
+                                receiver_wr_ptr.increment();
+                                messages_received++;
                             }
                         } else {
                             write_outs_remaining = fabric_mcast_factor;
                             send_ack = write_outs_remaining == 0;
                             DPRINT << "WRITE OUTS REMAINING: " << (uint32_t)write_outs_remaining << "\n";
+                            if (send_ack) {
+                                receiver_wr_ptr.increment();
+                            }
                         }
 
-                        messages_received++;
-
                         made_progress = true;
+                    }
+
+                    if constexpr (write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE) {
+                        if (send_ack && !eth_txq_is_busy() &&
+                            ncrisc_noc_nonposted_write_with_transaction_id_sent(
+                                noc_index, receiver_rd_ptr.get_buffer_index())) {
+                            size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
+                            DPRINT << "Receiving packet at " << (uint32_t)packet_src_addr << "\n";
+                            auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
+                            DPRINT << "SEND ACK\n";
+                            send_ack_to_sender(remote_src_ack_stream_id);
+                            receiver_rd_ptr.increment();
+                            send_ack = false;
+                            // messages_received++;
+                        }
                     }
 
                     if constexpr (write_out_mode == WRITE_OUT_MODE::ONE_AT_A_TIME) {
@@ -457,33 +487,41 @@ void kernel_main() {
                             // && noc_cmd_buf_ready(noc_index, write_cmd_buf)
                             // && ncrisc_noc_posted_writes_sent(noc_index)
                         ) {
-                            size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
-                            noc_async_write(packet_src_addr, fabric_fwd_addrs[0], message_size);
+                            auto buffer_index = receiver_wr_ptr.get_buffer_index();
+                            size_t packet_src_addr = recv_buffer_addresses[buffer_index];
+                            auto trid = buffer_index;
+                            // noc_async_write_one_packet(packet_src_addr, fabric_fwd_addrs[0], message_size);
+                            noc_async_write_one_packet_with_trid(
+                                packet_src_addr, fabric_fwd_addrs[0], message_size, trid);
                             // noc_async_write(packet_src_addr, fabric_fwd_addrs[write_outs_remaining], message_size);
                             DPRINT << "WRITE OUT\n";
 
                             write_outs_remaining--;
                             made_progress = true;
                             send_ack = write_outs_remaining == 0;
+                            if (send_ack) {
+                                receiver_wr_ptr.increment();
+                            }
                         }
                     }
                     if constexpr (
                         write_out_mode == WRITE_OUT_MODE::ONE_AT_A_TIME ||
                         write_out_mode == WRITE_OUT_MODE::ALL_AT_ONCE_WITH_SEPARATE_FLUSH) {
-                        if (send_ack &&
-                            !eth_txq_is_busy()
-                            // && noc_cmd_buf_ready(noc_index, write_cmd_buf)
-                            && ncrisc_noc_posted_writes_sent(noc_index)
-                            //  && ncrisc_noc_posted_writes_sent(noc_index)
-                        ) {
-                            DPRINT << "SEND ACK\n";
-                            noc_async_writes_flushed();
-                            size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
-                            auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
-                            DPRINT << "\tSending ack to stream id(" << (uint32_t)remote_src_ack_stream_id << ")\n";
-                            send_ack_to_sender(remote_src_ack_stream_id);
-                            receiver_rd_ptr.increment();
-                            send_ack = false;
+                        if (send_ack && !eth_txq_is_busy()) {
+                            auto buffer_index = receiver_rd_ptr.get_buffer_index();
+                            auto trid = buffer_index;
+                            // noc_async_writes_flushed();
+                            if (ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid)) {
+                                DPRINT << "SEND ACK\n";
+
+                                size_t packet_src_addr = recv_buffer_addresses[receiver_rd_ptr.get_buffer_index()];
+                                auto remote_src_ack_stream_id = *reinterpret_cast<volatile uint32_t*>(packet_src_addr);
+                                DPRINT << "\tSending ack to stream id(" << (uint32_t)remote_src_ack_stream_id << ")\n";
+                                send_ack_to_sender(remote_src_ack_stream_id);
+                                receiver_rd_ptr.increment();
+                                send_ack = false;
+                                messages_received++;
+                            }
                         }
                     }
                     invalidate_l1_cache();
