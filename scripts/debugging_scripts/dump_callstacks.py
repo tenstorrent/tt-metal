@@ -305,7 +305,9 @@ def run(args, context: Context):
     check_per_device = get_check_per_device(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     return check_per_device.run_check(
-        lambda device: dump_callstacks(device, dispatcher_data, context, full_callstack, gdb_callstack, active_cores, port)
+        lambda device: dump_callstacks(
+            device, dispatcher_data, context, full_callstack, gdb_callstack, active_cores, port
+        )
     )
 
 
