@@ -31,19 +31,15 @@ void kernel_main() {
     const uint32_t output_grad_tile_bytes = get_tile_size(cb_output_grad);
     const DataFormat output_grad_data_format = get_dataformat(cb_output_grad);
 
-    constexpr bool target_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool output_grad_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool weight_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr auto target_args = TensorAccessorArgs<0>();
+    constexpr auto output_grad_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
+    constexpr auto weight_args = TensorAccessorArgs<output_grad_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = target_tile_bytes};
+    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
     constexpr uint32_t onetile = 1;
 
 #if defined(WEIGHT)
-    const InterleavedAddrGen<weight_is_dram> addrg_weight = {
-        .bank_base_address = weight_addr,
-        .page_size = weight_tile_bytes,
-    };
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
     // weight: (1, C)
     read_line(cb_weight, addrg_weight, Ct);
@@ -52,10 +48,7 @@ void kernel_main() {
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
 #endif
 
-    const InterleavedAddrGenFast<output_grad_is_dram> addrg_output_grad = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
 
     auto zero = float_to_bfloat16(0.0f);
 
