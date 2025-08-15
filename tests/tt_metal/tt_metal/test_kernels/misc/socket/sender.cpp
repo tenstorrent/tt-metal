@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "socket_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     // Get this value from MeshSocket struct on host

@@ -108,7 +108,12 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     auto recv_peer_descriptor = generate_local_endpoint_descriptor(receiver_socket);
 
     write_socket_configs(sender_config_buffer, send_peer_descriptor, recv_peer_descriptor, SocketEndpoint::SENDER);
-    write_socket_configs(recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER);
+    write_socket_configs(
+        recv_config_buffer,
+        recv_peer_descriptor,
+        send_peer_descriptor,
+        SocketEndpoint::RECEIVER,
+        0 /* downstream_num */);
 
     auto fabric_node_id_map = generate_fabric_node_id_map(config, send_peer_descriptor, recv_peer_descriptor);
 
