@@ -369,7 +369,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
         ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16, num_tiles_2d, third_dim, total_tiles_per_row};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);

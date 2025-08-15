@@ -554,7 +554,6 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
 
     // reader
 
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
 
     auto log_shape = output.logical_shape();
@@ -1047,7 +1046,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // Writer compile-time args
-    bool output_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -1055,9 +1053,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
         output_num_blocks_across_width = tensor_width / output_shard_width;
     }
     uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
-    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
-    uint32_t output_log_base_2_of_page_size =
-        output_stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
     uint32_t output_element_size = output.element_size();
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
     uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;

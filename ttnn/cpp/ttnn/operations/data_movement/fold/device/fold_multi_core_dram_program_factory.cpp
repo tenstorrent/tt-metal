@@ -32,7 +32,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
-    const uint32_t batch_size = input_tensor.logical_shape()[0];
     const uint32_t input_height = input_tensor.logical_shape()[1];
     const uint32_t input_width = input_tensor.logical_shape()[2];
 
@@ -189,9 +188,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, true);
     std::vector<CoreCoord> cores_with_rtargs;
 
-    const uint32_t patch_size = stride_h * stride_w;          // Size of each patch
-    const uint32_t output_height = input_height / stride_h;   // Output height
-    const uint32_t output_width = input_width / stride_w;     // Output width
+    const uint32_t patch_size = stride_h * stride_w;         // Size of each patch
+    const uint32_t output_width = input_width / stride_w;    // Output width
     // Configure runtime arguments for each core
     for (auto i = 0; i < cores.size(); i++) {
         uint32_t curr_input_height_idx = block_start_id;
@@ -310,7 +308,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         CircularBufferConfig(
             double_buffer * aligned_stick_nbytes * stride_w * stride_h, {{cb_src0_index, cb_data_format}})
             .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w * stride_h);
-    auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
+    CreateCircularBuffer(program, all_cores, src_cb_config);
 
     // Create reader kernel
     std::vector<uint32_t> compile_time_args(
