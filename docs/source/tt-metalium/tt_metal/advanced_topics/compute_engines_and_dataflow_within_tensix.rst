@@ -110,6 +110,8 @@ As the compute kernel is expected to run on all 3 cores at the same time, extra 
 
     The ordering of circular buffer operations (``cb_wait_front``, ``cb_pop_front``, ``cb_reserve_back``, ``cb_push_back``) can be adjusted, but their placement is constrained by data dependencies. The pattern shown in the example is designed to minimize stalls by overlapping waiting for space and computation by different threads. Note that unpacking from a circular buffer can only occur after the ``Dst`` registers have been acquired, and packing can only begin after the packer is ready to access them.
 
+    The ``acquire_dst`` and ``release_dst`` functions also control access to the ``Dst`` registers but are now deprecated. They offer coarse-grained control and have been superseded by the more explicit ``tile_regs_*`` family of functions, which should be used instead.
+
 .. warning::
 
     Even when no packing is performed, ``tile_regs_commit`` and ``tile_regs_release`` must still be called in sequence. Failure to do so results in undefined behavior.
