@@ -11,6 +11,7 @@
 #include "ckernel_main.h"
 #include "ckernel_pcbuf.h"
 // Necessary for ckernel variables
+#include "boot.h"
 #include "ckernel_helper.h"
 #include "profiler.h"
 
@@ -29,6 +30,13 @@ uint32_t open_zone_cnt    = 0;
 
 int main()
 {
+#if defined(LLK_TRISC_UNPACK) && defined(LLK_BOOT_MODE_TRISC)
+    device_setup();
+
+    // Release the rest of the triscs
+    clear_trisc_soft_reset();
+#endif
+
     volatile std::uint64_t* TIMESTAMP_ADDRESS = reinterpret_cast<volatile std::uint64_t*>(0x19000);
 #if defined(LLK_TRISC_UNPACK)
     const std::uint32_t core_idx          = 0;

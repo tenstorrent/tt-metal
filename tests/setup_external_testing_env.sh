@@ -5,7 +5,7 @@
 
 # --- Configuration ---
 TT_SMI_REPO="https://github.com/tenstorrent/tt-smi"
-EXALENS_WHEEL="ttexalens-0.1.250626+dev.7538f60-cp310-cp310-linux_x86_64.whl"
+EXALENS_WHEEL="ttexalens-0.1.250813+dev.80e0cb9-cp310-cp310-linux_x86_6.whl"
 VENV_DIR=".venv"
 
 # --- Functions ---

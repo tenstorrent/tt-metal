@@ -4,6 +4,7 @@
 import torch
 
 from helpers.device import (
+    BootMode,
     collect_results,
     write_stimuli_to_l1,
 )
@@ -19,7 +20,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import ProfilerBuild, run_test
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
@@ -45,7 +46,10 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(MATMUL_FORMA
     ],
     format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
 )
-def test_matmul(test_name, math_fidelity, format_dest_acc_and_dims):
+# Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
+def test_matmul(
+    test_name, math_fidelity, format_dest_acc_and_dims, boot_mode=BootMode.BRISC
+):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
     formats = format_dest_acc_and_dims[0]
@@ -122,7 +126,7 @@ def test_matmul(test_name, math_fidelity, format_dest_acc_and_dims):
         tile_cnt_B,
     )
 
-    run_test(test_config)
+    run_test(test_config, ProfilerBuild.No, boot_mode)
 
     res_from_L1 = collect_results(
         formats, tile_count=matmul_dims["output_tile_cnt"], address=res_address
