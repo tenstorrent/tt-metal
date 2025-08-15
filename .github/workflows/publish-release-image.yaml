@@ -19,6 +19,9 @@ on:
         type: string
 jobs:
   create-docker-release-image:
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         os: [ubuntu-22.04]
