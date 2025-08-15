@@ -151,7 +151,7 @@ public:
     void clear_fabric_context();
 
     // Initialize fabric tensix config (call after routing tables are configured)
-    void initialize_fabric_tensix_config();
+    void initialize_fabric_tensix_datamover_config();
 
     // Check if ANY managed chip supports intermesh links
     bool system_has_intermesh_links() const;
