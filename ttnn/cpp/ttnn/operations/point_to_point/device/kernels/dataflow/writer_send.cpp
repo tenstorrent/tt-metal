@@ -80,16 +80,9 @@ void kernel_main() {
             tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
-                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0, 0);
-                packet_header_ptr->to_noc_unicast_write(
-                    tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, align(payload_size_bytes, alignment));
-
-                connection_direction.wait_for_empty_write_slot();
-                connection_direction.send_payload_without_header_non_blocking_from_address(
-                    packet_base_addr, payload_size_bytes);
-                connection_direction.send_payload_flush_non_blocking_from_address(
-                    (uint32_t)packet_header_ptr, packet_header_size_bytes);
-
+                tt::tt_fabric::linear::to_noc_unicast_write(
+                    align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer_addrgen);
+                perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
                 // reset counters
                 packet_page_idx = 0;
                 curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx - 1);
