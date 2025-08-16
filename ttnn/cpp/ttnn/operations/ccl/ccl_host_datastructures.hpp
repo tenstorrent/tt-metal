@@ -305,7 +305,7 @@ public:
     void dump_to_log() const {
         auto const rt_args = this->get_runtime_args();
         log_trace(tt::LogOp, "EDM RT Args:");
-        for (auto const& arg : rt_args) {
+        for ([[maybe_unused]] const auto& arg : rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
     };

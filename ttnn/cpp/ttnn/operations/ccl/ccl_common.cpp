@@ -367,7 +367,7 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
     log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
     log_trace(tt::LogOp, "CT ARGS:");
-    for (auto const& s : eth_sender_ct_args) {
+    for ([[maybe_unused]] const auto& s : eth_sender_ct_args) {
         log_trace(tt::LogOp, "\t{}", s);
     }
 
@@ -393,8 +393,6 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 
     return eth_sender_kernel;
 }
-
-
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
@@ -1535,7 +1533,6 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
         TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
-        auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
         if (forward_device) {
             auto forward_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());

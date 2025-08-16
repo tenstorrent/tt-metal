@@ -141,7 +141,7 @@ static void add_worker_config_to_edm_builders(
         // receiver kernel enabled
         bool receiver_enabled = !is_linear || !topology_config.is_first_device_in_line(is_in_clockwise_direction);
         if (receiver_enabled) {
-            bool choose_counter_clockwise_edm_builder = is_in_clockwise_direction;
+            [[maybe_unused]] bool choose_counter_clockwise_edm_builder = is_in_clockwise_direction;
             log_trace(
                 tt::LogOp,
                 "Adding receiver EDM channel to {} edm builder",
@@ -192,12 +192,12 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
 
     auto const& worker_defines = op_config.emit_worker_defines();
     TT_ASSERT(worker_defines.size() > 0);
-    for (auto const& [key, value] : worker_defines) {
+    for ([[maybe_unused]] const auto& [key, value] : worker_defines) {
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
     }
     if (split_worker_core_range.has_value()) {
         log_trace(tt::LogOp, "second worker core list:");
-        for (const auto& core : corerange_to_cores(split_worker_core_range.value())) {
+        for ([[maybe_unused]] const auto& core : corerange_to_cores(split_worker_core_range.value())) {
             log_trace(tt::LogOp, "\tx={},y={}", core.x, core.y);
         }
     }
@@ -255,7 +255,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
             "Internal Error. (line) Reduce scatter did not generate a smaller second worker grid to map the line start "
             "kernels onto");
         log_trace(tt::LogOp, "Invoking CCL send kernel on split kernel core range");
-        for (auto const& core : corerange_to_cores(split_worker_core_range.value())) {
+        for ([[maybe_unused]] const auto& core : corerange_to_cores(split_worker_core_range.value())) {
             log_trace(tt::LogOp, "\tcore=(x={},y={})", core.x, core.y);
         }
         line_start_sender_kernel_id = tt::tt_metal::CreateKernel(
@@ -406,12 +406,12 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores(
             auto const& core_ranges =
                 select_worker_cores_for_line_topology(topology_config, op_config, num_links, num_edm_channels);
             log_trace(tt::LogOp, "First core range");
-            for (const auto& core : corerange_to_cores(core_ranges.first)) {
+            for ([[maybe_unused]] const auto& core : corerange_to_cores(core_ranges.first)) {
                 log_trace(tt::LogOp, "\tx={},y={}", core.x, core.y);
             }
             if (core_ranges.second.has_value()) {
                 log_trace(tt::LogOp, "second worker core list:");
-                for (const auto& core : corerange_to_cores(core_ranges.second.value())) {
+                for ([[maybe_unused]] const auto& core : corerange_to_cores(core_ranges.second.value())) {
                     log_trace(tt::LogOp, "\tx={},y={}", core.x, core.y);
                 }
             }
