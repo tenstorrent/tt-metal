@@ -6,6 +6,7 @@
 #include <algorithm>
 #include "dataflow_api.h"
 #include <tt-metalium/constants.hpp>
+#include "accessor/tensor_accessor.h"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -59,9 +60,9 @@ public:
     }
 };
 
-template <bool is_dram = true, uint32_t tile_bytes>
+template <uint32_t tile_bytes, typename TensorAccessorType>
 uint32_t async_read_chunk_with_padding(
-    const InterleavedAddrGenFast<is_dram>& reader,
+    const TensorAccessorType& reader,
     const uint32_t cb_id,
     uint32_t start_tile_id,
     const uint32_t src_rows,
@@ -89,7 +90,8 @@ uint32_t async_read_chunk_with_padding(
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_tile(start_tile_id, reader, write_ptr);
+            uint64_t noc_addr = reader.get_noc_addr(start_tile_id);
+            noc_async_read(noc_addr, write_ptr, tile_bytes);
             start_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
@@ -114,9 +116,9 @@ uint32_t async_read_chunk_with_padding(
     return num_tiles;
 }
 
-template <bool is_dram = true, uint32_t tile_bytes>
+template <uint32_t tile_bytes, typename TensorAccessorType>
 void read_chunk_with_padding(
-    const InterleavedAddrGenFast<is_dram>& reader,
+    const TensorAccessorType& reader,
     const uint32_t cb_id,
     uint32_t start_tile_id,
     const uint32_t src_rows,
@@ -125,7 +127,7 @@ void read_chunk_with_padding(
     const uint32_t dst_cols,
     const uint32_t barrier_threshold,
     const bool transpose = false) {
-    auto num_tiles = async_read_chunk_with_padding<is_dram, tile_bytes>(
+    auto num_tiles = async_read_chunk_with_padding<tile_bytes>(
         reader, cb_id, start_tile_id, src_rows, src_cols, dst_rows, dst_cols, barrier_threshold, transpose);
     noc_async_read_barrier();
     cb_push_back(cb_id, num_tiles);
