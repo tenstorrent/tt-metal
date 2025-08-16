@@ -58,7 +58,7 @@ jobs:
 
       - name: Ensure BH Eth links online
         if: ${{ contains(inputs.runner-label, 'BH-') }}
-        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@williamly/bh-health-check-loop
+        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         with:
           runner-label: ${{ inputs.runner-label }}
 
