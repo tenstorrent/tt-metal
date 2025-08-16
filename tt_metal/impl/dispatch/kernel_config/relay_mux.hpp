@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include <optional>
-#include "fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include <tt-metalium/control_plane.hpp>

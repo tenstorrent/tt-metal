@@ -11,7 +11,7 @@
 
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/edm_fabric_counters.hpp>
 #include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
 #include <unordered_map>

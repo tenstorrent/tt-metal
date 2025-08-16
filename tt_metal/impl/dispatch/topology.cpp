@@ -7,7 +7,7 @@
 #include <device_pool.hpp>
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>

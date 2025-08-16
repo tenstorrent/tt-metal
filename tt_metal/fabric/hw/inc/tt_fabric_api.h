@@ -11,7 +11,7 @@
 #include "tt_fabric.h"
 #include "tt_fabric_interface.h"
 #include "eth_chan_noc_mapping.h"
-#include "fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <type_traits>
 
 namespace tt::tt_fabric {
@@ -102,7 +102,7 @@ static inline
 template <typename HeaderType>
 static inline void fabric_async_write_add_header_impl(
     HeaderType packet_header,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -130,7 +130,7 @@ static inline void fabric_async_write_add_header_impl(
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename ClientInterfaceType>
 inline void fabric_async_write_add_header(
     tt_l1_ptr ClientInterfaceType client_interface,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -587,7 +587,7 @@ inline void fabric_async_write(
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename ClientInterfaceType>
 inline void fabric_async_write_multicast_add_header(
     tt_l1_ptr ClientInterfaceType client_interface,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -632,7 +632,7 @@ inline void fabric_async_write_multicast(
     tt_l1_ptr ClientInterfaceType client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
                         // and the routing plane to use when using ROUTING_TABLE
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -669,7 +669,7 @@ inline void fabric_async_write_multicast(
 template <typename HeaderType>
 static inline void fabric_atomic_inc_add_header_impl(
     HeaderType packet_header,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -699,7 +699,7 @@ static inline void fabric_atomic_inc_add_header_impl(
 }
 
 inline void fabric_atomic_inc_add_header(
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -726,7 +726,7 @@ inline void fabric_atomic_inc(
     tt_l1_ptr ClientInterfaceType client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
                         // and the routing plane to use when using ROUTING_TABLE
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -754,7 +754,7 @@ inline void fabric_atomic_inc(
 template <typename HeaderType>
 static inline void fabric_async_write_atomic_inc_add_header_impl(
     HeaderType packet_header,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_write_addr,
@@ -790,7 +790,7 @@ static inline void fabric_async_write_atomic_inc_add_header_impl(
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename ClientInterfaceType>
 inline void fabric_async_write_atomic_inc_add_header(
     tt_l1_ptr ClientInterfaceType client_interface,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_write_addr,
@@ -824,7 +824,7 @@ inline void fabric_async_write_atomic_inc(
     tt_l1_ptr ClientInterfaceType client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
                         // and the routing plane to use when using ROUTING_TABLE
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_write_addr,
