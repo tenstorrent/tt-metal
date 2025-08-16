@@ -13,6 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 
@@ -281,6 +282,10 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
         Sk_chunk_t,
         num_cores,
     };
+    TensorAccessorArgs(*q_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*k_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*v_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*cu_window_seqlens_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -294,6 +299,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
         packed_identity_scalar,
         num_cores,
     };
+    TensorAccessorArgs(*out0_buffer).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         Skt,

@@ -199,7 +199,13 @@ void kernel_main() {
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
 
-    constexpr bool is_dram = true;
+    // Set up tensor accessor args for each buffer
+    // Base index for compile-time args after the fixed parameters (0-10)
+    constexpr uint32_t base_cta_idx = 11;
+    constexpr auto q_args = TensorAccessorArgs<base_cta_idx>();
+    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto cu_window_seqlens_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -223,27 +229,19 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
-    const InterleavedAddrGenFast<is_dram> q_reader = {
-        .bank_base_address = q_addr, .page_size = q_tile_bytes, .data_format = q_data_format};
-
-    const InterleavedAddrGenFast<is_dram> k_reader = {
-        .bank_base_address = k_addr, .page_size = k_tile_bytes, .data_format = k_data_format};
-
-    const InterleavedAddrGenFast<is_dram> v_reader = {
-        .bank_base_address = v_addr, .page_size = v_tile_bytes, .data_format = v_data_format};
-
-    // [INFO] cu_window_seqlens_bytes is the size of the fifo page size of the cu_window_seqlens cb
-    const InterleavedAddrGenFast<is_dram> cu_window_seqlens_reader = {
-        .bank_base_address = cu_window_seqlens_addr,
-        .page_size = cu_window_seqlens_tile_bytes,
-        .data_format = cu_window_seqlens_data_format};
+    const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
+    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
+    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
+    const auto cu_window_seqlens_reader =
+        TensorAccessor(cu_window_seqlens_args, cu_window_seqlens_addr, cu_window_seqlens_tile_bytes);
 
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
 
     // load the entire cu_window_seqlens tensor into a circular buffer
     cb_reserve_back(cb_cu_window_seqlens_in, 1);
-    noc_async_read_tile(0, cu_window_seqlens_reader, get_write_ptr(cb_cu_window_seqlens_in));
+    uint64_t cu_window_noc_addr = cu_window_seqlens_reader.get_noc_addr(0);
+    noc_async_read(cu_window_noc_addr, get_write_ptr(cb_cu_window_seqlens_in), cu_window_seqlens_tile_bytes);
     auto cb_cu_window_seqlens_ptr = ArrayView<uint32_t, CBAccessType::CB_BACK_RO>(cb_cu_window_seqlens_in);
     auto get_cu_window_seqlens = [&](uint32_t idx) -> uint32_t {
         if constexpr (cu_window_seqlens_data_format == DataFormat::UInt32) {
@@ -303,7 +301,7 @@ void kernel_main() {
                 const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
                 const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, q_row_start_tile, 0);
 
-                read_chunk_with_padding<is_dram, q_tile_bytes>(
+                read_chunk_with_padding<q_tile_bytes>(
                     q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
 
                 uint32_t q_low_idx_in_tiles = q_chunk * Sq_chunk_t;
@@ -317,7 +315,7 @@ void kernel_main() {
                     const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
 
                     // Read K chunk
-                    auto k_chunk_ntiles = async_read_chunk_with_padding<is_dram, k_tile_bytes>(
+                    auto k_chunk_ntiles = async_read_chunk_with_padding<k_tile_bytes>(
                         k_reader,
                         cb_k_in,
                         k_start_tile_id,
@@ -439,7 +437,7 @@ void kernel_main() {
                     cb_push_back(cb_mask_in, mask_chunk_tiles);
 
                     // Read V chunk
-                    read_chunk_with_padding<is_dram, v_tile_bytes>(
+                    read_chunk_with_padding<v_tile_bytes>(
                         v_reader,
                         cb_v_in,
                         k_start_tile_id,
