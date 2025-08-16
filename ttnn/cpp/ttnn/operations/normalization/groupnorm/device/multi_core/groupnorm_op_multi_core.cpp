@@ -2526,8 +2526,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             const auto& mask_tensor = optional_input_tensors.at(2);
             auto dst_buffer = output_tensors.at(0).buffer()->address();
 
-            updatedynamiccircularbufferaddress(program, cb_in0, *src_buffer_a);
-            updatedynamiccircularbufferaddress(program, cb_output, *dst_buffer);
             for (uint32_t i = 0; i < num_cores; ++i) {
                 CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
