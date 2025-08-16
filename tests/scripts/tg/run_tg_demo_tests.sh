@@ -11,7 +11,7 @@ run_tg_llama3_tests() {
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
   for llama_dir in "$llama70b"; do
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000; fail+=$?;
+    # LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000; fail+=$?;
 

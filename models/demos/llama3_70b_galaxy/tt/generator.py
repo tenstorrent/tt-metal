@@ -99,8 +99,9 @@ class Generator:
             last_token_idx = seq_len - 1
 
             prefill_seq_len = get_padded_prefill_len(seq_len)
-            if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
-                enable_trace = False
+            # if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
+            # TODO Issue #26423 If we enable trace and use persistent buffers with we might get incorrect prefill logits when repeating batches
+            enable_trace = False
 
             prefill_ids = torch.cat(
                 [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
