@@ -259,7 +259,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool local_mem_offset) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
@@ -302,7 +302,18 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t { return 0; };
+    this->eth_fw_arg_addr_func_ = [&](int, uint32_t) -> uint32_t { return 0; };
+
+    this->device_features_func_ = [](DeviceFeature feature) -> bool {
+        switch (feature) {
+            case DeviceFeature::ETH_FW_API: return false;
+            case DeviceFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
+            case DeviceFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DeviceFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DeviceFeature::ETH_LINKS_INTERMESH_ROUTING: return true;
+            default: TT_THROW("Invalid Wormhole device feature {}", static_cast<int>(feature));
+        }
+    };
 
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
@@ -321,7 +332,6 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = true;
-    this->intermesh_eth_links_enabled_ = true;  // Intermesh routing is enabled on Wormhole
     this->virtualized_core_types_ = {AddressableCoreType::TENSIX, AddressableCoreType::ETH};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
 
@@ -342,6 +352,11 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryWormhole>();
+    this->eth_live_link_status_func_ = [](std::span<uint32_t> bytes) -> EthLiveLinkStatus {
+        // Not supported on wormhole
+        TT_THROW("Live link status is not supported on wormhole");
+        return {.retrain_count = 0, .rx_link_up = 0};
+    };
 }
 
 }  // namespace tt_metal

@@ -7,7 +7,7 @@
 #include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 #include "risc_common.h"
 #include "dataflow_api_addrgen.h"
 #else
@@ -73,8 +73,17 @@ volatile tt_l1_ptr uint32_t (*profiler_data_buffer)[kernel_profiler::PROFILER_L1
     reinterpret_cast<volatile tt_l1_ptr uint32_t (*)[kernel_profiler::PROFILER_L1_VECTOR_SIZE]>(
         GET_MAILBOX_ADDRESS_DEV(profiler.buffer));
 
-#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY) || defined(COMPILE_FOR_BRISC)
+constexpr uint32_t myRiscID = 0;
+#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
+constexpr uint32_t myRiscID = 0;
+#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1
+constexpr uint32_t myRiscID = 1;
+#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0
+constexpr uint32_t myRiscID = 0;
+#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1
+constexpr uint32_t myRiscID = 1;
+#elif defined(COMPILE_FOR_ERISC)
 constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_NCRISC)
 constexpr uint32_t myRiscID = 1;
@@ -108,7 +117,8 @@ __attribute__((noinline)) void init_profiler(
         sums[i] = 0;
     }
 
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+    defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
 
@@ -200,7 +210,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 }
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 
 #if (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
@@ -257,7 +267,8 @@ void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
 
 __attribute__((noinline)) void finish_profiler() {
     risc_finished_profiling();
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+    defined(COMPILE_FOR_BRISC)
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
@@ -324,7 +335,7 @@ __attribute__((noinline)) void finish_profiler() {
 __attribute__((noinline)) void quick_push() {
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC))
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
 
     // tt-metal/issues/22578 - forbid quick_push if any cmd buffer has NOC_CMD_VC_LINKED bit set
     auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
@@ -393,7 +404,7 @@ __attribute__((noinline)) void quick_push() {
 void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC))
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
     if (!linked) {
         return;
     }

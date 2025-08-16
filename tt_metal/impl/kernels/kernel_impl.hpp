@@ -7,12 +7,14 @@
 #include <umd/device/tt_core_coordinates.h>
 #include <string>
 
+#include <umd/device/tt_core_coordinates.h>
 #include "api/tt-metalium/kernel.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include <enchantum/enchantum.hpp>
+#include "tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
 

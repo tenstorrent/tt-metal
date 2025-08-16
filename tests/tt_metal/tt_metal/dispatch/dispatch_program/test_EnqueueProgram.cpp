@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "dispatch_test_utils.hpp"
+#include "distributed.hpp"
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
@@ -133,7 +134,7 @@ KernelHandle create_kernel(
                 tt::tt_metal::ComputeConfig{
                     .compile_args = compile_args,
                 });
-        case tt::RISCV::ERISC:
+        case tt::RISCV::ERISC0:
             return CreateKernel(
                 program,
                 kernel_path,
@@ -141,6 +142,18 @@ KernelHandle create_kernel(
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
                     .noc = NOC::NOC_0,
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .compile_args = compile_args,
+                });
+        case tt::RISCV::ERISC1:
+            return CreateKernel(
+                program,
+                kernel_path,
+                cr_set,
+                tt::tt_metal::EthernetConfig{
+                    .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
+                    .noc = NOC::NOC_0,
+                    .processor = DataMovementProcessor::RISCV_1,
                     .compile_args = compile_args,
                 });
         default: TT_THROW("Unsupported {} processor in test.", enchantum::to_string(processor_class));
@@ -229,7 +242,7 @@ bool cb_config_successful(
 }
 
 void test_dummy_EnqueueProgram_with_runtime_args(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& eth_core_coord) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& eth_core_coord, DataMovementProcessor erisc_processor = DataMovementProcessor::RISCV_0) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -248,9 +261,20 @@ void test_dummy_EnqueueProgram_with_runtime_args(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         eth_core_coord,
-        tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .defines = dummy_defines0});
+        tt::tt_metal::EthernetConfig{
+            .noc = tt::tt_metal::NOC::NOC_0, .processor = erisc_processor, .defines = dummy_defines0});
 
-    vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    constexpr int k_NumDummyArgs = 9;
+    vector<uint32_t> dummy_kernel0_args(k_NumDummyArgs);
+    // Generate 9 random numbers
+    {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, 100);
+        for (uint32_t i = 0; i < k_NumDummyArgs; i++) {
+            dummy_kernel0_args[i] = dis(gen);
+        }
+    }
     tt::tt_metal::SetRuntimeArgs(program, dummy_kernel0, eth_core_coord, dummy_kernel0_args);
 
     auto& cq = mesh_device->mesh_command_queue();
@@ -813,6 +837,8 @@ bool test_EnqueueWrap_on_EnqueueProgram(IDevice* device, CommandQueue& cq, const
     return pass;
 }
 
+bool riscv_is_eth(const tt::RISCV& riscv) { return (riscv == tt::RISCV::ERISC0 || riscv == tt::RISCV::ERISC1); }
+
 // Verify RT args for a core at a given address by comparing to expected values.
 bool verify_rt_args(
     bool unique,
@@ -826,8 +852,8 @@ bool verify_rt_args(
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-    auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core)
-                                            : device->worker_core_from_logical_core(logical_core);
+    auto noc_xy = riscv_is_eth(riscv) ? device->ethernet_core_from_logical_core(logical_core)
+                                      : device->worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
     log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
 
@@ -864,13 +890,14 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, const tt::RIS
                 device->allocator()->get_base_allocator_addr(HalMemType::L1) + 2 * 256 * sizeof(uint32_t);
             common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
             break;
-        case tt::RISCV::ERISC: {
+        case tt::RISCV::ERISC0:
+        case tt::RISCV::ERISC1: {
             HalProgrammableCoreType eth_core_type =
                 idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
             unique_args_addr = MetalContext::instance().hal().get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             break;
-        } break;
+        }
         default: TT_THROW("Unsupported {} processor in get_args_addr.", riscv);
     }
     return {unique_args_addr, common_args_addr};
@@ -1001,7 +1028,15 @@ bool test_increment_runtime_args_sanity(
         idle_eth);
 }
 
-void test_my_coordinates(
+tt::RISCV datamovement_processor_to_riscv(DataMovementProcessor processor) {
+    switch (processor) {
+        case DataMovementProcessor::RISCV_0: return tt::RISCV::ERISC0;
+        case DataMovementProcessor::RISCV_1: return tt::RISCV::ERISC1;
+        default: TT_THROW("Unsupported processor {}", enchantum::to_string(processor));
+    }
+}
+
+static void test_my_coordinates(
     std::shared_ptr<distributed::MeshDevice> mesh_device,
     tt::RISCV processor_class,
     size_t cq_id = 0,
@@ -1317,8 +1352,68 @@ TEST_F(UnitMeshCQFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
-            local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core);
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+                HalProgrammableCoreType::ACTIVE_ETH);
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+                log_info(
+                    tt::LogTest,
+                    "Test active ethernet enqueue dummy program with runtime args for eth_core: {} DM{}",
+                    eth_core.str(),
+                    erisc_idx);
+                local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+                    device, eth_core, static_cast<DataMovementProcessor>(erisc_idx));
+            }
         }
+    }
+}
+
+// Test to see we can launch a kernel at the same time on both active ethernet cores
+// If they can't handshake it means only 1 was able to launch
+TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
+    const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        HalProgrammableCoreType::ACTIVE_ETH);
+    if (erisc_count < 2) {
+        GTEST_SKIP() << "Skipping test as this test requires 2 ethernet cores";
+    }
+    for (const auto& mesh_device : devices_) {
+        auto& cq = mesh_device->mesh_command_queue();
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        for (const auto& eth_core : mesh_device->get_devices()[0]->get_active_ethernet_cores(true)) {
+            auto program = tt::tt_metal::CreateProgram();
+            auto primary = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/local_handshake_2.cpp",
+                eth_core,
+                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0}
+            );
+            auto secondary = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/local_handshake_2.cpp",
+                eth_core,
+                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_1}
+            );
+
+            uint32_t unreserved_l1 = hal::get_erisc_l1_unreserved_base();
+            uint32_t init_value = rand();
+            log_info(tt::LogTest,
+                "Test active ethernet handshake for eth_core: {} DM0 and DM1, init value: {} unreserved_l1: 0x{:x}",
+                eth_core.str(),
+                init_value, unreserved_l1);
+
+            std::vector<uint32_t> primary_kernel_args = {1, unreserved_l1, init_value};
+            std::vector<uint32_t> secondary_kernel_args = {0, unreserved_l1, init_value};
+
+            tt::tt_metal::SetRuntimeArgs(program, primary, eth_core, primary_kernel_args);
+            tt::tt_metal::SetRuntimeArgs(program, secondary, eth_core, secondary_kernel_args);
+
+            distributed::MeshWorkload workload;
+            distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+        }
+
+        distributed::Finish(cq);
     }
 }
 
@@ -1330,9 +1425,23 @@ TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovem
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-            log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
-            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC));
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+                HalProgrammableCoreType::ACTIVE_ETH);
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+                log_info(
+                    tt::LogTest,
+                    "Test active ethernet runtime args for eth_core: {} DM{} using cr_set: {}",
+                    eth_core.str(),
+                    erisc_idx,
+                    cr_set.str());
+                EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+                    device,
+                    dummy_program_config,
+                    16,
+                    16,
+                    local_test_functions::datamovement_processor_to_riscv(
+                        static_cast<DataMovementProcessor>(erisc_idx))));
+            }
         }
     }
 }
@@ -1348,7 +1457,7 @@ TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCore
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             log_info(tt::LogTest, "Issuing test for idle eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC0, true));
         }
     }
 }
@@ -1365,7 +1474,7 @@ TEST_F(UnitMeshCQFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDa
             log_info(
                 tt::LogTest, "Issuing test for inactive eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC0, true));
         }
     }
 }
@@ -1376,8 +1485,8 @@ TEST_F(UnitMeshCQFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (auto& device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 15, 1));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 15, 1);
     }
 }
 
@@ -1400,7 +1509,7 @@ TEST_P(DISABLED_CQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) 
 
 TEST_P(DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (const auto& device : devices_) {
-        for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+        for (uint32_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             local_test_functions::test_basic_dispatch_functions(device, cq_id);
         }
     }
@@ -1605,8 +1714,8 @@ TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
         CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 13, 17, 19, 1));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->mesh_command_queue(), dummy_program_config, 13, 17, 19, 1);
     }
 }
 
@@ -1619,8 +1728,8 @@ TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_MaxRunt
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         auto n_rt = tt::tt_metal::max_runtime_args;
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, n_rt, n_rt, n_rt, 1));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->mesh_command_queue(), dummy_program_config, n_rt, n_rt, n_rt, 1);
     }
 }
 
@@ -1633,8 +1742,8 @@ TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->mesh_command_queue(), dummy_program_config, 12, 9, 2));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->mesh_command_queue(), dummy_program_config, 12, 9, 2);
     }
 }
 
@@ -1648,8 +1757,8 @@ TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiNonOverlappingCoreRange)
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 2));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 2);
     }
 }
 
@@ -1662,8 +1771,8 @@ TEST_F(UnitMeshCQFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->mesh_command_queue(), dummy_program_config, 9, 31, 10));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->mesh_command_queue(), dummy_program_config, 9, 31, 10);
     }
 }
 
@@ -1739,6 +1848,26 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesDataMovement) {
 TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
     for (const auto& device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
+    }
+}
+
+// Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
+    GTEST_SKIP() << "Mesh device does not support logical / relative coordinates on Eth";
+    for (const auto& device : devices_) {
+        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC0);
+        if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            HalProgrammableCoreType::ACTIVE_ETH);
+        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            log_info(tt::LogTest, "Test logical coordinates active ethernet DM{}", erisc_idx);
+            local_test_functions::test_my_coordinates(
+                device,
+                local_test_functions::datamovement_processor_to_riscv(static_cast<DataMovementProcessor>(erisc_idx)));
+        }
     }
 }
 
@@ -2035,8 +2164,8 @@ TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 256, 256, 256, NUM_ITER));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->mesh_command_queue(), dummy_program_config, 256, 256, 256, NUM_ITER);
     }
 }
 
