@@ -188,10 +188,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     uint32_t value_false_single_tile_size = tt_metal::detail::TileSize(value_false_data_format);
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
 
-    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
-
     // we parallelize the computation across the output tiles
-    constexpr bool row_major = true;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
