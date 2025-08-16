@@ -695,15 +695,15 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
         # ########################### 512 512 512 x 8 subblock 4 2 ################################
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
+        ("blackhole", 1350, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
+        ("blackhole", 1350, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
+        ("blackhole", 1350, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
+        ("blackhole", 1350, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
         # ########################### 512 512 256x8 subblock 4 2 ################################
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
+        ("blackhole", 1350, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
+        ("blackhole", 1350, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
+        ("blackhole", 1350, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
+        ("blackhole", 1350, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
     ],
 )
 def test_matmul_single_core_sharded(
@@ -771,9 +771,9 @@ def test_matmul_single_core_sharded(
         ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
         ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
         ("wormhole_b0", 1000, np.array([2048, 3840]), 1, 4, 1, 12, 0),  # Padded FF1 shapes for llama 70b on TG
-        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
-        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
-        ("blackhole", 800, np.array([2048, 3840]), 1, 4, 1, 8, 0),  # Padded FF1 shapes for llama 70b on TG
+        ("blackhole", 1350, np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
+        ("blackhole", 1350, np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
+        ("blackhole", 1350, np.array([2048, 3840]), 1, 4, 1, 8, 0),  # Padded FF1 shapes for llama 70b on TG
     ],
 )
 def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
@@ -790,11 +790,12 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
             input_size = k * n * 2048 // 1024
         run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
-        time = cycle / freq / 1000.0 / 1000.0
-        throughput = input_size / cycle
+        dev_freq = get_device_freq()
+        time = cycle / dev_freq / 1000.0 / 1000.0
+        throughput = input_size / cycle * dev_freq / 1000.0
         logger.info("DRAM read cycle: " + str(cycle))
         logger.info("DRAM read time: " + str(time))
-        logger.info("DRAM read throughput: " + str(throughput))
+        logger.info("DRAM read throughput: " + str(throughput) + " Gb/s")
         cycle_list.append(cycle)
         time_list.append(time)
         throughput_list.append(throughput)
@@ -803,12 +804,12 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
     throughput = sum(throughput_list) / len(throughput_list)
     logger.info("DRAM read cycle: " + str(cycle))
     logger.info("DRAM read time: " + str(time))
-    logger.info("DRAM read throughput: " + str(throughput))
+    logger.info("DRAM read throughput: " + str(throughput) + " Gb/s")
     data.append([throughput])
     # check within range
     dev_freq = get_device_freq()
-    bw_lower_bound = 260.0 * dev_freq / 1000.0
-    bw_upper_bound = bw_lower_bound + 10.0
+    bw_lower_bound = 340.0
+    bw_upper_bound = 400.0
     assert bw_lower_bound <= throughput
     assert throughput <= bw_upper_bound
 
@@ -934,7 +935,7 @@ def test_dram_read_l1_write_core(
     throughput = sum(throughput_list) / len(throughput_list)
     logger.info("DRAM read cycle: " + str(cycle))
     logger.info("DRAM read time: " + str(time))
-    logger.info("DRAM read throughput: " + str(throughput))
+    logger.info("DRAM read throughput: " + str(throughput) + " Gb/s")
     data.append([throughput])
     # check within range
     if arch == "grayskull":
@@ -1067,7 +1068,7 @@ def test_dram_read_remote_cb_sync(
     [
         ("grayskull", 1020, 9, 12, np.array([[3456, 3072, 1024], [2304, 3072, 768]]), np.array([[2304, 3072, 768]])),
         ("wormhole_b0", 1000, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
-        ("blackhole", 800, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
+        ("blackhole", 1350, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
     ],
 )
 @pytest.mark.skip()
