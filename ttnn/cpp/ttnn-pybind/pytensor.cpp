@@ -31,6 +31,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -45,6 +46,33 @@
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
+struct PyFromTorchConversionInput {
+    std::string torch_dtype;
+    DataType optional_data_type;
+    Layout optional_layout;
+
+    bool operator==(const PyFromTorchConversionInput& other) const {
+        return torch_dtype == other.torch_dtype && optional_data_type == other.optional_data_type &&
+               optional_layout == other.optional_layout;
+    }
+};
+
+struct PyTensorPreparedConversion {
+    /// Use this layout to construct the initial tensor -- extra conversion might be done
+    /// after the tensor has been moved to device.
+    Layout construct_with_layout = Layout::TILE;
+    DataType construct_with_data_type = DataType::INVALID;
+    std::optional<std::string> torch_convert_dtype = std::nullopt;
+};
+template <>
+struct std::hash<PyFromTorchConversionInput> {
+    std::size_t operator()(const PyFromTorchConversionInput& input) const {
+        std::size_t h1 = std::hash<std::string>{}(input.torch_dtype);
+        std::size_t h2 = std::hash<int>{}(static_cast<int>(input.optional_data_type));
+        std::size_t h3 = std::hash<int>{}(static_cast<int>(input.optional_layout));
+        return h1 ^ (h2 << 1) ^ (h3 << 2);
+    }
+};
 
 namespace ttnn::tensor {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -166,6 +194,26 @@ struct PreprocessedPyTensor {
     std::size_t py_data_ptr = 0;
 };
 
+std::optional<DataType> map_torch_data_type_to_ttnn(const py::object& py_dtype, const py::object& torch) {
+    if (py_dtype.equal(torch.attr("float32"))) {
+        return DataType::FLOAT32;
+    } else if (py_dtype.equal(torch.attr("float16"))) {
+        return DataType::BFLOAT16;
+    } else if (py_dtype.equal(torch.attr("bfloat16"))) {
+        return DataType::BFLOAT16;
+    } else if (py_dtype.equal(torch.attr("int64"))) {
+        return DataType::UINT32;
+    } else if (py_dtype.equal(torch.attr("int32"))) {
+        return DataType::INT32;
+    } else if (py_dtype.equal(torch.attr("int16"))) {
+        return DataType::UINT16;
+    } else if (py_dtype.equal(torch.attr("uint8"))) {
+        return DataType::UINT8;
+    } else {
+        return std::nullopt;
+    }
+}
+
 PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<DataType> optional_data_type) {
     const auto py_dtype = py_tensor.attr("dtype");
     if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
@@ -176,20 +224,8 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
         // Otherwise, figure it out from torch dtype
         if (optional_data_type.has_value()) {
             data_type = optional_data_type.value();
-        } else if (py_dtype.equal(torch.attr("float32"))) {
-            data_type = DataType::FLOAT32;
-        } else if (py_dtype.equal(torch.attr("float16"))) {
-            data_type = DataType::BFLOAT16;
-        } else if (py_dtype.equal(torch.attr("bfloat16"))) {
-            data_type = DataType::BFLOAT16;
-        } else if (py_dtype.equal(torch.attr("int64"))) {
-            data_type = DataType::UINT32;
-        } else if (py_dtype.equal(torch.attr("int32"))) {
-            data_type = DataType::INT32;
-        } else if (py_dtype.equal(torch.attr("int16"))) {
-            data_type = DataType::UINT16;
-        } else if (py_dtype.equal(torch.attr("uint8"))) {
-            data_type = DataType::UINT8;
+        } else if (auto opt_data = map_torch_data_type_to_ttnn(py_dtype, torch); opt_data.has_value()) {
+            data_type = opt_data.value();
         } else {
             TT_THROW("Unsupported DataType: {}", std::string(py::repr(py_dtype)));
         }
@@ -199,6 +235,7 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
                 contiguous_py_tensor = contiguous_py_tensor.attr("to")(torch.attr(target_py_dtype));
             }
         };
+
         switch (data_type) {
             case DataType::UINT8: {
                 maybe_convert_pytorch_tensor("uint8");
@@ -303,7 +340,193 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
     }
 }
 
-Tensor convert_python_tensor_to_tt_tensor(
+std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
+    const py::handle& py_tensor,
+    const std::optional<DataType>& dtype,
+    const std::optional<Layout>& layout,
+    bool has_device,
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& optional_tile) {
+    py::object torch = py::module_::import("torch");
+    py::object tensor = py::reinterpret_borrow<pybind11::object>(py_tensor);
+
+    if (!py::isinstance(py_tensor, torch.attr("Tensor"))) {
+        return std::nullopt;
+    }
+
+    // Early exit conditions -- on-device strategy is not supported
+
+    if (!has_device ||
+        // Device is required
+        (tensor.attr("numel")().cast<std::uint64_t>() == 0) || (tensor.attr("dim")().cast<std::uint64_t>() == 0) ||
+        // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
+        // the tensor must be constructed on host.
+        memory_config.is_sharded() ||
+        // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
+        (optional_tile.has_value() && (((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
+                                       ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))) ||
+        // on-device tiling operation expects 32x32 row
+        !map_torch_data_type_to_ttnn(py_tensor.attr("dtype"), torch).has_value()) {
+        return std::nullopt;
+    }
+
+    // High-level overview of the conversion strategy logic.
+    //
+    // Not all mappings improve performance if they are done on device: the type conversion itself is not the most
+    // expensive part of the conversion, it is ROW->TILE conversion. If done on host, it might be ~10 times slower than
+    // device. But due to existing issues with some on-device operators, only the mappings below can be safely done on
+    // device, without the loss of precision.
+    //
+    // Edge cases that require host-side conversion due to known bugs:
+    //    - int32 tensors with retiling can lose precision https://github.com/tenstorrent/tt-metal/issues/23407,
+    //      although the size is not stable. `(32, 32, 64, 64)` Can trigger the bug as well.
+    //    - uint8 typecast missing device support https://github.com/tenstorrent/tt-metal/issues/21682
+    //    - float32 precision loss when changing layout https://github.com/tenstorrent/tt-metal/issues/23405
+    //    - bfloat16 to bfloat4b/bfloat8b conversions can zero half the tensor in some conditions.
+    //      The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
+    //
+    // Based on the benchmark data, not all conversion pairings have performance improvements
+    // when done on host. Additionally, some types cannot be stored in ROW-MAJOR form, like bfloat8, meaning that
+    // on-host conversion to TILE is mandatory for the TTNN tensor creation.
+    //
+    // To extend the conversion map once the aforementioned bugs are resolved:
+    //
+    // - `construct_with_layout` constrols which layout should be used for the host-side tensor construction. For
+    //   performance reasons the ROW-MAJOR is the most optimal one.
+    // - `host_side_conversion` to show whether on-device type casting is necessary or not.
+    //   If not, the tensor will be created using torch (or on-host converted torch data) and optionally changed to the
+    //   right layout.
+
+    // Mapping
+    // `{input_torch_type, expected_ttnn_type, expected_layout}` -> `{on-host_tensor_layout, on-host_tensor_data_type,
+    // torch_data_conversion}`
+    static std::unordered_map<PyFromTorchConversionInput, PyTensorPreparedConversion> conversion_map = {
+        // clang-format off
+
+        // conversion must be done on host, but after that the tiling can be done on device. Caused by
+        // the float32 tiling on device might lose precision,
+        {{"float16", DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
+        {{"float16", DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32, "int32" }},
+        {{"float32", DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
+        {{"float32", DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32, "int32" }},
+
+        // int32 conversion can be safely done on device
+        {{"int32",   DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
+        {{"int32",   DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
+        {{"int32",   DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
+        {{"int32",   DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
+        {{"int32",   DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
+        {{"int32",   DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
+        {{"int32",   DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
+
+        // int64 cannot be stored in the torch tensor, and since the intermediate type is int32, all `int64` -> T conversions are also safe
+        // uint8, int32, uint32 conversion does not have show any performance improvement when done on device, and thus excluded
+        {{"int64",   DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
+        {{"int64",   DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
+        {{"int64",   DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
+        {{"int64",   DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
+
+
+
+        {{"uint8",   DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
+        {{"uint8",   DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32, "int32" }},
+        // clang-format on
+    };
+
+    DataType expected_dtype = DataType::INVALID;
+    if (dtype.has_value()) {
+        expected_dtype = dtype.value();
+    } else if (auto opt_data = map_torch_data_type_to_ttnn(py_tensor.attr("dtype"), torch); opt_data.has_value()) {
+        expected_dtype = opt_data.value();
+    }
+
+    if (expected_dtype != DataType::INVALID) {
+        PyFromTorchConversionInput input{
+            .torch_dtype = tensor.attr("dtype").attr("__str__")().cast<std::string>().substr(sizeof("torch.") - 1),
+            .optional_data_type = expected_dtype,
+            .optional_layout = layout.value_or(Layout::ROW_MAJOR),
+        };
+
+        auto it = conversion_map.find(input);
+        if (it != conversion_map.end()) {
+            return it->second;
+        }
+    }
+
+    return std::nullopt;
+}
+
+Tensor convert_python_tensor_to_tt_tensor_on_device(
+    const py::handle& py_tensor,
+    std::optional<DataType> optional_data_type,
+    std::optional<Layout> optional_layout,
+    const std::optional<Tile>& optional_tile,
+    const MemoryConfig& memory_config,
+    MeshDevice* device,
+    ttnn::QueueId cq_id,
+    float pad_value,
+    const distributed::TensorToMesh* mesh_mapper,
+    const PyTensorPreparedConversion& strategy) {
+    ZoneScoped;
+    py::object contiguous_py_tensor = py_tensor.attr("contiguous")();
+    py::object torch = py::module_::import("torch");
+
+    if (strategy.torch_convert_dtype) {
+        ZoneScopedN("Convert type on device");
+        contiguous_py_tensor =
+            contiguous_py_tensor.attr("to")(torch.attr(strategy.torch_convert_dtype.value().c_str()));
+    }
+
+    PreprocessedPyTensor preprocessed_py_tensor{
+        .data_type = strategy.construct_with_data_type,
+        .contiguous_py_tensor = contiguous_py_tensor,
+        .num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")()),
+        .py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
+    };
+
+    const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
+
+    TT_FATAL(
+        preprocessed_py_tensor.num_elements == shape.volume(),
+        "Number of elements from python tensor {} must match volume of shape {}!",
+        preprocessed_py_tensor.num_elements,
+        shape.volume());
+
+    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<py::object>(preprocessed_py_tensor.contiguous_py_tensor));
+
+    auto output = create_tt_tensor_from_py_data(
+        preprocessed_py_tensor.py_data_ptr,
+        shape,
+        TensorLayout(
+            preprocessed_py_tensor.data_type, PageConfig(strategy.construct_with_layout, optional_tile), memory_config),
+        device,
+        pydata_pin,
+        cq_id,
+        pad_value,
+        mesh_mapper);
+
+    output = tt::tt_metal::set_tensor_id(output);
+
+    auto set_layout = [&](Layout target) {
+        if (output.layout() != target) {
+            output = ttnn::to_layout(output, target, std::nullopt, memory_config);
+        }
+    };
+
+    if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
+        // Need to perform final data conversion on device, typecast requires TILE layout.
+        set_layout(Layout::TILE);
+        output = ttnn::typecast(output, optional_data_type.value());
+    }
+
+    if (optional_layout.has_value()) {
+        set_layout(optional_layout.value());
+    }
+
+    return output;
+}
+
+Tensor convert_python_tensor_to_tt_tensor_on_host(
     const py::handle& py_tensor,
     std::optional<DataType> optional_data_type,
     std::optional<Layout> optional_layout,
@@ -313,18 +536,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
-    GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
-        py_tensor,
-        optional_data_type,
-        optional_layout,
-        optional_tile,
-        memory_config,
-        device,
-        cq_id,
-        pad_value,
-        mesh_mapper);
-
+    ZoneScoped;
     auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
@@ -342,7 +554,7 @@ Tensor convert_python_tensor_to_tt_tensor(
             TT_FATAL(
                 !optional_layout.has_value() or *optional_layout == Layout::TILE,
                 "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
-                *optional_layout);
+                (optional_layout.has_value() ? fmt::format("{}", *optional_layout) : "std::nullopt"));
             return Layout::TILE;
         } else {
             return optional_layout.value_or(Layout::ROW_MAJOR);
@@ -365,7 +577,60 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value,
         mesh_mapper);
 
-    output = tt::tt_metal::set_tensor_id(output);
+    return tt::tt_metal::set_tensor_id(output);
+}
+
+Tensor convert_python_tensor_to_tt_tensor(
+    const py::handle& py_tensor,
+    std::optional<DataType> optional_data_type,
+    std::optional<Layout> optional_layout,
+    const std::optional<Tile>& optional_tile,
+    const MemoryConfig& memory_config,
+    MeshDevice* device,
+    ttnn::QueueId cq_id,
+    float pad_value,
+    const distributed::TensorToMesh* mesh_mapper) {
+    ZoneScoped;
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
+        py_tensor,
+        optional_data_type,
+        optional_layout,
+        optional_tile,
+        memory_config,
+        device,
+        cq_id,
+        pad_value,
+        mesh_mapper);
+
+    std::optional<PyTensorPreparedConversion> strategy = prepare_torch_tensor_conversion(
+        py_tensor, optional_data_type, optional_layout, device != nullptr, memory_config, optional_tile);
+    Tensor output;
+    if (strategy) {
+        output = convert_python_tensor_to_tt_tensor_on_device(
+            py_tensor,
+            optional_data_type,
+            optional_layout,
+            optional_tile,
+            memory_config,
+            device,
+            cq_id,
+            pad_value,
+            mesh_mapper,
+            strategy.value());
+    } else {
+        output = convert_python_tensor_to_tt_tensor_on_host(
+            py_tensor,
+            optional_data_type,
+            optional_layout,
+            optional_tile,
+            memory_config,
+            device,
+            cq_id,
+            pad_value,
+            mesh_mapper);
+    }
+
     GraphTracker::instance().track_function_end(output);
     return output;
 }
