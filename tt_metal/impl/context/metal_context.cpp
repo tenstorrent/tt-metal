@@ -2,27 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <filesystem>
+
 #include <enchantum/enchantum.hpp>
+#include <tracy/Tracy.hpp>
+
 #include "metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/debug/debug_helpers.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/debug/inspector_impl.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/debug/debug_helpers.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/llrt/get_platform_architecture.hpp"
+#include "tt_metal/llrt/llrt.hpp"
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include "tt_metal/fabric/fabric_host_utils.hpp"
-#include <filesystem>
-#include <tt-metalium/device_pool.hpp>
 
 namespace tt::tt_metal {
 
@@ -417,8 +421,15 @@ void MetalContext::set_fabric_config(
     const tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes) {
-    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
-    // config, not through this function exposed in the detail API.
+    if (is_2d_fabric_config(fabric_config) && cluster_->get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        const auto fabric_type = get_fabric_type(fabric_config);
+        if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_Y ||
+            fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+            TT_THROW("2D fabric with torus topology is only supported on GALAXY clusters.");
+        }
+    }
+
+    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
     force_reinit_ = true;
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
@@ -500,6 +511,7 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 
 void MetalContext::initialize_control_plane() {
     if (custom_mesh_graph_desc_path_.has_value()) {
+        log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
         TT_FATAL(
             std::filesystem::exists(mesh_graph_desc_path),
@@ -510,18 +522,30 @@ void MetalContext::initialize_control_plane() {
         this->construct_control_plane(mesh_graph_desc_path);
         return;
     }
+    log_debug(tt::LogDistributed, "Using default mesh graph descriptor.");
 
     auto cluster_type = cluster_->get_cluster_type();
-    auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type);
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
             cluster_type, std::filesystem::path(rtoptions_.get_root_dir()));
 
     // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY && fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
+        std::string_view mesh_graph_descriptor;
+        switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
+            case tt::tt_fabric::FabricType::TORUS_XY:
+                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
+                break;
+            case tt::tt_fabric::FabricType::TORUS_X:
+                mesh_graph_descriptor = "single_galaxy_torus_x_graph_descriptor.yaml";
+                break;
+            case tt::tt_fabric::FabricType::TORUS_Y:
+                mesh_graph_descriptor = "single_galaxy_torus_y_graph_descriptor.yaml";
+                break;
+            default: mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml"; break;
+        }
         mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
-                               "tt_metal/fabric/mesh_graph_descriptors" /
-                               "single_galaxy_torus_xy_graph_descriptor.yaml";
+                               "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
     }
 
     TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
@@ -615,7 +639,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
                 log_warning(
                     tt::LogAlways,
                     "Detected dispatch kernels still running but failed to complete an early exit. This may happen "
-                    "from time to time following a reset, continuing to FW intialization...");
+                    "from time to time following a reset, continuing to FW initialization...");
             }
         }
     }

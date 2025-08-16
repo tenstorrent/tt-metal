@@ -276,6 +276,7 @@ models/demos/yolov9c @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov8x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov8s @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
+models/experimental/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
 models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov7 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/classification_eval @tenstorrent/cse-developer-ttnn

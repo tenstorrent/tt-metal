@@ -393,7 +393,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     auto hugepage = get_hugepage(device->id(), 0);
     auto hugepage_size = get_hugepage_size(device->id());
 
-    // Don't need to seperate device results
+    // Don't need to separate device results
     // Readers will have 0 bytes written
     // Writers will have 0 bytes read. Will not mix.
     TestResult results;

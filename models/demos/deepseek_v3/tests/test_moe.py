@@ -28,7 +28,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
     ],
     indirect=True,
 )
@@ -64,7 +64,7 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
+    weight_config = MoE.convert_weights(hf_config, [hf_state_dict], tmp_path, mesh_device)
 
     # Generate appropriate config using utility function
     model_config = get_model_config(MoE, mode, hf_config, mesh_device)

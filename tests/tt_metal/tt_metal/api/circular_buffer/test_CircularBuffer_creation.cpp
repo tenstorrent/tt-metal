@@ -108,7 +108,7 @@ TEST_F(DeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
 
     EXPECT_TRUE(actual_config == expected_config);
 
-    auto cb = CreateCircularBuffer(program, cr_set, actual_config);
+    CreateCircularBuffer(program, cr_set, actual_config);
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         detail::CompileProgram(devices_.at(id), program);
@@ -150,7 +150,7 @@ TEST_F(DeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
                                        .set_page_size(2, cb_config.page_size)
                                        .set_page_size(16, cb_config.page_size);
 
-    auto valid_cb = CreateCircularBuffer(program, cr_set, config1);
+    CreateCircularBuffer(program, cr_set, config1);
 
     EXPECT_ANY_THROW(CreateCircularBuffer(program, cr_set, config2));
 }

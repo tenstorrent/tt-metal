@@ -131,6 +131,9 @@ SliceWidth = ttnn.Conv2dSliceWidth
     "has_bias, fp32_accum, packer_l1_acc",
     [[True, True, False]],
 )
+@pytest.mark.skip(
+    reason="Temporarily disabled due to issues - see ticket: https://github.com/tenstorrent/tt-metal/issues/26930"
+)
 def test_conv_dram(
     device,
     torch_tensor_map,

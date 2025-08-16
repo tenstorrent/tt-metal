@@ -52,7 +52,6 @@ void RunTest(
     bool active,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
     // Try printing on all ethernet cores on this device
-    int count = 0;
     std::unordered_set<CoreCoord> test_cores;
     tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .processor = processor};
     if (active) {
@@ -67,11 +66,7 @@ void RunTest(
         Program program = Program();
 
         // Create the kernel
-        KernelHandle erisc_kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
-            core,
-            config);
+        CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp", core, config);
 
         // Run the program
         log_info(

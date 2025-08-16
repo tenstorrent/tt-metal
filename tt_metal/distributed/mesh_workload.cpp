@@ -110,11 +110,11 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
     if (programs_.size() == 1) {
-        // Compile from main thread for homogenous workloads
+        // Compile from main thread for homogeneous workloads
         this->compile_program(programs_.begin()->first, mesh_device);
     } else {
         for (auto& [device_range, _] : programs_) {
-            // Multi-Threaded Compile: Useful for heterogenous MeshWorkloads
+            // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
             mesh_device->enqueue_to_thread_pool(
                 [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
         }

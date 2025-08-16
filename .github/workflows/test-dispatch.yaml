@@ -75,7 +75,7 @@ jobs:
   test-dispatch:
     # needs: setup
     needs: build-artifact
-    timeout-minutes: 1440
+    timeout-minutes: 120
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
       - name: ⬇️ Checkout

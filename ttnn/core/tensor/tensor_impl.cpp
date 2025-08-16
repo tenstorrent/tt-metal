@@ -474,8 +474,10 @@ std::string to_string(const Tensor& tensor) {
                 std::stringstream ss;
                 for (size_t i = 0; i < buffers.size(); i++) {
                     const distributed::MeshCoordinate coord = *coords_it++;
-                    ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
-                    detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+                    if (mesh_device->is_local(coord)) {
+                        ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+                        detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+                    }
                     if (i + 1 != buffers.size()) {
                         ss << std::endl;
                     }
@@ -577,7 +579,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
 
     // For performance, perform all allocations via DistributedHostBuffer::transform, run from multiple threads.
-    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
     for (const auto& coord : storage.coords) {
         distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
     }
@@ -931,7 +933,8 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
     const auto [num_shards_height, last_shard_height, num_shards_width, last_shard_width] =
         tt::tt_metal::compute_shard_division_spec(logical_2d_shape, logical_shard_shape);
 
-    std::vector<LogicalPhysicalMapping> logical_physical_mapping(num_shards_height * num_shards_width);
+    std::vector<LogicalPhysicalMapping> logical_physical_mapping{};
+    logical_physical_mapping.reserve(num_shards_height * num_shards_width);
 
     for (size_t shard_height_idx = 0; shard_height_idx < num_shards_height; shard_height_idx++) {
         for (size_t shard_width_idx = 0; shard_width_idx < num_shards_width; shard_width_idx++) {
@@ -949,7 +952,7 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
                 indices[i] = {i * logical_stride + logical_start_idx, i * physical_stride + physical_start_idx};
             }
 
-            logical_physical_mapping.push_back((LogicalPhysicalMapping){indices, num_shard_cols});
+            logical_physical_mapping.emplace_back(indices, num_shard_cols);
         }
     }
     return logical_physical_mapping;

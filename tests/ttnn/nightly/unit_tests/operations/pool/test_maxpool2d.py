@@ -109,9 +109,7 @@ def run_max_pool(
         pytest.skip("kernel is too large for the padded tensor")
 
     out_n = in_n
-    out_c = (
-        max(in_c, 32) if dtype == ttnn.bfloat8_b else in_c
-    )  # TTNN will pad the output channels to 32 for bfloat8_b only
+    out_c = in_c
     ceil_mode_out_shape_adj = False
     if ceil_mode:
         out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
@@ -211,7 +209,6 @@ def run_max_pool(
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
-    ttnn_output = ttnn_output[:, :in_c, :, :]
 
     # test for equivalance
     pcc_thresh = 1.0
@@ -251,8 +248,10 @@ def run_max_pool(
             [1, 640, 32, 32],
             [1, 576, 32, 32],
             [1, 384, 32, 32],
-            # C=16 test
+            # C partial tile test
             [1, 16, 12, 12],
+            [1, 1, 56, 56],
+            [2, 290, 10, 10],
             # partial grid tests
             [1, 32, 10, 10],  # BH
             [1, 32, 6, 6],  # WH

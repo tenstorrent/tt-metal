@@ -194,7 +194,6 @@ bool RunWriteBWTest(
     auto output_buffer = CreateBuffer(InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
-    bool output_is_dram = test_config.output_buffer_type == BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
     const uint32_t dram_output_buffer_base_addr = output_buffer->address();
 
@@ -291,7 +290,7 @@ bool RunWriteBWTest(
     log_debug(tt::LogTest, "\t-- receiver --");
     log_debug(tt::LogTest, "\tchip0_receiver_channels_offset: {}", chip0_receiver_channels_offset);
     chip0_edm_args.push_back(chip0_receiver_channels_offset);
-    uint32_t chip0_receiver_num_channels = 0;
+    [[maybe_unused]] uint32_t chip0_receiver_num_channels = 0;
     // chip0_edm_args.push_back(chip0_receiver_num_channels);
     log_debug(tt::LogTest, "\tchip0_receiver_num_channels: {}", chip0_receiver_num_channels);
     //---------------------
@@ -327,7 +326,7 @@ bool RunWriteBWTest(
     // TODO
     std::vector<uint32_t> chip0_sender_worker_reader_runtime_args{dram_input_buf_base_addr};
 
-    CBHandle cb_src0_sender_workers = CreateCircularBuffer(sender_program, chip0_sender_worker_core, cb_src0_config);
+    CreateCircularBuffer(sender_program, chip0_sender_worker_core, cb_src0_config);
     auto device_0_edm_sender_worker_reader_kernel = tt_metal::CreateKernel(
         sender_program,
         sender_side_reader_worker_kernel_path,
@@ -499,8 +498,7 @@ bool RunWriteBWTest(
         (uint32_t)receiver_device->ethernet_core_from_logical_core(eth_receiver_core).y,
         chip1_worker_semaphore_id};
 
-    CBHandle cb_src0_receiver_workers =
-        CreateCircularBuffer(receiver_program, chip1_receiver_worker_core, cb_src0_config);
+    CreateCircularBuffer(receiver_program, chip1_receiver_worker_core, cb_src0_config);
     auto device_1_edm_receiver_worker_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         receiver_side_reader_worker_kernel_path,

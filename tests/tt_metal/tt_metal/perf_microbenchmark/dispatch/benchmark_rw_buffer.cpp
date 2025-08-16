@@ -65,7 +65,7 @@ static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_d
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
-    auto device_id = state.range(3);
+    [[maybe_unused]] auto device_id = state.range(3);
 
     log_debug(
         LogTest,
@@ -94,7 +94,7 @@ static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_de
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
-    auto device_id = state.range(3);
+    [[maybe_unused]] auto device_id = state.range(3);
 
     log_debug(
         LogTest,

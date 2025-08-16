@@ -169,30 +169,30 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
         buffer_size,
         {{CBIndex::c_0, tt::DataFormat::Float16_b}}
     ).set_page_size(CBIndex::c_0, buffer_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     // A CB with an unsupported data format
     CircularBufferConfig cb_src1_config = CircularBufferConfig(
         buffer_size,
         {{CBIndex::c_1, tt::DataFormat::Bfp2_b}}
     ).set_page_size(CBIndex::c_1, buffer_size);
-    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     // Three different kernels to mirror typical usage and some previously
     // failing test cases, although all three kernels simply print.
-    KernelHandle brisc_print_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    KernelHandle ncrisc_print_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    KernelHandle trisc_print_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",

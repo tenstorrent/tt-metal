@@ -189,12 +189,12 @@ bool run_sfpu_all_same_buffer(tt_metal::IDevice* device, const SfpuConfig& test_
         tt_metal::CircularBufferConfig l1_input_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
                 .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
-        auto l1_input_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
+        tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
 
         tt_metal::CircularBufferConfig l1_output_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
                 .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
-        auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
+        tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
 
         auto reader_kernel = tt_metal::CreateKernel(
             program,
@@ -222,7 +222,7 @@ bool run_sfpu_all_same_buffer(tt_metal::IDevice* device, const SfpuConfig& test_
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
 
-        auto sfpu_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/compute/eltwise_sfpu.cpp",
             test_config.cores,
@@ -433,7 +433,6 @@ TEST_F(DeviceFixture, DISABLED_TensixAllCoreSingleTileSfpuApproxCompute) {
         GTEST_SKIP();
     }
 
-    int chip_id = 0;
     CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
     CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
 
@@ -472,7 +471,6 @@ TEST_F(DeviceFixture, DISABLED_TensixAllCoreMultiTileSfpuApproxCompute) {
         GTEST_SKIP();
     }
 
-    int chip_id = 0;
     CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
     CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
 

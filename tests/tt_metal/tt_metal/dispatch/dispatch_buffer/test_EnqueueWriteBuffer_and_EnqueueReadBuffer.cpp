@@ -481,7 +481,6 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 uint32_t buf_size = num_pages * config.page_size();
                 vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
-                uint32_t page_size = config.page_size();
                 for (uint32_t i = 0; i < src.size(); i++) {
                     src.at(i) = i;
                 }
@@ -1953,7 +1952,6 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestBackToBackNon32BAlignedPageSize) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (const auto& mesh_device : devices_) {
-        auto device = mesh_device->get_devices()[0];
         distributed::DeviceLocalBufferConfig l1_config1{.page_size = 100, .buffer_type = buff_type, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config1{.size = 125000};
         auto bufa = distributed::MeshBuffer::create(buffer_config1, l1_config1, mesh_device.get());
@@ -1983,8 +1981,6 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestBackToBackNon32BAlignedPageSize) {
 
 // This case was failing for FD v1.3 design
 TEST_F(UnitMeshCQSingleCardBufferFixture, TestLargeBuffer4096BPageSize) {
-    constexpr BufferType buff_type = BufferType::L1;
-
     for (const auto& mesh_device : devices_) {
         TestBufferConfig config = {.num_pages = 512, .page_size = 4096, .buftype = BufferType::L1};
 
@@ -2114,7 +2110,6 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestNonblockingReads) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (const auto& mesh_device : devices_) {
-        auto device = mesh_device->get_devices()[0];
         distributed::DeviceLocalBufferConfig l1_config1{
             .page_size = 2048, .buffer_type = buff_type, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config1{.size = 2048};

@@ -18,16 +18,10 @@ namespace fabric_router_tests {
 template <typename Fixture>
 void validate_and_setup_control_plane_config(Fixture* fixture) {
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
-    const char* host_rank_str = std::getenv("TT_HOST_RANK");
-    auto local_mesh_id = std::string(mesh_id_str);
-    auto local_host_rank = std::string(host_rank_str);
-
-    TT_FATAL(
-        local_mesh_id.size() and local_host_rank.size(),
-        "TT_MESH_ID and TT_HOST_RANK environment variables must be set for Multi-Host Fabric Tests.");
+    TT_FATAL(mesh_id_str != nullptr, "TT_MESH_ID environment variable must be set for Multi-Host Fabric Tests.");
 
     auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
-        fixture->get_eth_coord_mapping(), std::stoi(local_mesh_id));
+        fixture->get_eth_coord_mapping(), std::stoi(mesh_id_str));
     tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
         fixture->get_path_to_mesh_graph_desc(), chip_to_eth_coord_mapping);
     TT_FATAL(

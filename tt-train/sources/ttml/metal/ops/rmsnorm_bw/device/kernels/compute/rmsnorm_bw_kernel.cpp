@@ -157,7 +157,7 @@ inline void compute_scale(const uint32_t row) {
     cb_wait_front(cb_dL_out_idx, Wt);
     cb_wait_front(cb_input_idx, Wt);
     for (uint32_t col = 0; col < Wt; col++) {
-        // If col == 0, we use scale_register as the working register to aviod unnecessary copying of data.
+        // If col == 0, we use scale_register as the working register to avoid unnecessary copying of data.
         auto working_register = col == 0 ? scale_register : intermediate_register;
 
         compute_gained_dL_dout(col, working_register, tile_register);
@@ -193,7 +193,7 @@ inline void compute_scale(const uint32_t row) {
     pack_and_push(scale_register, cb_scale_idx);
 
     cb_wait_front(cb_scale_idx, onetile);
-    const uint32_t reducted_scale_register = 0U;
+    const uint32_t reduced_scale_register = 0U;
     tile_regs_acquire();
 
     // Reduce scale along the inner dimension (C).
@@ -207,13 +207,13 @@ inline void compute_scale(const uint32_t row) {
         cb_mat_mul_reduce,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        reducted_scale_register,
+        reduced_scale_register,
         /* transpose */ 0);
     tile_regs_commit();
 
     // Pop the non-reduced scale tile from the CB.
     cb_pop_front(cb_scale_idx, onetile);
-    pack_and_push(reducted_scale_register, cb_scale_idx);
+    pack_and_push(reduced_scale_register, cb_scale_idx);
 }
 #else
 inline void compute_scale(const uint32_t row) {
@@ -230,7 +230,7 @@ inline void compute_scale(const uint32_t row) {
         cb_wait_front(cb_dL_out_idx, block_size);
         cb_wait_front(cb_input_idx, block_size);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
-            // If col == 0, we use scale_register as the working register to aviod unnecessary copying of data.
+            // If col == 0, we use scale_register as the working register to avoid unnecessary copying of data.
             auto working_register = col == 0 ? scale_register : intermediate_register;
 
             compute_gained_dL_dout(block_idx, working_register, tile_register);
@@ -272,7 +272,7 @@ inline void compute_scale(const uint32_t row) {
     pack_and_push(scale_register, cb_scale_idx);
 
     cb_wait_front(cb_scale_idx, onetile);
-    const uint32_t reducted_scale_register = 0U;
+    const uint32_t reduced_scale_register = 0U;
     tile_regs_acquire();
 
     // Reduce scale along the inner dimension (C).
@@ -286,13 +286,13 @@ inline void compute_scale(const uint32_t row) {
         cb_mat_mul_reduce,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        reducted_scale_register,
+        reduced_scale_register,
         /* transpose */ 0);
     tile_regs_commit();
 
     // Pop the non-reduced scale tile from the CB.
     cb_pop_front(cb_scale_idx, onetile);
-    pack_and_push(reducted_scale_register, cb_scale_idx);
+    pack_and_push(reduced_scale_register, cb_scale_idx);
 }
 #endif  // EVERYTHING_FITS_IN_L1
 
@@ -326,7 +326,7 @@ inline void MAIN {
         cb_wait_front(cb_recip_rms_a_bcasted_idx, onetile);
         // To compute scale we must iterate over all inner dimension.
         compute_scale(row);
-        // Wait for the reducted cb_scale to be ready.
+        // Wait for the reduced cb_scale to be ready.
         cb_wait_front(cb_scale_idx, onetile);
         bcast_scale();
         cb_wait_front(cb_scale_bcasted_idx, onetile);

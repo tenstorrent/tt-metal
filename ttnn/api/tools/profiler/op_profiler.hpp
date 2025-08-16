@@ -281,11 +281,21 @@ static inline json get_tensor_json(const Tensor& tensor) {
         ret["storage_type"] = fmt::format("{}", enchantum::to_string(tensor.storage_type()));
     }
 
-    auto tensor_shape = tensor.padded_shape();
-    ret["shape"]["W"] = tensor_shape.rank() >= 4 ? tensor_shape[-4] : 1;
-    ret["shape"]["Z"] = tensor_shape.rank() >= 3 ? tensor_shape[-3] : 1;
-    ret["shape"]["Y"] = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
-    ret["shape"]["X"] = tensor_shape[-1];
+    auto tensor_shape_padded = tensor.padded_shape();
+    auto tensor_shape_logical = tensor.logical_shape();
+    ret["shape"]["W"] = fmt::format(
+        "{}[{}]",
+        tensor_shape_padded.rank() >= 4 ? tensor_shape_padded[-4] : 1,
+        tensor_shape_logical.rank() >= 4 ? tensor_shape_logical[-4] : 1);
+    ret["shape"]["Z"] = fmt::format(
+        "{}[{}]",
+        tensor_shape_padded.rank() >= 3 ? tensor_shape_padded[-3] : 1,
+        tensor_shape_logical.rank() >= 3 ? tensor_shape_logical[-3] : 1);
+    ret["shape"]["Y"] = fmt::format(
+        "{}[{}]",
+        tensor_shape_padded.rank() >= 2 ? tensor_shape_padded[-2] : 1,
+        tensor_shape_logical.rank() >= 2 ? tensor_shape_logical[-2] : 1);
+    ret["shape"]["X"] = fmt::format("{}[{}]", tensor_shape_padded[-1], tensor_shape_logical[-1]);
     ret["layout"] = fmt::format("{}", enchantum::to_string(tensor.layout()));
     ret["dtype"] = fmt::format("{}", enchantum::to_string(tensor.dtype()));
 

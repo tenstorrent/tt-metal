@@ -164,7 +164,6 @@ bool RunWriteBWTest(
     auto input_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
         sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
 
-    bool input_is_dram = test_config.input_buffer_type == tt_metal::BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(input_buffer, inputs);
     const uint32_t dram_input_buf_base_addr = input_buffer->address();
 
@@ -178,7 +177,6 @@ bool RunWriteBWTest(
     auto output_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
-    bool output_is_dram = test_config.output_buffer_type == tt_metal::BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
     const uint32_t dram_output_buffer_base_addr = output_buffer->address();
 

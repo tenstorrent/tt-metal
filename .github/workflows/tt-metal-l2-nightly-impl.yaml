@@ -260,7 +260,7 @@ jobs:
     name: tt-train nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
