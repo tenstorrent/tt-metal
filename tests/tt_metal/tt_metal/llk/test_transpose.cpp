@@ -26,6 +26,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -96,10 +97,17 @@ void validate_transpose_wh(
     EXPECT_TRUE(pass);
 }
 
-void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig& test_config) {
+void run_single_core_transpose(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const TransposeConfig& test_config) {
     TT_FATAL(test_config.shape.size() == 4, "Error");
-
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -132,7 +140,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
         tt_metal::CircularBufferConfig(
             num_buffer_tiles * test_config.single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, test_config.single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_buffer_tiles = 32;
@@ -140,17 +148,17 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
         tt_metal::CircularBufferConfig(
             num_output_buffer_tiles * test_config.single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, test_config.single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{
@@ -165,14 +173,14 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
     }
 
     tt_metal::CreateKernel(
-        program,
+        program_,
         test_config.transpose_dest ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
                                    : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         unary_reader_kernel,
         core,
         {
@@ -188,7 +196,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
         });
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         unary_writer_kernel,
         core,
         {dram_buffer_dst_addr,
@@ -198,7 +206,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -212,7 +220,7 @@ void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig&
 
 }  // namespace unit_tests::compute::transpose
 
-TEST_F(DeviceFixture, TensixComputeTransposeWH) {
+TEST_F(MeshDeviceFixture, TensixComputeTransposeWH) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = false,
         .transpose_dest = false,
@@ -222,7 +230,7 @@ TEST_F(DeviceFixture, TensixComputeTransposeWH) {
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
 }
 
-TEST_F(DeviceFixture, TensixComputeTransposeWHShortInit) {
+TEST_F(MeshDeviceFixture, TensixComputeTransposeWHShortInit) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = true,
         .transpose_dest = false,
@@ -232,7 +240,7 @@ TEST_F(DeviceFixture, TensixComputeTransposeWHShortInit) {
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
 }
 
-TEST_F(DeviceFixture, TensixComputeTransposeWHDest) {
+TEST_F(MeshDeviceFixture, TensixComputeTransposeWHDest) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = false,
         .transpose_dest = true,

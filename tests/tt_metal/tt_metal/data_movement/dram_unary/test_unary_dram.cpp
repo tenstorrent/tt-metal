@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -31,22 +32,29 @@ struct DramConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const DramConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& test_config) {
     // SETUP
 
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     const size_t total_size_bytes = test_config.pages_per_transaction * test_config.bytes_per_page;
 
     // DRAM Address
-    DramAddressInfo dram_info = tt::tt_metal::unit_tests::dm::get_dram_address_and_size(device);
+    DramAddressInfo dram_info = tt::tt_metal::unit_tests::dm::get_dram_address_and_size(mesh_device);
 
     uint32_t input_dram_address = dram_info.base_address;
     uint32_t output_dram_address = input_dram_address + total_size_bytes;
 
     // L1 Address
-    L1AddressInfo l1_info = tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.core_coord);
+    L1AddressInfo l1_info = tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.core_coord);
 
     uint32_t l1_address = l1_info.base_address;
 
@@ -55,7 +63,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
 
     // Initialize semaphore ID
     CoreRangeSet core_range_set = CoreRangeSet({CoreRange(test_config.core_coord)});
-    const uint32_t sem_id = CreateSemaphore(program, core_range_set, 0);
+    const uint32_t sem_id = CreateSemaphore(program_, core_range_set, 0);
 
     // Compile-time arguments for kernels
     vector<uint32_t> reader_compile_args = {
@@ -81,7 +89,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
 
     // Kernels
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/reader_unary.cpp",
         test_config.core_coord,
         DataMovementConfig{
@@ -90,7 +98,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
             .compile_args = reader_compile_args});
 
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/writer_unary.cpp",
         test_config.core_coord,
         DataMovementConfig{
@@ -100,7 +108,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // RUNNING THE PROGRAM
 
@@ -116,7 +124,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     MetalContext::instance().get_cluster().dram_barrier(device->id());
 
     // Launch the program
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     // Read Intermediate Output from L1 (for debugging purposes)
     vector<uint32_t> packed_intermediate_output;
@@ -144,7 +152,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
 
 void directed_ideal_test(
     tt::ARCH arch_,
-    std::vector<IDevice*>& devices_,
+    std::vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     CoreCoord core_coord = {0, 0},
@@ -177,7 +185,7 @@ void directed_ideal_test(
 
 void packet_sizes_test(
     tt::ARCH arch_,
-    std::vector<IDevice*>& devices_,
+    std::vector<std::shared_ptr<distributed::MeshDevice>>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
     CoreCoord core_coord = {0, 0},
@@ -217,7 +225,7 @@ void packet_sizes_test(
 }  // namespace unit_tests::dm::dram
 
 /* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMPacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementDRAMPacketSizes) {
     unit_tests::dm::dram::packet_sizes_test(
         arch_,
         devices_,
@@ -228,7 +236,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMPacketSizes) {
 }
 
 /* ========== Test case for varying core locations; Test id = 1 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMCoreLocations) {
+TEST_F(MeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
     uint32_t test_case_id = 1;
 
     CoreCoord core_coord;
@@ -251,7 +259,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMCoreLocations) {
 // DRAM channels
 
 /* ========== Test case for varying DRAM channels; Test id = 2 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMChannels) {
+TEST_F(MeshDeviceFixture, TensixDataMovementDRAMChannels) {
     uint32_t test_case_id = 2;
 
     CoreCoord core_coord = {0, 0};
@@ -265,7 +273,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMChannels) {
 }
 
 /* ========== Directed ideal test case; Test id = 3 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
     // Test ID (Arbitrary)
     uint32_t test_id = 3;
 

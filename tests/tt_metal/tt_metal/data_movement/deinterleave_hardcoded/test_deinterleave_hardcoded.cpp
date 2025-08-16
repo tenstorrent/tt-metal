@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -31,14 +32,21 @@ struct DeinterleaveConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const DeinterleaveConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const DeinterleaveConfig& test_config) {
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     for (int k = 0; k < test_config.dest_core_set.size(); k++) {
         // Kernels
         auto receiver_kernel = CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/data_movement/deinterleave_hardcoded/kernels/deinterleave_kernel_rm.cpp",
             test_config.dest_core_set[k],
             DataMovementConfig{
@@ -47,22 +55,22 @@ bool run_dm(IDevice* device, const DeinterleaveConfig& test_config) {
                 .compile_args = test_config.dest_core_compile_args[k]});
 
         // Runtime Arguments
-        SetRuntimeArgs(program, receiver_kernel, test_config.dest_core_set[k], test_config.dest_core_runtime_args[k]);
+        SetRuntimeArgs(program_, receiver_kernel, test_config.dest_core_set[k], test_config.dest_core_runtime_args[k]);
     }
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Launch program
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     return true;
 }
 }  // namespace unit_tests::dm::deinterleave_hardcoded
 
-TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
+TEST_F(MeshDeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -132,7 +140,7 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
+TEST_F(MeshDeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }

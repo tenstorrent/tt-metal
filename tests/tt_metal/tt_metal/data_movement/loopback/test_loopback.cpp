@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -38,9 +39,16 @@ struct LoopbackConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfig& test_config) {
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Sharded L1 buffers
     const uint32_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
@@ -91,7 +99,7 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
 
     // Kernels
     auto sender_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
         master_core_set,
         DataMovementConfig{
@@ -101,16 +109,16 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
 
     // Semaphores
     CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
-    const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
+    const uint32_t sem_id = CreateSemaphore(program_, sem_core_set, 0);
 
     // Runtime Arguments
     CoreCoord worker = device->worker_core_from_logical_core(test_config.master_core_coord);
     std::vector<uint32_t> master_run_args = {sem_id, worker.x, worker.y};
-    SetRuntimeArgs(program, sender_kernel, master_core_set, master_run_args);
+    SetRuntimeArgs(program_, sender_kernel, master_core_set, master_run_args);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
@@ -126,7 +134,7 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
     // Launch program and record outputs
     detail::WriteToBuffer(master_l1_buffer, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     vector<uint32_t> packed_output;
     detail::ReadFromBuffer(subordinate_l1_buffer, packed_output);
@@ -145,7 +153,7 @@ bool run_dm(IDevice* device, const LoopbackConfig& test_config) {
 }  // namespace unit_tests::dm::core_loopback
 
 /* ========== Test case for loopback data movement; ========== */
-TEST_F(DeviceFixture, TensixDataMovementLoopbackPacketSizes) {
+TEST_F(MeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
     // Parameters
     uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages =
@@ -176,7 +184,7 @@ TEST_F(DeviceFixture, TensixDataMovementLoopbackPacketSizes) {
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
+TEST_F(MeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
     uint32_t test_id = 55;
 
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
