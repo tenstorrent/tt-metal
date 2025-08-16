@@ -236,15 +236,16 @@ class Generator:
             "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs)
+            tt_decode_output = self._easy_trace_text(**decode_kwargs)
         else:
-            tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B, is_tokens=(sampling_params is not None))
-            return to_host
-        else:
-            return tt_logits
+            return self.read_decode_output(
+                tt_decode_output, read_from_device=True, is_tokens=(sampling_params is not None)
+            )
+
+        return tt_decode_output
 
     def _decode_forward_no_trace_text(
         self,
@@ -641,11 +642,27 @@ class Generator:
         else:
             return tt_logits
 
+    def async_transfer_decode_output_to_host(self, tt_out):
+        """
+        Input tt_out is a list of ttnn device tensors
+        """
+        host_out = []
+        read_events = []
+        for i in range(self.data_parallel):
+            host_out.append(tt_out[i].cpu(blocking=False))
+            read_events.append(ttnn.record_event(self.model[i].mesh_device, 0))
+
+        return host_out, read_events
+
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
+    def read_decode_output(self, tt_out, read_from_device=False, is_tokens=False):
         """
-        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        Converts the input ttnn tensor to a torch tensor. The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
+        If read_from_device=False, the input is expected to be a host tensor; otherwise, it is a device tensor.
         """
+        if read_from_device:
+            tt_out = [out.cpu() for out in tt_out]
+
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
         logits = []
