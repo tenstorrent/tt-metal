@@ -63,6 +63,10 @@ target_sources(
         core/distributed/distributed_configs.cpp
         core/distributed/host_ccl.cpp
         core/distributed/tensor_topology.cpp
+        core/distributed/bidirectional_fabric_socket.cpp
+        core/distributed/create_socket.cpp
+        core/distributed/fabric_socket.cpp
+        core/distributed/mpi_socket.cpp
         core/events.cpp
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp
