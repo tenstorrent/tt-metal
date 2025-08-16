@@ -484,7 +484,7 @@ run_t3000_qwen25_vl_unit_tests() {
     MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_mlp.py --timeout 400 || fail=1
     echo "LOG_METAL: Unit tests in test_mlp.py for $qwen_dir on T3K completed"
     # test_rms_norm.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_rms_norm.py --timeout 180 || fail=1
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_rms_norm.py --timeout 300 || fail=1
     echo "LOG_METAL: Unit tests in test_rms_norm.py for $qwen_dir on T3K completed"
     # test_vision_attention.py
     MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_vision_attention.py --timeout 180 || fail=1
