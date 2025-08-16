@@ -240,7 +240,7 @@ The compute kernel does not handle IO directly and is not concerned with how wor
 
         // Instead of processing all tiles, we process only the assigned amount of tiles.
         for (uint32_t i = 0; i < num_output_tiles; ++i) {
-            acquire_dst();
+            tile_regs_acquire();
             // Same inner loop as in the single core example, only the outer loop is adjusted
             // to produce the assigned number of tiles.
             for (uint32_t kt = 0; kt < Kt; kt++) {
@@ -253,11 +253,14 @@ The compute kernel does not handle IO directly and is not concerned with how wor
                 cb_pop_front(cb_in1, 1);
             }
 
+            tile_regs_commit();
+            tile_regs_wait();
+
             cb_reserve_back(cb_out, 1);
             pack_tile(0, cb_out);
             cb_push_back(cb_out, 1);
 
-            release_dst();
+            tile_regs_release();
         }
     }
 
