@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import json
 import math
 import os
@@ -26,6 +27,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
+    convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
@@ -1414,6 +1416,9 @@ class ModelArgs:
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
+        # multimodal llama additionally adds cross attention layers
+        # they are calculated in HF but not calculated in Meta
+        self.n_layers -= len(text_config.get("cross_attention_layers", ()))
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
@@ -1495,9 +1500,13 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
+        vision_config = config.get("vision_config", config)
+
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", vision_config.get("image_size", -1))
+        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
+        self.vision_num_cross_attention_layers = vision_config.get(
+            "vision_num_cross_attention_layers", vision_config.get("num_global_layers", -1)
+        )
 
         # Vision constants
         self.vision_dim = 1280
@@ -1688,9 +1697,14 @@ class ModelArgs:
 
                     print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
                 else:
-                    from transformers import AutoModelForCausalLM
+                    from transformers import AutoModelForCausalLM, AutoModelForVision2Seq
 
-                model = AutoModelForCausalLM.from_pretrained(
+                if self.is_vision():
+                    model_cls = AutoModelForVision2Seq
+                else:
+                    model_cls = AutoModelForCausalLM
+
+                model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto"
                     # Note that the default setting is torch.dtype.float32, but model weights are
@@ -1708,7 +1722,10 @@ class ModelArgs:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
             else:
                 state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+            if self.is_multimodal and "llama" in self.CKPT_DIR.lower():
+                state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
+            else:
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2042,7 +2059,7 @@ class ModelArgs:
             return Tokenizer(self.tokenizer_path)
         else:
             # Create a HuggingFace AutoTokenizer
-            from transformers import AutoTokenizer
+            from transformers import AutoProcessor
 
             # Mapping of base model names to their known tokenizer paths
             # These are the original models that have proper tokenizers
@@ -2069,7 +2086,10 @@ class ModelArgs:
 
             try:
                 # Try to load tokenizer from the original model path
-                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                # If there is no Processor, it will return Tokenizer (useful for multimodal models)
+                tokenizer = AutoProcessor.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
@@ -2108,7 +2128,9 @@ class ModelArgs:
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                     try:
-                        tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
+                        tokenizer = AutoProcessor.from_pretrained(
+                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        )
                         logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                     except Exception as fallback_e:
                         logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
@@ -2119,7 +2141,11 @@ class ModelArgs:
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
+                tokenizer.stop_tokens = []
+                if hasattr(tokenizer, "eos_token_id"):
+                    tokenizer.stop_tokens.append(tokenizer.eos_token_id)
+                elif hasattr(tokenizer, "tokenizer"):
+                    tokenizer.stop_tokens.append(tokenizer.tokenizer.eos_token_id)
             return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
@@ -2254,7 +2280,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
+            use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2360,7 +2386,7 @@ class HfAttentionWrapper:
 
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)
-            output, _ = self.attention(
+            output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,
                 past_key_value=self.past_key_value,
