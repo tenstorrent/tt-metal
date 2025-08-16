@@ -81,7 +81,6 @@ inline void setup_header_routing_2d(
         if constexpr (use_dynamic_routing) {
             fabric_set_unicast_route(
                 (MeshPacketHeader*)packet_header,
-                direction,  // Ignored: Dynamic Routing does not need outgoing_direction specified
                 my_dev_id,  // Ignored: Dynamic Routing does not need src chip ID
                 dst_dev_id,
                 dst_mesh_id,
@@ -89,7 +88,6 @@ inline void setup_header_routing_2d(
         } else {
             fabric_set_unicast_route(
                 (LowLatencyMeshPacketHeader*)packet_header,
-                direction,
                 my_dev_id,
                 dst_dev_id,
                 dst_mesh_id,  // Ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
