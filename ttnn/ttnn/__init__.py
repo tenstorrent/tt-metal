@@ -129,6 +129,10 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
 )
 
+from ttnn._ttnn.operations.debug import (
+    apply_device_delay,
+)
+
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
