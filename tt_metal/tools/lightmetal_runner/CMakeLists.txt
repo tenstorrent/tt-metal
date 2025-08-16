@@ -5,6 +5,7 @@ target_link_libraries(
         Metalium::Metal
         TT::STL
         FlatBuffers::FlatBuffers
+	execinfo
 )
 target_include_directories(
     lightmetal_runner

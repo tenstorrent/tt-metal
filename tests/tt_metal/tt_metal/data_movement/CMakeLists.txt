@@ -20,7 +20,9 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
 add_executable(unit_tests_data_movement ${UNIT_TESTS_DATA_MOVEMENT_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_data_movement)
 
-target_link_libraries(unit_tests_data_movement PUBLIC test_metal_common_libs)
+target_link_libraries(
+	unit_tests_data_movement PUBLIC test_metal_common_libs
+)
 target_include_directories(
     unit_tests_data_movement
     PRIVATE

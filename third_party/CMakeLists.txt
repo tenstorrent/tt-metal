@@ -18,6 +18,15 @@ endif()
 # Boost
 ############################################################################################################################
 
+# Define Boost::headers as IMPORTED INTERFACE with include dirs pointing to Boost include root
+add_library(Boost::headers INTERFACE IMPORTED GLOBAL)
+
+# Set the include directories for Boost::headers target
+target_include_directories(Boost::headers INTERFACE
+    $<BUILD_INTERFACE:${Boost_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:include>
+)
+
 function(ensureboosttarget boostTarget)
     if(NOT TARGET Boost::${boostTarget})
         add_library(Boost::${boostTarget} INTERFACE IMPORTED GLOBAL)

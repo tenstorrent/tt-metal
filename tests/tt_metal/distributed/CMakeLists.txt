@@ -22,6 +22,8 @@ target_sources(
         utils.cpp
 )
 
+target_link_libraries(test_common_libs INTERFACE execinfo)
+
 target_link_libraries(
     distributed_unit_tests
     PRIVATE

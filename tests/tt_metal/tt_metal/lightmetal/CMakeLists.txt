@@ -8,6 +8,7 @@ target_link_libraries(
     PUBLIC
         test_metal_common_libs
         FlatBuffers::FlatBuffers
+    test_metal_common_libs PRIVATE execinfo
 )
 
 target_include_directories(
