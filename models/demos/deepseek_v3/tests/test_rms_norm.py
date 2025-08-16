@@ -56,6 +56,7 @@ def test_forward_pass(
     tmp_path,
     mesh_device,
     ccl,
+    set_deterministic_env,
 ):
     num_module_layers, _ = mesh_device.shape
 

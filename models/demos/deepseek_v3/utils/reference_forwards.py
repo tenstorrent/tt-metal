@@ -152,6 +152,20 @@ def reference_forward_decode(
     # Generate the cache
     cache = DynamicCache()
 
+    # Pre-populate cache with dummy entries for layers before the target layer
+    # This is necessary when testing a single layer in isolation
+    layer_idx = reference_model.self_attn.layer_idx
+    if layer_idx > 0 and len(cache.key_cache) < layer_idx:
+        # For DeepSeek v3 MLA, cache entries have shape [bsz, 1, 0, kv_lora_rank + qk_rope_head_dim]
+        # where the sequence length is 0 initially
+        cache_head_dim = reference_model.self_attn.kv_lora_rank + reference_model.self_attn.qk_rope_head_dim
+        dummy_key_value = torch.zeros(bsz, 1, 0, cache_head_dim, dtype=torch.float32)
+
+        # Only add dummy entries for missing layers
+        for i in range(len(cache.key_cache), layer_idx):
+            cache.key_cache.append(dummy_key_value.clone())
+            cache.value_cache.append(dummy_key_value.clone())
+
     # Padding for decode mode
     if mode == "decode":
         assert q_len == 1, "Decode mode should have sequence length of 1"

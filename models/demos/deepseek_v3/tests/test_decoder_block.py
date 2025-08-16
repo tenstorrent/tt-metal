@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-
 from random import randint
 
 import pytest
@@ -11,6 +10,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
+from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block import MoEDecoderBlock
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_decode as reference_forward
@@ -31,14 +31,6 @@ def hf_config(hf_config):
     return hf_config
 
 
-def load_reference_model(hf_config, layer_idx):
-    """Load the reference model for testing."""
-
-    model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval()
-
-    return model
-
-
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -50,7 +42,7 @@ def load_reference_model(hf_config, layer_idx):
     "DecoderBlockClass, module_path, reference_layer_idx",
     [
         (DecoderBlock, None, 0),
-        # (MoEDecoderBlock, None, 3), # TODO: Uncomment once PCC is fixed for MoE
+        (MoEDecoderBlock, None, 3),
         # (DecoderBlock, "model.layers.0", None),
         # (MoEDecoderBlock, "model.layers.3", None), # TODO: Uncomment once PCC is fixed for MoE
     ],
@@ -75,6 +67,7 @@ def test_forward_pass(
     mesh_device,
     model_path,
     ccl,
+    set_deterministic_env,
 ):
     mesh_shape = list(mesh_device.shape)
     num_rows, sdpa_dp_factor = mesh_shape
@@ -86,7 +79,9 @@ def test_forward_pass(
     ############################
     logger.info("Setting up reference model")
     if module_path is None:
-        reference_model = load_reference_model(hf_config, reference_layer_idx)
+        reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=reference_layer_idx).eval()
+        # This needs to be disabled as deterministic way to quantize weights is not supported
+        torch.use_deterministic_algorithms(False)
         state_dict = add_inv_scale_to_state_dict(
             reference_model.to(torch.bfloat16).state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],
