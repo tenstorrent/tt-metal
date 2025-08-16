@@ -23,8 +23,10 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 @pytest.mark.timeout(600)
 def test_grok_moe_inference(t3k_mesh_device, reset_seeds):
     pcc = 0.87  # real weights = 0.99
