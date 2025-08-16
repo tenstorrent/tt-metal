@@ -347,8 +347,6 @@ private:
             shard_grid_strides_rt[i] = stride;
             stride *= shard_grid_rt[i];
         }
-        // Check that the number of shards is greater than or equal to the number of banks
-        ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks());
     }
 
     constexpr void update_spans_pointers() {
