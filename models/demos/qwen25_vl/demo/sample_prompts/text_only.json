@@ -1,4 +1,8 @@
 [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "Who are you?"}
+    [
+        {
+            "role": "user",
+            "content": "Who are you?"
+        }
+    ]
 ]
