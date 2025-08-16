@@ -24,7 +24,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_mesh_workload(
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    auto mesh_device = tensor_args.input_tensor.mesh_device();
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program =
             create_at(operation_attributes, coord, tensor_coords.coords(), tensor_args, tensor_return_value);
