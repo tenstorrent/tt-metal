@@ -19,10 +19,10 @@ void kernel_main() {
 
     // Reshard writer
     constexpr uint32_t worker_core_stride_w_bytes =
-        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 4);
+        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 2);
     constexpr uint32_t storage_core_stride_w_bytes =
-        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 5);
-    constexpr uint32_t block_ht = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 6);
+        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t block_ht = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 4);
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);

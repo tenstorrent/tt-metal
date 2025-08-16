@@ -1133,11 +1133,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
         writer_mcast_sender_compile_time_args.push_back(beta_stick_size);
         writer_mcast_receiver_compile_time_args.push_back(beta_stick_size);
-    } else {
-        writer_mcast_sender_compile_time_args.push_back(tile_size(gamma_cb_data_format));
-        writer_mcast_receiver_compile_time_args.push_back(tile_size(gamma_cb_data_format));
     }
-
     writer_mcast_sender_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
     writer_mcast_sender_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
     writer_mcast_receiver_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
