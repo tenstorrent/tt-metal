@@ -20,6 +20,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.any-code-changed }}
   docs-changed:
     value: ${{ steps.find-changed-files.outputs.docs-changed }}
+  model-charts-changed:
+   value: ${{ steps.find-changed-files.outputs.model-charts-changed }}
 
 runs:
   using: "composite"
