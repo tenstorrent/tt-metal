@@ -146,6 +146,24 @@ void MatmulFusedOpSignaler::init_all_gather(
     initialized_all_gather = true;
 }
 
+void MatmulFusedOpSignaler::init_llama_all_gather(
+    uint32_t num_transfers,
+    uint32_t ring_size,
+    uint32_t start_ring_index,
+    uint32_t tensor_slice_shape_width,
+    uint32_t output_page_offset,
+    uint32_t weight_output_page_offset,
+    uint32_t start_cb_index) {
+    this->num_transfers = num_transfers;
+    this->ring_size = ring_size;
+    this->start_ring_index = start_ring_index;
+    this->tensor_slice_shape_width = tensor_slice_shape_width;
+    this->output_page_offset = output_page_offset;
+    this->weight_output_page_offset = weight_output_page_offset;
+    this->start_cb_index = start_cb_index;
+    initialized_llama_all_gather = true;
+}
+
 // Used to propagate semaphore information from matmul to reduce_scatter in matmul_reduce_scatter op
 void MatmulFusedOpSignaler::init_reduce_scatter(
     const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
@@ -212,8 +230,14 @@ void MatmulFusedOpSignaler::init_fused_op(
         },
         core_range_to_signal);
     // Create the semaphores
-    this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
-    this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+    if (fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER) {
+        for (uint32_t i = 0; i < ring_size; i++) {
+            this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+        }
+    } else {
+        this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+        this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+    }
 
     // Set the number of fused op cores to signal
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
@@ -352,6 +376,10 @@ bool MatmulFusedOpSignaler::is_reduce_scatter() { return fused_op_type == Matmul
 
 bool MatmulFusedOpSignaler::is_llama_reduce_scatter() {
     return fused_op_type == MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER;
+}
+
+bool MatmulFusedOpSignaler::is_llama_all_gather() {
+    return fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER;
 }
 
 }  // namespace ccl
