@@ -7,6 +7,7 @@
 #include <tt-metalium/util.hpp>
 #include "ttnn/operation.hpp"
 #include "topk_utils.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <iostream>
 #include <cmath>
@@ -127,8 +128,8 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
             .set_page_size(output_ind_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, output_ind_cb_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index, index_cb_index, (uint32_t)input_is_dram, Ht, Wt, (uint32_t)uint16_output};
+    std::vector<uint32_t> reader_compile_time_args = {input_cb_index, index_cb_index, Ht, Wt, (uint32_t)uint16_output};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
@@ -143,13 +144,9 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
             input_buffer->address(),
         });
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        output_val_cb_index,
-        output_ind_cb_index,
-        (std::uint32_t)values_is_dram,
-        (std::uint32_t)index_is_dram,
-        Ht,
-        Ktiles};
+    std::vector<uint32_t> writer_compile_time_args = {output_val_cb_index, output_ind_cb_index, Ht, Ktiles};
+    tt::tt_metal::TensorAccessorArgs(values_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(index_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp",
@@ -403,12 +400,12 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     std::vector<uint32_t> reader_local_compile_time_args = {
         input_cb_index,
         index_cb_index,
-        (uint32_t)input_is_dram,
-        (uint32_t)input_indices_is_dram,
         Ht,
         Wt_local,
         input_shape[-1] / TILE_WIDTH,  // Wt
     };
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_local_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_local_compile_time_args);
     std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_local_topk.cpp";
     if (input_indices_tensor.has_value()) {
@@ -457,8 +454,9 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         local_cores_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args_final = {
-        values_cb_index, output_ind_cb_index, (std::uint32_t)values_is_dram, (std::uint32_t)index_is_dram, Ht, Kt};
+    std::vector<uint32_t> writer_compile_time_args_final = {values_cb_index, output_ind_cb_index, Ht, Kt};
+    tt::tt_metal::TensorAccessorArgs(values_buffer).append_to(writer_compile_time_args_final);
+    tt::tt_metal::TensorAccessorArgs(index_buffer).append_to(writer_compile_time_args_final);
     tt::tt_metal::KernelHandle binary_writer_final_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_final_topk.cpp",

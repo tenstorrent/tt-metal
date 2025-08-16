@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "batch_norm_device_operation.hpp"
+
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <cmath>
@@ -206,12 +208,27 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto [temp_1_cb, temp_1_cb_handle] =
         create_cb(tt::CBIndex::c_8, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
 
-    auto a_is_dram = static_cast<uint32_t>(input_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    auto b_is_dram = static_cast<uint32_t>(batch_mean_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    auto c_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    auto d_is_dram = static_cast<uint32_t>(batch_var_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    const auto e_is_dram = weight_has_value and weight_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
-    const auto f_is_dram = bias_has_value and bias_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    std::vector<uint32_t> reader_compile_time_args = {
+        input_tensor_cb,
+        eps_cb,
+    };
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        static_cast<uint32_t>(weight_has_value),
+        static_cast<uint32_t>(bias_has_value),
+        batch_mean_tensor_cb,
+        output_tensor_cb,
+        batch_var_tensor_cb,
+        weight_tensor_cb,
+        bias_tensor_cb,
+    };
+    tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(batch_var_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_tensor ? weight_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias_tensor ? bias_tensor->buffer() : nullptr).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> dataflow_defines;  // Currently support only for fp32, bf16
     if (input_tensor.dtype() == DataType::FLOAT32) {
@@ -228,7 +245,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram, input_tensor_cb, eps_cb}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 
     // WRITER KERNEL
     auto writer_defines = dataflow_defines;
@@ -236,22 +253,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(
-            {
-                b_is_dram,
-                c_is_dram,
-                d_is_dram,
-                e_is_dram,
-                f_is_dram,
-                static_cast<uint32_t>(weight_has_value),
-                static_cast<uint32_t>(bias_has_value),
-                batch_mean_tensor_cb,
-                output_tensor_cb,
-                batch_var_tensor_cb,
-                weight_tensor_cb,
-                bias_tensor_cb,
-            },
-            std::move(writer_defines)));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
 
     // COMPUTE KERNEL
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =

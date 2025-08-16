@@ -12,6 +12,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -138,11 +139,9 @@ operation::ProgramWithCallbacks argmax_single_core(
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         src_cb_idx,
         dst_cb_idx,
-        src_is_dram,
-        dst_is_dram,
         src_page_size,
         dst_page_size,
         outer_dim_units,
@@ -150,6 +149,8 @@ operation::ProgramWithCallbacks argmax_single_core(
         red_dim_units,
         (uint32_t)(reduce_all),
     };
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(reader_compile_time_args);
 
     const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -403,8 +404,6 @@ operation::ProgramWithCallbacks argmax_multi_core(
         dst_cb_idx,
         red_idxs_cb_idx,
         red_vals_cb_idx,
-        src_is_dram,
-        dst_is_dram,
         src_page_size,
         dst_page_size,
         red_idxs_page_size / num_total_cores,
@@ -431,6 +430,8 @@ operation::ProgramWithCallbacks argmax_multi_core(
         start_sem_idx,
         done_sem_idx,
     };
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(reader_compile_args);
 
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id0 = tt::tt_metal::CreateKernel(
