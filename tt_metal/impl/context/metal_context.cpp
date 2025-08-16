@@ -48,11 +48,6 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
 
 }  // namespace
 
-void MetalContext::reinitialize() {
-    force_reinit_ = true;
-    initialize(dispatch_core_config_, num_hw_cqs_, l1_bank_remap_, worker_l1_size_, false);
-}
-
 void MetalContext::initialize(
     const DispatchCoreConfig& dispatch_core_config,
     uint8_t num_hw_cqs,
