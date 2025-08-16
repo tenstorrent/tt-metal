@@ -19,11 +19,11 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "test_common.hpp"
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"

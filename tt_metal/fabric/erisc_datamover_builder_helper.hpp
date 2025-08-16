@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder.hpp"
 
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/mesh_device.hpp>

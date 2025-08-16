@@ -23,9 +23,9 @@
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
-#include "erisc_datamover_builder.hpp"
-#include "fabric_edm_packet_header.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "fabric_types.hpp"
 #include "hal.hpp"
 #include "host_api.hpp"
