@@ -57,7 +57,7 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         # (1, 128, 512, 512, 32, 22, 4, 4),  # SD 1.4 VAE
         # sd35
         # //4 indicats the number of device. Default number of blocks used is (w*h)/(128*128)
-        (1, 128 // 4, 64, 64, 8, 1, 8, 8),
+        (1, 128 // 4, 64, 64, 32 // 4, 1, 8, 8),
         (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
         (1, 512 // 4, 256, 256, 32 // 4, 1, 8, 8),
         (1, 512 // 4, 512, 512, 32 // 4, 1, 8, 8),
@@ -95,7 +95,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
 
     # input mask
     TILE_WIDTH = 32
-    num_virtual_cols = cores_x
+    num_virtual_cols = min(cores_x, num_groups)
     while (C / num_virtual_cols) % TILE_WIDTH != 0:
         num_virtual_cols -= 1
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, num_virtual_cols)
@@ -146,7 +146,6 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     ttnn.synchronize_device(device)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    breakpoint()
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 

@@ -1209,7 +1209,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
     // Compute optimal core grid
-    uint32_t num_virtual_cols = grid_size.x;
+    uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, num_groups);
     while ((W / num_virtual_cols) % TILE_WIDTH != 0) {
         num_virtual_cols -= 1;
     }
@@ -1310,12 +1310,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     if (per_core_M_group_2 > 0) {
         TT_FATAL(per_core_M_group_2 % TILE_HEIGHT == 0, "per_core_M: {} divides Tile Height", per_core_M_group_2);
     }
-    // if (per_core_N != W) {
-    //     TT_FATAL(per_core_N * num_cores_c == W, "cores_x mus divide Channels");
-    //  TT_FATAL(per_core_M_group_1 * num_cores_r == H, "{} * {} should equal {}", per_core_M_group_1, num_cores_r,
-    //  H); TODO VASH
-    //}
-
     TT_FATAL(per_core_M_group_1 % TILE_HEIGHT == 0, "per_core_M must be divisible by TILE_HEIGHT");
     if (per_core_M_group_2 > 0) {
         TT_FATAL(per_core_M_group_2 % TILE_HEIGHT == 0, "per_core_M must be divisible by TILE_HEIGHT");
