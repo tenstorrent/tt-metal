@@ -325,7 +325,7 @@ jobs:
 
   # LLMBox-only unit tests
   blackhole-llmbox-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [build-artifact-profiler, generate-matrix]
     if: ${{ inputs.enable-llmbox-tests }}
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
