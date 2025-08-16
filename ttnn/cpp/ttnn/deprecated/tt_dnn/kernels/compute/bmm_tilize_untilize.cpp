@@ -31,7 +31,7 @@ inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
     // UNPACK(( kernel_sleep(100) ));
     UNPACK((llk_unpack_reconfig_data_format(1, 0, 0, 0)));
-    MATH((llk_math_reconfig_data_format(1, 0, 0, 0)));
+    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(1, 0, 0, 0)));
     tilize_init(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
@@ -172,7 +172,7 @@ void MAIN {
                             // Reconfigure input
                             copy_tile_to_dst_init_short(matmul_partials_cb);
                             UNPACK((llk_unpack_reconfig_data_format(1, matmul_partials_cb, 0, 0)));
-                            MATH((llk_math_reconfig_data_format(1, matmul_partials_cb, 0, 0)));
+                            MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(1, matmul_partials_cb, 0, 0)));
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
                             for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                                 copy_tile(matmul_partials_cb, i, i);

@@ -6,22 +6,16 @@ Certain operations may require multiple input or output DataFormats. Since the U
 
 This API reconfigures hardware associated with UNPACK (trisc0) and MATH (trisc1). It consists of the following 6 calls:
 ```
-template <bool to_from_int8 = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand)
 
-template <bool to_from_int8 = false>
 ALWI void reconfig_data_format(const uint32_t srca_old_operand, const uint32_t srca_new_operand, const uint32_t srcb_old_operand, const uint32_t srcb_new_operand)
 
-template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand)
 
-template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand)
 
-template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand)
 
-template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand)
 ```
 There are 3 different functions (`reconfig_data_format`, `reconfig_data_format_srca`, `reconfig_data_format_srcb`), each overloaded to accept either only the new operand CB index or both the old and new operand CB index.
@@ -29,14 +23,12 @@ There are 3 different functions (`reconfig_data_format`, `reconfig_data_format_s
 2. `reconfig_data_format_srca`: reconfigures the DataFormats for only SrcA register
 3. `reconfig_data_format_srcb`: reconfigures the DataFormats for only SrcB register
 
-The template parameter `to_from_int8` serves to enable reconfiguring between FLOAT and INT8 DataFormats (ex. BFLOAT16 <-> UINT8), and requires that `DST_ACCUM_MODE==true`.
-
 The following DataFormat reconfigurations are currently supported:
-| Old DataFormat                            | New DataFormat                            | Requirements                                 |
-|-------------------------------------------|-------------------------------------------|----------------------------------------------|
-| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None                                         |
-| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | UINT8                                     | `to_from_int8==true`, `DST_ACCUM_MODE==true` |
-| UINT8                                     | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | `to_from_int8==true`, `DST_ACCUM_MODE==true` |
+| Old DataFormat                            | New DataFormat                            | Special Requirements                                   |
+|-------------------------------------------|-------------------------------------------|--------------------------------------------------------|
+| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None                                                   |
+| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | {UINT8, INT8}                             | Int8 FPU Math won't work unless `DST_ACCUM_MODE==true` |
+| {UINT8, INT8}                             | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None                                                   |
 
 ## `pack_reconfig_data_format`
 
@@ -49,11 +41,11 @@ ALWI void pack_reconfig_data_format(const uint32_t old_operand, const uint32_t n
 The function `pack_reconfig_data_format` is overloaded to accept either just the new, or both the old and new operand CB index.
 
 The following DataFormat reconfigurations are currently supported:
-| Old DataFormat                            | New DataFormat                            | Requirements                                 |
-|-------------------------------------------|-------------------------------------------|----------------------------------------------|
-| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None                                         |
-| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | UINT8                                     | None                                         |
-| UINT8                                     | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None                                         |
+| Old DataFormat                            | New DataFormat                            | Requirements |
+|-------------------------------------------|-------------------------------------------|--------------|
+| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None         |
+| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | UINT8                                     | None         |
+| UINT8                                     | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None         |
 
 ## Usage guidelines
 
