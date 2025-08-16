@@ -3,6 +3,11 @@
 This test suite implements tests that measure the performance (i.e. bandwidth) of reshard transactions between Tensix cores.
 They are based on kernel runtime arguments of existing metal tests.
 
+## Slow Dispatch Support
+This test suite uses the TT-Metal slow dispatch mode for reliable program execution. The tests use `DeviceFixture` and are designed to work with the slow dispatch API.
+
+**Note**: These tests require slow dispatch mode for proper operation. They use `tt::tt_metal::detail::LaunchProgram()` for direct program execution without command queues.
+
 ## Test Flow
 
 This test creates a buffer for various sharding patterns as gotten from `pytest test_core.py -k test_reshard`. It plots the bandwidth of each core.
@@ -10,6 +15,17 @@ This test creates a buffer for various sharding patterns as gotten from `pytest 
 It does not check pcc as the afformentioned test does this.
 
 The sharding patterns are the exact ones as gotten from the base tests, as such this is a directed test is is not general.
+
+## Running the Tests
+The tests use slow dispatch mode. Run with the slow dispatch environment variable:
+```
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*ReshardHardcoded*"
+```
+
+Or run normally (the DeviceFixture will automatically enforce slow dispatch mode):
+```
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*ReshardHardcoded*"
+```
 
 ## Test Parameters
 | Parameter                 | Data Type             | Description |
