@@ -323,9 +323,6 @@ def test_reduce_scatter_async(
     use_persistent_buffers,
     rs_topology,
 ):
-    if is_training_shape and not use_barrier:
-        pytest.skip(f"Barrier semaphore required for training shapes that invoke composite RS")
-
     if rs_input_dtype == ttnn.bfloat8_b and enable_trace:
         pytest.skip("bfloat8_b invokes composite RS where we've seen ND pcc when running with trace with bfloat8_b")
 

@@ -16,8 +16,6 @@ def run_with_trace(
     input_tensor_mesh,
     num_links,
     output_mem_config,
-    multi_device_global_semaphore,
-    barrier_semaphore,
     num_iter=20,
     subdevice_id=None,
 ):
@@ -25,12 +23,10 @@ def run_with_trace(
     logger.info("Compiling model")
     tt_out_tensor = ttnn.experimental.all_broadcast_async(
         input_tensor_mesh,
-        multi_device_global_semaphore=multi_device_global_semaphore,
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
-        barrier_semaphore=barrier_semaphore,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -40,12 +36,10 @@ def run_with_trace(
     for i in range(num_iter):
         tt_out_tensor = ttnn.experimental.all_broadcast_async(
             input_tensor_mesh,
-            multi_device_global_semaphore=multi_device_global_semaphore,
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
-            barrier_semaphore=barrier_semaphore,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -96,11 +90,6 @@ def run_all_broadcast_impl(
     sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
-    barrier_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"input_shard_shape: {input_shard_shape}")
@@ -196,8 +185,6 @@ def run_all_broadcast_impl(
             input_tensor_mesh_list[0],
             num_links,
             output_mem_config,
-            multi_device_global_semaphore=ccl_semaphore_handles[i],
-            barrier_semaphore=barrier_semaphore_handles[i],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -206,12 +193,10 @@ def run_all_broadcast_impl(
         for i in range(num_iters):
             tt_out_tensors = ttnn.experimental.all_broadcast_async(
                 input_tensor_mesh_list[i],
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
-                barrier_semaphore=barrier_semaphore_handles[i],
             )
             tt_out_tensor_list.append(tt_out_tensors)
 
@@ -295,6 +280,55 @@ def test_all_broadcast(
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@pytest.mark.parametrize(
+    "num_devices, num_links, output_shape, layout, input_dtype",
+    [
+        (4, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (2, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10000}], indirect=True
+)
+def test_all_broadcast_trace(
+    t3k_mesh_device,
+    # pcie_mesh_device,
+    num_devices,
+    output_shape,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    num_iters,
+    function_level_defaults,
+):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
+    run_all_broadcast_impl(
+        t3k_mesh_device,
+        num_devices,
+        output_shape,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        all_broadcast_topology=ttnn.Topology.Linear,
+        num_iters=num_iters,
+        rand_tensor=True,
+        mem_config=mem_config,
+        trace_mode=True,
     )
 
 

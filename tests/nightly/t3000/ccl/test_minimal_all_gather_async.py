@@ -269,9 +269,6 @@ def test_all_gather_async(
     all_gather_topology,
     num_iters,
 ):
-    if is_training_shape and not use_barrier:
-        pytest.skip(f"Barrier semaphore required for training shapes that invoke composite AG")
-
     run_all_gather_impl(
         t3k_mesh_device,
         num_devices,
