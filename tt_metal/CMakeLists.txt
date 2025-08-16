@@ -54,10 +54,10 @@ set_source_files_properties(
 
 # TODO(afuller): this should be self-describing modules.
 #   For now just cherry-pick all the files I discovered empirically by trying to run a test.
-add_library(jitapi INTERFACE)
+add_library(jit_api INTERFACE)
 # These headers are for the device, not host; will require cross compiling to verify.
 set_target_properties(
-    jitapi
+    jit_api
     PROPERTIES
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
@@ -72,7 +72,7 @@ file(
 )
 
 target_sources(
-    jitapi
+    jit_api
     INTERFACE
         FILE_SET jit_api
         TYPE HEADERS
@@ -216,7 +216,7 @@ if(TT_INSTALL)
 
     install(
         TARGETS
-            jitapi
+            jit_api
         FILE_SET
         jit_api
             DESTINATION
