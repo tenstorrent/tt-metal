@@ -23,11 +23,7 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/types.hpp"
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace tensor_impl {
+namespace tt::tt_metal::tensor_impl {
 
 // Empty structs to facilitate Tensor template logic.
 struct bfloat4_b {};
@@ -174,20 +170,10 @@ bool logical_matches_physical(const TensorSpec& tensor_spec);
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
-
-template <typename T>
-void read_data_from_device_buffer(CommandQueue& cq, Buffer& device_buffer, void* host_buffer_data, bool blocking) {
-    EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
-}
-
-template <typename T>
-void read_data_from_device_buffer(Buffer& device_buffer, std::vector<T>& host_buffer) {
-    ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
-}
 
 // ======================================================================================
 //                                         .to_host() and .to_device()
@@ -196,23 +182,19 @@ void read_data_from_device_buffer(Buffer& device_buffer, std::vector<T>& host_bu
 template <typename T>
 Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
-// TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
 template <typename T>
-Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
-
-template <typename T>
-void copy_to_host_tensor(
+void copy_to_host(
     const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-Tensor to_device_mesh_tensor(
+Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
     const MemoryConfig& memory_config,
     QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-void copy_to_device_tensor(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
 
 // ======================================================================================
 //                                  .to_layout()
@@ -257,8 +239,4 @@ std::string to_string(const Tensor& tensor);
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
 
-}  // namespace tensor_impl
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal::tensor_impl
