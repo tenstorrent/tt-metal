@@ -56,8 +56,8 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         # (1, 256, 512, 512, 32, 16, 8, 8),  # SD 1.4 VAE
         # (1, 128, 512, 512, 32, 22, 4, 4),  # SD 1.4 VAE
         # sd35
-        (1, 128 // 4, 64, 64, 8, 1, 8, 8),
         # //4 indicats the number of device. Default number of blocks used is (w*h)/(128*128)
+        (1, 128 // 4, 64, 64, 8, 1, 8, 8),
         (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
         (1, 512 // 4, 256, 256, 32 // 4, 1, 8, 8),
         (1, 512 // 4, 512, 512, 32 // 4, 1, 8, 8),
@@ -75,8 +75,8 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.ones((C,), dtype=torch.bfloat16)
-    torch_bias = torch.zeros((C,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
@@ -94,7 +94,11 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
 
     # input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, 1)
+    TILE_WIDTH = 32
+    num_virtual_cols = cores_x
+    while (C / num_virtual_cols) % TILE_WIDTH != 0:
+        num_virtual_cols -= 1
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, num_virtual_cols)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
         dtype=ttnn.DataType.BFLOAT8_B,
@@ -104,8 +108,8 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     )
 
     # gamma/beta
-    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, num_groups)
-    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, num_groups)
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, num_virtual_cols)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, num_virtual_cols)
 
     gamma_t = ttnn.from_torch(
         gamma,
@@ -142,6 +146,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     ttnn.synchronize_device(device)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+    breakpoint()
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
