@@ -90,7 +90,7 @@ def reference_forward_mla(
 
     position_ids_expanded = torch.arange(0, q_len, dtype=torch.long).unsqueeze(0).repeat(bsz, 1)
 
-    out, _, past_key_value = reference_model.forward_mla(
+    out, _, past_key_value = reference_model.forward(
         hidden_states=torch_input,
         attention_mask=mask,
         position_ids=position_ids_expanded,
