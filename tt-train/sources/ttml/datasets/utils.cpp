@@ -50,7 +50,6 @@ std::vector<uint32_t> load_tokens_from_space_separated_file(const std::string &f
 
     std::vector<uint32_t> tokens;
     uint32_t token;
-    size_t line_number = 1;
 
     while (file >> token) {
         tokens.push_back(token);
