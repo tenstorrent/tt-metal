@@ -8,7 +8,7 @@
 #include "debug/dprint.h"
 
 void kernel_main() {
-    // same arg indices as in reader_binary_diff_lenghts for compat
+    // same arg indices as in reader_binary_diff_lengths for compat
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
     uint32_t Mt = get_arg_val<uint32_t>(2);

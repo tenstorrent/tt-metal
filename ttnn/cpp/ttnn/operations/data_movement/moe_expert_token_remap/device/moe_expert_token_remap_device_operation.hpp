@@ -17,28 +17,32 @@
 namespace ttnn::operations::data_movement {
 
 struct MoeExpertTokenRemapDeviceOperation {
+    static constexpr uint32_t REDUCTION_SIZE = 16;
+
     struct operation_attributes_t {
         const std::optional<MemoryConfig> output_mem_config;
+        const uint32_t reduction_size;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("output_mem_config");
-        auto attribute_values() const { return std::forward_as_tuple(output_mem_config); };
+        static constexpr auto attribute_names = std::forward_as_tuple("output_mem_config", "reduction_size");
+        auto attribute_values() const { return std::forward_as_tuple(output_mem_config, reduction_size); };
     };
     struct tensor_args_t {
         const ttnn::Tensor topk_tensor;
         const ttnn::Tensor mapping_tensor;
         const ttnn::Tensor metadata_tensor;
-        const std::optional<ttnn::Tensor> optional_output_tensor;
+        const std::optional<ttnn::Tensor> optional_output_mapping_tensor;
+        const std::optional<ttnn::Tensor> optional_output_reduced_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 
-    using tensor_return_value_t = ttnn::Tensor;
+    using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
     struct Multicore {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle binary_writer_kernel_id;
             std::vector<CoreCoord> utilized_cores;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -86,7 +90,9 @@ struct MoeExpertTokenRemapDeviceOperation {
         const ttnn::Tensor& mapping_tensor,
         const ttnn::Tensor& metadata_tensor,
         const std::optional<ttnn::MemoryConfig>& output_mem_config,
-        const std::optional<ttnn::Tensor>& optional_output_tensor);
+        const std::optional<ttnn::Tensor>& optional_output_tensor,
+        const std::optional<ttnn::Tensor>& optional_reduced_tensor,
+        uint32_t reduction_size = REDUCTION_SIZE);
 };
 }  // namespace ttnn::operations::data_movement
 

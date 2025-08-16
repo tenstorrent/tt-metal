@@ -111,7 +111,7 @@ TEST(FreeListOptTest, AllocateAtAddress) {
 
 TEST(FreeListOptTest, AllocateAtAddressInteractions) {
     auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
-    auto wedge = allocator.allocate_at_address(32_KiB, 1_KiB);
+    allocator.allocate_at_address(32_KiB, 1_KiB);
 
     auto a = allocator.allocate(1_KiB);
     ASSERT_TRUE(a.has_value());
@@ -203,7 +203,6 @@ TEST(FreeListOptTest, CoalescingAfterResetShrink) {
     allocator.deallocate(a.value());
 
     allocator.shrink_size(1_KiB);
-    auto d = allocator.allocate(2_KiB);
     allocator.reset_size();
     auto e = allocator.allocate(2_KiB);
     ASSERT_TRUE(e.has_value());
@@ -332,7 +331,7 @@ TEST(FreeListOptTest, FirstFit) {
 
 TEST(FreeListOptTest, FirstFitAllocateAtAddressInteractions) {
     auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB, tt::tt_metal::allocator::FreeListOpt::SearchPolicy::FIRST);
-    auto wedge = allocator.allocate_at_address(32_KiB, 1_KiB);
+    allocator.allocate_at_address(32_KiB, 1_KiB);
 
     auto a = allocator.allocate(1_KiB);
     ASSERT_TRUE(a.has_value());

@@ -43,6 +43,7 @@ struct AllGatherAsync {
     std::optional<uint32_t> cluster_axis;
     bool use_optimal_ccl_for_llama;
     const std::optional<GlobalSemaphore>& barrier_semaphore;
+    bool using_persistent_buffers;
     std::optional<uint32_t> chunks_per_sync;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
@@ -59,6 +60,7 @@ struct AllGatherAsync {
         std::optional<uint32_t> cluster_axis,
         bool use_optimal_ccl_for_llama,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
+        bool using_persistent_buffers,
         std::optional<uint32_t> chunks_per_sync,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel) :
@@ -73,6 +75,7 @@ struct AllGatherAsync {
         cluster_axis(cluster_axis),
         use_optimal_ccl_for_llama(use_optimal_ccl_for_llama),
         barrier_semaphore(barrier_semaphore),
+        using_persistent_buffers(using_persistent_buffers),
         chunks_per_sync(chunks_per_sync),
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel) {}
@@ -88,6 +91,7 @@ struct AllGatherAsync {
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
+        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("semaphore", semaphore);
@@ -149,6 +153,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
@@ -167,6 +172,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,

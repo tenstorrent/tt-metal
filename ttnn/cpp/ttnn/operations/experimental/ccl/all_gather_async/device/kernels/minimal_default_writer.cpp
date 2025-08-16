@@ -146,7 +146,9 @@ void kernel_main() {
 
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
+    uint32_t self_write_done_semaphore_addr;
     if constexpr (fuse_op) {
+        self_write_done_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
         op_signaler_sender = OpSignaler(arg_idx);
     }
 
@@ -336,6 +338,9 @@ void kernel_main() {
     if (fuse_op && direction == 1) {
         // Synchronize and signal that the local tensor slice is available
         op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
+        uint64_t self_write_done_semaphore_noc_addr =
+            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, self_write_done_semaphore_addr, 0);
+        noc_semaphore_inc(self_write_done_semaphore_noc_addr, 1);
     }
 
     uint32_t writes_expected = 0;

@@ -21,7 +21,7 @@ Mesh: [
   board: T3K,
   device_topology: [2, 4],
   host_topology: [1, 1],
-  host_ranks: [[0]]}
+}
 ]
 
 Graph: [

@@ -80,7 +80,6 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto global_buffer = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
     Program program = CreateProgram();
 
-    uint32_t cb_size = k_local_l1_size;
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(k_local_l1_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -96,7 +95,6 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     detail::ValidateCircularBufferRegion(program, mesh_device.get());
     ShardSpecBuffer local_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
-    uint32_t local_buffer_size = k_local_l1_size / 2;
     distributed::DeviceLocalBufferConfig local_config_2 = {
         .page_size = global_buffer_size,
         .buffer_type = BufferType::L1,
@@ -304,7 +302,6 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.
 TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinates) {
     auto mesh_device = devices_[0];
-    uint32_t local_l1_size = 3200;
     // Make 2 sub devices.
     // origin means top left.
     // for sub_device_1 = 0,0. so relative coordinates are the same as logical.
@@ -513,14 +510,14 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_1, false);
     std::array sub_device_ids_for_event = {SubDeviceId{1}};
-    auto early_event = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
+    auto early_event =
+        distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_2, false);
 
     // CQ 0 owns sub device 1, CQ 1 owns sub device 2.
     // This should throw because program_1 targets sub device 1 which is owned by CQ 0
     EXPECT_THROW(
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_1, false),
-        std::exception);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_1, false), std::exception);
 
     // Finish allows transfering ownership of sub device 1.
     distributed::Finish(mesh_device->mesh_command_queue(0));
@@ -529,13 +526,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     // CQ 1 owns sub devices 1 and 2.
     // This should throw because program_2 targets sub device 2 which is now owned by CQ 1
     EXPECT_THROW(
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false),
-        std::exception);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false), std::exception);
     // Waiting on an event before the last program was queued does not allow transferring ownership of sub device 2.
     distributed::EnqueueWaitForEvent(mesh_device->mesh_command_queue(0), early_event);
     EXPECT_THROW(
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false),
-        std::exception);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false), std::exception);
 
     // Later event allows transferring ownership of sub device 2 to CQ 0
     auto event1 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);

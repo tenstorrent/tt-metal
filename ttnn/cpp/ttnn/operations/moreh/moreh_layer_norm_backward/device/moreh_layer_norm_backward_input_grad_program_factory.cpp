@@ -6,6 +6,7 @@
 
 #include "moreh_layer_norm_backward_input_grad_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -159,17 +160,16 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(output_grad)),
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(mean)),
-        static_cast<uint32_t>(is_dram(rstd)),
-        static_cast<uint32_t>(is_dram(gamma)),
-        static_cast<uint32_t>(gamma_has_value),
-        static_cast<uint32_t>(do_mask_h),
-        static_cast<uint32_t>(do_mask_w)};
+    std::vector<uint32_t> reader_compile_time_args{
+        static_cast<uint32_t>(gamma_has_value), static_cast<uint32_t>(do_mask_h), static_cast<uint32_t>(do_mask_w)};
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mean.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(rstd.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gamma.has_value() ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};

@@ -53,6 +53,18 @@ def test_sd35_performance(
     """Performance test for SD35 pipeline with detailed timing analysis."""
 
     if galaxy_type == "4U":
+        # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
+        if is_ci_env:
+            profiler = BenchmarkProfiler()
+            with profiler("run", iteration=0):
+                pass
+
+            benchmark_data = BenchmarkData()
+            benchmark_data.save_partial_run_json(
+                profiler,
+                run_type="empty_run",
+                ml_model_name="empty_run",
+            )
         pytest.skip("4U is not supported for this test")
 
     # Setup parallel manager

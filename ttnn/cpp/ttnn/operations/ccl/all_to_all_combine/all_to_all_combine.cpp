@@ -27,7 +27,8 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<uint32_t>& axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<GlobalSemaphore>& init_semaphore) {
     auto mesh_device = input_tensor.mesh_device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
@@ -47,7 +48,8 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
         axis,
         subdevice_id,
         optional_output_tensor,
-        locally_reduced);
+        locally_reduced,
+        init_semaphore);
 }
 
 }  // namespace ttnn::operations::ccl

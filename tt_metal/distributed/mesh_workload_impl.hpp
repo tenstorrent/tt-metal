@@ -20,7 +20,7 @@ class MeshWorkloadImpl {
     // A MeshWorkload can be fully described using a set of programs mapped to different Logical Device Regions
     // in a Mesh + configurable runtime Args
     // The current iteration supports the following compute paradigms:
-    //  - Single Program Multi Device (Completely Homogenous MeshWorkload)
+    //  - Single Program Multi Device (Completely Homogeneous MeshWorkload)
     //  - Multi Program Multi Device (Completely Heterogeneous MeshWorkload)
     // Support for configurable runtime arguments will be added in future versions.
 private:

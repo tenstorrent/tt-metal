@@ -15,6 +15,9 @@
 namespace tt {
 
 namespace tt_metal {
+// We use 16 bits to store tiles_received and tiles_acked.
+static constexpr uint32_t cb_page_count_bits = 16;
+static constexpr uint32_t max_num_cb_pages = (1 << cb_page_count_bits) - 1;
 
 // Dynamic CBs will be created with address_ initialized to globally allocated address
 // Static CBs will not have address set until their owning Program allocates them
@@ -87,6 +90,10 @@ void CircularBuffer::validate_set_config_attributes() {
                 df_set_str,
                 ps_set_str);
         }
+        if (ps_set) {
+            // Validate number of pages is not too large.
+            this->num_pages(buffer_index);
+        }
     }
 }
 
@@ -115,7 +122,19 @@ uint32_t CircularBuffer::page_size(uint32_t buffer_index) const {
     return page_size;
 }
 
-uint32_t CircularBuffer::num_pages(uint32_t buffer_index) const { return this->size() / this->page_size(buffer_index); }
+uint32_t CircularBuffer::num_pages(uint32_t buffer_index) const {
+    uint32_t num_pages = this->size() / this->page_size(buffer_index);
+    // LocalCBInterface.tiles_acked and LocalCBInterface.tiles_received are 16 bits, so we need to check if the
+    // number of pages would cause overflow.
+    TT_FATAL(
+        num_pages <= max_num_cb_pages,
+        "For buffer index {}, number of CB pages {} is greater than {}. Would cause wraparound in the CB "
+        "calculations.",
+        buffer_index,
+        num_pages,
+        max_num_cb_pages);
+    return num_pages;
+}
 
 DataFormat CircularBuffer::data_format(uint32_t buffer_index) const {
     if (not this->uses_buffer_index(buffer_index)) {

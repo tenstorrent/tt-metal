@@ -16,7 +16,11 @@ from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_model_parameters,
     get_mesh_mappers,
 )
-from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
+from models.tt_cnn.tt.pipeline import (
+    PipelineConfig,
+    create_pipeline_from_config,
+    get_memory_config_for_persistent_dram_tensor,
+)
 from models.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -40,15 +44,11 @@ def run_mobilenetv2_e2e(
     model_parameters = create_mobilenetv2_model_parameters(torch_model, device=device)
     ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size_per_device)
 
-    dram_cores = 10
-    assert host_input_tensor.shape[-2] % dram_cores == 0, "Expecting even sharding on DRAM input tensor"
-    dram_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))}),
-        [host_input_tensor.shape[-2] // dram_cores, host_input_tensor.shape[-1]],
-        ttnn.ShardOrientation.ROW_MAJOR,
+    input_dram_mem_config = get_memory_config_for_persistent_dram_tensor(
+        host_input_tensor.shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, device.dram_grid_size()
     )
-    input_dram_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+    logger.info(
+        f"Auto-selected persistent DRAM tensor memory config: shape={host_input_tensor.shape}, shard_shape={input_dram_mem_config.shard_spec.shape}, grid={input_dram_mem_config.shard_spec.grid}"
     )
 
     input_l1_core_grid = ttnn.CoreGrid(x=8, y=8)
@@ -61,16 +61,13 @@ def run_mobilenetv2_e2e(
         use_height_and_width_as_shard_shape=True,
     )
 
-    config = PipelineConfig(use_trace=True, num_command_queues=2, separate_io_queue=False)
+    config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipe = create_pipeline_from_config(
         config,
         ttnn_model,
         device,
         dram_input_memory_config=input_dram_mem_config,
         l1_input_memory_config=input_l1_mem_config,
-        dram_output_memory_config=None,
-        output_shape=None,
-        output_dtype=None,
     )
 
     iterations = 32

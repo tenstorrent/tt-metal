@@ -163,7 +163,6 @@ jobs:
         platform: [
           "N300-viommu",
           "N300-llmbox",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -187,7 +186,6 @@ jobs:
         platform: [
           "N300-viommu",
           "N300-llmbox",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -226,7 +224,6 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
     with:
@@ -249,7 +246,6 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
     with:

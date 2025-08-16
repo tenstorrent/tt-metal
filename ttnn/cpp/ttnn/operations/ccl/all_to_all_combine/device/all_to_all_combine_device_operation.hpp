@@ -28,11 +28,18 @@ struct AllToAllCombineDeviceOperation {
         const std::optional<tt::tt_metal::GlobalSemaphore> cross_device_semaphore;
         const bool locally_reduced;
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
+        const std::optional<tt::tt_metal::GlobalSemaphore> init_semaphore;
         static constexpr auto attribute_names = std::forward_as_tuple(
-            "output_mem_config", "axis", "num_links", "topology", "cross_device_semaphore", "subdevice_id");
+            "output_mem_config",
+            "axis",
+            "num_links",
+            "topology",
+            "cross_device_semaphore",
+            "subdevice_id",
+            "init_semaphore");
         auto attribute_values() const {
             return std::forward_as_tuple(
-                output_mem_config, axis, num_links, topology, cross_device_semaphore, subdevice_id);
+                output_mem_config, axis, num_links, topology, cross_device_semaphore, subdevice_id, init_semaphore);
         };
     };
     struct tensor_args_t {
@@ -105,7 +112,8 @@ struct AllToAllCombineDeviceOperation {
         const std::optional<uint32_t>& axis,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
-        bool locally_reduced = false);
+        bool locally_reduced = false,
+        const std::optional<GlobalSemaphore>& init_semaphore = std::nullopt);
 };
 }  // namespace ttnn::operations::ccl
 

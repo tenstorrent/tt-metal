@@ -59,17 +59,17 @@ struct dispatch_static_config_t {
 };
 
 struct dispatch_dependent_config_t {
-    std::optional<tt_cxy_pair> upstream_logical_core;      // Dependant
-    std::optional<tt_cxy_pair> downstream_logical_core;    // Dependant
-    std::optional<tt_cxy_pair> downstream_s_logical_core;  // Dependant
+    std::optional<tt_cxy_pair> upstream_logical_core;      // Dependent
+    std::optional<tt_cxy_pair> downstream_logical_core;    // Dependent
+    std::optional<tt_cxy_pair> downstream_s_logical_core;  // Dependent
 
-    std::optional<uint32_t> upstream_dispatch_cb_sem_id;  // Dependant
+    std::optional<uint32_t> upstream_dispatch_cb_sem_id;  // Dependent
 
-    std::optional<uint32_t> upstream_sync_sem;  // Dependant
+    std::optional<uint32_t> upstream_sync_sem;  // Dependent
 
     std::optional<uint32_t> downstream_cb_base;    // 10, dependent
     std::optional<uint32_t> downstream_cb_size;    // Dependent
-    std::optional<uint32_t> downstream_cb_sem_id;  // Dependant
+    std::optional<uint32_t> downstream_cb_sem_id;  // Dependent
 
     std::optional<uint32_t> split_prefetch;                        // If upstream is NOT a prefetch_HD
     std::optional<uint32_t> prefetch_h_noc_xy;                     // Dependent. Used if split_prefetch is true

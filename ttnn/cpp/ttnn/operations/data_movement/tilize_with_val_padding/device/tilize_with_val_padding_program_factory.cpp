@@ -33,7 +33,7 @@ uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value) {
                     TT_FATAL(
                         tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::UINT32 or
                             tensor.dtype() == DataType::INT32,
-                        "only supporting bfloat16, float32, and int32/uint32");
+                        "only supporting bfloat16, float32, and uint32/int32");
                     return (uint32_t)((pad_value));
                 }
             } else if constexpr (std::is_same_v<T, uint32_t>) {
@@ -369,7 +369,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
         ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16, num_tiles_2d, third_dim, total_tiles_per_row};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);

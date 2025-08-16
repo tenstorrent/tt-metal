@@ -17,9 +17,9 @@ def run_with_trace(
     num_links,
     output_mem_config,
     multi_device_global_semaphore,
+    barrier_semaphore,
     num_iter=20,
     subdevice_id=None,
-    barrier_semaphore=None,
 ):
     # Compile Run
     logger.info("Compiling model")
@@ -78,7 +78,6 @@ def run_all_broadcast_impl(
     output_shard_grid=None,
     tensor_mem_layout=None,
     cluster_axis=None,
-    use_barrier=False,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -198,9 +197,9 @@ def run_all_broadcast_impl(
             num_links,
             output_mem_config,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
+            barrier_semaphore=barrier_semaphore_handles[i],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
-            barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
         )
         tt_out_tensor_list.append(tt_out_tensor)
     else:
@@ -212,7 +211,7 @@ def run_all_broadcast_impl(
                 memory_config=output_mem_config,
                 topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
-                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                barrier_semaphore=barrier_semaphore_handles[i],
             )
             tt_out_tensor_list.append(tt_out_tensors)
 
@@ -268,7 +267,6 @@ def run_all_broadcast_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])
-@pytest.mark.parametrize("use_barrier", [True, False])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_broadcast(
     t3k_mesh_device,
@@ -281,7 +279,6 @@ def test_all_broadcast(
     mem_config,
     num_iters,
     function_level_defaults,
-    use_barrier,
 ):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")
@@ -298,7 +295,6 @@ def test_all_broadcast(
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
-        use_barrier=use_barrier,
     )
 
 
@@ -372,7 +368,6 @@ def test_all_broadcast(
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("use_barrier", [True, False])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_broadcast_sharded(
     t3k_mesh_device,
@@ -388,7 +383,6 @@ def test_all_broadcast_sharded(
     output_shard_shape,
     output_shard_grid,
     tensor_mem_layout,
-    use_barrier,
 ):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")
@@ -409,5 +403,4 @@ def test_all_broadcast_sharded(
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
-        use_barrier=use_barrier,
     )

@@ -119,15 +119,15 @@ std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHa
                     .set_page_size(ouput_cb_index, single_tile_size)
                     .set_page_size(interm0_cb_index, single_tile_size);
             if (cfg.multi_dram) {
-                auto cb_src0 = tt_metal::CreateCircularBuffer(program_, all_cores, cb_src0_config);
-                auto cb_src1 = tt_metal::CreateCircularBuffer(program_, all_cores, cb_src1_config);
-                auto cb_output = tt_metal::CreateCircularBuffer(program_, CoreRangeSet({all_cores}), cb_output_config);
+                tt_metal::CreateCircularBuffer(program_, all_cores, cb_src0_config);
+                tt_metal::CreateCircularBuffer(program_, all_cores, cb_src1_config);
+                tt_metal::CreateCircularBuffer(program_, CoreRangeSet({all_cores}), cb_output_config);
             } else {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
-                auto cb_src0 = tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
-                auto cb_src1 = tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
-                auto cb_output = tt_metal::CreateCircularBuffer(program_, cores, cb_output_config);
+                tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
+                tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
+                tt_metal::CreateCircularBuffer(program_, cores, cb_output_config);
             }
         }
     }
@@ -174,7 +174,7 @@ std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHa
         uint(out_subblock_w),
         uint(out_subblock_num_tiles)};
 
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
         all_cores,
@@ -262,7 +262,6 @@ bool matmul_multi_core_single_dram(std::shared_ptr<distributed::MeshDevice> mesh
             int dram_src1_channel_id = 1;
             uint32_t dram_buffer_dst_addr =
                 (core_index * per_core_M * per_core_N * single_tile_size) + dram_unreserved_base;
-            int dram_dst_channel_id = 2;
 
             uint32_t dram_buffer_size_act =
                 single_tile_size * per_core_M * K;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -477,7 +476,6 @@ bool matmul_multi_core_multi_dram(
     int in0_block_w = 2;
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
-    uint32_t single_tile_size = 2 * 1024;
     log_info(LogTest, "num_cores_r={}, num_cores_c={}", num_cores_r, num_cores_c);
     log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
     log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
@@ -519,10 +517,8 @@ bool matmul_multi_core_multi_dram(
             out_subblock_h,
             out_subblock_w);
 
-    auto device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto& program_ = workload.get_programs().at(device_range);
     // CommandQueue& cq = device->command_queue();
 
     ////////////////////////////////////////////////////////////////////////////

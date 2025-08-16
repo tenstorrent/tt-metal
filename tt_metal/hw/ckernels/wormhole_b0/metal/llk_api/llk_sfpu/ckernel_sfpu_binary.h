@@ -6,37 +6,13 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
-// Helper function for _sfpu_binary_power_
-// This function is based on _float32_to_int32_, but expects a positive input, which allows us to optimize
-// away several lines (and make it faster)
-sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
-    sfpi::vInt result;
-    sfpi::vInt exp = exexp(in);  // extract exponent
-    v_if(exp < 0) { result = 0; }
-    v_elseif(exp > 30)  // overflow occurs above this range
-    {
-        // set to int32 max value in case of overflow
-        result = std::numeric_limits<int32_t>::max();
-    }
-    v_else {
-        // extract mantissa
-        sfpi::vInt man = exman8(in);
-        // shift the mantissa by (23-exponent) to the right
-        sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
-        man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));
-
-        result = man;
-    }
-    v_endif;
-    return result;
-}
 
 /**
  * @brief Computes base raised to the power of pow (base**pow)
@@ -65,6 +41,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
+template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
     // 1) Compute log2(base)
@@ -124,7 +101,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     // Compute formula in Horner form
     sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
     sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif, 0);
-    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560) + zif, 0);
+    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560e) + zif, 0);
+
     d2 = d1 * d2;
     zif = _float_to_int32_positive_(d2 * d3);
 
@@ -159,19 +137,26 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     }
     v_endif;
 
+    if constexpr (!is_fp32_dest_acc_en) {
+        // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
+        // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
+        // rather than 81 (which would have been correct).
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
+        y = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+    }
+
     return y;
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary(const uint dst_offset) {
     if constexpr (BINOP == BinaryOp::POW) {
         for (int d = 0; d < ITERATIONS; d++) {
             constexpr uint dst_tile_size = 32;
             sfpi::vFloat in0 = sfpi::dst_reg[0];
             sfpi::vFloat in1 = sfpi::dst_reg[dst_offset * dst_tile_size];
-            sfpi::vFloat result = 0.f;
 
-            result = _sfpu_binary_power_(in0, in1);
+            sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
 
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;

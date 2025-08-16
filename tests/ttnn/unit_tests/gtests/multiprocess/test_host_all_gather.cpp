@@ -25,7 +25,7 @@ using ::testing::ElementsAre;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
-using ::tt::tt_fabric::HostRankId;
+using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;

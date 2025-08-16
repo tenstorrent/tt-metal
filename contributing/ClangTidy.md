@@ -28,7 +28,7 @@ If the check does not have FIX-ITs, then it’s a manual process.  Perform the s
 
 # FAQ
 ## What sorts of things can Clang Tidy detect?
-Many things.  Some categories of checks are performance, security, modernization, readability, recommended practices, and convensions.  For a full list see [Clang-Tidy Checks](https://clang.llvm.org/extra/clang-tidy/checks/list.html).
+Many things.  Some categories of checks are performance, security, modernization, readability, recommended practices, and conventions.  For a full list see [Clang-Tidy Checks](https://clang.llvm.org/extra/clang-tidy/checks/list.html).
 
 ## Can we turn on ALL the checks?
 No.  Some checks are mutually exclusive.  Generally when a style or opinion is involved.  For example [modernize-use-trailing-return-type](https://clang.llvm.org/extra/clang-tidy/checks/modernize/use-trailing-return-type.html)  helps to use a trailing return type.  While [fuchsia-trailing-return](https://clang.llvm.org/extra/clang-tidy/checks/fuchsia/trailing-return.html)  enforces that such syntax is NOT used.

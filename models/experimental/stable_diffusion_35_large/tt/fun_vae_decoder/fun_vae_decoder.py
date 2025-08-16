@@ -41,30 +41,30 @@ class TtVaeDecoderParameters:
     ) -> TtVaeDecoderParameters:
         return cls(
             conv_in=TtConv2dParameters.from_torch(
-                torch_vae_decoder.conv_in, dtype=dtype, parallel_config=parallel_config, mesh_sharded_output=False
+                torch_vae_decoder.conv_in, dtype=dtype, parallel_config=parallel_config, mesh_sharded_output=True
             ),
             mid_block=TtUNetMidBlock2DParameters.from_torch(
                 torch_vae_decoder.mid_block,
                 dtype=dtype,
                 parallel_config=parallel_config,
-                gn_allow_sharded_compute=False,
-                mesh_sharded_input=False,
+                gn_allow_sharded_compute=True,
+                mesh_sharded_input=True,
             ),
             up_blocks=[
                 TtUpDecoderBlock2DParameters.from_torch(
                     up_block,
                     dtype=dtype,
                     parallel_config=parallel_config,
-                    gn_allow_sharded_compute=False,  # (False if idx == len(torch_vae_decoder.up_blocks) - 1 else True),
-                    mesh_sharded_input=False,
+                    gn_allow_sharded_compute=True,  # (False if idx == len(torch_vae_decoder.up_blocks) - 1 else True),
+                    mesh_sharded_input=True,
                 )  # No sharded compute for group norm for the last up decoder layer
                 for idx, up_block in enumerate(torch_vae_decoder.up_blocks or [])
             ],
             conv_norm_out=TtGroupNormParameters.from_torch(
                 torch_vae_decoder.conv_norm_out,
                 parallel_config=parallel_config,
-                allow_sharded_compute=False,  # No sharded compute for group norm for the last group norm because of hanging issue
-                mesh_sharded_input=False,
+                allow_sharded_compute=True,  # No sharded compute for group norm for the last group norm because of hanging issue
+                mesh_sharded_input=True,
             ),
             conv_out=TtConv2dParameters.from_torch(
                 torch_vae_decoder.conv_out,
@@ -78,18 +78,18 @@ class TtVaeDecoderParameters:
 # TODO: Verify upscale_dtype from reference code
 def sd_vae_decode(x: ttnn.Tensor, parameters: TtVaeDecoderParameters) -> ttnn.Tensor:
     x = vae_conv2d(x, parameters.conv_in)
-    # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
+    # ttnn.ReadDeviceProfiler(parameters.parallel_config.device)
     x = unet_mid_block(x, parameters.mid_block)
-    # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
+    # ttnn.ReadDeviceProfiler(parameters.parallel_config.device)
 
     for up_block_params in parameters.up_blocks:
         x = updecoder_block(x, up_block_params)
-        # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
+        # ttnn.ReadDeviceProfiler(parameters.parallel_config.device)
 
     x = vae_group_norm(x, parameters.conv_norm_out)
-    # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
+    # ttnn.ReadDeviceProfiler(parameters.parallel_config.device)
     x = ttnn.silu(x)
-    # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
+    # ttnn.ReadDeviceProfiler(parameters.parallel_config.device)
     x = vae_conv2d(x, parameters.conv_out)
 
     return x

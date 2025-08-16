@@ -28,15 +28,15 @@ void kernel_main() {
     //   receiver: This the cores that receive the aggregated results from sender, they only do
     //   local computations that they send to the sender for final aggregation
     //
-    // GROUPNORM RECIEVER DESCIPTION
-    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
+    // GROUPNORM RECEIVER DESCRIPTION
+    // This is a high level description of the stages of this kernel, tags will be added to show where in the code each
     // stage starts and ends
     //
     // Batch Loop:
     //   Group Loop:
     //     This is the process which repeats for every group
     //     First Read of data:
-    //       If Reciever:
+    //       If Receiver:
     //           Send partial reduction of Average to Sender Core
     //       If Sender:
     //           Pack Partials:
@@ -45,7 +45,7 @@ void kernel_main() {
     //           Send Global:
     //               Send Global Average to all Receiver cores
     //     Second Read of data:
-    //       If Reciever:
+    //       If Receiver:
     //           Send partial reduction of Varience to Sender Core
     //       If Sender:
     //           Pack Partials:

@@ -63,7 +63,7 @@ void find_max_value_in_row() {
     tile_regs_acquire();
     reconfig_data_format(cb_input, cb_input);
     for (uint32_t col = 0; col < Wt;) {
-        // try to procces data by blocks to improve performance
+        // try to process data by blocks to improve performance
         cb_wait_front(cb_input, col + block_size);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
             auto working_register = col == 0 ? max_value_register : tile_register;

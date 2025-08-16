@@ -6,6 +6,7 @@
 
 #include "moreh_nll_loss_step1_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
@@ -96,12 +97,12 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     }
 
     // create read/wrtie kernel
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(target)),
-        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
-        static_cast<uint32_t>(weight_has_value)};
+    std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(weight_has_value)};
+    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;

@@ -6,6 +6,7 @@
 
 #include "moreh_layer_norm_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -195,19 +196,17 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(gamma)),
-        static_cast<uint32_t>(is_dram(beta)),
-        block_size};
+    std::vector<uint32_t> reader_compile_time_args{block_size};
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(output)),
-        static_cast<uint32_t>(is_dram(mean_as_tensor)),
-        static_cast<uint32_t>(is_dram(rstd_as_tensor)),
-        static_cast<uint32_t>(mean_has_value),
-        static_cast<uint32_t>(rstd_has_value),
-        block_size};
+    std::vector<uint32_t> writer_compile_time_args{mean_has_value, rstd_has_value, block_size};
+    tt::tt_metal::TensorAccessorArgs(output->buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mean_as_tensor ? mean_as_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(rstd_as_tensor ? rstd_as_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};

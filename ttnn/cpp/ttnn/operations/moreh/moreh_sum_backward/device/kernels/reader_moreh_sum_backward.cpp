@@ -29,8 +29,8 @@ inline uint32_t get_output_grad_tile(
 
 void kernel_main() {
     // compile-time args
-    constexpr bool output_grad_is_dram = (get_compile_time_arg_val(0) == 1);
-    constexpr uint32_t input_grad_rank = get_compile_time_arg_val(1);
+    constexpr uint32_t input_grad_rank = get_compile_time_arg_val(0);
+    constexpr auto output_grad_args = TensorAccessorArgs<1>();
 
     // runtime args
     ArgFetcher arg_fetcher;
@@ -79,11 +79,7 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
     uint32_t output_grad_tile_bytes = get_tile_size(cb_id_in0);
-    const auto output_grad_data_format = get_dataformat(cb_id_in0);
-    const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         auto read_tile_id = get_output_grad_tile(
