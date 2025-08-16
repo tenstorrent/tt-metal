@@ -808,7 +808,8 @@ void gen_host_test(
         data.push_back(i);
     }
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(first_worker_g);
-    llrt::write_hex_vec_to_core(device->id(), phys_worker_core, data, l1_buf_base_g);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        device->id(), phys_worker_core, data, l1_buf_base_g);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     for (int count = 1; count < 100; count++) {
@@ -1737,9 +1738,10 @@ void write_prefetcher_cmds(
 
         prefetch_q_rd_ptr_addr_data.push_back(
             prefetch_q_base + prefetch_q_entries_g * sizeof(DispatchSettings::prefetch_q_entry_type));
-        llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device->id(), phys_prefetch_core, prefetch_q_rd_ptr_addr_data, prefetch_q_rd_ptr_addr);
-        llrt::write_hex_vec_to_core(device->id(), phys_prefetch_core, prefetch_q, prefetch_q_base);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            device->id(), phys_prefetch_core, prefetch_q, prefetch_q_base);
 
         host_mem_ptr = (uint32_t*)host_hugepage_base;
         prefetch_q_dev_ptr = prefetch_q_base;
@@ -1876,7 +1878,8 @@ void configure_for_single_chip(
     uint32_t prefetch_d_buffer_pages = prefetch_d_buffer_size_g >> DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
     dispatch_wait_addr_g = l1_unreserved_base_aligned + MetalContext::instance().hal().get_alignment(HalMemType::L1);
     vector<uint32_t> zero_data(0);
-    llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
     uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(DispatchSettings::prefetch_q_entry_type);
     uint32_t noc_read_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
@@ -1910,8 +1913,10 @@ void configure_for_single_chip(
     uint32_t completion_q_rd_ptr = MetalContext::instance()
                                        .dispatch_mem_map(DISPATCH_CORE_TYPE)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_wr_ptr);
-    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_rd_ptr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        device->id(), phys_dispatch_host_core, tmp, completion_q_wr_ptr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        device->id(), phys_dispatch_host_core, tmp, completion_q_rd_ptr);
     dirty_host_completion_buffer(host_hugepage_completion_buffer);
 
     const uint32_t prefetch_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
