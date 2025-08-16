@@ -161,20 +161,7 @@ void MAIN {
                     } else if constexpr (use_provided_mask) {
                         /* QK += MASK */
                         reconfig_data_format(cb_qk_im, cb_mask_in);
-                        // Manually inlining: add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
-                        add_tiles_init(cb_qk_im, cb_mask_in);
-                        cb_wait_front(cb_qk_im, qk_chunk_tiles);
-                        cb_wait_front(cb_mask_in, qk_chunk_tiles);
-                        for (uint32_t i = 0; i < qk_chunk_tiles; i++) {
-                            acquire_dst();
-                            add_tiles(cb_qk_im, cb_mask_in, i, i, 0);
-                            pack_tile(0, cb_qk_im);
-                            release_dst();
-                        }
-                        cb_pop_front(cb_mask_in, qk_chunk_tiles);
-                        cb_pop_front(cb_qk_im, qk_chunk_tiles);
-                        cb_reserve_back(cb_qk_im, qk_chunk_tiles);
-                        cb_push_back(cb_qk_im, qk_chunk_tiles);
+                        add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                     } else if constexpr (use_padded_mask) {
                         // only uses mask on the last K chunk if it exists at all
                         if (k_chunk == k_num_chunks - 1) {
