@@ -14,6 +14,7 @@ void kernel_main() {
     // them
     constexpr uint32_t window_outer = get_compile_time_arg_val(4);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
     constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
@@ -24,6 +25,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
 
+#ifdef ACTIVATION_REUSE
+    constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(27);
+    constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(28);
+    constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(29) == 1;
+    constexpr uint32_t image_width_tiles = get_compile_time_arg_val(30);
+    constexpr uint32_t output_image_width = get_compile_time_arg_val(31);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(32);
+    constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(33) == 1;
+#endif
+
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);
     i += 1;
@@ -31,6 +42,10 @@ void kernel_main() {
     if (noop) {
         return;
     }
+
+#ifdef ACTIVATION_REUSE
+    uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(i++);
+#endif
 
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act>();
@@ -65,11 +80,16 @@ void kernel_main() {
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     uint32_t start_reader_idx = 0;
+    const uint32_t cb_start_addr = get_write_ptr(cb_id_act);
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
+#ifdef ACTIVATION_REUSE
+        uint32_t l1_write_addr_act = cb_start_addr;
+#endif
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
 
+#ifndef ACTIVATION_REUSE
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
 
@@ -83,10 +103,33 @@ void kernel_main() {
                 stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
 
             noc_async_read_barrier();
-
             cb_push_back(cb_id_act, act_block_num_tiles);
-
             reader_offset += window_outer_offset;
+#else
+            read_sticks_activation_reuse<
+                coalesced_read_bytes,
+                conv_act_c_read_bytes,
+                act_block_w_extra_align_bytes,
+                window_outer_offset,
+                weight_size_w,
+                stride_w,
+                weight_size_h,
+                cb_id_act,
+                act_reuse_cb_tiles,
+                act_block_w_tiles,
+                readers_process_full_image_widths,
+                image_width_tiles,
+                output_image_width,
+                window_reuse_offset,
+                need_to_push_remaining_tiles>(
+                packed_reader_indices_ptr,
+                act_l1_read_addr,
+                l1_write_addr_act,
+                reader_idx,
+                cb_start_addr,
+                remaining_tiles_to_push);
+
+#endif
         }
 
         start_reader_idx = reader_idx;
