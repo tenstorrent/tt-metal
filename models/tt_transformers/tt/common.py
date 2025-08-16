@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import re
 from enum import Enum
 from typing import Optional
@@ -233,9 +234,8 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
-    # Values obtained from grid search
+def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Llama-3.x specific scaling for rotary embeddings."""
     low_freq_factor = 1
     high_freq_factor = 4
 
@@ -253,6 +253,24 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
             smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
             new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def compute_default_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Default scaling for rotary embeddings."""
+    return freqs
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+
+    hf_model_env = os.getenv("HF_MODEL")
+
+    if hf_model_env == "google/gemma-3-1b-it":
+        freqs = compute_default_parameters(freqs, scale_factor, orig_context_len)
+    elif "LLAMA_DIR" in os.environ or (hf_model_env and "llama" in hf_model_env.lower()):
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
+
+    return freqs
 
 
 def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
@@ -602,7 +620,11 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    from models.tt_transformers.tt.model import Transformer
+    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
+        from models.experimental.gemma3_1b.tt.model import Gemma3Transformer as Transformer
+    else:
+        from models.tt_transformers.tt.model import Transformer
+
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
