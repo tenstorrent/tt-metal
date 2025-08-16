@@ -37,7 +37,7 @@ void kernel_main() {
     const uint32_t pre_scale = get_arg_val<uint32_t>(1);
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
-    constexpr uint32_t block_ht = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t block_ht = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 2);
     for (uint32_t h = 0; h < block_ht; h++) {
         cb_reserve_back(cb_attn, block_wt);
         uint32_t l1_write_addr = get_write_ptr(cb_attn);

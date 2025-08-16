@@ -38,8 +38,8 @@ void kernel_main() {
 
 #if defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
 
-    constexpr uint32_t fused_head = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 3);
-    constexpr uint32_t mask_block_ht = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 5);
+    constexpr uint32_t fused_head = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t mask_block_ht = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 4);
 
     for (uint32_t f = 0; f < fused_head; f++) {
         mask_id = mask_start_tile_id;

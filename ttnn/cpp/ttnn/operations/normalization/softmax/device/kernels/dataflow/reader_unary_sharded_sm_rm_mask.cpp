@@ -9,8 +9,8 @@
 void kernel_main() {
 #if FUSED_SCALE_MASK
     constexpr uint32_t block_wt = get_compile_time_arg_val(0);
-    constexpr uint32_t size = get_compile_time_arg_val(1);
-    constexpr auto mask_args = TensorAccessorArgs<2>();
+    constexpr auto mask_args = TensorAccessorArgs<1>();
+    constexpr uint32_t size = get_compile_time_arg_val(mask_args.next_compile_time_args_offset());
     const uint32_t mask_addr = get_arg_val<uint32_t>(2);
     const uint32_t mask_start_tile_id = get_arg_val<uint32_t>(3);
 
@@ -23,7 +23,7 @@ void kernel_main() {
     const uint32_t pre_scale = get_arg_val<uint32_t>(1);
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
-    constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(mask_args.next_compile_time_args_offset());
+    constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE ? 64 : 32;
     constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE ? 1024 : 512;
 

@@ -14,7 +14,7 @@ void kernel_main() {
     const uint32_t tile_offset = get_arg_val<uint32_t>(4);
     const uint32_t Wt = get_arg_val<uint32_t>(5);
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
 
     // ublocks size defined in tiles
@@ -26,7 +26,7 @@ void kernel_main() {
     uint32_t mask_addr = get_arg_val<uint32_t>(7);
     uint32_t start_ht = get_arg_val<uint32_t>(8);
     uint32_t start_mask_id = get_arg_val<uint32_t>(9);
-    constexpr auto mask_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto mask_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_attn = 4;
     uint32_t mask_tile_bytes = get_tile_size(cb_id_attn);
@@ -50,7 +50,7 @@ void kernel_main() {
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 #endif
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
+    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
     {

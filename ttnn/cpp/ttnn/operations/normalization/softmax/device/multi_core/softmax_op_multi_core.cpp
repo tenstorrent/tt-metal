@@ -18,9 +18,9 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 namespace ttnn::operations::normalization {
@@ -176,11 +176,9 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
     if (mask.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(mask.value().buffer()).append_to(reader_compile_time_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs().append_to(reader_compile_time_args);
+        TensorAccessorArgs(mask.value().buffer()).append_to(reader_compile_time_args);
     }
     if (causal_mask) {
         uint32_t num_tiles_causal_mask =
@@ -189,7 +187,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
 
     std::vector<uint32_t> writer_compile_time_args = {num_datum_padded};
-    tt::tt_metal::TensorAccessorArgs(out0_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(out0_buffer).append_to(writer_compile_time_args);
     std::map<std::string, std::string> softmax_defines, writer_defines;
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
@@ -716,20 +714,21 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
     // reader compile arg
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_wt};
+    if (mask.has_value()) {
+        TensorAccessorArgs(mask->buffer()).append_to(reader_compile_time_args);
+    } else {
+        TensorAccessorArgs().append_to(reader_compile_time_args);  // placeholder for missing mask
+    }
     std::map<std::string, std::string> softmax_defines;
     // hw_dims_only_causal_mask does not support RM Layout atm
     bool use_row_major_kernel = (mask.has_value() and mask->layout() == tt::tt_metal::Layout::ROW_MAJOR);
     if (use_row_major_kernel) {
         auto mask_stick_size = mask->padded_shape()[3] * mask->element_size();
         reader_compile_time_args.push_back(mask_stick_size);
-    }
-    if (mask.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(mask->buffer()).append_to(reader_compile_time_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs().append_to(reader_compile_time_args);
+        reader_compile_time_args.push_back(0);
+        reader_compile_time_args.push_back(0);
     }
-    reader_compile_time_args.push_back(
-        (std::uint32_t)(mask_cb_data_format == tt::DataFormat::Float32));  // mask float32
     if (causal_mask) {
         if (!hw_dims_only_causal_mask) {
             reader_compile_time_args.push_back((std::uint32_t)block_ht / mask_Ht);  // fused head
@@ -737,6 +736,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
             reader_compile_time_args.push_back((std::uint32_t)block_ht);
         }
     }
+    reader_compile_time_args.push_back(
+        (std::uint32_t)(mask_cb_data_format == tt::DataFormat::Float32));  // mask float32
     reader_compile_time_args.push_back((std::uint32_t)mask_Ht);
 
     if (mask.has_value()) {
