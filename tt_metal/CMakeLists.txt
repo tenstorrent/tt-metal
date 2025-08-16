@@ -232,7 +232,6 @@ if(TT_INSTALL)
             reflect
             enchantum
             TracyClient
-            small_vector
             tt-logger
         EXPORT Metalium
         FILE_SET
