@@ -232,7 +232,7 @@ def test_permute_5d_width(device, shape, perm, memory_config, dtype):
     if dtype == ttnn.float32:
         # float32 permute internally truncates to tf32 at the moment
         # https://github.com/tenstorrent/tt-metal/issues/23663
-        assert_with_pcc(torch_output, output_tensor, 0.9999)
+        assert_with_pcc(torch_output, tt_output, 0.9999)
     else:
         assert_equal(torch_output, tt_output)
 
@@ -266,7 +266,7 @@ def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
     if dtype == ttnn.float32:
         # float32 permute internally truncates to tf32 at the moment
         # https://github.com/tenstorrent/tt-metal/issues/23663
-        assert_with_pcc(torch_output, output_tensor, 0.9999)
+        assert_with_pcc(torch_output, tt_output, 0.9999)
     else:
         assert_equal(torch_output, tt_output)
 
