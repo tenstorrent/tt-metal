@@ -31,19 +31,40 @@ concept ProgramFactoryConcept = requires {
 };
 
 template <typename T>
-concept MeshWorkloadFactoryConcept = requires {
+concept MeshWorkloadFactoryConcept_CreateMesh = requires {
     typename T::cached_mesh_workload_t;
-
     [](const auto& operation_attributes,
        const ttnn::MeshCoordinateRangeSet& tensor_coords,
        const auto& tensor_args,
        auto& tensor_return_value) {
         auto cached_workload =
             T::create_mesh_workload(operation_attributes, tensor_coords, tensor_args, tensor_return_value);
-
         T::override_runtime_arguments(cached_workload, operation_attributes, tensor_args, tensor_return_value);
     };
 };
+
+template <typename T>
+concept MeshWorkloadFactoryConcept_CreateAt = requires {
+    typename T::cached_mesh_workload_t;
+    [](const auto& operation_attributes, const ttnn::MeshCoordinate& coord, const auto& tensor_args, auto& ret) {
+        T::create_at(operation_attributes, coord, tensor_args, ret);
+    };
+    [](typename T::cached_mesh_workload_t& cached_workload,
+       const auto& operation_attributes,
+       const auto& tensor_args,
+       auto& ret) {
+        T::override_runtime_arguments(cached_workload, operation_attributes, tensor_args, ret);
+    };
+};
+
+template <typename T>
+concept MeshWorkloadFactoryConcept = MeshWorkloadFactoryConcept_CreateMesh<T> || MeshWorkloadFactoryConcept_CreateAt<T>;
+
+template <typename T>
+concept HasMeshWorkloadCreate = MeshWorkloadFactoryConcept_CreateMesh<T>;
+
+template <typename T>
+concept HasMeshWorkloadCreateAt = MeshWorkloadFactoryConcept_CreateAt<T>;
 
 template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(
@@ -67,11 +88,16 @@ concept DeviceOperationConcept = requires {
                       decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
                       tensor_return_value_t>);
 
-        // All program factories returned by `select_program_factory` must implement exactly one of
-        // `ProgramFactoryConcept` or `MeshWorkloadFactoryConcept`.
+        // All program factories returned by `select_program_factory` must not implement both
+        // `ProgramFactoryConcept` and `MeshWorkloadFactoryConcept` simultaneously. Additional forms (e.g. create_at)
+        // may be adapted downstream.
         const auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
         std::visit(
-            []<typename T>(const T&) { static_assert(ProgramFactoryConcept<T> != MeshWorkloadFactoryConcept<T>); },
+            []<typename T>(const T&) {
+                static_assert(
+                    !(ProgramFactoryConcept<T> && MeshWorkloadFactoryConcept<T>),
+                    "Factory must implement at most one of ProgramFactoryConcept or MeshWorkloadFactoryConcept");
+            },
             program_factory);
     };
 } && HasComputeOutputSpecs<device_operation_t>;

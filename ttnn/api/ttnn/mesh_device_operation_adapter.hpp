@@ -109,9 +109,21 @@ struct MeshDeviceOperationAdapter {
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
-                auto cached_program = program_factory.create(attrs, tensor_args, tensor_return_value);
-                mesh_workload.add_program(range, std::move(cached_program.program));
-                shared_variables[range] = std::move(cached_program.shared_variables);
+                if constexpr (requires(
+                                  ProgramFactory& pf,
+                                  const operation_attributes_t& a,
+                                  const ttnn::MeshCoordinate& c,
+                                  const tensor_args_t& ta,
+                                  tensor_return_value_t& tr) { pf.create_at(a, c, ta, tr); }) {
+                    const auto& coord = *range.begin();
+                    auto cached_program = program_factory.create_at(attrs, coord, tensor_args, tensor_return_value);
+                    mesh_workload.add_program(range, std::move(cached_program.program));
+                    shared_variables[range] = std::move(cached_program.shared_variables);
+                } else {
+                    auto cached_program = program_factory.create(attrs, tensor_args, tensor_return_value);
+                    mesh_workload.add_program(range, std::move(cached_program.program));
+                    shared_variables[range] = std::move(cached_program.shared_variables);
+                }
             }
 
             return AdaptedCachedMeshWorkload<shared_variables_t>{std::move(mesh_workload), std::move(shared_variables)};
@@ -126,16 +138,60 @@ struct MeshDeviceOperationAdapter {
 
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
+                const auto& coord = *coordinate_range.begin();
 
-                mesh_device_operation_utils::apply_override_runtime_arguments(
-                    program_factory,
-                    program,
-                    shared_variables,
-                    attrs,
-                    *(coordinate_range.begin()),
-                    tensor_args,
-                    tensor_return_value);
+                if constexpr (requires(
+                                  ProgramFactory& pf,
+                                  tt::tt_metal::Program& p,
+                                  shared_variables_t& sv,
+                                  const operation_attributes_t& a,
+                                  const ttnn::MeshCoordinate& c,
+                                  const tensor_args_t& ta,
+                                  tensor_return_value_t& tr) {
+                                  mesh_device_operation_utils::apply_override_runtime_arguments(
+                                      pf, p, sv, a, c, ta, tr);
+                              }) {
+                    mesh_device_operation_utils::apply_override_runtime_arguments(
+                        program_factory, program, shared_variables, attrs, coord, tensor_args, tensor_return_value);
+                } else {
+                    // Fallback for factories that don't need per-coordinate override
+                    mesh_device_operation_utils::apply_override_runtime_arguments(
+                        program_factory, program, shared_variables, attrs, coord, tensor_args, tensor_return_value);
+                }
             }
+        }
+    };
+
+    // An adapter that provides `create_mesh_workload` for factories that only implement `create_at(...)`.
+    template <typename WorkloadFactory>
+        requires HasMeshWorkloadCreateAt<WorkloadFactory>
+    struct MeshWorkloadCreateAtAdapter {
+        using shared_variables_t = typename WorkloadFactory::shared_variables_t;
+        using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
+
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            tt::tt_metal::distributed::MeshWorkload mesh_workload;
+            std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+            for (const auto& range : tensor_coords.ranges()) {
+                const auto& coord = *range.begin();
+                auto cached_program = WorkloadFactory::create_at(attrs, coord, tensor_args, tensor_return_value);
+                mesh_workload.add_program(range, std::move(cached_program.program));
+                shared_variables.emplace(range, std::move(cached_program.shared_variables));
+            }
+            return AdaptedCachedMeshWorkload<shared_variables_t>{std::move(mesh_workload), std::move(shared_variables)};
+        }
+
+        static void override_runtime_arguments(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            WorkloadFactory::override_runtime_arguments(
+                cached_workload, attrs, tensor_args, tensor_return_value);
         }
     };
 

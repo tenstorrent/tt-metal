@@ -184,6 +184,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    std::cout << "creating with old infra" << std::endl;
     auto target_device = input_tensors.at(0).mesh_device() ? input_tensors.at(0).mesh_device()->get_device(mesh_coord)
                                                            : input_tensors.at(0).device();
     ccl::SenderReceiverConfig config =
