@@ -69,7 +69,7 @@ class CLIPEncoderLayer:
             activation_fn = "quick_gelu"
         else:
             raise ValueError(f"Unsupported activation function: {self.config.hidden_act}")
-
+        # breakpoint()
         self._mlp = ParallelFeedForward(
             dim=self.config.hidden_size,
             dim_out=self.config.hidden_size,
@@ -120,10 +120,7 @@ class CLIPEncoderLayer:
         hidden_states_shape = list(mlp_output.shape)
         logger.debug(f"Saving original shape: {hidden_states_shape}")
 
-        logger.debug(f"Adding batch dimension for reduce-scatter...")
-        mlp_output = ttnn.unsqueeze(mlp_output, 0)
-        logger.debug(f"After unsqueeze, shape: {mlp_output.shape}")
-
+        breakpoint()
         # AllReduce output
         logger.debug(f"Starting reduce_scatter_minimal_async...")
         mlp_output_scattered = ttnn.experimental.reduce_scatter_minimal_async(
@@ -133,7 +130,7 @@ class CLIPEncoderLayer:
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ccl_manager.topology,
-            cluster_axis=ccl_manager.tensor_parallel.mesh_axis,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
         )
         logger.debug(f"reduce_scatter completed, shape: {mlp_output_scattered.shape}")
 
@@ -141,7 +138,7 @@ class CLIPEncoderLayer:
         mlp_output = ttnn.experimental.all_gather_async(
             mlp_output_scattered,
             dim=3,
-            cluster_axis=ccl_manager.tensor_parallel.mesh_axis,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=ccl_manager.mesh_device,
             topology=ccl_manager.topology,
             multi_device_global_semaphore=ccl_manager.get_ping_pong_semaphore(),
