@@ -10,7 +10,41 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 
+#include "debug/dprint.h"
+#include "debug/dprint_pages.h"
+#include "debug/dprint_tensix.h"
+
 namespace NAMESPACE {
+
+template <const int n, const int riscv>
+inline void add_nops() {
+    DPRINT << "RISCV " << riscv << " NOPS " << n << ENDL();
+
+    for (int i = 0; i < n; i++) {
+        if constexpr (riscv) {
+            asm("nop");
+        } else {
+            TTI_NOP;
+        }
+    }
+}
+
+template <const int U, const int M, const int P, const int R>
+inline void add_trisc_nops() {
+    DPRINT << "U " << (uint32_t)U << " M " << (uint32_t)M << " P " << (uint32_t)P << ENDL();
+    if constexpr (U) {
+        UNPACK((add_nops<U, R>()));
+    }
+
+    if constexpr (M) {
+        MATH((add_nops<M, R>()));
+    }
+
+    if constexpr (P) {
+        PACK((add_nops<P, R>()));
+    }
+}
+
 void MAIN {
     constexpr uint32_t x_block_size = get_compile_time_arg_val(0);
     constexpr uint32_t w_block_size = get_compile_time_arg_val(1);
@@ -24,6 +58,7 @@ void MAIN {
     unary_op_init_common(cb_in, cb_out);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
+        add_trisc_nops<UNOPS, MNOPS, PNOPS, RISCV>();
         // tilize input via unpack and then pack
         tilize_init(cb_in, 1, cb_tilize);
 
@@ -39,6 +74,7 @@ void MAIN {
 
         // transpose input
         cb_wait_front(cb_tilize, 1);
+
         transpose_wh_init_short(cb_tilize);
         pack_untilize_dest_init<1>(cb_out);
 

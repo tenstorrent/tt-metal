@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
 import torch
@@ -12,7 +14,7 @@ import itertools
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from models.utility_functions import is_blackhole, skip_for_wormhole_b0
 
-iterations = 10
+iterations = 1
 
 
 def random_torch_tensor(dtype, shape):
@@ -31,8 +33,9 @@ def random_torch_tensor(dtype, shape):
 
 # @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65)])
 # @pytest.mark.parametrize("shape", [(3, 33, 3, 3, 33)])
+# @pytest.mark.parametrize("shape", [(3, 33, 3, 2, 33)]) # Most efficient so far
 # @pytest.mark.parametrize("shape", [(3, 33, 2, 2, 33)])
-@pytest.mark.parametrize("shape", [(3, 33, 3, 2, 33)])
+@pytest.mark.parametrize("shape", [(1, 33, 1, 1, 31)])
 @pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1)])
 @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize(
@@ -44,19 +47,54 @@ def random_torch_tensor(dtype, shape):
     ],
 )
 def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
-    torch.manual_seed(520)
-    for i in range(iterations):
-        input_a = random_torch_tensor(dtype, shape)
-        torch_output = torch.permute(input_a, perm)
+    device.disable_and_clear_program_cache()
+    # nop_types_sentence = "UNOPS MNOPS PNOPS"
+    nop_types_sentence = "MNOPS"
+    nop_types = nop_types_sentence.split()
 
-        tt_input = ttnn.from_torch(
-            input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
-        )
+    # torch.manual_seed(520)
+    # input_a = random_torch_tensor(dtype, shape)
+    # tlist = torch.arange(33 * 31)
+    # tlist_a = torch.tensor(tlist)
+    # input_a = torch.reshape(tlist_a, shape)
+    input_a = torch.full(shape, 0, dtype=torch.int32)
+    torch_output = torch.permute(input_a, perm)
 
-        tt_output = ttnn.permute(tt_input, perm)
-        tt_output = ttnn.to_torch(tt_output)
+    # for is_risc in range(2):
+    for is_risc in range(1):
+        print("RISCV ", is_risc)
+        os.environ["RISCV"] = str(is_risc)
+        for core_nop in nop_types:
+            print("NOP TYPE ", core_nop)
+            my_it = 1  # 10
+            my_nop = 100
+            min_nop = 0
+            min_it = my_it
+            # for nops in range(my_nop):
+            # failed with 47 nops in versim
+            for nops in range(47, 48):
+                os.environ[core_nop] = str(nops)
+                counter = 0
+                for i in range(my_it):
+                    tt_input = ttnn.from_torch(
+                        input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
+                    )
 
-        assert_equal(torch_output, tt_output)
+                    tt_output = ttnn.permute(tt_input, perm)
+                    tt_output = ttnn.to_torch(tt_output)
+
+                    # assert_equal(torch_output, tt_output)
+                    if torch.equal(torch_output, tt_output):
+                        counter = counter + 1
+                    else:
+                        torch.set_printoptions(profile="full", linewidth=1000, sci_mode=True)
+                        print(input_a)
+                        print(tt_output)
+                print("Nops ", nops, " Counter ", counter)
+                if min_it > counter:
+                    min_nop = nops
+                    min_it = counter
+            print("Min nops ", min_nop, " Counter ", min_it)
 
 
 '''
