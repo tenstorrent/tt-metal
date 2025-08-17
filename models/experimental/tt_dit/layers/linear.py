@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ..utils.tensor import bf16_tensor
+from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 
 class Linear:
@@ -73,20 +73,45 @@ class ColParallelLinear:
     """
 
     def __init__(
-        self, in_features, out_features, bias=True, activation=None, mesh_device=None, mesh_axis=0, init=False
+        self,
+        in_features,
+        out_features,
+        bias=True,
+        activation=None,
+        mesh_device=None,
+        tp_mesh_axis=0,
+        fsdp_mesh_axis=None,
+        ccl_manager=None,
+        init=False,
     ):
         self.in_features = in_features
         self.out_features = out_features
         self.activation = activation
         self.mesh_device = mesh_device
-        self.mesh_axis = mesh_axis
+        self.tp_mesh_axis = tp_mesh_axis
+        self.fsdp_mesh_axis = fsdp_mesh_axis
+        self.ccl_manager = ccl_manager
+
+        if self.fsdp_mesh_axis is not None:
+            assert self.tp_mesh_axis != self.fsdp_mesh_axis
+
         if init:
-            self.weight = bf16_tensor(
-                torch.randn(in_features, out_features), device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1
-            )
+            if fsdp_mesh_axis is not None:
+                self.weight = bf16_tensor_2dshard(
+                    torch.randn(in_features, out_features),
+                    device=self.mesh_device,
+                    shard_mapping={tp_mesh_axis: 1, fsdp_mesh_axis: 0},
+                )
+            else:
+                self.weight = bf16_tensor(
+                    torch.randn(in_features, out_features),
+                    device=self.mesh_device,
+                    mesh_axis=self.tp_mesh_axis,
+                    shard_dim=-1,
+                )
             if bias:
                 self.bias = bf16_tensor(
-                    torch.randn(1, out_features), device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1
+                    torch.randn(1, out_features), device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-1
                 )
             else:
                 self.bias = None
@@ -109,10 +134,15 @@ class ColParallelLinear:
 
         if transform is not None:
             weight, bias = transform(weight, bias)
-        self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
+        if self.fsdp_mesh_axis is not None:
+            self.weight = bf16_tensor_2dshard(
+                weight, device=self.mesh_device, shard_mapping={self.tp_mesh_axis: 1, self.fsdp_mesh_axis: 0}
+            )
+        else:
+            self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-1)
         if bias is not None:
             bias = bias.reshape(1, -1)
-            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
+            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-1)
         else:
             self.bias = None
 
@@ -121,9 +151,27 @@ class ColParallelLinear:
         Expects x to be replicated.
         Return output fractured on columns.
         """
+        if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight)
+            weight = ttnn.experimental.all_gather_async(
+                unsqueezed_weight,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    unsqueezed_weight.shape, 2, self.fsdp_mesh_axis
+                ),
+                dim=2,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.fsdp_mesh_axis,
+                # **self.ccl_manager.get_ag_hyperparams(unsqueezed_weight.shape),
+            )
+            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
+        else:
+            weight = self.weight
+
         output = ttnn.linear(
             x,
-            self.weight,
+            weight,
             bias=self.bias,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
@@ -146,7 +194,8 @@ class RowParallelLinear:
         bias=True,
         activation=None,
         mesh_device=None,
-        mesh_axis=0,
+        tp_mesh_axis=0,
+        fsdp_mesh_axis=None,
         ccl_manager=None,
         init=False,
     ):
@@ -154,12 +203,27 @@ class RowParallelLinear:
         self.out_features = out_features
         self.activation = activation
         self.mesh_device = mesh_device
-        self.mesh_axis = mesh_axis
+        self.tp_mesh_axis = tp_mesh_axis
+        self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
+
+        if self.fsdp_mesh_axis is not None:
+            assert self.tp_mesh_axis != self.fsdp_mesh_axis
+
         if init:
-            self.weight = bf16_tensor(
-                torch.randn(in_features, out_features), device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-2
-            )
+            if self.fsdp_mesh_axis is not None:
+                self.weight = bf16_tensor_2dshard(
+                    torch.randn(in_features, out_features),
+                    device=self.mesh_device,
+                    shard_mapping={self.tp_mesh_axis: 0, self.fsdp_mesh_axis: 1},
+                )
+            else:
+                self.weight = bf16_tensor(
+                    torch.randn(in_features, out_features),
+                    device=self.mesh_device,
+                    mesh_axis=self.tp_mesh_axis,
+                    shard_dim=-2,
+                )
             if bias:
                 # row-parallel bias must not be replicated across mesh_devices
                 rand_bias = torch.randn(1, out_features)
@@ -188,13 +252,18 @@ class RowParallelLinear:
 
         if transform is not None:
             weight, bias = transform(weight, bias)
-        self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-2)
+        if self.fsdp_mesh_axis is not None:
+            self.weight = bf16_tensor_2dshard(
+                weight, device=self.mesh_device, shard_mapping={self.tp_mesh_axis: 0, self.fsdp_mesh_axis: 1}
+            )
+        else:
+            self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-2)
         if bias is not None:
             bias = bias.reshape(1, -1)
-            if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-                zero_bias = torch.zeros(1, bias.shape[1] * (tuple(self.mesh_device.shape)[self.mesh_axis] - 1))
+            if tuple(self.mesh_device.shape)[self.tp_mesh_axis] > 1:
+                zero_bias = torch.zeros(1, bias.shape[1] * (tuple(self.mesh_device.shape)[self.tp_mesh_axis] - 1))
                 bias = torch.cat([bias, zero_bias], dim=-1)
-            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
+            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-1)
         else:
             self.bias = None
 
@@ -203,26 +272,44 @@ class RowParallelLinear:
         Expects x to be column fractured.
         Return output fractured on columns.
         """
+        if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight)
+            weight = ttnn.experimental.all_gather_async(
+                unsqueezed_weight,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    unsqueezed_weight.shape, 3, self.fsdp_mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.fsdp_mesh_axis,
+                # **self.ccl_manager.get_ag_hyperparams(unsqueezed_weight.shape),
+            )
+            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
+        else:
+            weight = self.weight
+
         output = ttnn.linear(
             x,
-            self.weight,
+            weight,
             bias=self.bias,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
 
-        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+        if tuple(self.mesh_device.shape)[self.tp_mesh_axis] > 1:
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
                 persistent_output_buffers=self.ccl_manager.get_rs_ping_pong_buffer(
-                    output.shape, dim=3, mesh_axis=self.mesh_axis
+                    output.shape, dim=3, mesh_axis=self.tp_mesh_axis
                 ),
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
                 num_links=self.ccl_manager.num_links,
                 memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
                 topology=self.ccl_manager.topology,
-                cluster_axis=self.mesh_axis,
+                cluster_axis=self.tp_mesh_axis,
                 **self.ccl_manager.get_rs_hyperparams(output.shape),
             )
 
