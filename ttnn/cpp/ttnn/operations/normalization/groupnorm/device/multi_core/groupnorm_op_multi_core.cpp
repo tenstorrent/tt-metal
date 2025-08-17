@@ -2456,6 +2456,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t gamma_tile_start_id = 0;
     uint32_t beta_tile_start_id = 0;
     uint32_t input_mask_tile_start_id = 0;
+    uint32_t curr_virtual_core_x = 0;
     for (int i = 0; i < core_coords.size(); ++i) {
         auto core = core_coords[i];
         auto virtual_core = virtual_core_coords[i];
@@ -2466,6 +2467,21 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             out_tile_start_id = per_core_Mt_group_1 * Wt * (last_row_with_extra_batch + 1) +
                                 per_core_Mt_group_2 * Wt * (virtual_core.y - last_row_with_extra_batch - 1) +
                                 per_core_Nt * virtual_core.x;
+        }
+        if (virtual_core.x > curr_virtual_core_x) {
+            curr_virtual_core_x++;
+            if (gamma.has_value()) {
+                gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %
+                                      (gamma.value().physical_volume() / TILE_WIDTH);
+            }
+            if (beta.has_value()) {
+                beta_tile_start_id = (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) %
+                                     (beta.value().physical_volume() / TILE_WIDTH);
+            }
+            if (input_mask.has_value()) {
+                input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) %
+                                           (input_mask.value().physical_volume() / TILE_HW);
+            }
         }
 
         std::vector<uint32_t> writer_mcast_sender_args;
@@ -2492,21 +2508,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id_group_2, core, writer_mcast_sender_args);
             writer_kernel_ids.push_back(writer_kernels_id_group_2);
         }
-
-        if (gamma.has_value()) {
-            gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %
-                                  (gamma.value().physical_volume() / TILE_WIDTH);
-        }
-        if (beta.has_value()) {
-            beta_tile_start_id = (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) %
-                                 (beta.value().physical_volume() / TILE_WIDTH);
-        }
-        if (input_mask.has_value()) {
-            input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) %
-                                       (input_mask.value().physical_volume() / TILE_HW);
-        }
     }
-    log_debug(tt::LogOp, " End groupnorm factory", -1);
     auto override_runtime_args_callback =
         [writer_kernel_ids, reader_sender_kernel_ids, reader_receiver_kernel_ids, num_cores, grid_size, mcast_groups](
             const void* operation,
