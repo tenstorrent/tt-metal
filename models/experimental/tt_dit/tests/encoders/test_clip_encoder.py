@@ -60,7 +60,7 @@ def test_clip_encoder(
         tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[1], mesh_axis=1),
     )
     ccl_manager = CCLManager(
-        mesh_device=mesh_device,
+        mesh_device=encoder_submesh,
         num_links=1,
         topology=ttnn.Topology.Linear,
     )
@@ -82,11 +82,11 @@ def test_clip_encoder(
     logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
 
     # Print weights dictionary keys
-    weights_dict = hf_model.state_dict()
-    logger.info("=== Weights Dictionary Keys ===")
-    for key in weights_dict.keys():
-        logger.info(f"  {key}")
-    logger.info(f"Total number of weight keys: {len(weights_dict)}")
+    # weights_dict = hf_model.state_dict()
+    # logger.info("=== Weights Dictionary Keys ===")
+    # for key in weights_dict.keys():
+    #     logger.info(f"  {key}")
+    # logger.info(f"Total number of weight keys: {len(weights_dict)}")
 
     # test text
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
@@ -101,7 +101,9 @@ def test_clip_encoder(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
-    # map HF config to our CLIPConfig
+    eos_token_id = hf_model.config.eos_token_id
+
+    # === USING tt-dit CLIP: ====
     config = CLIPConfig(
         vocab_size=hf_model.config.vocab_size,
         embed_dim=hf_model.config.hidden_size,
@@ -111,26 +113,35 @@ def test_clip_encoder(
         max_prompt_length=77,
         layer_norm_eps=hf_model.config.layer_norm_eps,
         attention_dropout=hf_model.config.attention_dropout,
-        hidden_act=hf_model.config.hidden_act,
+        hidden_act="quick_gelu",
     )
 
-    tt_clip = CLIPEncoder(config, encoder_submesh, ccl_manager, parallel_config)
-    tt_clip.load_state_dict(hf_model.state_dict())
+    tt_clip = CLIPEncoder(config, encoder_submesh, ccl_manager, parallel_config, eos_token_id)
+    tt_clip.load_state_dict(hf_model.state_dict())  # load weights
     tt_clip_output = tt_clip(tt_prompt, encoder_submesh, with_projection=True)
 
+    # =====
+
     with torch.no_grad():
-        hf_embeddings = hf_model.text_model.embeddings(hf_inputs.input_ids)
+        # Run HF model to capture self-attention output
+        hf_output = hf_model.text_model(hf_inputs.input_ids)
+
+    # Extract final hidden states from TT encoder output
+    # tt_clip_output is a tuple: (final_hidden_states, all_hidden_states)
+    tt_final_hidden_states, tt_all_hidden_states = tt_clip_output
 
     # Convert mesh tensor to torch tensor for pcc
     # Since weights are replicated, we can get the tensor from any single device
-    tt_clip_output_single_device = ttnn.get_device_tensors(tt_clip_output)[0]
-    tt_output = ttnn.to_torch(tt_clip_output_single_device)
+    tt_output_single_device = ttnn.get_device_tensors(tt_final_hidden_states)[0]
+    tt_output = ttnn.to_torch(tt_output_single_device)
 
-    logger.info(f"TT text encoder embeddings shape: {tt_output.shape}")
-    logger.info(f"HF text encoder embeddings shape: {hf_embeddings.shape}")
+    hf_final_hidden_states = hf_output.last_hidden_state
 
-    assert tt_output.shape == hf_embeddings.shape
-    assert_quality(tt_output, hf_embeddings, pcc=expected_pcc)
+    logger.info(f"TT text encoder final hidden states shape: {tt_output.shape}")
+    logger.info(f"HF text encoder final hidden states shape: {hf_final_hidden_states.shape}")
+
+    assert tt_output.shape == hf_final_hidden_states.shape
+    assert_quality(tt_output, hf_final_hidden_states, pcc=expected_pcc)
 
 
 if __name__ == "__main__":

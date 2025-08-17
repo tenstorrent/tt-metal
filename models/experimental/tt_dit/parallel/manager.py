@@ -8,6 +8,14 @@ from ..utils.tensor import bf16_tensor
 
 
 class CCLManager:
+    """
+    Manages parallelization of DiT model.
+
+        - stores mesh device, num links, topology
+        - caches ping pong buffers and semaphores
+        - sets up one SubDevice spanning all compute cores
+    """
+
     def __init__(
         self,
         mesh_device,
@@ -74,10 +82,25 @@ class CCLManager:
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
+            # DEBUG: Add detailed logging when ff2 is involved
+            print(f"DEBUG get_rs_ping_pong_buffer:")
+            print(f"  shape: {shape}")
+            print(f"  dim: {dim}")
+            print(f"  mesh_axis: {mesh_axis}")
+            print(f"  mesh_device.shape: {self.mesh_device.shape}")
+            print(f"  len(shape): {len(shape)}")
+            breakpoint()  # ADD BREAKPOINT HERE
+
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
+
+            print(f"output_buffer_shape: {output_buffer_shape}")
+            print(f"self.mesh_device.shape: {self.mesh_device.shape}")
+            print(f"self.mesh_device.shape[mesh_axis]: {self.mesh_device.shape[mesh_axis]}")
+            breakpoint()
+
             intermediate_buffer_shape = list(shape)
             intermediate_buffer_shape = [2] + intermediate_buffer_shape
             for _ in range(2):
