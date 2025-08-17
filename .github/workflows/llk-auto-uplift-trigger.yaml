@@ -68,7 +68,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          token: ${{ secrets.TEMP_METAL_PAT }}
+          token: ${{ secrets.LLK_UPLIFT_PAT }}
           fetch-depth: 0
           ref: main
           clean: true
@@ -94,7 +94,7 @@ jobs:
           cd ${{ env.SUBMODULE_PATH }}
           OLD_SHA=$(git rev-parse --short=7 HEAD)
 
-          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
+          git remote set-url origin https://${{ secrets.LLK_UPLIFT_PAT }}@github.com/tenstorrent/tt-llk.git
           git fetch origin main
           git checkout main
           git pull origin main
@@ -205,7 +205,7 @@ jobs:
         if: steps.update.outputs.has-changes == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ secrets.TEMP_METAL_PAT }}
+          token: ${{ secrets.LLK_UPLIFT_PAT }}
           commit-message: "chore: update LLK submodule to ${{ steps.update.outputs.new-sha }}"
           title: "chore: update LLK submodule to ${{ steps.update.outputs.new-sha }}"
           branch: ${{ env.BRANCH_NAME }}
@@ -244,7 +244,7 @@ jobs:
       - name: Trigger and monitor workflow
         if: matrix.should-run == 'true'
         env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+          GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
         run: |
           PR_NUMBER="${{ needs.update-submodule.outputs.pr-number }}"
           WORKFLOW="${{ matrix.workflow }}"
@@ -366,12 +366,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.TEMP_METAL_PAT }}
+          token: ${{ secrets.LLK_UPLIFT_PAT }}
 
       - name: Check latest test runs
         id: check
         env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+          GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
         run: |
           # Find PR and get decisions
           PR_NUMBER=$(gh pr list --head "${{ env.BRANCH_NAME }}" --json number --jq '.[0].number // empty')
@@ -467,7 +467,7 @@ jobs:
 
       - name: Finalize PR
         env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+          GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
         run: |
           PR_NUMBER="${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.update-submodule.outputs.pr-number }}"
 
