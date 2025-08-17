@@ -14,6 +14,7 @@ from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer
 
 from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.experimental.tt_dit.parallel.manager import CCLManager
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.experimental.tt_dit.utils.check import assert_quality
 
@@ -54,9 +55,16 @@ def test_clip_encoder(
         pytest.skip("submesh shape is larger than parent mesh shape, skipping")
     encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
-    encoder_parallel_config = EncoderParallelConfig(
+
+    parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[1], mesh_axis=1),
     )
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
+
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
     hf_model = CLIPTextModelWithProjection.from_pretrained(
@@ -72,6 +80,13 @@ def test_clip_encoder(
     logger.info(f"intermediate_size: {hf_model.config.intermediate_size}")
     logger.info(f"num_attention_heads: {hf_model.config.num_attention_heads}")
     logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
+
+    # Print weights dictionary keys
+    weights_dict = hf_model.state_dict()
+    logger.info("=== Weights Dictionary Keys ===")
+    for key in weights_dict.keys():
+        logger.info(f"  {key}")
+    logger.info(f"Total number of weight keys: {len(weights_dict)}")
 
     # test text
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
@@ -99,23 +114,23 @@ def test_clip_encoder(
         hidden_act=hf_model.config.hidden_act,
     )
 
-    CLIP = CLIPEncoder(config, encoder_submesh)
-    CLIP.load_state_dict(hf_model.state_dict())
-    tt_embeddings = CLIP(tt_prompt, encoder_submesh, with_projection=True)
+    tt_clip = CLIPEncoder(config, encoder_submesh, ccl_manager, parallel_config)
+    tt_clip.load_state_dict(hf_model.state_dict())
+    tt_clip_output = tt_clip(tt_prompt, encoder_submesh, with_projection=True)
 
     with torch.no_grad():
         hf_embeddings = hf_model.text_model.embeddings(hf_inputs.input_ids)
 
     # Convert mesh tensor to torch tensor for pcc
     # Since weights are replicated, we can get the tensor from any single device
-    tt_embeddings_single_device = ttnn.get_device_tensors(tt_embeddings)[0]
-    tt_embeddings_torch = ttnn.to_torch(tt_embeddings_single_device)
+    tt_clip_output_single_device = ttnn.get_device_tensors(tt_clip_output)[0]
+    tt_output = ttnn.to_torch(tt_clip_output_single_device)
 
-    logger.info(f"TT text encoder embeddings shape: {tt_embeddings_torch.shape}")
+    logger.info(f"TT text encoder embeddings shape: {tt_output.shape}")
     logger.info(f"HF text encoder embeddings shape: {hf_embeddings.shape}")
 
-    assert tt_embeddings_torch.shape == hf_embeddings.shape
-    assert_quality(tt_embeddings_torch, hf_embeddings, pcc=expected_pcc)
+    assert tt_output.shape == hf_embeddings.shape
+    assert_quality(tt_output, hf_embeddings, pcc=expected_pcc)
 
 
 if __name__ == "__main__":

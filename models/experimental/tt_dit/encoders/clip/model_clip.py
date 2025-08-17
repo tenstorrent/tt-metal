@@ -6,7 +6,10 @@ import torch
 import ttnn
 
 from ...utils.tensor import bf16_tensor
-from ...utils.substate import substate
+from ...utils.substate import substate, indexed_substates
+from ...parallel.manager import CCLManager
+from ...parallel.config import EncoderParallelConfig
+from ...layers.linear import ColParallelLinear
 
 
 class CLIPConfig:
@@ -34,19 +37,224 @@ class CLIPConfig:
 
 
 class CLIPEncoder:
-    def __init__(self, config: CLIPConfig, mesh_device: ttnn.Device) -> None:
+    def __init__(
+        self,
+        config: CLIPConfig,
+        mesh_device: ttnn.Device,
+        ccl_manager: CCLManager,
+        parallel_config: EncoderParallelConfig,
+    ) -> None:
         self.config = config
         self.embeddings = TextEmbeddings(config, mesh_device)
-        # self.encoder = CLIPStack(config)
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+        self.encoder = CLIPStack(config, mesh_device, self.ccl_manager, self.parallel_config)
 
     def load_state_dict(self, state_dict):
         self.embeddings.load_state_dict(substate(state_dict, "text_model.embeddings"))
-        # self.encoder.load_state_dict(substate(state_dict, "text_model.encoder"))
+        self.encoder.load_state_dict(substate(state_dict, "text_model.encoder"))
 
-    def __call__(self, prompt: ttnn.Tensor, mesh_device: ttnn.Device, with_projection: bool = True) -> torch.Tensor:
-        input_embeddings = self.embeddings(prompt, mesh_device)
-        return input_embeddings
+    def __call__(
+        self, prompt_tokenized: ttnn.Tensor, mesh_device: ttnn.Device, with_projection: bool = True
+    ) -> torch.Tensor:
+        hidden_states = self.embeddings(prompt_tokenized, mesh_device)
+
+        causal_attention_mask = _create_4d_causal_attention_mask(
+            prompt_tokenized.shape, mesh_device, dtype=hidden_states.get_dtype()
+        )
+
+        encoder_output = self.encoder(
+            hidden_states,
+            causal_attention_mask,
+            ccl_manager=self.ccl_manager,
+            parallel_config=self.parallel_config,
+            output_hidden_states=True,
+        )
+
+        return hidden_states
         # return self.encoder(input_ids, with_projection=with_projection)
+
+
+class CLIPStack:
+    def __init__(
+        self,
+        config: CLIPConfig,
+        mesh_device: ttnn.Device,
+        ccl_manager: CCLManager,
+        parallel_config: EncoderParallelConfig,
+    ) -> None:
+        self.config = config
+        self.layers = [
+            CLIPEncoderLayer(config, mesh_device, ccl_manager, parallel_config) for _ in range(config.num_hidden_layers)
+        ]
+
+    def load_state_dict(self, state_dict):
+        """
+        each encoder layer's weights are replicated across all devices
+        """
+        layer_states = indexed_substates(state_dict, "layers")
+        for layer, layer_state in zip(self.layers, layer_states):
+            layer.load_state_dict(layer_state)
+
+    def __call__(
+        self,
+        hidden_states: ttnn.Tensor,
+        causal_attention_mask: ttnn.Tensor,
+        ccl_manager: CCLManager,
+        parallel_config: EncoderParallelConfig,
+        output_hidden_states: bool = True,
+    ) -> torch.Tensor:
+        all_hidden_states = []  # list of hidden states from each layer
+        all_hidden_states.append(hidden_states)
+
+        for layer in self.layers:
+            hidden_states = layer(hidden_states, causal_attention_mask, ccl_manager, parallel_config)
+            all_hidden_states.append(hidden_states)
+
+        # hidden_states is the last layer's output, all_hidden_states is a list of all hidden states from each layer
+        return hidden_states, all_hidden_states
+
+
+class CLIPEncoderLayer:
+    def __init__(
+        self,
+        config: CLIPConfig,
+        mesh_device: ttnn.Device,
+        ccl_manager: CCLManager,
+        parallel_config: EncoderParallelConfig,
+    ) -> None:
+        self.config = config
+        self.mesh_device = mesh_device
+        self.self_attn = EncoderLayerSelfAttention(config, mesh_device, ccl_manager, parallel_config)
+        self.mlp = None  # CLIPEncoderLayerMLP(config)
+        self.layer_norm1 = None  # = CLIPLayerLayerNorm(config)
+        self.layer_norm2 = None  # = CLIPLayerLayerNorm(config)
+        self.layer_norm_eps = config.layer_norm_eps
+
+    def load_state_dict(self, state_dict):
+        """
+        weights are replicated across all devices
+        """
+        self.layer_norm1 = bf16_tensor(
+            state_dict["layer_norm1.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        self.layer_norm1_bias = bf16_tensor(
+            state_dict["layer_norm1.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        self.layer_norm2 = bf16_tensor(
+            state_dict["layer_norm2.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        self.layer_norm2_bias = bf16_tensor(
+            state_dict["layer_norm2.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+
+        self.self_attn.load_state_dict(substate(state_dict, "self_attn"))
+        # TODO: Implement MLP loading when self.mlp is not None
+        # if self.mlp is not None:
+        #     self.mlp.load_state_dict(substate(state_dict, "mlp"))
+
+    def __call__(
+        self,
+        hidden_states: ttnn.Tensor,
+        causal_attention_mask: ttnn.Tensor,
+        ccl_manager: CCLManager,
+        parallel_config: EncoderParallelConfig,
+    ) -> ttnn.Tensor:
+        breakpoint()
+        # self attention block
+        residual = hidden_states
+        hidden_states = ttnn.layer_norm(  # Shape([1, 19, 768])
+            hidden_states, weight=self.layer_norm1, bias=self.layer_norm1_bias, epsilon=self.layer_norm_eps
+        )
+        attn_output = self.self_attn(hidden_states, causal_attention_mask, ccl_manager, parallel_config)
+        hidden_states = residual + attn_output
+
+        # mlp block
+        residual = hidden_states
+        hidden_states = ttnn.layer_norm(
+            hidden_states, weight=self.layer_norm2, bias=self.layer_norm2_bias, epsilon=self.layer_norm_eps
+        )
+        # mlp_output = self.mlp(hidden_states, ccl_manager, parallel_config)
+        # hidden_states = residual + mlp_output
+
+        return hidden_states
+
+
+class EncoderLayerSelfAttention:
+    """
+    input is replicated
+    Q, K, V are head/column parallel
+    SDPA executes head/column parallel
+    output is all-gather
+    """
+
+    def __init__(
+        self,
+        config: CLIPConfig,
+        mesh_device: ttnn.Device,
+        ccl_manager: CCLManager,
+        parallel_config: EncoderParallelConfig,
+    ) -> None:
+        self.config = config
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+
+        self.num_heads = config.num_heads
+        self.embed_dim = config.embed_dim
+        self.head_dim = config.embed_dim // config.num_heads
+        self.scale = self.head_dim**-0.5
+        self.attention_dropout = config.attention_dropout
+
+        # weights to be added in load_state_dict, column sharded
+        self.q_proj = ColParallelLinear(
+            in_features=self.embed_dim,
+            out_features=self.embed_dim,
+            bias=True,
+            mesh_device=self.mesh_device,
+            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
+        )
+        self.k_proj = ColParallelLinear(
+            in_features=self.embed_dim,
+            out_features=self.embed_dim,
+            bias=True,
+            mesh_device=self.mesh_device,
+            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
+        )
+        self.v_proj = ColParallelLinear(
+            in_features=self.embed_dim,
+            out_features=self.embed_dim,
+            bias=True,
+            mesh_device=self.mesh_device,
+            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
+        )
+        self.o_proj = ColParallelLinear(
+            in_features=self.embed_dim,
+            out_features=self.embed_dim,
+            bias=True,
+            mesh_device=self.mesh_device,
+            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
+        )
+
+    def load_state_dict(self, state_dict):
+        self.q_proj.load_state_dict(substate(state_dict, "q_proj"))
+        self.k_proj.load_state_dict(substate(state_dict, "k_proj"))
+        self.v_proj.load_state_dict(substate(state_dict, "v_proj"))
+        self.o_proj.load_state_dict(substate(state_dict, "out_proj"))
+
+    def __call__(hidden_states, causal_attention_mask, ccl_manager, parallel_config):
+        """
+        input is replicated
+        Q, K, V are head-parallel
+        SDPA executes head-parallel
+        output is replicated
+        """
+        # TODO:
+        return hidden_states
 
 
 class TextEmbeddings:
@@ -61,11 +269,11 @@ class TextEmbeddings:
         ttnn.Tensor: Token + position embeddings - shape: (batch_size, seq_len, embed_dim)
     """
 
-    def __init__(self, config: CLIPConfig, mesh_device: ttnn.Device) -> None:
+    def __init__(self, config, mesh_device: ttnn.Device) -> None:
         self.config = config
         self.mesh_device = mesh_device
 
-        # weights added in load_state_dict
+        # weights to be added in load_state_dict
         self.token_embedding = None
         self.position_embedding = None
 
@@ -92,3 +300,16 @@ class TextEmbeddings:
         position_embeddings = ttnn.embedding(position_ids_ttnn, self.position_embedding, layout=ttnn.TILE_LAYOUT)
 
         return input_embeddings + position_embeddings
+
+
+# adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py
+def _create_4d_causal_attention_mask(
+    input_shape: tuple[int, int], device: ttnn.Device, dtype: ttnn.DataType
+) -> ttnn.Tensor:
+    """Create a 4D causal attention mask for the given input shape."""
+    batch_size, tgt_len = input_shape
+    mask = torch.full((tgt_len, tgt_len), float("-inf"))
+    mask_cond = torch.arange(mask.size(-1))
+    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+    mask = mask[None, None, :, :].expand(batch_size, 1, tgt_len, tgt_len)
+    return ttnn.from_torch(mask, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
