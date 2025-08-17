@@ -252,7 +252,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     });
 }
 
-// Templated with-state variant allowing compile-time control over which fields to update
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet (payload
+// included when applicable).
 template <UnicastWriteUpdateMask UpdateMask, uint32_t PACKET_SIZE = 0>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -279,7 +280,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     });
 }
 
-// Templated set-state variant to preconfigure static fields
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <UnicastWriteUpdateMask UpdateMask, uint32_t PACKET_SIZE, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     uint8_t route_id, uint8_t* num_hops, CommandHeaderT header) {
@@ -312,7 +314,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     });
 }
 
-// Templated with-state variant for Unicast Atomic Inc
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet.
 template <UnicastAtomicIncUpdateMask UpdateMask>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -334,7 +336,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     });
 }
 
-// Templated set-state variant for Unicast Atomic Inc
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
     typename CommandHeaderT = std::nullptr_t>
@@ -375,6 +378,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     });
 }
 
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet.
 template <UnicastScatterWriteUpdateMask UpdateMask, uint32_t PACKET_SIZE = 0>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -401,6 +405,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     });
 }
 
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <UnicastScatterWriteUpdateMask UpdateMask, uint32_t PACKET_SIZE, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     uint8_t route_id, uint8_t* num_hops, CommandHeaderT header = nullptr) {
@@ -433,7 +439,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     });
 }
 
-// Templated with-state variant for Unicast Inline Write
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet.
 template <UnicastInlineWriteUpdateMask UpdateMask>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -456,6 +462,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     });
 }
 
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
     uint8_t route_id, uint8_t* num_hops, CommandHeaderT header) {
@@ -499,6 +507,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     });
 }
 
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet.
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, uint32_t PACKET_SIZE = 0>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -525,6 +534,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     });
 }
 
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, uint32_t PACKET_SIZE, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint8_t route_id, uint8_t* num_hops, CommandHeaderT header) {
@@ -570,7 +581,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     });
 }
 
-// Multicast templated variants for Unicast Write
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet.
 template <UnicastWriteUpdateMask UpdateMask, uint32_t PACKET_SIZE = 0>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -598,6 +609,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     });
 }
 
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <UnicastWriteUpdateMask UpdateMask, uint32_t PACKET_SIZE, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     uint8_t route_id, uint8_t* start_distance, uint8_t* range, CommandHeaderT header) {
@@ -632,7 +645,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     });
 }
 
-// Multicast templated variants for Unicast Atomic Inc (with state)
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet.
 template <UnicastAtomicIncUpdateMask UpdateMask>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -654,6 +667,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     });
 }
 
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
     typename CommandHeaderT = std::nullptr_t>
@@ -702,6 +717,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     });
 }
 
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet.
 template <UnicastScatterWriteUpdateMask UpdateMask, uint32_t PACKET_SIZE = 0>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -728,6 +744,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     });
 }
 
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <UnicastScatterWriteUpdateMask UpdateMask, uint32_t PACKET_SIZE, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     uint8_t route_id, uint8_t* start_distance, uint8_t* range, CommandHeaderT header = nullptr) {
@@ -762,7 +780,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     });
 }
 
-// Multicast templated variants for Unicast Inline Write
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet.
 template <UnicastInlineWriteUpdateMask UpdateMask>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -784,6 +802,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     });
 }
 
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
     uint8_t route_id, uint8_t* start_distance, uint8_t* range, CommandHeaderT header) {
@@ -830,6 +850,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     });
 }
 
+// *_with_state: Updates only fields selected by UpdateMask from the provided header, then submits the packet.
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, uint32_t PACKET_SIZE = 0>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
@@ -856,6 +877,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     });
 }
 
+// *_set_state: For all headers of the route, pre-sets only fields selected by UpdateMask from the provided template;
+// also initializes routing/send type for reuse.
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, uint32_t PACKET_SIZE, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint8_t route_id, uint8_t* start_distance, uint8_t* range, CommandHeaderT header) {
