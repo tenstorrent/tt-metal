@@ -488,6 +488,8 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t page_size = 2 * 32 * 32;
+    uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() == receiver_device->id()) {
@@ -511,9 +513,9 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                     sender_eth_core.str(),
                     receiver_eth_core.str());
                 BankedConfig test_config = BankedConfig{
-                    .num_pages = 200,
-                    .size_bytes = 200 * 2 * 32 * 32,
-                    .page_size_bytes = 2 * 32 * 32,
+                    .num_pages = num_pages,
+                    .size_bytes = num_pages * page_size,
+                    .page_size_bytes = page_size,
                     .input_buffer_type = BufferType::L1,
                     .output_buffer_type = BufferType::DRAM};
 
@@ -534,9 +536,9 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                     test_config,
                     MAX_BUFFER_SIZE));
                 test_config = BankedConfig{
-                    .num_pages = 200,
-                    .size_bytes = 200 * 2 * 32 * 32,
-                    .page_size_bytes = 2 * 32 * 32,
+                    .num_pages = num_pages,
+                    .size_bytes = num_pages * page_size,
+                    .page_size_bytes = page_size,
                     .input_buffer_type = BufferType::DRAM,
                     .output_buffer_type = BufferType::L1};
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
@@ -623,6 +625,8 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t page_size = 2 * 32 * 32;
+    uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
@@ -646,9 +650,9 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                     sender_eth_core.str(),
                     receiver_eth_core.str());
                 BankedConfig test_config = BankedConfig{
-                    .num_pages = 200,
-                    .size_bytes = 200 * 2 * 32 * 32,
-                    .page_size_bytes = 2 * 32 * 32,
+                    .num_pages = num_pages,
+                    .size_bytes = num_pages * page_size,
+                    .page_size_bytes = page_size,
                     .input_buffer_type = BufferType::L1,
                     .output_buffer_type = BufferType::DRAM};
 
@@ -669,9 +673,9 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                     test_config,
                     MAX_BUFFER_SIZE));
                 test_config = BankedConfig{
-                    .num_pages = 200,
-                    .size_bytes = 200 * 2 * 32 * 32,
-                    .page_size_bytes = 2 * 32 * 32,
+                    .num_pages = num_pages,
+                    .size_bytes = num_pages * page_size,
+                    .page_size_bytes = page_size,
                     .input_buffer_type = BufferType::DRAM,
                     .output_buffer_type = BufferType::L1};
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
