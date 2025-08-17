@@ -71,7 +71,7 @@ class CLIPEncoder:
             output_hidden_states=True,
         )
 
-        return hidden_states
+        return encoder_output
         # return self.encoder(input_ids, with_projection=with_projection)
 
 
@@ -160,7 +160,7 @@ class CLIPEncoderLayer:
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
     ) -> ttnn.Tensor:
-        breakpoint()
+        # breakpoint()
         # self attention block
         residual = hidden_states
         hidden_states = ttnn.layer_norm(  # Shape([1, 19, 768])
@@ -202,7 +202,7 @@ class EncoderLayerSelfAttention:
 
         self.num_heads = config.num_heads
         self.embed_dim = config.embed_dim
-        self.head_dim = config.embed_dim // config.num_heads
+        self.head_dim = config.embed_dim // self.num_heads
         self.scale = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
 
@@ -246,15 +246,105 @@ class EncoderLayerSelfAttention:
         self.v_proj.load_state_dict(substate(state_dict, "v_proj"))
         self.o_proj.load_state_dict(substate(state_dict, "out_proj"))
 
-    def __call__(hidden_states, causal_attention_mask, ccl_manager, parallel_config):
+    def __call__(self, hidden_states, causal_attention_mask, ccl_manager, parallel_config):
         """
         input is replicated
-        Q, K, V are head-parallel
+        Q, K, V are head-parallel (Each device gets embed_dim // num_devices columns of each weight matrix)
         SDPA executes head-parallel
         output is replicated
         """
-        # TODO:
-        return hidden_states
+        # breakpoint()
+        # TODO: determine the parallelism status (replicated, shareded, etc) of
+        # every weight/activation/etc right before self attn (here) is done
+
+        # hidden_states is replicated. [batch_size, seq_length, embed_dim]
+        # Shape([1, 19, 768])
+
+        # causal_attention_mask is replicated. [1, 1, seq_length, seq_length]
+        # Shape([1, 1, 19, 19])
+
+        # q_proj weight is column parallel [embed_dim, embed_dim/num_heads = head_dim]
+        # q_proj bias Shape([1, 192])
+
+        # k_proj weight Shape([768, 192])
+        # v_proj weight Shape([768, 192])
+        # o_proj weight Shape([192, 768])
+
+        batch_size, seq_length, _ = hidden_states.shape
+
+        # get q, k, v  matrices
+        q = self.q_proj(hidden_states)  # Shape([1, 19, 192])
+        k = self.k_proj(hidden_states)  # Shape([1, 19, 192])
+        v = self.v_proj(hidden_states)  # Shape([1, 19, 192])
+
+        q = q * self.scale  # Shape([1, 19, 192])
+
+        # reshape for multihead attention
+        num_devices = parallel_config.tensor_parallel.factor
+        num_local_heads = self.num_heads // num_devices
+
+        q = ttnn.reshape(q, (batch_size, seq_length, num_local_heads, self.head_dim))
+        k = ttnn.reshape(k, (batch_size, seq_length, num_local_heads, self.head_dim))
+        v = ttnn.reshape(v, (batch_size, seq_length, num_local_heads, self.head_dim))
+        # shape([1, 19, 16, 64])
+
+        # transpose to [batch_size, num_heads, seq_length, head_dim]
+        q = ttnn.transpose(q, 1, 2)
+        k = ttnn.transpose(k, 1, 2)
+        v = ttnn.transpose(v, 1, 2)
+
+        scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))  # [batch_size, num_heads, seq_length, seq_length]
+
+        if causal_attention_mask is not None:
+            scores = scores + causal_attention_mask
+
+        attn_weights = ttnn.softmax(scores, dim=-1)
+
+        # TODO: replace with ttnn.dropout once it's supported
+        # attn_weights = ttnn.experimental.dropout(attn_weights, self._attention_dropout)
+
+        attn_output = ttnn.matmul(attn_weights, v)  # head_parallel. [batch_size, num_heads, seq_length, head_dim]
+
+        # transpose back and reshape
+        attn_output = ttnn.transpose(attn_output, 1, 2)  # [batch_size, seq_length, num_heads, head_dim]
+        attn_output = ttnn.reshape(
+            attn_output, (1, batch_size, seq_length, self.embed_dim // num_devices)
+        )  # [1, batch_size, seq_length, embed_dim/num_heads]
+
+        orig_shape = list(attn_output.shape)
+
+        # need to gather attn_output across all devices
+        attn_output = ttnn.experimental.all_gather_async(  # [1, batch_size, seq_length, full embed_dim] (replicated)
+            attn_output,
+            dim=len(attn_output.shape) - 1,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=ccl_manager.mesh_device,
+            topology=ccl_manager.topology,
+            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Shape([1, 1, 19, 768]) (replicated)
+
+        dense_out = self.o_proj(attn_output)  # o_proj is still head parallel. Shape([1, 1, 19, 192])
+
+        dense_out = ttnn.experimental.all_gather_async(
+            dense_out,
+            dim=len(dense_out.shape) - 1,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=ccl_manager.mesh_device,
+            topology=ccl_manager.topology,
+            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # breakpoint()
+
+        dense_out_shape = list(dense_out.shape)  # [1,1,19,768]
+        dense_out_shape[2] = orig_shape[2]
+        dense_out = ttnn.reshape(dense_out, tuple(dense_out_shape), dense_out.shape)  # Shape([1, 1, 19, 768])
+
+        return ttnn.reshape(dense_out, tuple(dense_out.shape)[1:])
 
 
 class TextEmbeddings:
