@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     pass
 
 
-# TODO: Need to update residual with cloning after switching to persistent buffers
+# TODO: Cleanup the use of torch ref
 class ResnetBlock:
     def __init__(
         self,
@@ -41,7 +41,7 @@ class ResnetBlock:
             mesh_axis=mesh_axis,
             core_grid=norm_core_grid,
             num_out_blocks=norm_out_blocks,
-            torch_ref=torch_ref.norm1,
+            torch_ref=torch_ref.norm1 if torch_ref is not None else None,
         )
         self.norm2 = GroupNorm(
             num_groups=num_groups,
@@ -51,7 +51,7 @@ class ResnetBlock:
             mesh_axis=mesh_axis,
             core_grid=norm_core_grid,
             num_out_blocks=norm_out_blocks,
-            torch_ref=torch_ref.norm2,
+            torch_ref=torch_ref.norm2 if torch_ref is not None else None,
         )
         self.conv1 = Conv2d(
             in_channels,
@@ -60,7 +60,7 @@ class ResnetBlock:
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
             parallel_manager=parallel_manager,
-            torch_ref=torch_ref.conv1,
+            torch_ref=torch_ref.conv1 if torch_ref is not None else None,
         )
         self.conv2 = Conv2d(
             out_channels,
@@ -69,7 +69,7 @@ class ResnetBlock:
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
             parallel_manager=parallel_manager,
-            torch_ref=torch_ref.conv2,
+            torch_ref=torch_ref.conv2 if torch_ref is not None else None,
         )
         self.conv_shortcut = None
         if in_channels != out_channels or torch_ref.conv_shortcut is not None:
@@ -148,7 +148,7 @@ class Upsample2D:
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
             parallel_manager=parallel_manager,
-            torch_ref=torch_ref.conv,
+            torch_ref=torch_ref.conv if torch_ref is not None else None,
         )
 
     @classmethod
@@ -410,3 +410,121 @@ class UnetMidBlock2D:
         x = self.resnets[0](x)
         x = self.attentions[0](x)
         return self.resnets[1](x)
+
+
+class VAEDecoder:
+    def __init__(
+        self,
+        block_out_channels=(128, 256, 512, 512),
+        in_channels=16,
+        out_channels=3,
+        layers_per_block=2,
+        norm_num_groups=32,
+        torch_ref=None,
+        mesh_device=None,
+        mesh_axis=None,
+        parallel_manager=None,
+    ):
+        if torch_ref is None:
+            self.conv_in = Conv2d(
+                in_channels,
+                block_out_channels[-1],
+                kernel_size=(3, 3),
+                padding=(1, 1),
+                mesh_device=mesh_device,
+                mesh_axis=mesh_axis,
+                parallel_manager=parallel_manager,
+            )
+            self.mid_block = UnetMidBlock2D(
+                in_channels=block_out_channels[-1],
+                attention_head_dim=block_out_channels[-1],
+                resnet_groups=norm_num_groups,
+                mesh_device=mesh_device,
+                mesh_axis=mesh_axis,
+                parallel_manager=parallel_manager,
+            )
+
+            self.up_blocks = []
+            reversed_block_out_channels = list(reversed(block_out_channels))
+            prev_output_channel = reversed_block_out_channels[0]
+            for i, output_channel in enumerate(reversed_block_out_channels):
+                is_final_block = i == len(reversed_block_out_channels) - 1
+
+                up_block = UpDecoderBlock2D(
+                    num_layers=layers_per_block + 1,
+                    in_channels=prev_output_channel,
+                    out_channels=output_channel,
+                    add_upsample=not is_final_block,
+                    resnet_groups=norm_num_groups,
+                )
+
+                self.up_blocks.append(up_block)
+                prev_output_channel = output_channel
+
+            self.conv_norm_out = GroupNorm(
+                num_groups=norm_num_groups,
+                num_channels=block_out_channels[0],
+                mesh_device=mesh_device,
+                mesh_axis=mesh_axis,
+            )
+
+            self.conv_out = Conv2d(
+                block_out_channels[0],
+                out_channels,
+                kernel_size=(3, 3),
+                padding=(1, 1),
+                mesh_device=mesh_device,
+                mesh_axis=mesh_axis,
+                parallel_manager=parallel_manager,
+            )
+
+        else:
+            self.conv_in = Conv2d.from_torch(
+                torch_ref.conv_in, mesh_device=mesh_device, mesh_axis=mesh_axis, parallel_manager=parallel_manager
+            )
+            self.mid_block = UnetMidBlock2D.from_torch(
+                torch_ref=torch_ref.mid_block,
+                mesh_device=mesh_device,
+                mesh_axis=mesh_axis,
+                parallel_manager=parallel_manager,
+            )
+
+            self.up_blocks = [
+                UpDecoderBlock2D.from_torch(
+                    torch_ref=up_block, mesh_device=mesh_device, mesh_axis=mesh_axis, parallel_manager=parallel_manager
+                )
+                for up_block in torch_ref.up_blocks
+            ]
+
+            self.conv_norm_out = GroupNorm.from_torch(
+                torch_ref=torch_ref.conv_norm_out, mesh_device=mesh_device, mesh_axis=mesh_axis
+            )
+
+            self.conv_out = Conv2d.from_torch(
+                torch_ref.conv_out, mesh_device=mesh_device, mesh_axis=None, parallel_manager=parallel_manager
+            )
+
+    @classmethod
+    def from_torch(cls, torch_ref, mesh_device=None, mesh_axis=None, parallel_manager=None):
+        vae_model = cls(
+            torch_ref=torch_ref, mesh_device=mesh_device, mesh_axis=mesh_axis, parallel_manager=parallel_manager
+        )
+        return vae_model
+
+    def load_state_dict(self, state_dict):
+        self.conv_in.load_state_dict(substate(state_dict, "conv_in"))
+        self.mid_block.load_state_dict(substate(state_dict, "mid_block"))
+        for i, state in enumerate(indexed_substates(state_dict, "up_blocks")):
+            self.up_blocks[i].load_state_dict(state)
+        self.conv_norm_out.load_state_dict(substate(state_dict, "conv_norm_out"))
+        self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
+
+    def __call__(self, x):
+        x = self.conv_in(x)
+        x = self.mid_block(x)
+        for up_block in self.up_blocks:
+            x = up_block(x)
+        x = self.conv_norm_out(x)
+        x = ttnn.silu(x)
+        x = self.conv_out(x)
+        return x
