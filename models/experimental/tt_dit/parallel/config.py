@@ -19,6 +19,10 @@ class DiTParallelConfig(NamedTuple):
     sequence_parallel: ParallelFactor
 
 
+class EncoderParallelConfig(NamedTuple):
+    tensor_parallel: ParallelFactor
+
+
 class OldParallelConfig(NamedTuple):
     mesh_shape: tuple[int, int]
     factor: int
