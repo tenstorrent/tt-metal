@@ -295,7 +295,7 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+ pytest models/demos/vanilla_unet/demo/demo.py
 }
 
 # Commenting out the test from CI due to HF issue. TODO demo will be enabled with CIv2 dataset .
