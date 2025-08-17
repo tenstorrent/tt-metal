@@ -101,15 +101,11 @@ run_llama3_func() {
 
 }
 
-## comment out ufld_v2 from CI tests for now until dataset_evaluation test failure is debugged.
 run_ufld_v2_func() {
-  #ufld_v2
-  pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
-  #ufld_v2 eval
-  ## Commenting out UFLDv2 eval since CIv2 does not support dataset download from Kaggle
-  # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
-  #pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
+  #ufld_v2 demo
+  pytest models/demos/ufld_v2/demo/demo.py
 }
+
 run_vgg_func() {
 
   #VGG11/VGG16
