@@ -98,7 +98,6 @@ runs:
           -v /etc/shadow:/etc/shadow:ro
           -v /etc/bashrc:/etc/bashrc:ro
           -v ${{ github.workspace }}:${{ github.workspace }}
-          --net=host
           --log-driver local
           --log-opt max-size=50m
           ${{ inputs.docker_opts }}
