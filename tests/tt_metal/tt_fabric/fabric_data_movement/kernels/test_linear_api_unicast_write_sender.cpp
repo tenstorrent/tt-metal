@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager_v2.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
@@ -50,7 +49,7 @@ void kernel_main() {
     }
 
     auto route_id = PacketHeaderPool::allocate_header_n(num_send_dir);
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir> connections;
+    tt::tt_fabric::RoutingPlaneConnectionManager connections;
     open_connections(connections, route_id, rt_arg_idx);
 
     zero_l1_buf(test_results, test_results_size_bytes);

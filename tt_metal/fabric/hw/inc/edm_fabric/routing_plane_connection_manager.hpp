@@ -12,20 +12,21 @@
 
 namespace tt::tt_fabric {
 
-// A scalable connection manager that can host an arbitrary number of
-// WorkerToFabricEdmSender connections up to MaxConnections.
-//
-// Runtime layout expected by build_from_args():
-//   - for i in [0, MaxConnections):
-//       - uint32_t tag                         // arbitrary user tag/label (e.g., direction); opaque to the manager
-//       - <WorkerToFabricEdmSender build args>
-//
-// Notes:
-// - Tags are optional metadata provided by the host to enable selection/routing policies in kernels. If unused, host
-// should pass 0.
-template <std::size_t MaxConnections>
-class FabricConnectionManagerV2 final {
+// Determine maximum number of routing-plane connections if not provided by the build.
+#ifndef TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS
+#if defined(FABRIC_2D)
+#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
+#else  // 1D
+#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 2
+// TODO: 3D, dragonfly and custom etc.
+#endif
+#endif
+
+// Logical connection manager across routing planes. Capacity is fixed by TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS.
+// This is V2 of FabricConnectionManager.
+class RoutingPlaneConnectionManager final {
 public:
+    static constexpr std::size_t MaxConnections = TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS;
     using Sender = tt::tt_fabric::WorkerToFabricEdmSender;
 
     enum BuildFromArgsMode : uint8_t {
@@ -36,19 +37,22 @@ public:
 
     struct ConnectionSlot {
         Sender sender;
-        uint32_t tag;
+        uint8_t tag;
     };
 
+    RoutingPlaneConnectionManager() : num_active_(0) {}
+
     template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
-    static FabricConnectionManagerV2 build_from_args(std::size_t& arg_idx) {
+    static RoutingPlaneConnectionManager build_from_args(std::size_t& arg_idx, uint32_t num_connections_to_build) {
         constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
                                  build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY;
         constexpr bool wait_for_connection_open_finish = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION;
 
-        FabricConnectionManagerV2 mgr;
+        RoutingPlaneConnectionManager mgr;
+        ASSERT(num_connections_to_build <= MaxConnections);
 
-        for (uint32_t i = 0; i < MaxConnections; ++i) {
-            mgr.slots_[i].tag = get_arg_val<uint32_t>(arg_idx++);
+        for (uint32_t i = 0; i < num_connections_to_build; ++i) {
+            mgr.slots_[i].tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
             mgr.slots_[i].sender =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
@@ -56,8 +60,10 @@ public:
             }
         }
 
+        mgr.num_active_ = num_connections_to_build;
+
         if constexpr (connect && wait_for_connection_open_finish) {
-            for (uint32_t i = 0; i < MaxConnections; ++i) {
+            for (uint32_t i = 0; i < mgr.num_active_; ++i) {
                 mgr.slots_[i].sender.open_finish();
             }
         }
@@ -65,29 +71,29 @@ public:
     }
 
     inline uint32_t get_tag(uint32_t index) const {
-        ASSERT(index < MaxConnections);
+        ASSERT(index < num_active_);
         return slots_[index].tag;
     }
 
     inline Sender& get(uint32_t index) {
-        ASSERT(index < MaxConnections);
+        ASSERT(index < num_active_);
         return slots_[index].sender;
     }
     inline const Sender& get(uint32_t index) const {
-        ASSERT(index < MaxConnections);
+        ASSERT(index < num_active_);
         return slots_[index].sender;
     }
 
     template <typename Fn>
     inline void for_each(Fn&& fn) {
-        for (uint32_t i = 0; i < MaxConnections; ++i) {
+        for (uint32_t i = 0; i < num_active_; ++i) {
             fn(slots_[i].sender, i, slots_[i].tag);
         }
     }
 
     template <typename Fn>
     inline void for_each_with_tag(uint32_t tag, Fn&& fn) {
-        for (uint32_t i = 0; i < MaxConnections; ++i) {
+        for (uint32_t i = 0; i < num_active_; ++i) {
             if (slots_[i].tag == tag) {
                 fn(slots_[i].sender, i, slots_[i].tag);
             }
@@ -122,8 +128,11 @@ public:
         close_finish();
     }
 
+    inline uint32_t active_count() const { return num_active_; }
+
 private:
-    std::array<ConnectionSlot, MaxConnections> slots_;
+    std::array<ConnectionSlot, MaxConnections> slots_{};
+    uint32_t num_active_;
 };
 
 }  // namespace tt::tt_fabric

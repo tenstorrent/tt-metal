@@ -1886,8 +1886,7 @@ void FabricUnicastCommon(
     // Append FabricConnectionManager args per manager (pair-ordered)
     // V2 connection args: [tag, WorkerToFabricEdmSender args]
     for (size_t i = 0; i < dir_configs.size(); ++i) {
-        auto [dir, _hops] = dir_configs[i];
-        (void)_hops;
+        auto dir = std::get<0>(dir_configs[i]);
         sender_runtime_args.push_back(static_cast<uint32_t>(dir));  // tag (optional)
         auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
         const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
@@ -2091,9 +2090,7 @@ void FabricMulticastCommon(
 
     // V2 connection args for multicast: [tag, WorkerToFabricEdmSender args]
     for (size_t i = 0; i < dir_configs.size(); ++i) {
-        auto [dir, start_distance, range] = dir_configs[i];
-        (void)start_distance;
-        (void)range;
+        auto dir = std::get<0>(dir_configs[i]);
         sender_runtime_args.push_back(static_cast<uint32_t>(dir));  // tag (optional)
         auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
         const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);

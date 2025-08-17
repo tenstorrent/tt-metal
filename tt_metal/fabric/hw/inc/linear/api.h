@@ -5,24 +5,20 @@
 #pragma once
 
 #include <cstdint>
-#include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager_v2.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt-metalium/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::linear::experimental {
 
-template <size_t num_send_dir>
 FORCE_INLINE void open_connections(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager, uint8_t route_id, size_t& rt_arg_idx) {
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager, uint8_t route_id, size_t& rt_arg_idx) {
     uint32_t header_count = PacketHeaderPool::get_num_headers(route_id);
-    ASSERT(header_count == num_send_dir);
-    connection_manager = tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>::template build_from_args<
-        tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx);
+    connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx, header_count);
 
 #ifdef FABRIC_2D
     uint32_t ew_dim = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -47,8 +43,7 @@ FORCE_INLINE void open_connections(
 #endif
 }
 
-template <size_t num_send_dir>
-FORCE_INLINE void close_connections(tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager) {
+FORCE_INLINE void close_connections(tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager) {
     connection_manager.close();
 }
 
@@ -66,9 +61,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
@@ -92,9 +86,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t* num_hops) {
@@ -119,9 +112,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
@@ -145,9 +137,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t* num_hops) {
@@ -172,9 +163,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
@@ -202,9 +192,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_unicast_write(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
@@ -230,9 +219,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t* start_distance,
@@ -259,9 +247,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_scatter_write(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
@@ -287,9 +274,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t* start_distance,
@@ -316,9 +302,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-template <size_t num_send_dir>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
-    tt::tt_fabric::FabricConnectionManagerV2<num_send_dir>& connection_manager,
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
