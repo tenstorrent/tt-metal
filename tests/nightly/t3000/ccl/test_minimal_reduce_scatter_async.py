@@ -260,6 +260,7 @@ def run_reduce_scatter_impl(
         "batch_1",
         "tt_training_test_one",
         "tt_training_test_two",
+        "tt_training_test_three",
     ],
 )
 @pytest.mark.parametrize(
