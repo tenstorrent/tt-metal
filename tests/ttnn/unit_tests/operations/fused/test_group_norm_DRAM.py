@@ -28,17 +28,7 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         # (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
         # (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
         # (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
-        # (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
-        # (
-        #   1,
-        #    128,
-        #    1,
-        #    512,
-        #    32,
-        #    2,
-        #    4,
-        #    4,
-        # ),  # test all groups on core fit in less than one tile, so need to reduce col core count
+        # (1, 128, 1, 512, 32, 2, 4, 4),  # test all groups on core fit in less than one tile, so need to reduce col core count
         # # # SDXL 1024x1024 resoultion
         # (1, 640, 128, 128, 32, 3, 4, 4),
         # (1, 960, 128, 128, 32, 6, 2, 2),
@@ -92,7 +82,6 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
-
     # input mask
     TILE_WIDTH = 32
     num_virtual_cols = min(cores_x, num_groups)
@@ -127,7 +116,6 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     )
 
     # groupnorm
-    print(" Starting groupnorm")
     output_tensor = ttnn.group_norm(
         input_tensor_tilized,
         num_groups=num_groups,
@@ -140,8 +128,6 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         inplace=False,
         num_out_blocks=num_out_blocks,
     )
-
-    print(" Done with groupnorm")
 
     ttnn.synchronize_device(device)
     output_tensor = ttnn.from_device(output_tensor)

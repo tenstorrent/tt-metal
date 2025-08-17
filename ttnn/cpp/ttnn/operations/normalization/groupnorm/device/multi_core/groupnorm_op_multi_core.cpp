@@ -1564,7 +1564,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         uint32_t core_index = core_index_offset;
         for (int j = 0; j < num_groups / num_groups_per_core; ++j) {
             mcast_sender_core_ranges_all.insert(CoreRange(core_coords[core_index]));
-            if (equal_batches_per_core || (virtual_core_coords[core_index].x <= last_row_with_extra_batch)) {
+            if (equal_batches_per_core || (virtual_core_coords[core_index].y <= last_row_with_extra_batch)) {
                 mcast_sender_core_ranges_group_1.insert(CoreRange(core_coords[core_index]));
             } else {
                 mcast_sender_core_ranges_group_2.insert(CoreRange(core_coords[core_index]));
@@ -1586,7 +1586,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         // not found in mcast sender
         if (mcast_sender_core_ranges_all.find(CoreRange(core_coords[i])) == mcast_sender_core_ranges_all.end()) {
             mcast_receiver_core_ranges_all.insert(CoreRange(core_coords[i]));
-            if (equal_batches_per_core || (virtual_core_coords[i].x <= last_row_with_extra_batch)) {
+            if (equal_batches_per_core || (virtual_core_coords[i].y <= last_row_with_extra_batch)) {
                 mcast_receiver_core_ranges_group_1.insert(CoreRange(core_coords[i]));
             } else {
                 mcast_receiver_core_ranges_group_2.insert(CoreRange(core_coords[i]));
@@ -2461,7 +2461,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         auto core = core_coords[i];
         auto virtual_core = virtual_core_coords[i];
         uint32_t out_tile_start_id;
-        if (equal_batches_per_core || (virtual_core.x <= last_row_with_extra_batch)) {
+        if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
             out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
         } else {
             out_tile_start_id = per_core_Mt_group_1 * Wt * (last_row_with_extra_batch + 1) +
