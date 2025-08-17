@@ -407,9 +407,6 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         packet_header->to_chip_unicast(num_hops[i]);
         packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-        if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize)) {
-            packet_header->payload_size_bytes = PACKET_SIZE;
-        }
         populate_unicast_scatter_write_fields<UpdateMask, PACKET_SIZE>(packet_header, header);
     });
 }
@@ -534,9 +531,6 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         packet_header->to_chip_unicast(num_hops[i]);
         packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
-        if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::PayloadSize)) {
-            packet_header->payload_size_bytes = PACKET_SIZE;
-        }
         populate_unicast_fused_atomic_inc_fields<UpdateMask, PACKET_SIZE>(packet_header, header);
     });
 }
@@ -740,9 +734,6 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance[i], range[i]});
         packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-        if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize)) {
-            packet_header->payload_size_bytes = PACKET_SIZE;
-        }
         populate_unicast_scatter_write_fields<UpdateMask, PACKET_SIZE>(packet_header, header);
     });
 }
@@ -871,9 +862,6 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance[i], range[i]});
         packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
-        if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::PayloadSize)) {
-            packet_header->payload_size_bytes = PACKET_SIZE;
-        }
         populate_unicast_fused_atomic_inc_fields<UpdateMask, PACKET_SIZE>(packet_header, header);
     });
 }
