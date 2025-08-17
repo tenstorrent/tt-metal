@@ -463,6 +463,7 @@ class ModelArgs:
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
         self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+        logger.info(f"CACHE_PATH: {self.CACHE_PATH}")
         assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
         if LLAMA_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
@@ -476,9 +477,12 @@ class ModelArgs:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
             if not self.CACHE_PATH:
+                logger.info(f"Not cache path branch")
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
+                logger.info(f"Cache path branch")
                 self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
+            logger.info(f"CACHE_PATH: {self.CACHE_PATH}")
             self.model_name = HF_MODEL.strip("/").split("/")[
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
