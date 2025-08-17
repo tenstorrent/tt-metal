@@ -20,6 +20,8 @@ bool use_composite_all_gather(
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
+    auto input_shape = input_tensor.logical_shape();
+
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
@@ -34,9 +36,13 @@ bool use_composite_all_gather(
     }
 
     // Use composite if tiled and padded on the gather dim
-    auto input_shape = input_tensor.logical_shape();
     if ((gather_dim == 2 && input_shape[2] % tile_height != 0) ||
         (gather_dim == 3 && input_shape[3] % tile_width != 0)) {
+        return true;
+    }
+
+    // Use composite if gathering on dim 0 or dim 1, and input_shape[0] != 1 or input_shape[1] != 1
+    if ((gather_dim == 0 || gather_dim == 1) && (input_shape[0] != 1 || input_shape[1] != 1)) {
         return true;
     }
 
