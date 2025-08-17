@@ -41,9 +41,9 @@ std::pair<bfloat16, bfloat16> unpack_two_bfloat16_from_uint32(uint32_t uint32_da
     return two_bfloats;
 }
 
-std::vector<std::uint32_t> create_arange_vector_of_bfloat16(uint32_t num_bytes, bool print) {
+std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bool print) {
     std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
-    for (int i = 0; i < vec.size(); i++) {
+    for (auto i = 0; i < vec.size(); i++) {
         float num_1_float = i * 2;
         float num_2_float = i * 2 + 1;
 
@@ -65,11 +65,11 @@ std::vector<std::uint32_t> create_arange_vector_of_bfloat16(uint32_t num_bytes, 
 }
 
 std::vector<bfloat16> create_random_vector_of_bfloat16_native(
-    uint32_t num_bytes, float rand_max_float, int seed, float offset) {
+    size_t num_bytes, float rand_max_float, int seed, float offset) {
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
 
     std::vector<bfloat16> vec(num_bytes / sizeof(bfloat16), 0);
-    for (int i = 0; i < vec.size(); i++) {
+    for (auto i = 0; i < vec.size(); i++) {
         float num_1_float = rand_float() + offset;
         vec[i] = bfloat16(num_1_float);
     }
@@ -78,7 +78,7 @@ std::vector<bfloat16> create_random_vector_of_bfloat16_native(
 
 void print_golden_metalium_vectors(std::vector<bfloat16>& golden_vec, std::vector<bfloat16>& result_vec) {
     std::cout << "-- index -- golden -- metalium --" << std::endl;
-    for (int i = 0; i < result_vec.size(); i++) {
+    for (auto i = 0; i < result_vec.size(); i++) {
         float a1 = golden_vec[i].to_float();
         float a2 = result_vec[i].to_float();
         if (i % 128 == 0) {
@@ -88,11 +88,11 @@ void print_golden_metalium_vectors(std::vector<bfloat16>& golden_vec, std::vecto
 }
 
 std::vector<std::uint32_t> create_random_vector_of_bfloat16(
-    uint32_t num_bytes, int rand_max_float, int seed, float offset) {
+    size_t num_bytes, int rand_max_float, int seed, float offset) {
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
 
     std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
-    for (int i = 0; i < vec.size(); i++) {
+    for (auto i = 0; i < vec.size(); i++) {
         float num_1_float = rand_float() + offset;
         float num_2_float = rand_float() + offset;
 
@@ -110,11 +110,11 @@ std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     return vec;
 }
 
-std::vector<std::uint32_t> create_random_vector_of_bfloat16_1_1(uint32_t num_bytes, int seed) {
+std::vector<std::uint32_t> create_random_vector_of_bfloat16_1_1(size_t num_bytes, int seed) {
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed, -1.0f);  // -1.0..1.0
 }
 
-std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(uint32_t num_bytes, int seed) {
+std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(size_t num_bytes, int seed) {
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed);  // 0.0f..2.0f
 }
 
@@ -122,11 +122,10 @@ std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(uint32_t num_byt
  * rk: Still won't handle the case where the number of elements is odd, except
  * if it's 1. Whatever, for now.
  */
-std::vector<std::uint32_t> create_constant_vector_of_bfloat16(uint32_t num_bytes, float value) {
-    const uint32_t num_elements_vec = std::max(
-        static_cast<uint32_t>(1), static_cast<uint32_t>(num_bytes / sizeof(std::uint32_t)));  // always at least have 1
+std::vector<std::uint32_t> create_constant_vector_of_bfloat16(size_t num_bytes, float value) {
+    const size_t num_elements_vec = std::max<size_t>(1ul, num_bytes / sizeof(std::uint32_t));  // always at least have 1
     std::vector<std::uint32_t> vec(num_elements_vec, 0);
-    for (int i = 0; i < vec.size(); i++) {
+    for (auto i = 0; i < vec.size(); i++) {
         bfloat16 num_1_bfloat16 = bfloat16(value);
 
         bfloat16 num_2_bfloat16 = num_elements_vec == 1 ? bfloat16(static_cast<float>(0.0)) : bfloat16(value);
@@ -148,11 +147,11 @@ std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_ones) {
 }
 
 // TODO(AP): duplication with above
-std::vector<uint32_t> create_random_binary_vector_of_bfloat16(uint32_t num_bytes, int seed) {
+std::vector<uint32_t> create_random_binary_vector_of_bfloat16(size_t num_bytes, int seed) {
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, 1), std::mt19937(seed));
 
     std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
-    for (int i = 0; i < vec.size(); i++) {
+    for (auto i = 0; i < vec.size(); i++) {
         float num_1_float = rand_float();
         float num_2_float = rand_float();
 
@@ -169,7 +168,7 @@ std::vector<uint32_t> create_random_binary_vector_of_bfloat16(uint32_t num_bytes
 
 std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in) {
     std::vector<uint16_t> result(in.size() * 2);
-    for (int i = 0; i < in.size(); i++) {
+    for (auto i = 0; i < in.size(); i++) {
         uint32_t val = in.at(i);
         auto two_bfloats = unpack_two_bfloat16_from_uint32(val);
         result[i * 2] = two_bfloats.first.to_uint16();
@@ -321,7 +320,7 @@ bool packed_uint32_t_vector_comparison(
         return false;
     }
 
-    for (int i = 0; i < vec_a.size(); i++) {
+    for (auto i = 0; i < vec_a.size(); i++) {
         std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(vec_a.at(i));
         std::pair<bfloat16, bfloat16> bs = unpack_two_bfloat16_from_uint32(vec_b.at(i));
 
