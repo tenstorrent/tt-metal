@@ -10,7 +10,7 @@
 #include "llk_unpack_A_api.h"
 #include "llk_pack_api.h"
 
-namespace ckernel {
+namespace single_thread {
 
 // clang-format off
 /**
@@ -24,7 +24,7 @@ namespace ckernel {
  * | ocb            | The identifier of the circular buffer (CB) containing output  | uint32_t | 0 to 31, defaults to CB 16 | True     |
  */
 // clang-format on
-ALWI void binary_op_init_common_(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1)));
 
     UNPACK((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
@@ -51,7 +51,7 @@ ALWI void binary_op_init_common_(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
  */
 // clang-format on
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
-ALWI void binary_tiles_init_(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
+ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
     UNPACK((llk_unpack_AB_init_st(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
 }
 
@@ -73,7 +73,7 @@ ALWI void binary_tiles_init_(uint32_t icb0, uint32_t icb1, bool acc_to_dest = fa
  * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-ALWI void add_tiles_(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     // This will do the task of both the unpacker and math.
     // We can configure only one mop per thread and even if we could configure two mops
     // And launch them in sequence, unpacker's mop would wait for clear signal from
@@ -82,4 +82,4 @@ ALWI void add_tiles_(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t iti
     UNPACK((llk_unpack_AB_st(icb0, icb1, itile0, itile1, idst)));
 }
 
-}  // namespace ckernel
+}  // namespace single_thread

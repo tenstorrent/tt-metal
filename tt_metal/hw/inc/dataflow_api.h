@@ -197,24 +197,6 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
     }
 }
 
-FORCE_INLINE
-void cb_push_back_df(const int32_t operand, const int32_t num_pages) {
-    uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
-
-    volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
-    pages_received_ptr[0] += num_pages;
-
-    get_local_cb_interface(operand).fifo_wr_ptr += num_words;
-
-    // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
-    // producer always writes into contiguous memory, it cannot wrap
-    ASSERT(get_local_cb_interface(operand).fifo_wr_ptr <= get_local_cb_interface(operand).fifo_limit);
-    if (get_local_cb_interface(operand).fifo_wr_ptr == get_local_cb_interface(operand).fifo_limit) {
-        // TODO: change this to fifo_wr_ptr
-        get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
-    }
-}
-
 // clang-format off
 /**
  * Pops a specified number of tiles from the front of the specified CB. This
@@ -241,24 +223,6 @@ void cb_push_back_df(const int32_t operand, const int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
-    volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
-    pages_acked_ptr[0] += num_pages;
-
-    uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
-
-    get_local_cb_interface(operand).fifo_rd_ptr += num_words;
-
-    // this will basically reset fifo_rd_ptr to fifo_addr -- no other wrap is legal
-    // consumer always reads from contiguous memory, it cannot wrap
-    ASSERT(get_local_cb_interface(operand).fifo_rd_ptr <= get_local_cb_interface(operand).fifo_limit);
-    if (get_local_cb_interface(operand).fifo_rd_ptr == get_local_cb_interface(operand).fifo_limit) {
-        // TODO: change this to fifo_wr_ptr
-        get_local_cb_interface(operand).fifo_rd_ptr -= get_local_cb_interface(operand).fifo_size;
-    }
-}
-
-FORCE_INLINE
-void cb_pop_front_df(int32_t operand, int32_t num_pages) {
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
@@ -2035,6 +1999,44 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 
 #if defined(COMPILE_FOR_TRISC)
 
+namespace single_thread {
+
+FORCE_INLINE
+void cb_push_back_df(const int32_t operand, const int32_t num_pages) {
+    uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
+
+    volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
+    pages_received_ptr[0] += num_pages;
+
+    get_local_cb_interface(operand).fifo_wr_ptr += num_words;
+
+    // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
+    // producer always writes into contiguous memory, it cannot wrap
+    ASSERT(get_local_cb_interface(operand).fifo_wr_ptr <= get_local_cb_interface(operand).fifo_limit);
+    if (get_local_cb_interface(operand).fifo_wr_ptr == get_local_cb_interface(operand).fifo_limit) {
+        // TODO: change this to fifo_wr_ptr
+        get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
+    }
+}
+
+FORCE_INLINE
+void cb_pop_front_df(int32_t operand, int32_t num_pages) {
+    volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
+    pages_acked_ptr[0] += num_pages;
+
+    uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
+
+    get_local_cb_interface(operand).fifo_rd_ptr += num_words;
+
+    // this will basically reset fifo_rd_ptr to fifo_addr -- no other wrap is legal
+    // consumer always reads from contiguous memory, it cannot wrap
+    ASSERT(get_local_cb_interface(operand).fifo_rd_ptr <= get_local_cb_interface(operand).fifo_limit);
+    if (get_local_cb_interface(operand).fifo_rd_ptr == get_local_cb_interface(operand).fifo_limit) {
+        // TODO: change this to fifo_wr_ptr
+        get_local_cb_interface(operand).fifo_rd_ptr -= get_local_cb_interface(operand).fifo_size;
+    }
+}
+
 inline void cb_push_back_from_dram(
     uint32_t dram_bank_id, uint32_t dram_addr, uint32_t cb_id, uint32_t num_tiles, uint32_t noc = noc_index) {
     UNPACK(uint32_t tile_size_bytes = get_tile_size(cb_id);
@@ -2055,4 +2057,5 @@ inline void cb_pop_front_to_dram(
            cb_pop_front_df(cb_id, num_tiles););
 }
 
+}  // namespace single_thread
 #endif

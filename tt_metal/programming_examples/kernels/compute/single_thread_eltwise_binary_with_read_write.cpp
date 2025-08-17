@@ -40,38 +40,38 @@ void MAIN {
     uint32_t ublock_size_bytes_dst = get_tile_size(cb_out0);
 
     // Initialize the parts that are common among binary operations
-    binary_op_init_common_(cb_in0, cb_in1, cb_out0);
+    single_thread::binary_op_init_common(cb_in0, cb_in1, cb_out0);
 
     // Initialize the parts that required specifically for this binary operatoins
-    binary_tiles_init_<false, EltwiseBinaryType::ELWADD>(cb_in0, cb_in1);
+    single_thread::binary_tiles_init<false, EltwiseBinaryType::ELWADD>(cb_in0, cb_in1);
 
     for (uint32_t block = 0; block < per_core_block_cnt; block++) {
-        cb_push_back_from_dram(src0_bank_id, src0_addr, cb_in0, per_core_block_size);
+        single_thread::cb_push_back_from_dram(src0_bank_id, src0_addr, cb_in0, per_core_block_size);
         src0_addr += ublock_size_bytes_0 * per_core_block_size;
 
-        cb_push_back_from_dram(src1_bank_id, src1_addr, cb_in1, per_core_block_size);
+        single_thread::cb_push_back_from_dram(src1_bank_id, src1_addr, cb_in1, per_core_block_size);
         src1_addr += ublock_size_bytes_1 * per_core_block_size;
 
         // Perform the elementwise operation on the tiles in the block
         // and store them in the destination register
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            add_tiles_(cb_in0, cb_in1, i, i, i);
+            single_thread::add_tiles(cb_in0, cb_in1, i, i, i);
         }
 
         // Pack all the output tiles from destination register out to
         // the output circular buffer that resides in L1 memory
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile_(i, cb_out0);
+            single_thread::pack_tile(i, cb_out0);
         }
 
         // Update the write pointer and counts for the output circular buffer.
-        cb_push_back_(cb_out0, per_core_block_size);
-        cb_pop_front_to_dram(dst_bank_id, dst_addr, cb_out0, per_core_block_size);
+        single_thread::cb_push_back(cb_out0, per_core_block_size);
+        single_thread::cb_pop_front_to_dram(dst_bank_id, dst_addr, cb_out0, per_core_block_size);
         dst_addr += ublock_size_bytes_dst * per_core_block_size;
 
         // Pop out the used input tiles
-        cb_pop_front(cb_in0, per_core_block_size);
-        cb_pop_front(cb_in1, per_core_block_size);
+        single_thread::cb_pop_front(cb_in0, per_core_block_size);
+        single_thread::cb_pop_front(cb_in1, per_core_block_size);
     }
 }
 }  // namespace NAMESPACE
