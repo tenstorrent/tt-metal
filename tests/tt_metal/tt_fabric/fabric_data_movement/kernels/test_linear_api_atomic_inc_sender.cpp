@@ -49,7 +49,7 @@ void kernel_main() {
             switch (noc_send_type) {
                 case NOC_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
-                        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncDynamic::DstAddr>(
+                        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
                             route_id,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -73,7 +73,8 @@ void kernel_main() {
                 case NOC_FUSED_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
-                            UnicastFusedAtomicIncDynamic::WriteDstAddr | UnicastFusedAtomicIncDynamic::SemaphoreAddr>(
+                            UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
+                            UnicastFusedAtomicIncUpdateMask::SemaphoreAddr>(
                             connections,
                             route_id,
                             source_l1_buffer_address,
@@ -107,7 +108,7 @@ void kernel_main() {
             switch (noc_send_type) {
                 case NOC_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
-                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncDynamic::DstAddr>(
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
                             route_id,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -130,7 +131,8 @@ void kernel_main() {
                 case NOC_FUSED_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<
-                            UnicastFusedAtomicIncDynamic::WriteDstAddr | UnicastFusedAtomicIncDynamic::SemaphoreAddr>(
+                            UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
+                            UnicastFusedAtomicIncUpdateMask::SemaphoreAddr>(
                             connections,
                             route_id,
                             source_l1_buffer_address,
