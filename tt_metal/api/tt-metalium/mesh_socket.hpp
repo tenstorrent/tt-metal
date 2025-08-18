@@ -26,6 +26,10 @@ struct MeshCoreCoord {
 struct SocketConnection {
     MeshCoreCoord sender_core;
     MeshCoreCoord receiver_core;
+
+    bool operator==(const SocketConnection& other) const {
+        return sender_core == other.sender_core && receiver_core == other.receiver_core;
+    }
 };
 
 // Specifies how memory is allocated for this socket.
@@ -114,6 +118,12 @@ template <>
 struct hash<tt::tt_metal::distributed::MeshCoreCoord> {
     size_t operator()(const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept {
         return tt::stl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
+    }
+};
+template <>
+struct hash<tt::tt_metal::distributed::SocketConnection> {
+    size_t operator()(const tt::tt_metal::distributed::SocketConnection& conn) const noexcept {
+        return tt::stl::hash::hash_objects_with_default_seed(conn.sender_core, conn.receiver_core);
     }
 };
 template <>
