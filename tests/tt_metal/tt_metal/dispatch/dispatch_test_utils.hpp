@@ -4,10 +4,13 @@
 
 #pragma once
 #include <gtest/gtest.h>
+#include <umd/device/tt_core_coordinates.h>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
+#include "hal_types.hpp"
 #include "llrt.hpp"
+#include "mesh_device.hpp"
 
 namespace tt::tt_metal {
 
@@ -117,25 +120,18 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
 }
 
 inline void verify_kernel_coordinates(
-    tt::RISCV processor_class,
+    HalProgrammableCoreType hal_core_type,
     const CoreRangeSet& cr_set,
     const tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::SubDeviceId sub_device_id,
-    uint32_t cb_addr,
-    bool idle_eth = false) {
+    uint32_t cb_addr) {
     for (const auto& device : mesh_device->get_devices()) {
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
-    tt::tt_metal::HalProgrammableCoreType hal_core_type =
-        (processor_class == tt::RISCV::ERISC || processor_class == tt::RISCV::ERISC1)
-            ? tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-            : tt::tt_metal::HalProgrammableCoreType::TENSIX;
-    hal_core_type = idle_eth ? tt::tt_metal::HalProgrammableCoreType::IDLE_ETH : hal_core_type;
 
-    CoreType core_type = (processor_class == tt::RISCV::ERISC || processor_class == tt::RISCV::ERISC1)
-                             ? CoreType::ETH
-                             : CoreType::WORKER;
-    core_type = idle_eth ? CoreType::IDLE_ETH : core_type;
+    CoreType core_type = hal_core_type == HalProgrammableCoreType::TENSIX     ? CoreType::WORKER
+                         : hal_core_type == HalProgrammableCoreType::IDLE_ETH ? CoreType::IDLE_ETH
+                                                                              : CoreType::ETH;
 
     const auto& sub_device_origin = mesh_device->worker_cores(hal_core_type, sub_device_id).bounding_box().start_coord;
     for (const auto& cr : cr_set.ranges()) {

@@ -13,12 +13,10 @@
 #include <array>
 #include <cstdint>
 #include <exception>
-#include <initializer_list>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -47,7 +45,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
@@ -353,9 +350,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
 
     // Check coordinates
     tt::tt_metal::verify_kernel_coordinates(
-        tt::BRISC, sub_device_1_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{0}, cb_addr);
+        HalProgrammableCoreType::TENSIX, sub_device_1_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{0}, cb_addr);
     tt::tt_metal::verify_kernel_coordinates(
-        tt::NCRISC, sub_device_2_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{1}, cb_addr);
+        HalProgrammableCoreType::TENSIX, sub_device_2_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{1}, cb_addr);
 }
 
 // Ensure the relative coordinate for the worker is updated correctly when it is used for multiple sub device
@@ -402,7 +399,11 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
 
         // Check coordinates
         tt::tt_metal::verify_kernel_coordinates(
-            tt::BRISC, sub_device_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{i}, cb_addr);
+            HalProgrammableCoreType::TENSIX,
+            sub_device_cores,
+            mesh_device.get(),
+            tt::tt_metal::SubDeviceId{i},
+            cb_addr);
     }
 }
 
