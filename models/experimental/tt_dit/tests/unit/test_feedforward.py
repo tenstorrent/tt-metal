@@ -20,13 +20,20 @@ class TorchFeedForward(torch.nn.Module):
         self.dim_out = dim_out
         self.bias = bias
         self.activation_fn = activation_fn
-        self.ff1 = torch.nn.Linear(dim, inner_dim, bias=bias)
+        if activation_fn == "swiglu":
+            ff1_inner_dim = inner_dim * 2
+        else:
+            ff1_inner_dim = inner_dim
+        self.ff1 = torch.nn.Linear(dim, ff1_inner_dim, bias=bias)
         self.ff2 = torch.nn.Linear(inner_dim, dim_out, bias=bias)
 
     def forward(self, x):
         x = self.ff1(x)
         if self.activation_fn == "gelu":
             x = torch.nn.functional.gelu(x)
+        elif self.activation_fn == "swiglu":
+            x, gate = torch.chunk(x, 2, -1)
+            x = x * torch.nn.functional.silu(gate)
         return self.ff2(x)
 
 
@@ -104,20 +111,22 @@ def test_feedforward(
 )
 @pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
 @pytest.mark.parametrize(
-    ("B, seq, dim, inner_dim, dim_out"),
+    ("B, seq, dim, inner_dim, dim_out, bias, activation_fn"),
     [
-        (1, 1, 256, 2432, 2432),  # SD3.5 timestep_embedder
-        (1, 333, 2048, 2432, 2432),  # SD3.5 text_embedder
-        (1, 4096, 2432, 9728, 2432),  # SD3.5 spatial FF
-        (1, 333, 2432, 9728, 2432),  # SD3.5 text FF
+        (1, 1, 256, 2432, 2432, True, "gelu"),  # SD3.5 timestep_embedder
+        (1, 333, 2048, 2432, 2432, True, "gelu"),  # SD3.5 text_embedder
+        (1, 4096, 2432, 9728, 2432, True, "gelu"),  # SD3.5 spatial FF
+        (1, 333, 2432, 9728, 2432, True, "gelu"),  # SD3.5 text FF
+        (1, 44520, 3072, 8192, 3072, False, "swiglu"),  # Mochi spatial FF
+        (1, 118, 1536, 4096, 1536, False, "swiglu"),  # Mochi prompt FF
     ],
-)
-@pytest.mark.parametrize("activation_fn", [None, "gelu"])
-@pytest.mark.parametrize(
-    ("bias"),
-    [
-        True,
-        # False,
+    ids=[
+        "sd35_timestep_embedder",
+        "sd35_text_embedder",
+        "sd35_spatial_ff",
+        "sd35_text_ff",
+        "mochi_spatial_ff",
+        "mochi_prompt_ff",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)

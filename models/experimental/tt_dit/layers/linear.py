@@ -15,6 +15,9 @@ class Linear:
     def __init__(self, in_features, out_features, bias=True, activation=None, mesh_device=None, init=False):
         self.in_features = in_features
         self.out_features = out_features
+        if activation == "swiglu":
+            # Double out features for fused swiglu activation
+            self.out_features = self.out_features * 2
         self.activation = activation
         self.mesh_device = mesh_device
         if init:
@@ -61,9 +64,13 @@ class Linear:
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation is not None:
-            assert self.activation == "gelu"
+        if self.activation == "gelu":
             output = ttnn.gelu(output, fast_and_approximate_mode=False)
+        elif self.activation == "swiglu":
+            output, gate = ttnn.chunk(output, 2, -1)
+            output = output * ttnn.silu(gate)
+        else:
+            assert self.activation is None, f"Unsupported activation: {self.activation}"
         return output
 
 
@@ -86,6 +93,9 @@ class ColParallelLinear:
     ):
         self.in_features = in_features
         self.out_features = out_features
+        if activation == "swiglu":
+            # Double out features for fused swiglu activation
+            self.out_features = self.out_features * 2
         self.activation = activation
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
@@ -133,8 +143,23 @@ class ColParallelLinear:
         weight = state_dict["weight"].transpose(0, 1)
         bias = state_dict.get("bias", None)
 
+        def permute_for_swiglu(tensor):
+            assert self.activation == "swiglu"
+            ndev = self.mesh_device.shape[self.mesh_axis]
+            tensor = tensor.reshape(-1, 2, ndev, tensor.shape[-1] // 2 // ndev)
+            tensor = tensor.permute(0, 2, 1, 3)
+            tensor = tensor.reshape(-1, self.out_features)
+            assert tensor.shape[0] in [1, self.in_features]
+            return tensor
+
         if transform is not None:
             weight, bias = transform(weight, bias)
+
+        if self.activation == "swiglu":
+            weight = permute_for_swiglu(weight)
+            if bias is not None:
+                bias = permute_for_swiglu(bias)
+
         if self.fsdp_mesh_axis is not None:
             self.weight = bf16_tensor_2dshard(
                 weight, device=self.mesh_device, shard_mapping={self.mesh_axis: 1, self.fsdp_mesh_axis: 0}
@@ -177,9 +202,13 @@ class ColParallelLinear:
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation is not None:
-            assert self.activation == "gelu"
+        if self.activation == "gelu":
             output = ttnn.gelu(output, fast_and_approximate_mode=False)
+        elif self.activation == "swiglu":
+            output, gate = ttnn.chunk(output, 2, -1)
+            output = output * ttnn.silu(gate)
+        else:
+            assert self.activation is None, f"Unsupported activation: {self.activation}"
         return output
 
 
