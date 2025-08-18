@@ -182,8 +182,8 @@ void MAIN {
                     copy_tile_to_dst_init_short_with_dt(tile_tmp_cb_id, tile_idx_tmp_cb_id);
                     copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
 
-                    dprint_tensix_dest_reg(0);
-                    dprint_tensix_dest_reg(2);
+                    // dprint_tensix_dest_reg(0);
+                    // dprint_tensix_dest_reg(2);
 
                     // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
                     topk_tile_init();
@@ -193,9 +193,8 @@ void MAIN {
                     cb_pop_front(tile_tmp_cb_id, topk_output_tiles);
                     cb_pop_front(tile_idx_tmp_cb_id, topk_output_tiles);
 
-                    dprint_tensix_dest_reg(0);
-                    dprint_tensix_dest_reg(2);
-                    // BH/WH different here
+                    // dprint_tensix_dest_reg(0);
+                    // dprint_tensix_dest_reg(2);
 
                     tile_regs_commit();
                 }
