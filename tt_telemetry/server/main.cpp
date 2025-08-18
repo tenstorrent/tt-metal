@@ -37,8 +37,8 @@
 #include <telemetry/ethernet/ethernet_link.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 #include <telemetry/ethernet/print_helpers.hpp>
-#include <server/mock_telemetry_provider.hpp>
-#include <server/telemetry_provider.hpp>
+#include <telemetry/mock_telemetry_provider.hpp>
+#include <telemetry/telemetry_provider.hpp>
 #include <server/web_server.hpp>
 
 
