@@ -53,7 +53,6 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    bool use_barrier = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
@@ -113,34 +112,31 @@ void kernel_main() {
         fabric_connection.open();
     }
 
-    if (use_barrier) {
-        uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
+    uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-        pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            barrier_sem_noc_addr_in_pkt,
-            static_cast<uint16_t>(1),  // increment 1
-            32});
+    uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        barrier_sem_noc_addr_in_pkt,
+        static_cast<uint16_t>(1),  // increment 1
+        32});
 
-        if (num_targets_forward_direction) {
-            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-            pkt_hdr_seminc->to_chip_multicast(
-                tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-        }
-        if (num_targets_backward_direction) {
-            pkt_hdr_seminc->to_chip_multicast(
-                tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-            fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-        }
-
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    if (num_targets_forward_direction) {
+        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+        pkt_hdr_seminc->to_chip_multicast(
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
+    if (num_targets_backward_direction) {
+        pkt_hdr_seminc->to_chip_multicast(
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+        fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
 
     // 1. mcast via fabric to remote tensor addresses
     uint32_t tile_id = tile_id_start;
