@@ -186,7 +186,7 @@ TEST(Tunneling, LiteFabricReads) {
     {
         // Read out
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
-        host_interface.read(read_data.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), onesNocAddr);
+        host_interface.read_any_len(read_data.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), onesNocAddr);
         log_info(
             tt::LogMetal,
             "Read out data from {} {:#x} {} elements",
@@ -201,7 +201,7 @@ TEST(Tunneling, LiteFabricReads) {
     {
         // Read out
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
-        host_interface.read(read_data.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), twosNocAddr);
+        host_interface.read_any_len(read_data.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), twosNocAddr);
         log_info(
             tt::LogMetal,
             "Read out data from {} {:#x} {} elements",
