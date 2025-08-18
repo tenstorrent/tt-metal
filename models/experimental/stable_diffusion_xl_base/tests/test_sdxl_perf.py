@@ -85,11 +85,10 @@ def test_sdxl_vae_perf_device():
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     batch_size = 1
-    total_batch_size = batch_size
 
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
     post_processed_results = run_device_perf(
-        command, subdir="sdxl_vae", num_iterations=1, cols=cols, batch_size=total_batch_size
+        command, subdir="sdxl_vae", num_iterations=1, cols=cols, batch_size=batch_size
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_cycles_per_iteration}
     expected_results = check_device_perf(
@@ -97,7 +96,7 @@ def test_sdxl_vae_perf_device():
     )
     prep_device_perf_report(
         model_name=f"sdxl_vae",
-        batch_size=total_batch_size,
+        batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results=expected_results,
         comments="",
