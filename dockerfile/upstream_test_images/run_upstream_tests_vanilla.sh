@@ -90,7 +90,22 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
         local min_connections_arg=""
     fi
 
-    ./build/test/tt_metal/tt_fabric/test_system_health $min_connections_arg
+    # Health check loop. Needed due to the following issues:
+    # https://tenstorrent.atlassian.net/browse/SYS-1634
+    # https://tenstorrent.atlassian.net/browse/BH-84
+    for i in {1..10}; do
+        echo "Health check attempt $i"
+        if tt-smi -r >/dev/null 2>&1 && ./build/test/tt_metal/tt_fabric/test_system_health $min_connections_arg; then
+            echo "Health checks passed"
+            break
+        fi
+        if [ $i -eq 10 ]; then
+            echo "Health checks failed after 10 attempts"
+            exit 1
+        fi
+        echo "Health checks failed, retrying..."
+        sleep 5
+    done
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/unit_tests_eth
@@ -203,13 +218,13 @@ test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests"
 
 hw_topology_test_suites["blackhole_llmbox"]="
-test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_deskbox"]="
-test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_rackbox"]="
