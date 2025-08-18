@@ -83,76 +83,76 @@ export class TelemetryDashboard extends LitElement {
             this._eventSource = new EventSource('/api/stream');
             
             this._eventSource.onmessage = (event) => {
-                let did_update = false;
+                let didUpdate = false;
 
                 // Handle message
                 try {
                     const data = JSON.parse(event.data);
 
-                    const bool_metric_ids = data["bool_metric_ids"];
-                    const bool_metric_names = data["bool_metric_names"];    // optional, and indicates new telemetry metrics if present
-                    const bool_metric_values = data["bool_metric_values"];
-                    const is_absolute = data["is_absolute"];                // absolute update
+                    const boolMetricIds = data["bool_metric_ids"];
+                    const boolMetricNames = data["bool_metric_names"];    // optional, and indicates new telemetry metrics if present
+                    const boolMetricValues = data["bool_metric_values"];
+                    const isAbsolute = data["is_absolute"];                // absolute update
 
-                    if (bool_metric_ids.length != bool_metric_values.length) {
-                        console.log(`SSE error: Received differing id and value counts (${bool_metric_ids.length} vs. ${bool_metric_values.length})`);
+                    if (boolMetricIds.length != boolMetricValues.length) {
+                        console.log(`SSE error: Received differing id and value counts (${boolMetricIds.length} vs. ${boolMetricValues.length})`);
                         return;
                     }
 
-                    if (bool_metric_names.length > 0 && bool_metric_names.length != bool_metric_ids.length) {
-                        console.log(`SSE error: Received differing name and id counts (${bool_metric_names.length} vs. ${bool_metric_ids.length})`);
+                    if (boolMetricNames.length > 0 && boolMetricNames.length != boolMetricIds.length) {
+                        console.log(`SSE error: Received differing name and id counts (${boolMetricNames.length} vs. ${boolMetricIds.length})`);
                         return;
                     }
 
-                    if (bool_metric_names.length > 0) {
+                    if (boolMetricNames.length > 0) {
                         // Adding new
-                        for (let i = 0; i < bool_metric_ids.length; i++) {
-                            const path = bool_metric_names[i];
-                            const id = bool_metric_ids[i];
-                            const value = bool_metric_values[i];
+                        for (let i = 0; i < boolMetricIds.length; i++) {
+                            const path = boolMetricNames[i];
+                            const id = boolMetricIds[i];
+                            const value = boolMetricValues[i];
                             this._telemetryStore.addPath(path, id, value, true);
-                            did_update = true;
+                            didUpdate = true;
                         }
                     } else {
                         // Delta updates
-                        for (let i = 0; i < bool_metric_ids.length; i++) {
-                            const id = bool_metric_ids[i];
-                            const value = bool_metric_values[i];
+                        for (let i = 0; i < boolMetricIds.length; i++) {
+                            const id = boolMetricIds[i];
+                            const value = boolMetricValues[i];
                             this._telemetryStore.updateBoolValue(id, value);
-                            did_update = true;
+                            didUpdate = true;
                         }
                     }
 
-                    const uint_metric_ids = data["uint_metric_ids"];
-                    const uint_metric_names = data["uint_metric_names"];    // optional, and indicates new telemetry metrics if present
-                    const uint_metric_values = data["uint_metric_values"];
+                    const uintMetricIds = data["uint_metric_ids"];
+                    const uintMetricNames = data["uint_metric_names"];    // optional, and indicates new telemetry metrics if present
+                    const uintMetricValues = data["uint_metric_values"];
 
-                    if (uint_metric_ids.length != uint_metric_values.length) {
-                        console.log(`SSE error: Received differing id and value counts (${uint_metric_ids.length} vs. ${uint_metric_values.length})`);
+                    if (uintMetricIds.length != uintMetricValues.length) {
+                        console.log(`SSE error: Received differing id and value counts (${uintMetricIds.length} vs. ${uintMetricValues.length})`);
                         return;
                     }
 
-                    if (uint_metric_names.length > 0 && uint_metric_names.length != uint_metric_ids.length) {
-                        console.log(`SSE error: Received differing name and id counts (${uint_metric_names.length} vs. ${uint_metric_ids.length})`);
+                    if (uintMetricNames.length > 0 && uintMetricNames.length != uintMetricIds.length) {
+                        console.log(`SSE error: Received differing name and id counts (${uintMetricNames.length} vs. ${uintMetricIds.length})`);
                         return;
                     }
 
-                    if (uint_metric_names.length > 0) {
+                    if (uintMetricNames.length > 0) {
                         // Adding new
-                        for (let i = 0; i < uint_metric_ids.length; i++) {
-                            const path = uint_metric_names[i];
-                            const id = uint_metric_ids[i];
-                            const value = uint_metric_values[i];
+                        for (let i = 0; i < uintMetricIds.length; i++) {
+                            const path = uintMetricNames[i];
+                            const id = uintMetricIds[i];
+                            const value = uintMetricValues[i];
                             this._telemetryStore.addPath(path, id, value, false);
-                            did_update = true;
+                            didUpdate = true;
                         }
                     } else {
                         // Delta updates
-                        for (let i = 0; i < uint_metric_ids.length; i++) {
-                            const id = uint_metric_ids[i];
-                            const value = uint_metric_values[i];
+                        for (let i = 0; i < uintMetricIds.length; i++) {
+                            const id = uintMetricIds[i];
+                            const value = uintMetricValues[i];
                             this._telemetryStore.updateUIntValue(id, value);
-                            did_update = true;
+                            didUpdate = true;
                         }
                     }
                 } catch (error) {
@@ -160,7 +160,7 @@ export class TelemetryDashboard extends LitElement {
                     console.error(`SSE error: Error processing data: ${error}`);
                 }
 
-                if (did_update) {
+                if (didUpdate) {
                     this.requestUpdate();
                 }
             };
@@ -182,12 +182,12 @@ export class TelemetryDashboard extends LitElement {
         const metricName = event.detail.name;
         const newPath = [ ...this.currentPath, metricName ].join("/");
 
-        console.log(`Clicked ${metricName}: new_path=${newPath}`);
+        console.log(`Clicked ${metricName}: newPath=${newPath}`);
         
         // Get children, if any, to drill in deeper
-        const child_names = this._telemetryStore.getChildNames(newPath);
-        console.log(child_names);
-        if (child_names.length > 0) {
+        const childNames = this._telemetryStore.getChildNames(newPath);
+        console.log(childNames);
+        if (childNames.length > 0) {
             this.currentPath = [...this.currentPath, metricName]; // descend one level deeper (don't use push, we need to mutate array to trigger state update)
         }
     }
@@ -208,16 +208,16 @@ export class TelemetryDashboard extends LitElement {
 
     _getCurrentMetrics() {
         // Get children of currently displayed path
-        const current_path = this.currentPath.join("/");
-        const metric_names = this._telemetryStore.getChildNames(current_path);
+        const currentPath = this.currentPath.join("/");
+        const metricNames = this._telemetryStore.getChildNames(currentPath);
 
         // Create metric boxes
         const metrics = [];
-        for (const metric_name of metric_names) {
-            const metric_path = [...this.currentPath, metric_name].join("/");
+        for (const metricName of metricNames) {
+            const metricPath = [...this.currentPath, metricName].join("/");
             metrics.push({
-                name: metric_name,
-                value: this._telemetryStore.getValue(metric_path)
+                name: metricName,
+                value: this._telemetryStore.getValue(metricPath)
             });
         }
 
@@ -227,17 +227,6 @@ export class TelemetryDashboard extends LitElement {
     render() {
         console.log("Render", this._getCurrentMetrics());
         return html`
-            <!--
-            <div class="controls">
-                <button @click="${this.randomizeStatus}">Randomize Status</button>
-                <button @click="${() => this.setCpuCount(2)}">2 CPUs</button>
-                <button @click="${() => this.setCpuCount(4)}">4 CPUs</button>
-                <button @click="${() => this.setCpuCount(8)}">8 CPUs</button>
-                <button @click="${() => this.setConditionCount(3)}">3 Conditions</button>
-                <button @click="${() => this.setConditionCount(6)}">6 Conditions</button>
-            </div>
-            -->
-
             <div class="navigation">
                 <div class="breadcrumb">${this._getBreadcrumb()}</div>
                 <button class="back-button" 
