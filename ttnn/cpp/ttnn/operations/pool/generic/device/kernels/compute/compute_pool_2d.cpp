@@ -144,15 +144,18 @@ void MAIN {
                     //     UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id, 0));
                     // }
 
+                    cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
+
                     tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
                     // reconfig_data_format_srca(tile_tmp_cb_id);
                     // pack_reconfig_data_format(tile_tmp_cb_id);
                     tilize_block(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id, tile_idx_tmp_cb_id);
 
-                    cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
                     cb_push_back(tile_tmp_cb_id, topk_output_tiles);
                     cb_wait_front(tile_tmp_cb_id, topk_output_tiles);
+
+                    cb_reserve_back(tile_idx_tmp_cb_id, topk_output_tiles);
 
                     tilize_init_short_with_dt(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
                     // reconfig_data_format_srca(tile_idx_tmp_cb_id);
@@ -161,7 +164,6 @@ void MAIN {
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
                     tilize_uninit(curr_in_idx_cb_id, tile_idx_tmp_cb_id);
 
-                    cb_reserve_back(tile_idx_tmp_cb_id, topk_output_tiles);
                     cb_push_back(tile_idx_tmp_cb_id, topk_output_tiles);
                     cb_wait_front(tile_idx_tmp_cb_id, topk_output_tiles);
 
@@ -181,7 +183,7 @@ void MAIN {
                     copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
 
                     dprint_tensix_dest_reg(0);
-                    // dprint_tensix_dest_reg(2);
+                    dprint_tensix_dest_reg(2);
 
                     // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
                     topk_tile_init();
@@ -191,10 +193,11 @@ void MAIN {
                     cb_pop_front(tile_tmp_cb_id, topk_output_tiles);
                     cb_pop_front(tile_idx_tmp_cb_id, topk_output_tiles);
 
-                    tile_regs_commit();
+                    dprint_tensix_dest_reg(0);
+                    dprint_tensix_dest_reg(2);
+                    // BH/WH different here
 
-                    // dprint_tensix_dest_reg(0);
-                    // dprint_tensix_dest_reg(2);
+                    tile_regs_commit();
                 }
                 cb_pop_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
@@ -218,19 +221,19 @@ void MAIN {
 
                 pack_untilize_dest<topk_output_tiles>(
                     out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, data_dst_idx);
-                if (n == 0) {
-                    PACK(DPRINT << "OUT CB " << ENDL());
-                    PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
-                }
+                // if (n == 0) {
+                //     PACK(DPRINT << "OUT CB " << ENDL());
+                //     PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
+                // }
                 cb_push_back(out_cb_id, topk_output_tiles);
 
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_untilize_dest<topk_output_tiles>(
                     out_idx_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, index_dst_idx);
-                if (n == 0) {
-                    PACK(DPRINT << "OUT CB " << ENDL());
-                    PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
-                }
+                // if (n == 0) {
+                //     PACK(DPRINT << "OUT CB " << ENDL());
+                //     PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
+                // }
                 cb_push_back(out_idx_cb_id, topk_output_tiles);
 
                 pack_untilize_uninit(out_cb_id);

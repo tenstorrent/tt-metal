@@ -310,6 +310,7 @@ void kernel_main() {
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
+            clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();  // TODO don't really need this, just helps debugging
         }
         // we don't need to clear the idx CB since the data CB is the one being sorted
     }
