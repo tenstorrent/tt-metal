@@ -131,6 +131,7 @@ jobs:
       build-wheel: true
       tracy: true
       version: "22.04"
+      build-umd-tests: true
   run-profiler-regression:
     needs: [build-artifact-profiler, generate-matrix]
     uses: ./.github/workflows/run-profiler-regression.yaml
@@ -336,9 +337,9 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
