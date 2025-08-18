@@ -77,6 +77,123 @@ enum class FabricEriscDatamoverContextSwitchType : uint8_t {
     INTERVAL = 1,
 };
 
+/*
+Receiver channel side registers are defined here to receive free-slot credits from downstream sender channels.
+
+                                North Router
+                        ┌───────────────────────────────────┐
+                        │                                   │
+                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  └────┘ └────┘ └────┘ └────┘      │
+                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  └────┘ └─┬──┘ └────┘ └────┘      │
+    West Router         └───────────┼───────────────────────┘        East Router
+ ┌─────────────────────┐            │                             ┌────────────────────────────┐
+ │                     │            │                             │                            │
+ │                     │            │                             │                            │
+ │               ┌────┐│ (increment)│    Acks From East           │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    ◄┼────────────┼───────────────────┐         ││              │ │    │ E   │
+ │     East      │    ││            │                   │         ││              │ │    │     │
+ │               └────┘│            │                   │         │└──────────────┘ └────┘     │
+ │                 12  │            │                   │         │                            │
+ │               ┌────┐│            │                   │         │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    ││            │                   │         ││              │ │    │ W   │
+ │     West      │    ││            │                   └─────────┼┼              │ │    │     │
+ │               └────┘│            │                             │└──────────────┘ └────┘     │
+ │                 13  │            │                             │                            │
+ │               ┌────┐│ (increment)│                             │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    │◄────────────┘                             ││              │ │    │ N   │
+ │     North     │    ││  Acks From North                         ││              │ │    │     │
+ │               └────┘│                                          │└──────────────┘ └────┘     │
+ │                 14  │                                          │                            │
+ │               ┌────┐│  Acks From South                         │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    │◄────────────────┐                         ││              │ │    │ S   │
+ │     South     │    ││ (increment)    │                         ││              │ │    │     │
+ │               └────┘│                │                         │└──────────────┘ └────┘     │
+ │                 15  │                │                         │                            │
+ │                     │                │                         │                            │
+ │                     │                │                         │                            │
+ └─────────────────────┘  ┌─────────────┼───────────────────┐     └────────────────────────────┘
+                          │   ┌────┐ ┌──┼─┐ ┌────┐ ┌────┐   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   └────┘ └────┘ └────┘ └────┘   │
+                          │   ┌────┐ ┌────┐ ┌────┐ ┌────┐   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   └────┘ └────┘ └────┘ └────┘   │
+                          │                                 │
+                          └─────────────────────────────────┘
+                                   South Router
+*/
+struct stream_reg_assignments {
+    // Packet send/ack/complete stream IDs
+    static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
+    static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
+    static constexpr uint32_t to_sender_0_pkts_acked_id = 2;
+    static constexpr uint32_t to_sender_1_pkts_acked_id = 3;
+    static constexpr uint32_t to_sender_2_pkts_acked_id = 4;
+    static constexpr uint32_t to_sender_3_pkts_acked_id = 5;
+    static constexpr uint32_t to_sender_4_pkts_acked_id = 6;
+    static constexpr uint32_t to_sender_0_pkts_completed_id = 7;
+    static constexpr uint32_t to_sender_1_pkts_completed_id = 8;
+    static constexpr uint32_t to_sender_2_pkts_completed_id = 9;
+    static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
+    static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
+    // Receiver channel free slots stream IDs
+    static constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
+    static constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+    // Sender channel free slots stream IDs
+    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
+    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
+    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
+    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
+    static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    // Multi-RISC teardown synchronization stream ID
+    static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
+
+    // Helper method to get all stream IDs as a vector
+    static std::vector<uint32_t> get_all_stream_ids() {
+        return {
+            to_receiver_0_pkts_sent_id,
+            to_receiver_1_pkts_sent_id,
+            to_sender_0_pkts_acked_id,
+            to_sender_1_pkts_acked_id,
+            to_sender_2_pkts_acked_id,
+            to_sender_3_pkts_acked_id,
+            to_sender_4_pkts_acked_id,
+            to_sender_0_pkts_completed_id,
+            to_sender_1_pkts_completed_id,
+            to_sender_2_pkts_completed_id,
+            to_sender_3_pkts_completed_id,
+            to_sender_4_pkts_completed_id,
+            receiver_channel_0_free_slots_from_east_stream_id,
+            receiver_channel_0_free_slots_from_west_stream_id,
+            receiver_channel_0_free_slots_from_north_stream_id,
+            receiver_channel_0_free_slots_from_south_stream_id,
+            receiver_channel_1_free_slots_from_downstream_stream_id,
+            sender_channel_1_free_slots_stream_id,
+            sender_channel_2_free_slots_stream_id,
+            sender_channel_3_free_slots_stream_id,
+            sender_channel_4_free_slots_stream_id,
+            vc1_sender_channel_free_slots_stream_id,
+            multi_risc_teardown_sync_stream_id};
+    }
+};
+
 struct FabricRouterBufferConfig {
     bool enable_dateline_sender_extra_buffer_slots = false;
     bool enable_dateline_receiver_extra_buffer_slots = false;
@@ -263,35 +380,6 @@ struct FabricEriscDatamoverConfig {
 
     // emd vcs
     std::size_t edm_noc_vc = 0;
-
-    // Stream IDs
-    // Packet send/ack/complete stream IDs
-    static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
-    static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
-    static constexpr uint32_t to_sender_0_pkts_acked_id = 2;
-    static constexpr uint32_t to_sender_1_pkts_acked_id = 3;
-    static constexpr uint32_t to_sender_2_pkts_acked_id = 4;
-    static constexpr uint32_t to_sender_3_pkts_acked_id = 5;
-    static constexpr uint32_t to_sender_4_pkts_acked_id = 6;
-    static constexpr uint32_t to_sender_0_pkts_completed_id = 7;
-    static constexpr uint32_t to_sender_1_pkts_completed_id = 8;
-    static constexpr uint32_t to_sender_2_pkts_completed_id = 9;
-    static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
-    static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
-    // Receiver channel free slots stream IDs
-    static constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
-    static constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
-    // Sender channel free slots stream IDs
-    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
-    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
-    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
-    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
-    static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
-    // Multi-RISC teardown synchronization stream ID
-    static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 
 private:
     void configure_buffer_slots_helper(

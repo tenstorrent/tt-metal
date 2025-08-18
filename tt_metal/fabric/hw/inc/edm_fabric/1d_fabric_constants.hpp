@@ -18,65 +18,6 @@
 
 constexpr uint32_t DEFAULT_ETH_TXQ = 0;
 
-/*
-Receiver channel side registers are defined here to receive free-slot credits from downstream sender channels.
-
-                                North Router
-                        ┌───────────────────────────────────┐
-                        │                                   │
-                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  └────┘ └────┘ └────┘ └────┘      │
-                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  └────┘ └─┬──┘ └────┘ └────┘      │
-    West Router         └───────────┼───────────────────────┘        East Router
- ┌─────────────────────┐            │                             ┌────────────────────────────┐
- │                     │            │                             │                            │
- │                     │            │                             │                            │
- │               ┌────┐│ (increment)│    Acks From East           │┌──────────────┐ ┌────┐     │
- │   Free Slots  │    ◄┼────────────┼───────────────────┐         ││              │ │    │ E   │
- │     East      │    ││            │                   │         ││              │ │    │     │
- │               └────┘│            │                   │         │└──────────────┘ └────┘     │
- │                 12  │            │                   │         │                            │
- │               ┌────┐│            │                   │         │┌──────────────┐ ┌────┐     │
- │   Free Slots  │    ││            │                   │         ││              │ │    │ W   │
- │     West      │    ││            │                   └─────────┼┼              │ │    │     │
- │               └────┘│            │                             │└──────────────┘ └────┘     │
- │                 13  │            │                             │                            │
- │               ┌────┐│ (increment)│                             │┌──────────────┐ ┌────┐     │
- │   Free Slots  │    │◄────────────┘                             ││              │ │    │ N   │
- │     North     │    ││  Acks From North                         ││              │ │    │     │
- │               └────┘│                                          │└──────────────┘ └────┘     │
- │                 14  │                                          │                            │
- │               ┌────┐│  Acks From South                         │┌──────────────┐ ┌────┐     │
- │   Free Slots  │    │◄────────────────┐                         ││              │ │    │ S   │
- │     South     │    ││ (increment)    │                         ││              │ │    │     │
- │               └────┘│                │                         │└──────────────┘ └────┘     │
- │                 15  │                │                         │                            │
- │                     │                │                         │                            │
- │                     │                │                         │                            │
- └─────────────────────┘  ┌─────────────┼───────────────────┐     └────────────────────────────┘
-                          │   ┌────┐ ┌──┼─┐ ┌────┐ ┌────┐   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   └────┘ └────┘ └────┘ └────┘   │
-                          │   ┌────┐ ┌────┐ ┌────┐ ┌────┐   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   └────┘ └────┘ └────┘ └────┘   │
-                          │                                 │
-                          └─────────────────────────────────┘
-                                   South Router
-*/
 constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
@@ -117,8 +58,16 @@ constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_
 constexpr uint32_t vc1_sender_channel_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
 constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
 
-// Main configuration arguments (after stream IDs)
-constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = STREAM_ID_ARGS_START_IDX + 23;
+// Special marker after stream IDs
+constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 23;
+constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX) == STREAM_IDS_END_MARKER,
+    "Stream IDs end marker not found. This implies some arguments were misaligned between host and device. Double "
+    "check the CT args.");
+
+// Main configuration arguments (after stream IDs and marker)
+constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = STREAM_IDS_END_MARKER_IDX + 1;
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
@@ -137,11 +86,13 @@ static_assert(
 static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
-static_assert(wait_for_host_signal_IDX == 26, "wait_for_host_signal_IDX must be 26 (23 stream IDs + 3 config args)");
+static_assert(
+    wait_for_host_signal_IDX == 27, "wait_for_host_signal_IDX must be 27 (23 stream IDs + 1 marker + 3 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
-static_assert(MAIN_CT_ARGS_START_IDX == 27, "MAIN_CT_ARGS_START_IDX must be 27 (23 stream IDs + 4 config args)");
+static_assert(
+    MAIN_CT_ARGS_START_IDX == 28, "MAIN_CT_ARGS_START_IDX must be 28 (23 stream IDs + 1 marker + 4 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
