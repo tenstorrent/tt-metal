@@ -23,7 +23,8 @@ void MAIN {
     // architecture. Think it like that. Later on we will ensure that registers are
     // free and then we will submit compute to the FPU/SFPU that writes to the register.
     // see:
-    // https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/acquire_dst.html
+    // //
+    // https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/acquire_dst.html#acquire-dst
     constexpr uint32_t dst_reg = 0;
 
     // Tell the SFPU that we will be using circular buffers c_in0, c_in1 and c_out0
@@ -37,12 +38,15 @@ void MAIN {
     // Loop over all the tiles and perform the computation
     for (uint32_t i = 0; i < n_tiles; i++) {
         // Make sure there is a valid register we can use.
-        acquire_dst();
+        tile_regs_acquire();
         // Wait until there is a tile in both input circular buffers
         cb_wait_front(cb_in0, 1);
         cb_wait_front(cb_in1, 1);
         // Add the tiles from the input circular buffers and write the result to the destination register
         add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);
+        // Wait for results in the registers are available
+        tile_regs_commit();
+        tile_regs_wait();
         // Make sure there is space in the output circular buffer
         cb_reserve_back(cb_out0, 1);
         // Copy the result from adding the tiles to the output circular buffer
@@ -52,7 +56,7 @@ void MAIN {
         cb_pop_front(cb_in0, 1);
         cb_pop_front(cb_in1, 1);
         // Release the held register
-        release_dst();
+        tile_regs_release();
     }
 }
 }  // namespace NAMESPACE
