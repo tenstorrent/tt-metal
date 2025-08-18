@@ -573,6 +573,7 @@ def dump_tensor(
         ttnn._ttnn.tensor.dump_tensor(str(file_name), tensor)
 
 
+# TODO: #16067 - Remove `enable_multihost_format`, when we remove the legacy format.
 @ttnn.register_python_operation(name="ttnn.as_tensor")
 def as_tensor(
     tensor: Union["torch.Tensor"],  # TODO: add support for numpy.ndarray and other tensor types
@@ -696,8 +697,11 @@ def as_tensor(
 
         cache_path = pathlib.Path(cache_file_name)
 
-        # Prepend "tt-mesh" to differentiate file store for new weights format
-        cache_path = cache_path.parent / "tt-mesh" / cache_path.name
+        if enable_multihost_format:
+            cache_path = cache_path.parent / cache_path.name
+        else:
+            # TODO: #16067 - Remove `tt-mesh` prefix when we remove the legacy format.
+            cache_path = cache_path.parent / "tt-mesh" / cache_path.name
         cache_file_name = str(cache_path)
 
         if not cache_path.exists() or not cache_path.is_file():
