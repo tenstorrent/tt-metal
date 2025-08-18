@@ -73,7 +73,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode):
 
     all_tests_pass = True
 
-    seqlen = 32
+    seqlen = 1
     batch = 32
 
     for i in range(iterations):

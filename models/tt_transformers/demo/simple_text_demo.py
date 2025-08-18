@@ -599,6 +599,8 @@ def test_demo_text(
     if is_ci_env and (("accuracy" in test_id) or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
 
+    mesh_device.disable_and_clear_program_cache()
+
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")

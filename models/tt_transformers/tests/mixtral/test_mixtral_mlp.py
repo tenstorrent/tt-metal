@@ -3,7 +3,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.rmsnorm import RMSNorm as TtRMSNorm
 from models.demos.t3000.mixtral8x7b.reference.model import FeedForward, RMSNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -51,18 +50,6 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
     rms = RMSNorm(dim=model_args.dim)
     rms.load_state_dict(rms_state_dict)
 
-    tt_norm = TtRMSNorm(
-        device=t3k_mesh_device,
-        dim=model_args.dim,
-        state_dict=state_dict,
-        state_dict_prefix=state_dict_prefix,
-        weight_key=f"ffn_norm",
-        weight_dtype=ttnn.bfloat16,
-        is_distributed=model_args.is_distributed_norm,
-        sharded_program_config=model_args.get_model_config()["SHARDED_NORM_MLP_PRGM_CFG"],
-        sharded_output_config=model_args.get_model_config()["SHARDED_MLP_INPUT_MEMCFG"],
-    )
-
     original_input = (torch.rand(1, 1, seqlen, model_args.dim) * 2) - 1
     torch_input = rms(original_input)  # apply rmsnorm to input
 
@@ -82,7 +69,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
         )
 
         tt_input = ttnn.as_tensor(
-            original_input,
+            torch_input,
             dtype=ttnn.bfloat16,  # or your desired dtype
             layout=ttnn.TILE_LAYOUT,
             device=t3k_mesh_device,
@@ -90,7 +77,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
         )
     else:
         tt_input = ttnn.from_torch(
-            original_input,
+            torch_input,
             dtype=ttnn.bfloat16,  # or your desired dtype
             layout=ttnn.TILE_LAYOUT,
             device=t3k_mesh_device,
