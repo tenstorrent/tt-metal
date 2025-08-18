@@ -10,6 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 from models.experimental.stable_diffusion_xl_base.tests.pcc.test_module_tt_unet import run_unet_model
 
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 3
+VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
 
 
 @pytest.mark.parametrize(
@@ -88,7 +89,7 @@ def test_sdxl_vae_perf_device():
 
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
     post_processed_results = run_device_perf(
-        command, subdir="sdxl_vae", num_iterations=1, cols=cols, batch_size=batch_size
+        command, subdir="sdxl_vae", num_iterations=VAE_DEVICE_TEST_TOTAL_ITERATIONS, cols=cols, batch_size=batch_size
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_cycles_per_iteration}
     expected_results = check_device_perf(
