@@ -194,6 +194,8 @@ class CLIPEncoderLayer:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
         )
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
 
     def load_state_dict(self, state_dict):
         """
@@ -228,7 +230,7 @@ class CLIPEncoderLayer:
         hidden_states = ttnn.layer_norm(  # Shape([1, 19, 768])
             hidden_states, weight=self.layer_norm1, bias=self.layer_norm1_bias, epsilon=self.layer_norm_eps
         )
-        attn_output = self.self_attn(hidden_states, causal_attention_mask, ccl_manager, parallel_config)
+        attn_output = self.self_attn(hidden_states, causal_attention_mask)
         hidden_states = residual + attn_output
 
         # mlp block
@@ -258,17 +260,24 @@ class CLIPEncoderLayer:
         # logger.debug(f"reduce_scatter completed, shape: {mlp_output_fractured.shape}")
 
         mlp_output_fractured = ttnn.unsqueeze(mlp_output_fractured, 0)
-        # all gather
-        mlp_output = ttnn.experimental.all_gather_async(
-            mlp_output_fractured,
-            dim=3,
-            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=ccl_manager.mesh_device,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        if self.parallel_config.tensor_parallel.factor > 1:
+            # all gather
+            mlp_output = ttnn.experimental.all_gather_async(
+                mlp_output_fractured,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    mlp_output_fractured.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            mlp_output = mlp_output_fractured
+
         mlp_output = ttnn.squeeze(mlp_output, 0)
         logger.debug(f"all_gather completed, shape: {mlp_output.shape}")
 
@@ -350,7 +359,7 @@ class EncoderLayerSelfAttention:
         self.v_proj.load_state_dict(substate(state_dict, "v_proj"))
         self.o_proj.load_state_dict(substate(state_dict, "out_proj"))
 
-    def __call__(self, hidden_states, causal_attention_mask, ccl_manager, parallel_config):
+    def __call__(self, hidden_states, causal_attention_mask):
         """
         input is replicated
         Q, K, V are head-parallel (Each device gets embed_dim // num_devices columns of each weight matrix)
@@ -384,7 +393,7 @@ class EncoderLayerSelfAttention:
         q = q * self.scale  # Shape([1, 19, 192])
 
         # reshape for multihead attention
-        num_devices = parallel_config.tensor_parallel.factor
+        num_devices = self.parallel_config.tensor_parallel.factor
         num_local_heads = self.num_heads // num_devices
 
         q = ttnn.reshape(q, (batch_size, seq_length, num_local_heads, self.head_dim))
@@ -417,32 +426,38 @@ class EncoderLayerSelfAttention:
 
         orig_shape = list(attn_output.shape)
 
-        # need to gather attn_output across all devices
-        attn_output = ttnn.experimental.all_gather_async(  # [1, batch_size, seq_length, full embed_dim] (replicated)
-            attn_output,
-            dim=len(attn_output.shape) - 1,
-            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=ccl_manager.mesh_device,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        logger.debug(f"tensor parallel factor: {self.parallel_config.tensor_parallel.factor}")
+        if self.parallel_config.tensor_parallel.factor > 1:
+            # need to gather attn_output across all devices
+            attn_output = ttnn.experimental.all_gather_async(
+                attn_output,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    attn_output.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                # memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         # Shape([1, 1, 19, 768]) (replicated)
-        # breakpoint()
         dense_out = self.o_proj(attn_output)  # o_proj is still head parallel. Shape([1, 1, 19, 192])
 
-        dense_out = ttnn.experimental.all_gather_async(
-            dense_out,
-            dim=len(dense_out.shape) - 1,
-            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=ccl_manager.mesh_device,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # breakpoint()
+        if self.parallel_config.tensor_parallel.factor > 1:
+            dense_out = ttnn.experimental.all_gather_async(
+                dense_out,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    dense_out.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                # memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # breakpoint()
 
         dense_out_shape = list(dense_out.shape)  # [1,1,19,768]
         dense_out_shape[2] = orig_shape[2]
