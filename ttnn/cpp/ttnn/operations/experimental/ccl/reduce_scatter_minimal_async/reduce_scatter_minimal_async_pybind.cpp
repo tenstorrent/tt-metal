@@ -30,7 +30,7 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                const ttnn::Tensor& input_tensor,
                const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
                const int32_t dim,
-               const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+               const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -58,7 +58,7 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                     num_buffers_per_channel);
             },
             py::arg("input_tensor"),
-            py::arg("persistent_output_buffers") = std::nullopt,
+            py::arg("persistent_output_buffers"),
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),
