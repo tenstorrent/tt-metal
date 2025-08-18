@@ -4,7 +4,6 @@
 
 import os
 from loguru import logger
-
 import torch
 import torchvision
 import pytest
@@ -36,7 +35,7 @@ def evaluation(
     gt_id = []
     pred_id = []
     for i in range(iterations // batch_size):
-        if model_name in ["vit", "resnet50", "mobilenetv2"]:
+        if model_name in ["vit", "resnet50", "mobilenetv2", "vovnet"]:
             inputs, labels = get_batch(data_loader, image_processor)
         else:
             inputs, labels = get_batch(data_loader)
@@ -44,7 +43,18 @@ def evaluation(
 
         # preprocess
         if model_name == "mobilenetv2":
-            torch_input_tensor = inputs
+            n, c, h, w = inputs.shape
+            torch_input_tensor = inputs.reshape(batch_size, 3, res, res)
+            tt_inputs = torch.permute(inputs, (0, 2, 3, 1))
+            ttnn_input_tensor = tt_inputs.reshape(
+                1,
+                1,
+                n * h * w,
+                c,
+            )
+
+            ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
         elif model_name == "resnet50":
             torch_input_tensor = inputs
             if model_type == "tt_model":
@@ -54,6 +64,8 @@ def evaluation(
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=model.test_infra.inputs_mesh_mapper,
                 )
+        elif model_name == "vovnet":
+            torch_input_tensor = inputs
         else:
             torch_input_tensor = inputs
             if model_type == "tt_model":
@@ -78,6 +90,8 @@ def evaluation(
                 output = model.execute_vit_trace_2cqs_inference(tt_inputs_host)
             elif model_name == "resnet50":
                 output = model.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
+            elif model_name == "vovnet":
+                output = model.run(torch_input_tensor)
         elif model_type == "torch_model":
             output = model(torch_input_tensor)
 
@@ -92,6 +106,19 @@ def evaluation(
             for i in range(batch_size):
                 pred_id.append(prediction[i].item())
                 gt_id.append(labels[i])
+            del output, final_output
+
+        elif model_name == "vovnet":
+            if model_type == "tt_model":
+                final_output = ttnn.to_torch(output, mesh_composer=model.runner_infra.output_mesh_composer)
+            else:
+                final_output = output
+            prediction = final_output.argmax(dim=-1)
+
+            for i in range(batch_size):
+                pred_id.append(prediction[i].item())
+                gt_id.append(labels[i])
+
             del output, final_output
 
         elif model_name == "vit":
@@ -120,6 +147,8 @@ def evaluation(
     if model_type == "tt_model":
         if model_name == "mobilenetv2":
             model.release_mobilenetv2_trace_2cqs_inference()
+        elif model_name == "vovnet":
+            model.release()
         elif model_name == "resnet50":
             model.release_resnet50_trace_2cqs_inference()
         elif model_name == "vit":
@@ -336,4 +365,77 @@ def test_mobilenetv2_image_classification_eval_dp(
 ):
     run_mobilenetv2_image_classification_eval(
         mesh_device, model_type, batch_size, res, model_location_generator, reset_seeds
+    )
+
+
+def run_vovnet_image_classification_eval(
+    device, model_type, device_batch_size, res, model_location_generator, reset_seeds
+):
+    from models.experimental.vovnet.runner.performant_runner import VovnetPerformantRunner
+    from models.demos.ttnn_resnet.tests.demo_utils import get_batch
+    from models.experimental.vovnet.common import load_torch_model
+
+    model_version = "microsoft/resnet-50"
+    image_processor = AutoImageProcessor.from_pretrained(model_version)
+    batch_size = device_batch_size * device.get_num_devices()
+    if model_type == "torch_model":
+        torch_model = load_torch_model(model_location_generator).eval()
+    else:
+        vovnet_trace_2cq = VovnetPerformantRunner(
+            device,
+            device_batch_size,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            resolution=(224, 224),
+            model_location_generator=model_location_generator,
+        )
+
+        vovnet_trace_2cq._capture_vovnet_trace_2cqs()
+    evaluation(
+        device=device,
+        model=vovnet_trace_2cq if model_type == "tt_model" else torch_model,
+        model_location_generator=model_location_generator,
+        model_type=model_type,
+        model_name="vovnet",
+        image_processor=image_processor,
+        config=None,
+        get_batch=get_batch,
+        batch_size=batch_size,
+        res=res,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1752064, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize("batch_size, res", [[1, 224]])
+def test_vovnet_image_classification_eval(device, model_type, batch_size, res, model_location_generator, reset_seeds):
+    return run_vovnet_image_classification_eval(
+        device, model_type, batch_size, res, model_location_generator, reset_seeds
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1752064, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize("device_batch_size, res", [[1, 224]])
+def test_vovnet_image_classification_eval_dp(
+    mesh_device, model_type, device_batch_size, res, model_location_generator, reset_seeds
+):
+    return run_vovnet_image_classification_eval(
+        mesh_device, model_type, device_batch_size, res, model_location_generator, reset_seeds
     )
