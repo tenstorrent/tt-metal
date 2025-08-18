@@ -83,25 +83,6 @@ def run_max_pool(
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
 
-    # OOM skips
-    if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
-        if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
-            pytest.skip("This case runs out of memory")
-        if in_n > 16 and in_c > 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
-            pytest.skip("This case runs out of memory on Wormhole b0")
-        if (
-            stride == (1, 1)
-            and (
-                input_shape == [16, 64, 112, 112]
-                or input_shape == [4, 16, 1056, 160]
-                or input_shape == [16, 16, 528, 80]
-            )
-            and is_wormhole_b0()
-        ):
-            pytest.skip("This case runs out of memory on Wormhole b0")
-        if kernel_h > 5 and kernel_w > 5 and input_shape == [16, 64, 112, 112] and is_x2_harvested(device):
-            pytest.skip("This case runs out of memory on Wormhole X2")
-
     if pad_t > kernel_h / 2 or pad_b > kernel_h / 2 or pad_l > kernel_w / 2 or pad_r > kernel_w / 2:
         pytest.skip("padding is too large for the kernel size")
 
@@ -178,6 +159,8 @@ def run_max_pool(
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
         in_place_halo=in_place,
+        deallocate_input=True,
+        reallocate_halo_output=True,
     )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
