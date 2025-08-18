@@ -47,9 +47,6 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
-uint16_t logical_col_to_translated_col[noc_size_x] __attribute__((used));
-uint16_t logical_row_to_translated_row[noc_size_y] __attribute__((used));
-
 #if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
 void l1_to_erisc_iram_copy(volatile uint32_t* iram_load_reg) {
     // Trigger copy of code from L1 to IRAM.
