@@ -1271,12 +1271,12 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 @pytest.mark.parametrize(
     "dims, slice_size, core_x, core_y",
     [
-        # [[2, 64, 64, 256], 32, 4, 4],
-        # [[2, 64, 64, 512], 16, 4, 4],
-        # [[2, 16, 16, 1024], 4, 4, 4],
-        # [[2, 128, 128, 256], 32, 8, 4],
-        # [[2, 128, 128, 63], 32, 8, 2],
-        [[2, 192, 192, 528], 96, 8, 8]
+        [[2, 64, 64, 256], 32, 4, 4],
+        [[2, 64, 64, 512], 16, 4, 4],
+        [[2, 16, 16, 1024], 4, 4, 4],
+        [[2, 128, 128, 256], 32, 8, 4],
+        [[2, 128, 128, 63], 32, 8, 2],
+        [[2, 128, 128, 528], 96, 8, 6],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -1302,10 +1302,14 @@ def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
         torch_input, device=device, layout=layout, dtype=input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    padded_channels = round_up(dims[-1], 32)
+    padded_channels = round_up(dims[-1], core_y * 32)
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
-    core_grid = ttnn.CoreGrid(x=core_x, y=core_y)
-
+    core_range_start = ttnn.CoreCoord(0, 0)
+    core_range_end = ttnn.CoreCoord(core_x - 1, core_y - 1)
+    core_range = ttnn.CoreRangeSet([ttnn.CoreRange(core_range_start, core_range_end)])
+    parallel_config = ttnn.SlidingWindowParallelConfig(
+        grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED, shard_orientation=orientation
+    )
     for i in range(num_slices):
         begins = [0, 0, 0, 0]
         ends = [dims[0], dims[1], dims[2], dims[3]]
@@ -1314,8 +1318,8 @@ def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
         this_torch_output = padded_torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2]]
         output_shape = this_torch_output.shape
         output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], 32)]
-        memory_config = ttnn.create_sharded_memory_config_(
-            output_shape, core_grid, ttnn.ShardStrategy.BLOCK, orientation
+        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            output_shape, parallel_config, 1
         )
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = this_ttnn_output.cpu().to_torch_with_padded_shape()

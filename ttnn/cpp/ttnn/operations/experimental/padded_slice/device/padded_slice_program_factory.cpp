@@ -29,6 +29,7 @@ const uint32_t cb_buffer_size = 4;
 const uint32_t cb_input_index = 0;
 const uint32_t cb_untilized_index = 1;
 const uint32_t cb_output_index = 2;
+const uint32_t cb_padding_index = 3;
 
 namespace ttnn::operations::experimental::detail {
 
@@ -123,7 +124,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address
         input_page_size,
-        input_row_size_bytes,
+        output_row_size_bytes,
         output_row_size_bytes_offset,
         num_dims,
         0,
@@ -165,7 +166,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
-        uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes, input_page_size - width_offset);
+        uint32_t this_input_row_size_bytes = std::min(output_row_size_bytes, input_page_size - width_offset);
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
         reader_kernel_args[2] = this_input_row_size_bytes;
@@ -379,6 +380,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
         num_tiles_per_channel,
         tt::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH));
 
+    uint32_t input_channels_num_tiles = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
     std::vector<uint32_t> num_output_tiles_per_dim(num_dims);
@@ -551,7 +553,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
             num_full_rows = 0;
             num_tiles_this_core = 0;
         }
-        log_debug(
+        log_trace(
             tt::LogOp,
             "For Core {}, Input Start ID {}, End ID {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, "
             "End Coord "
@@ -595,7 +597,18 @@ get_padded_slice_runtime_args_tile_sharded_output(
             num_tiles_this_core / num_tiles_per_channel,  // number of tiles to read
         };
 
-        std::vector<uint32_t> writer_kernel_args = {num_tiles_this_core, num_tiles_per_channel, num_sticks_per_core};
+        int this_core_output_channels_end_tile = width_offset + num_tiles_per_channel;
+        uint32_t output_channels_padding_ntiles =
+            std::max<int>(this_core_output_channels_end_tile - input_channels_num_tiles, 0);
+        log_trace(
+            tt::LogOp,
+            "Core = {}, width_offset = {}, input_channels_num_tiles = {}, output_channels_padding = {}",
+            core,
+            width_offset,
+            input_channels_num_tiles,
+            output_channels_padding_ntiles);
+        std::vector<uint32_t> writer_kernel_args = {
+            num_tiles_this_core, num_tiles_per_channel, num_sticks_per_core, output_channels_padding_ntiles};
         writer_kernel_args.insert(writer_kernel_args.end(), reversed_start_index.begin(), reversed_start_index.end());
         writer_kernel_args.insert(
             writer_kernel_args.end(), reversed_output_start_in_input.begin(), reversed_output_start_in_input.end());
@@ -703,13 +716,21 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         output_row_size_bytes,
         num_output_sticks_per_core);
     auto cb_output_tuple = tt::tt_metal::create_cb(
-        2,
+        cb_output_index,
         program,
         total_cores,
         output_row_size_bytes,
         num_output_sticks_per_core,
         output_cb_data_format,
         output.buffer());
+
+    auto cb_padding_source_tuple = tt::tt_metal::create_cb(
+        cb_padding_index,
+        program,
+        total_cores,
+        output_row_size_bytes,
+        1,  // We need only a single row to hold the padding, and reuse it.
+        output_cb_data_format);
 
     log_debug(
         tt::LogOp,
@@ -730,7 +751,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         program, compute_kernel, total_cores, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compute_args});
 
     std::vector<uint32_t> writer_compile_time_args_vec = {
-        cb_untilized_index, cb_output_index, input_padded_shape.rank() /* == 4*/};
+        cb_untilized_index, cb_output_index, cb_padding_index, input_padded_shape.rank() /* == 4*/};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram, misalignment};
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
