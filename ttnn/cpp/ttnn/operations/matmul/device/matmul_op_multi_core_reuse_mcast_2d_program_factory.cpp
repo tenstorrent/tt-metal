@@ -452,11 +452,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for sparsity
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
-    if (bias_buffer != nullptr) {
-        tt::tt_metal::TensorAccessorArgs(*bias_buffer).append_to(in1_sender_writer_compile_time_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder
-    }
+    tt::tt_metal::TensorAccessorArgs(bias_buffer).append_to(in1_sender_writer_compile_time_args);
 
     if (in1_is_sharded and in1_is_dram) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
@@ -1087,14 +1083,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(0);
                 }
 
-                if (bias_buffer != nullptr) {
-                    mm_in1_sender_writer_args.push_back((std::uint32_t)bias_buffer->address());
-                    mm_in1_sender_writer_args.push_back(
-                        (std::uint32_t)per_core_N * in1_idx);  // in1_tensor_start_tile_id
-                } else {
-                    mm_in1_sender_writer_args.push_back(0);  // Placeholder; not used
-                    mm_in1_sender_writer_args.push_back(0);  // Placeholder; not used
-                }
+                mm_in1_sender_writer_args.push_back(bias_buffer ? (std::uint32_t)bias_buffer->address() : 0);
+                mm_in1_sender_writer_args.push_back(
+                    bias_buffer ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
                 if (!output_is_sharded) {
                     if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
                         mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);

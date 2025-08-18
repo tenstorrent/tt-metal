@@ -59,7 +59,6 @@ void kernel_main() {
 
     constexpr bool fuse_op = (bool)get_compile_time_arg_val(22);
 
-    // TensorAccessor compile time args
     constexpr auto in0_args = TensorAccessorArgs<23>();
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 

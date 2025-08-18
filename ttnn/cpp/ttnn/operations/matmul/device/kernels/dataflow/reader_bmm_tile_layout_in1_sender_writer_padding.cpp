@@ -126,7 +126,6 @@ void kernel_main() {
         op_signaler = OpSignaler(rt_args_idx);
     }
 
-    // TensorAccessor compile time args
     constexpr auto in1_args = TensorAccessorArgs<32>();
     constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();

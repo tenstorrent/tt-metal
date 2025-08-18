@@ -42,7 +42,6 @@ void kernel_main() {
     uint32_t batch = get_arg_val<uint32_t>(19);
     uint32_t bcast_B = get_arg_val<uint32_t>(20);
 
-    // TensorAccessor compile time args
     constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 

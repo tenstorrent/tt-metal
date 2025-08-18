@@ -77,7 +77,6 @@ void kernel_main() {
 #endif
     constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(18);
 
-    // TensorAccessor compile time args
     constexpr auto out_args = TensorAccessorArgs<19>();
     OpSignaler op_signaler;
     if constexpr (fuse_op_reduce_scatter) {
@@ -94,7 +93,6 @@ void kernel_main() {
     // single-tile
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
     constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
-    const DataFormat output_data_format = get_dataformat(cb_id_out0);
 
     volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);

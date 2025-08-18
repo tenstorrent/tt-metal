@@ -52,7 +52,6 @@ void kernel_main() {
     // WRITER
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
 
-    // TensorAccessor compile time args
     constexpr auto in1_args = TensorAccessorArgs<0>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 

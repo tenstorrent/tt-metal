@@ -30,8 +30,6 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     constexpr uint32_t last_ktile_w = get_compile_time_arg_val(0);
-
-    // TensorAccessor compile time args
     constexpr auto in0_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t cb_id_in0 = 0;

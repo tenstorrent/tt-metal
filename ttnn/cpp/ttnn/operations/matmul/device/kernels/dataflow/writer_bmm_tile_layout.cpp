@@ -29,7 +29,6 @@ void kernel_main() {
     // single-tile
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
-    // TensorAccessor compile time args
     constexpr auto out_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(out_args, out_tensor_addr, single_tile_size_bytes);
 
