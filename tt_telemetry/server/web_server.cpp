@@ -11,6 +11,7 @@
 #include <httplib.h>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/assert.hpp>
 
 #include <telemetry/telemetry_subscriber.hpp>
 #include <server/web_server.hpp>
@@ -45,7 +46,6 @@ private:
 
         // Construct snapshot from current data
         TelemetrySnapshot full_snapshot;
-        full_snapshot.is_absolute = true;
         for (const auto &[id, name]: bool_metric_name_by_id_) {
             full_snapshot.bool_metric_ids.push_back(id);
             full_snapshot.bool_metric_names.push_back(name);
@@ -87,13 +87,13 @@ private:
     }
 
     void update_telemetry_state_from_snapshot(std::shared_ptr<TelemetrySnapshot> snapshot) {
-        //TODO: assert vectors are equal length
-        if (snapshot->is_absolute) {
-            // Absolute snapshot -- replace everything with new data
-            bool_metric_name_by_id_.clear();
-            bool_metric_value_by_id_.clear();
-            uint_metric_name_by_id_.clear();
-            uint_metric_value_by_id_.clear();
+        TT_ASSERT(snapshot->bool_metric_ids.size() == snapshot->bool_metric_values.size());
+        if (snapshot->bool_metric_names.size() > 0) {
+            TT_ASSERT(snapshot->bool_metric_ids.size() == snapshot->bool_metric_names.size());
+        }
+        TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_values.size());
+        if (snapshot->uint_metric_names.size() > 0) {
+            TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_names.size());
         }
 
         for (size_t i = 0; i < snapshot->bool_metric_ids.size(); i++) {

@@ -92,7 +92,6 @@ export class TelemetryDashboard extends LitElement {
                     const boolMetricIds = data["bool_metric_ids"];
                     const boolMetricNames = data["bool_metric_names"];    // optional, and indicates new telemetry metrics if present
                     const boolMetricValues = data["bool_metric_values"];
-                    const isAbsolute = data["is_absolute"];                // absolute update
 
                     if (boolMetricIds.length != boolMetricValues.length) {
                         console.log(`SSE error: Received differing id and value counts (${boolMetricIds.length} vs. ${boolMetricValues.length})`);

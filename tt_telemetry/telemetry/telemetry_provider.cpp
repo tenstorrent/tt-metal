@@ -3,9 +3,6 @@
  * -----
  * - Wait until subscribers have all finished before fetching a new buffer. Continue to use
  *   existing buffer until ready to hand off.
- * - Get rid of is_absolute. Contract should simply be that if names have been transmitted,
- *   all data represents new metrics. Otherwise, the snapshot contains delta metrics (of existing
- *   metrics).
  */
 
 #include <future>
@@ -110,7 +107,6 @@ static void send_initial_snapshot(
     const std::vector<std::unique_ptr<UIntMetric>> &uint_metrics
 ) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
-    snapshot->is_absolute = true;
 
     for (size_t i = 0; i < bool_metrics.size(); i++) {
         std::string path = get_cluster_wide_telemetry_path(*bool_metrics[i]);
@@ -139,7 +135,6 @@ static void send_delta(
     std::vector<std::unique_ptr<UIntMetric>> &uint_metrics
 ) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
-    snapshot->is_absolute = false;
 
     for (size_t i = 0; i < bool_metrics.size(); i++) {
         if (!bool_metrics[i]->changed_since_transmission()) {
