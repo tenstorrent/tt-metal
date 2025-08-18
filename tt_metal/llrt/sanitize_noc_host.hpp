@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iostream>
 
 #include "impl/context/metal_context.hpp"
 
@@ -82,6 +83,35 @@ static void watcher_sanitize_host_noc(
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
+    // BEFORE/AFTER comparison for "Remove virtual coords" commit
+    std::cout << "=== PCIE CORES COMPARISON (sanitize_noc_host.hpp) ===" << std::endl;
+    std::cout << "BEFORE (get_umd_coord_system): ";
+    auto pcie_cores_old = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
+    for (const auto& core : pcie_cores_old) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    std::cout << std::endl;
+    std::cout << "AFTER  (NOC0):                ";
+    auto pcie_cores_new = soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
+    for (const auto& core : pcie_cores_new) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    std::cout << std::endl;
+
+    std::cout << "=== DRAM CORES COMPARISON (sanitize_noc_host.hpp) ===" << std::endl;
+    std::cout << "BEFORE (get_umd_coord_system): ";
+    auto dram_cores_old = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
+    for (const auto& core : dram_cores_old) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    std::cout << std::endl;
+    std::cout << "AFTER  (NOC0):                ";
+    auto dram_cores_new = soc_d.get_cores(CoreType::DRAM, tt::umd::CoordSystem::NOC0);
+    for (const auto& core : dram_cores_new) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    std::cout << std::endl;
+
     if (coord_found_p(soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0), core) ||
         coord_found_p(virtual_pcie_cores, core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());

@@ -7,6 +7,7 @@
 #include <assert.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -164,6 +165,22 @@ void configure_static_tlbs(
 
     std::int32_t address = 0;
     // Setup static TLBs for all worker cores
+
+    // BEFORE/AFTER comparison for "Remove virtual coords" commit
+    std::cout << "=== TENSIX CORES COMPARISON (tlb_config.cpp) ===" << std::endl;
+    std::cout << "BEFORE (get_umd_coord_system): ";
+    auto tensix_cores_old = sdesc.get_cores(CoreType::TENSIX, sdesc.get_umd_coord_system());
+    for (const auto& core : tensix_cores_old) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    std::cout << std::endl;
+    std::cout << "AFTER  (NOC0):                ";
+    auto tensix_cores_new = sdesc.get_cores(CoreType::TENSIX, tt::umd::CoordSystem::NOC0);
+    for (const auto& core : tensix_cores_new) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    std::cout << std::endl;
+
     for (const CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, tt::umd::CoordSystem::NOC0)) {
         auto tlb_index = get_static_tlb_index({core.x, core.y});
         // TODO
@@ -175,6 +192,28 @@ void configure_static_tlbs(
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }
     // Setup static TLBs for all eth cores
+
+    // BEFORE/AFTER comparison for "Remove virtual coords" commit
+    std::cout << "=== ETH CORES COMPARISON (tlb_config.cpp) ===" << std::endl;
+    std::cout << "BEFORE (get_umd_coord_system): ";
+    auto eth_cores_old = sdesc.get_cores(CoreType::ETH, sdesc.get_umd_coord_system());
+    for (const auto& core : eth_cores_old) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    if (eth_cores_old.empty()) {
+        std::cout << "(none)";
+    }
+    std::cout << std::endl;
+    std::cout << "AFTER  (NOC0):                ";
+    auto eth_cores_new = sdesc.get_cores(CoreType::ETH, tt::umd::CoordSystem::NOC0);
+    for (const auto& core : eth_cores_new) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    if (eth_cores_new.empty()) {
+        std::cout << "(none)";
+    }
+    std::cout << std::endl;
+
     for (const CoreCoord& core : sdesc.get_cores(CoreType::ETH, tt::umd::CoordSystem::NOC0)) {
         auto tlb_index = get_static_tlb_index({core.x, core.y});
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);

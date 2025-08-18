@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iostream>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -123,7 +124,24 @@ DeviceData::DeviceData(
     this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
 
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+
+    // BEFORE/AFTER comparison for "Remove virtual coords" commit
+    std::cout << "=== PCIE CORES COMPARISON ===" << std::endl;
+    std::cout << "BEFORE (get_umd_coord_system): ";
+    const std::vector<tt::umd::CoreCoord>& pcie_cores_old =
+        soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
+    for (const auto& core : pcie_cores_old) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    std::cout << std::endl;
+
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
+    std::cout << "AFTER  (NOC0):                ";
+    for (const auto& core : pcie_cores) {
+        std::cout << "(" << core.x << "," << core.y << ") ";
+    }
+    std::cout << std::endl;
+
     for (const CoreCoord& core_coord : pcie_cores) {
         CoreCoord core = {core_coord.x, core_coord.y};
         // TODO: make this all work w/ phys coords
