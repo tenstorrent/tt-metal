@@ -17,6 +17,7 @@
 #include "interface.hpp"
 #include "tt_stl/tt_stl/small_vector.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/decorators.hpp"
 #endif
 
 namespace ttnn::graph {
@@ -154,24 +155,16 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
         [&](auto&&... unpacked_args) { return std::make_tuple(transform_to_json(unpacked_args)...); },
         transformed_args);
 
-    std::string op_name;
-    if constexpr (std::is_same_v<Op, std::decay_t<decltype(ttnn::exp)>>) {
-        op_name = "ttnn::exp";
-    } else {
-        op_name = "unknown";
-    }
-
-    if (op_name != "unknown") {
-        uint64_t runtime = std::apply(
-            [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op_name, json_args...); },
-            json_args_tuple);
-        if (runtime != 0) {
-            return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
-        }
+    uint64_t runtime = std::apply(
+        [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op.base_name(), json_args...); },
+        json_args_tuple);
+    if (runtime != 0) {
+        return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
     }
 
 #endif
 
+    std::cout << "in trace" << std::endl;
     try {
         auto trace_id = std::apply(
             [&](auto&&... unpacked_args) {

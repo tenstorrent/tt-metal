@@ -18,7 +18,6 @@
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_query_op_runtime.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -28,7 +27,13 @@
 #include "ttnn/types.hpp"
 #include "umd/device/types/arch.h"
 #include "tt_stl/tt_stl/small_vector.hpp"
+
+#include "ttnn/decorators.hpp"
+
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
 // Include the interface for get_runtime_from_model
 #ifdef BUILD_MLP_OP_PERF
@@ -221,6 +226,38 @@ INSTANTIATE_TEST_SUITE_P(
         TestExpOpQueryOpRuntime::m_interleaved_32_512_512_0_tiled,
         TestExpOpQueryOpRuntime::m_interleaved_2048_2048_0_0_tiled));
 
+TEST(TypeNameUtils, GetTypeNameForOps) {
+    // Test get_type_name for several ttnn op types
+    std::string exp_type = std::string(ttsl::get_type_name<decltype(ttnn::exp)>());
+    std::string add_type = std::string(ttsl::get_type_name<decltype(ttnn::add)>());
+    std::string mul_type = std::string(ttsl::get_type_name<decltype(ttnn::multiply)>());
+    std::string relu_type = std::string(ttsl::get_type_name<decltype(ttnn::relu)>());
+    std::string matmul_type = std::string(ttsl::get_type_name<decltype(ttnn::matmul)>());
+    std::string transpose_type = std::string(ttsl::get_type_name<decltype(ttnn::transpose)>());
+
+    auto op = ttnn::exp;
+    std::cout << "using decorators" << std::endl;
+    std::string name = op.base_name();                       // "exp"
+    std::string py_name = op.python_fully_qualified_name();  // "ttnn.exp"
+    std::string class_name = op.class_name();                // "ttnn::exp"
+    std::cout << "Base name: " << name << std::endl;
+    std::cout << "Python fully qualified name: " << py_name << std::endl;
+    std::cout << "Class name: " << class_name << std::endl;
+
+    std::cout << "Type name for ttnn::exp: " << exp_type << std::endl;
+    std::cout << "Type name for ttnn::add: " << add_type << std::endl;
+    std::cout << "Type name for ttnn::multiply: " << mul_type << std::endl;
+    std::cout << "Type name for ttnn::relu: " << relu_type << std::endl;
+    std::cout << "Type name for ttnn::matmul: " << matmul_type << std::endl;
+    std::cout << "Type name for ttnn::transpose: " << transpose_type << std::endl;
+
+    EXPECT_NE(exp_type.find("exp"), std::string::npos);
+    EXPECT_NE(add_type.find("add"), std::string::npos);
+    EXPECT_NE(mul_type.find("multiply"), std::string::npos);
+    EXPECT_NE(relu_type.find("relu"), std::string::npos);
+    EXPECT_NE(matmul_type.find("matmul"), std::string::npos);
+    EXPECT_NE(transpose_type.find("transpose"), std::string::npos);
+}
 #endif  // BUILD_MLP_OP_PERF
 
 }  // namespace ttnn::operations::binary::test
