@@ -165,8 +165,8 @@ struct StreamRegAssignments {
     // Multi-RISC teardown synchronization stream ID
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 
-    static const std::array<uint32_t, 23>& get_all_stream_ids() {
-        static constexpr std::array<uint32_t, 23> stream_ids = {
+    static const auto& get_all_stream_ids() {
+        static constexpr std::array stream_ids = {
             to_receiver_0_pkts_sent_id,
             to_receiver_1_pkts_sent_id,
             to_sender_0_pkts_acked_id,
