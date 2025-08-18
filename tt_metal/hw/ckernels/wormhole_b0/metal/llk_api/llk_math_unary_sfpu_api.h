@@ -40,3 +40,4 @@
 #include "llk_math_eltwise_unary_sfpu_prelu.h"
 #include "llk_math_eltwise_unary_sfpu_i1.h"
 #include "llk_math_eltwise_unary_sfpu_alt_complex_rotate90.h"
+#include "llk_math_eltwise_unary_sfpu_adam_w.h"

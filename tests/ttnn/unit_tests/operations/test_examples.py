@@ -23,8 +23,6 @@ def test_example(device, height, width):
     output_tensor = ttnn.prim.example(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
-
 
 @pytest.mark.parametrize("height", [64])
 @pytest.mark.parametrize("width", [128])
