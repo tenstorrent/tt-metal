@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * server/mock_telemetry_provider.hpp
+ * telemetry/mock_telemetry_provider.hpp
  *
  * Generates fake telemetry. Useful for testing.
  *
@@ -20,7 +20,7 @@
 #include <random>
 #include <vector>
 
-#include <server/telemetry_subscriber.hpp>
+#include <telemetry/telemetry_subscriber.hpp>
 
 class MockTelemetryProvider {
 private:

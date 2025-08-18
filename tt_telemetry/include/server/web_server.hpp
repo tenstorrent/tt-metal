@@ -3,7 +3,7 @@
 #include <future>
 #include <utility>
 
-#include <server/telemetry_subscriber.hpp>
+#include <telemetry/telemetry_subscriber.hpp>
 
 /*
  * server/web_server.hpp

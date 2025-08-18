@@ -1,12 +1,12 @@
 #pragma once
 
 /*
- * server/telemetry_subscriber.hpp
+ * telemetry/telemetry_subscriber.hpp
  *
  * Interface for a telemetry consumer that accepts snapshots of telemetry data.
  */
 
- #include <server/telemetry_snapshot.hpp>
+ #include <telemetry/telemetry_snapshot.hpp>
 
 class TelemetrySubscriber {
 public:

@@ -12,7 +12,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-#include <server/telemetry_subscriber.hpp>
+#include <telemetry/telemetry_subscriber.hpp>
 #include <server/web_server.hpp>
 
 using json = nlohmann::json;
