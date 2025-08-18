@@ -192,7 +192,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
 
     auto const& worker_defines = op_config.emit_worker_defines();
     TT_ASSERT(worker_defines.size() > 0);
-    for ([[maybe_unused]] auto const& [key, value] : worker_defines) {
+    for ([[maybe_unused]] const auto& [key, value] : worker_defines) {
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
     }
     if (split_worker_core_range.has_value()) {
@@ -255,7 +255,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
             "Internal Error. (line) Reduce scatter did not generate a smaller second worker grid to map the line start "
             "kernels onto");
         log_trace(tt::LogOp, "Invoking CCL send kernel on split kernel core range");
-        for ([[maybe_unused]] auto const& core : corerange_to_cores(split_worker_core_range.value())) {
+        for ([[maybe_unused]] const auto& core : corerange_to_cores(split_worker_core_range.value())) {
             log_trace(tt::LogOp, "\tcore=(x={},y={})", core.x, core.y);
         }
         line_start_sender_kernel_id = tt::tt_metal::CreateKernel(
