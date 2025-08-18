@@ -205,22 +205,9 @@ void MAIN {
             // and transpose back to columns
             // transpose_wh_dest is currently buggy,
             // so we transpose through the CB interface
+            layernorm::compute::utils::transpose_pack_mean_and_variance(cb_ex, cb_ex2, dst1, dst2);
             tile_regs_commit();
-            cb_reserve_back(cb_ex, onetile);
-            pack_reconfig_data_format(cb_ex);
-            pack_tile(dst1, cb_ex);
-            cb_push_back(cb_ex, onetile);
             tile_regs_release();
-            layernorm::compute::utils::transpose_single_tile_cb(cb_ex);
-
-            tile_regs_acquire();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_ex2);
-            tile_regs_commit();
-            pack_tile(dst2, cb_ex2);
-            cb_push_back(cb_ex2, onetile);
-            tile_regs_release();
-            layernorm::compute::utils::transpose_single_tile_cb(cb_ex2);
         }
 
         // =====================================
