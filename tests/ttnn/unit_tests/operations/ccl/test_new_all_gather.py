@@ -766,6 +766,12 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
 
 # Related to issue #26672
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
 def test_all_gather_async_segfault(mesh_device):
     if mesh_device.get_num_devices() < 8:
         pytest.skip("Not enough devices for this test!")
@@ -793,6 +799,10 @@ def test_all_gather_async_segfault(mesh_device):
         use_height_and_width_as_shard_shape=True,
     )
 
+    cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mesh_device.core_grid.x - 1, mesh_device.core_grid.y - 1))}
+    )
+    semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2)]
     tensor_ag = ttnn.experimental.all_gather_async(
         tensor,
         mesh_device=mesh_device,
@@ -800,28 +810,10 @@ def test_all_gather_async_segfault(mesh_device):
         dim=-1,
         topology=ttnn.Topology.Linear,
         memory_config=memory_config,
-        barrier_semaphore=ttnn.create_global_semaphore(
-            mesh_device,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mesh_device.core_grid.x - 1, mesh_device.core_grid.y - 1)
-                    )
-                }
-            ),
-            0,
-        ),
-        multi_device_global_semaphore=ttnn.create_global_semaphore(
-            mesh_device,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mesh_device.core_grid.x - 1, mesh_device.core_grid.y - 1)
-                    )
-                }
-            ),
-            0,
-        ),
+        barrier_semaphore=ttnn.create_global_semaphore(mesh_device, cores, 0),
+        # when using 2 multi_device_global_semaphores, the minimal AG is getting executed
+        # when using one multi_device_global_semaphore (multi_device_global_semaphore=semaphores[0]), the composite AG is getting executed
+        multi_device_global_semaphore=semaphores[0],
     )
 
     tt_output_tensor = ttnn.to_torch(
