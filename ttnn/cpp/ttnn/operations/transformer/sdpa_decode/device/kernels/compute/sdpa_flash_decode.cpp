@@ -22,6 +22,7 @@
 #include "compute_common.hpp"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
@@ -62,6 +63,7 @@ void MAIN {
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(26);
     constexpr bool use_half_tile = get_compile_time_arg_val(27);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
+    constexpr bool enable_split_reader = get_compile_time_arg_val(29);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -70,7 +72,15 @@ void MAIN {
 
     // CB index definitions
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
+    uint32_t cb_k_in_0 = tt::CBIndex::c_1;
+    uint32_t cb_k_in_1 = tt::CBIndex::c_1;
+
+    // OPTIMIZATION:
+    if constexpr (enable_split_reader) {
+        cb_k_in_0 = tt::CBIndex::c_13;
+        cb_k_in_1 = tt::CBIndex::c_14;
+    }
+
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
@@ -78,7 +88,6 @@ void MAIN {
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
     constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
     constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
@@ -157,21 +166,22 @@ void MAIN {
     }
 
     // We tilize input Q if it is in ROW MAJOR layout
-    if constexpr (tilize_q) {
-        compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-        tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
-        cb_wait_front(cb_q_rm, q_chunk_tiles);
-        cb_reserve_back(cb_q_in, q_chunk_tiles);
-        tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
-        tilize_uninit(cb_q_rm, cb_q_in);
-        cb_push_back(cb_q_in, q_chunk_tiles);
-        cb_pop_front(cb_q_rm, q_chunk_tiles);
-        mm_init_short(cb_q_in, cb_k_in);
-    } else {
-        mm_init(cb_q_in, cb_k_in, cb_qk_im);
+    {
+        if constexpr (tilize_q) {
+            compute_kernel_hw_startup(cb_q_rm, cb_q_in);
+            tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
+            cb_wait_front(cb_q_rm, q_chunk_tiles);
+            cb_reserve_back(cb_q_in, q_chunk_tiles);
+            tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
+            tilize_uninit(cb_q_rm, cb_q_in);
+            cb_push_back(cb_q_in, q_chunk_tiles);
+            cb_pop_front(cb_q_rm, q_chunk_tiles);
+            mm_init_short(cb_q_in, cb_k_in_0);
+        } else {
+            mm_init(cb_q_in, cb_k_in_0, cb_qk_im);
+        }
+        cb_wait_front(cb_q_in, q_chunk_tiles);
     }
-    cb_wait_front(cb_q_in, q_chunk_tiles);
-
     // Define dynamic matmul configs
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;
@@ -265,7 +275,7 @@ void MAIN {
             // Loop through all K chunks
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
                 // Reconfig register DF
-                reconfig_data_format(cb_q_in, cb_k_in);
+                reconfig_data_format(cb_q_in, cb_k_in_0);
                 pack_reconfig_data_format(cb_qk_im);
 
                 // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
@@ -277,23 +287,27 @@ void MAIN {
 #endif
 
                 /* QK = Q_CHUNK @ K_CHUNK */
-                cb_matmul_blocks(
-                    cb_q_in,
-                    cb_k_in,
-                    cb_qk_im,
-                    Sq_chunk_t,
-                    Sk_chunk_t_dynamic,
-                    DHt,
-                    qk_num_blocks,
-                    qk_in0_num_subblocks_dynamic,
-                    qk_in1_num_subblocks_dynamic,
-                    qk_in0_block_w,
-                    qk_subblock_h_dynamic,
-                    qk_subblock_w_dynamic,
-                    true,
-                    add_mask_fusion,
-                    cb_mask_in,
-                    cb_zero_in);
+                {
+                    cb_matmul_blocks(
+                        cb_q_in,
+                        cb_k_in_0,
+                        cb_k_in_1,
+                        cb_qk_im,
+                        Sq_chunk_t,
+                        Sk_chunk_t_dynamic,
+                        DHt,
+                        qk_num_blocks,
+                        qk_in0_num_subblocks_dynamic,
+                        qk_in1_num_subblocks_dynamic,
+                        qk_in0_block_w,
+                        qk_subblock_h_dynamic,
+                        qk_subblock_w_dynamic,
+                        true,
+                        add_mask_fusion,
+                        cb_mask_in,
+                        cb_zero_in,
+                        enable_split_reader);
+                }
 
                 /* QK += MASK */
                 if (!add_mask_fusion) {
@@ -340,12 +354,8 @@ void MAIN {
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
-                sub_exp_block_bcast_cols_inplace_reduce<
-                    cb_qk_im,
-                    Sq_chunk_t,
-                    scale_fp32,
-                    vector_mode,
-                    cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
+                sub_exp_block_bcast_cols_inplace_reduce<cb_qk_im, Sq_chunk_t, scale_fp32, vector_mode>(
+                    cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
 
                 // Reconfig register DF
@@ -359,24 +369,28 @@ void MAIN {
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
                 pack_reconfig_data_format(cb_out_im);
-                cb_matmul_blocks(
-                    cb_qk_im,
-                    cb_v_in,
-                    cb_out_mm,
-                    Sq_chunk_t,
-                    vDHt,
-                    Sk_chunk_t_dynamic,
-                    out_num_blocks_dynamic,
-                    out_in0_num_subblocks,
-                    out_in1_num_subblocks,
-                    out_in0_block_w_dynamic,
-                    out_subblock_h,
-                    out_subblock_w,
-                    false /*transpose*/,
-                    false,
-                    cb_mask_in,
-                    cb_zero_in);
 
+                {
+                    cb_matmul_blocks(
+                        cb_qk_im,
+                        cb_v_in,
+                        cb_v_in,
+                        cb_out_mm,
+                        Sq_chunk_t,
+                        vDHt,
+                        Sk_chunk_t_dynamic,
+                        out_num_blocks_dynamic,
+                        out_in0_num_subblocks,
+                        out_in1_num_subblocks,
+                        out_in0_block_w_dynamic,
+                        out_subblock_h,
+                        out_subblock_w,
+                        false /*transpose*/,
+                        false,
+                        cb_mask_in,
+                        cb_zero_in,
+                        false);
+                }
                 // Reconfig register DF
                 reconfig_data_format_srca(cb_out_im);
                 cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
