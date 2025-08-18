@@ -1564,6 +1564,8 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
     this->downstream_edm_vcs_semaphore_address[1] = adapter_spec.edm_l1_sem_addr;
     this->downstream_edm_vcs_worker_registration_address[1] = adapter_spec.edm_connection_handshake_addr;
     this->downstream_edm_vcs_worker_location_info_address[1] = adapter_spec.edm_worker_location_info_addr;
+    // all downstream buffer slots are equal currently
+    this->downstream_sender_channels_num_buffers.fill(adapter_spec.num_buffers_per_channel);
 
     // VC 1
     if (!fabric_context.need_deadlock_avoidance_support(this->direction)) {
@@ -1606,9 +1608,6 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
     if (!is_2D_routing) {
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2] = adapter_spec.buffer_index_semaphore_id;
     }
-
-    // all downstream buffer slots are equal currently
-    this->downstream_sender_channels_num_buffers.fill(adapter_spec.num_buffers_per_channel);
 }
 
 eth_chan_directions FabricEriscDatamoverBuilder::get_direction() const { return this->direction; }
