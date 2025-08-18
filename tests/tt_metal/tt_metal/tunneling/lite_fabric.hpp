@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include "blackhole/dev_mem_map.h"
+#include "lite_fabric_memory_config.h"
 #include "hal_types.hpp"
 #include "lite_fabric_constants.hpp"
 #include "lite_fabric_header.hpp"
@@ -427,7 +427,7 @@ struct LiteFabricMemoryMap {
     }
 
     static uint32_t get_address() {
-        auto addr = MEM_LITE_FABRIC_CONFIG_BASE;
+        auto addr = LITE_FABRIC_CONFIG_START;
         return addr;
     }
 

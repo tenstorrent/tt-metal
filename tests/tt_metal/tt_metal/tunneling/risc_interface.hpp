@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "blackhole/dev_mem_map.h"
 #include "blackhole/noc_nonblocking_api.h"
 #include "ethernet/tunneling.h"
 #include "risc_common.h"
+#include "lite_fabric_memory_config.h"
 
 namespace lite_fabric {
 
@@ -32,7 +32,7 @@ struct ConnectedRisc1Interface {
     }
 
     inline static void set_pc(uint32_t pc) {
-        constexpr uint32_t k_ResetPcAddr = MEM_LITE_FABRIC_RESET_PC;
+        constexpr uint32_t k_ResetPcAddr = LITE_FABRIC_RESET_PC;
         internal_::eth_write_remote_reg(k_Txq, k_ResetPcAddr, pc);
         while (internal_::eth_txq_is_busy(k_Txq)) {
         }

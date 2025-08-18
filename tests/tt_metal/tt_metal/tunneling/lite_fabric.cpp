@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
-#include "blackhole/dev_mem_map.h"
 #include "blackhole/noc_nonblocking_api.h"
 #include "dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
@@ -20,31 +19,9 @@
 #include "lite_fabric_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
-#define BEGIN_MAIN_FUNCTION()                                                                \
-    IF_NOT_METAL_LAUNCH(int main())                                                          \
-    IF_METAL_LAUNCH(void kernel_main()) {                                                    \
-        IF_NOT_METAL_LAUNCH(configure_csr();)                                                \
-        IF_NOT_METAL_LAUNCH(noc_index = NOC_INDEX;)                                          \
-        IF_NOT_METAL_LAUNCH(do_crt1((uint32_t*)MEM_LITE_FABRIC_INIT_LOCAL_L1_BASE_SCRATCH);) \
-        IF_NOT_METAL_LAUNCH(noc_bank_table_init(MEM_LITE_FABRIC_BANK_TO_NOC_SCRATCH);)       \
-        IF_NOT_METAL_LAUNCH(risc_init();)                                                    \
-        IF_NOT_METAL_LAUNCH(noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);)                          \
-        IF_NOT_METAL_LAUNCH(for (uint32_t n = 0; n < NUM_NOCS; n++) { noc_local_state_init(n); })
-
-// End the main function
-#define END_MAIN_FUNCTION()        \
-    IF_NOT_METAL_LAUNCH(return 0;) \
-    IF_METAL_LAUNCH(return;)       \
-    }
-
 #if !defined(tt_l1_ptr)
 #define tt_l1_ptr __attribute__((rvtt_l1_ptr))
 #endif
-
-// Define METAL_LAUNCH if lite_fabric is being launched by Metal
-#if !defined(METAL_LAUNCH)
-#define IF_NOT_METAL_LAUNCH(x) x
-#define IF_METAL_LAUNCH(x)
 
 uint8_t noc_index __attribute__((used));
 
@@ -74,18 +51,24 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
-#else
-
-#include "debug/dprint.h"
-
-#define IF_NOT_METAL_LAUNCH(x)
-#define IF_METAL_LAUNCH(x) x
-#endif
-
-BEGIN_MAIN_FUNCTION() {
+int main() {
     invalidate_l1_cache();
+    configure_csr();
+    noc_index = NOC_INDEX;
+    {
+        // Clear bss.
+        extern uint32_t __ldm_bss_start[];
+        extern uint32_t __ldm_bss_end[];
+        wzerorange(__ldm_bss_start, __ldm_bss_end);
+    }
+    noc_bank_table_init(LITE_FABRIC_INIT_BANK_TO_NOC_SCRATCH);
+    risc_init();
+    noc_init(MEM_LITE_FABRIC_NOC_ATOMIC_RET_VAL_ADDR);
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        noc_local_state_init(n);
+    }
 
-    auto structs = reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(MEM_LITE_FABRIC_CONFIG_BASE);
+    auto structs = reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(LITE_FABRIC_CONFIG_START);
 
     volatile lite_fabric::HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE>& host_interface =
         structs->host_interface;
@@ -156,9 +139,6 @@ BEGIN_MAIN_FUNCTION() {
     structs->host_interface.init();
 
     bool on_mmio_chip = structs->config.is_mmio;
-    DPRINT << "Routing Enabled " << structs->config.routing_enabled
-           << " Init on MMIO = " << (uint32_t)structs->config.is_mmio << " Host IF at 0x" << HEX()
-           << (uint32_t)&host_interface << DEC() << ENDL();
 
     lite_fabric::routing_init(&structs->config);
 
@@ -194,12 +174,9 @@ BEGIN_MAIN_FUNCTION() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    DPRINT << "lite_fabric: out " << (uint32_t)structs->config.routing_enabled << ENDL();
-
-#if !defined(METAL_LAUNCH)
     lite_fabric::ConnectedRisc1Interface::assert_connected_dm1_reset();
-#endif
 
     structs->config.current_state = lite_fabric::InitState::TERMINATED;
+
+    return 0;
 }
-END_MAIN_FUNCTION()
