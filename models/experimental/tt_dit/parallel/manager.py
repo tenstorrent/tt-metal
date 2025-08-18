@@ -74,6 +74,8 @@ class CCLManager:
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
+            # Synchronize devices to ensure all are ready to allocate and proceed
+            ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
@@ -112,6 +114,8 @@ class CCLManager:
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
+            # Synchronize devices to ensure all are ready to allocate and proceed
+            ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
