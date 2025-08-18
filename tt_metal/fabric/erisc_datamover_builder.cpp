@@ -1090,7 +1090,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     const auto& fabric_context = control_plane.get_fabric_context();
 
-    auto ct_args = std::vector<uint32_t>{
+    const auto& stream_ids = StreamRegAssignments::get_all_stream_ids();
+    auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
+    ct_args.push_back(0xFFEE0001);
+
+    const std::vector<uint32_t> main_args = {
         num_sender_channels,
         num_receiver_channels,
         config.num_fwd_paths,
@@ -1195,12 +1199,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 
-    // Insert stream IDs at the beginning of ct_args
-    auto stream_ids = stream_reg_assignments::get_all_stream_ids();
-    ct_args.insert(ct_args.begin(), stream_ids.begin(), stream_ids.end());
-
-    // Insert special marker after stream IDs
-    ct_args.insert(ct_args.begin() + stream_ids.size(), 0xFFEE0001);
+    // Add main arguments to ct_args
+    ct_args.insert(ct_args.end(), main_args.begin(), main_args.end());
 
     // insert the sender channel num buffers
     // Index updated to account for 23 stream ID arguments + 1 marker at the beginning

@@ -136,7 +136,7 @@ Receiver channel side registers are defined here to receive free-slot credits fr
                           └─────────────────────────────────┘
                                    South Router
 */
-struct stream_reg_assignments {
+struct StreamRegAssignments {
     // Packet send/ack/complete stream IDs
     static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
     static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
@@ -165,9 +165,8 @@ struct stream_reg_assignments {
     // Multi-RISC teardown synchronization stream ID
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 
-    // Helper method to get all stream IDs as a vector
-    static std::vector<uint32_t> get_all_stream_ids() {
-        return {
+    static const std::array<uint32_t, 23>& get_all_stream_ids() {
+        static constexpr std::array<uint32_t, 23> stream_ids = {
             to_receiver_0_pkts_sent_id,
             to_receiver_1_pkts_sent_id,
             to_sender_0_pkts_acked_id,
@@ -191,6 +190,7 @@ struct stream_reg_assignments {
             sender_channel_4_free_slots_stream_id,
             vc1_sender_channel_free_slots_stream_id,
             multi_risc_teardown_sync_stream_id};
+        return stream_ids;
     }
 };
 
