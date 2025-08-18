@@ -1395,29 +1395,6 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, uint32_t cmd_buf>
-inline __attribute__((always_inline)) void noc_fast_read(
-    uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        noc_read_init_state<cmd_buf>(noc);
-    }
-    noc_read_with_state<noc_mode, cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_wait>(noc, src_addr, dst_addr, size);
-}
-
-template <uint8_t noc_mode = DM_DEDICATED_NOC, uint32_t cmd_buf>
-inline __attribute__((always_inline)) void noc_fast_read_any_len(
-    uint32_t noc, uint64_t src_addr, uint32_t dest_addr, uint32_t size) {
-    while (size > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        noc_fast_read<noc_mode, cmd_buf>(noc, src_addr, dest_addr, NOC_MAX_BURST_SIZE);
-        src_addr += NOC_MAX_BURST_SIZE;
-        dest_addr += NOC_MAX_BURST_SIZE;
-        size -= NOC_MAX_BURST_SIZE;
-    }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    noc_fast_read<noc_mode, cmd_buf>(noc, src_addr, dest_addr, size);
-}
-
 template <uint32_t cmd_buf, enum CQNocCmdFlags flags = CQ_NOC_mkp>
 inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, uint32_t vc) {
     constexpr bool multicast_path_reserve = true;
@@ -1481,51 +1458,4 @@ inline __attribute__((always_inline)) void noc_write_with_state(
             noc_nonposted_writes_acked[noc] += ndests;
         }
     }
-}
-
-template <uint8_t noc_mode = DM_DEDICATED_NOC, uint32_t cmd_buf, bool update_counter = true, bool use_trid = false>
-inline __attribute__((always_inline)) void noc_fast_write(
-    uint32_t noc,
-    uint32_t src_addr,
-    uint64_t dst_addr,
-    uint32_t size,
-    uint32_t ndests,
-    uint32_t vc,
-    uint32_t trid = 0) {
-    constexpr bool mcast = false;
-    constexpr bool linked = false;
-    constexpr bool posted = false;
-
-    noc_write_init_state<mcast, linked, posted, cmd_buf>(noc, vc);
-
-    if constexpr (use_trid) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
-    }
-
-    noc_write_with_state<noc_mode, cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_wait, update_counter, posted>(
-        noc, src_addr, dst_addr, size, ndests);
-}
-
-template <uint8_t noc_mode = DM_DEDICATED_NOC, uint32_t cmd_buf, bool use_trid = false, bool one_packet = false>
-inline __attribute__((always_inline)) void noc_fast_write_any_len(
-    uint32_t noc,
-    uint32_t src_addr,
-    uint64_t dest_addr,
-    uint32_t len_bytes,
-    uint32_t vc,
-    uint32_t num_dests = 1,
-    uint32_t trid = 0) {
-    if constexpr (!one_packet) {
-        while (len_bytes > NOC_MAX_BURST_SIZE) {
-            while (!noc_cmd_buf_ready(noc, cmd_buf));
-            noc_fast_write<noc_mode, cmd_buf, true /* update_counter */, use_trid>(
-                noc, src_addr, dest_addr, NOC_MAX_BURST_SIZE, num_dests, vc, trid);
-            src_addr += NOC_MAX_BURST_SIZE;
-            dest_addr += NOC_MAX_BURST_SIZE;
-            len_bytes -= NOC_MAX_BURST_SIZE;
-        }
-    }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    noc_fast_write<noc_mode, cmd_buf, true /* update_counter */, use_trid>(
-        noc, src_addr, dest_addr, len_bytes, num_dests, vc, trid);
 }
