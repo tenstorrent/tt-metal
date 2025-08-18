@@ -154,7 +154,8 @@ export class StatusBox extends LitElement {
         level: { type: Number },
         clickable: { type: Boolean },
         type: { type: String },
-        value: { type: Object }
+        value: { type: Object },
+        isLeaf: { type: Boolean }
     };
 
     constructor() {
@@ -163,6 +164,7 @@ export class StatusBox extends LitElement {
         this.clickable = true;
         this.type = 'health';
         this.value = null;
+        this.isLeaf = false;
         this._cachedFittedText = null;
     }
 
@@ -391,7 +393,7 @@ export class StatusBox extends LitElement {
             const isHealthy = typeof this.value === 'boolean' ? this.value : true;
             statusClass = isHealthy ? 'good' : 'bad';
             content = html`
-                <div class="status-indicator"></div>
+                ${!this.isLeaf ? html`<div class="status-indicator"></div>` : ''}
                 <div class="label-text ${scaleClass}">${displayName}</div>
             `;
         }
