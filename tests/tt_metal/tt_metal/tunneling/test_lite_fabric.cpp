@@ -24,6 +24,7 @@
 #include "lite_fabric_host_util.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal.hpp"
+#include "build.hpp"
 
 #define CHECK_TEST_REQS()                                                                       \
     if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) { \
@@ -43,6 +44,21 @@ TEST(Tunneling, DISABLED_LiteFabricInitWithMetal) {
     lite_fabric::TerminateLiteFabricWithMetal(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
     tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
     tt::tt_metal::detail::CloseDevices(devices);
+}
+
+TEST(Tunneling, LiteFabricBuildOnly) {
+    auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
+    auto output_directory = home_directory / "lite_fabric";
+    auto rtoptions = tt::llrt::RunTimeOptions();
+    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
+    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+
+    if (lite_fabric::CompileLiteFabric(*cluster.get(), home_directory, output_directory)) {
+        throw std::runtime_error("Failed to compile lite fabric");
+    }
+    if (lite_fabric::LinkLiteFabric(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
+        throw std::runtime_error("Failed to link lite fabric");
+    }
 }
 
 TEST(Tunneling, LiteFabricInit) {
