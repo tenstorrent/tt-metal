@@ -458,6 +458,52 @@ def test_vovnet_image_classification_eval_dp(
     )
 
 
+def run_efficientnetb0_image_classification_eval(
+    device, model_type, device_batch_size, res, model_location_generator, reset_seeds
+):
+    from models.experimental.efficientnetb0.reference import efficientnetb0
+    from efficientnet_pytorch import EfficientNet
+    from models.experimental.efficientnetb0.runner.performant_runner import EfficientNetb0PerformantRunner
+    from models.experimental.efficientnetb0.demo.demo_utils import get_batch
+    from models.experimental.efficientnetb0.tt.model_preprocessing import get_mesh_mappers
+
+    if model_type == "torch_model":
+        model = EfficientNet.from_pretrained("efficientnet-b0").eval()
+        state_dict = model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        torch_model = efficientnetb0.Efficientnetb0()
+
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            if isinstance(parameter2, torch.FloatTensor):
+                new_state_dict[name1] = parameter2
+        torch_model.load_state_dict(new_state_dict)
+        torch_model.eval()
+    else:
+        inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
+        performant_runner = EfficientNetb0PerformantRunner(
+            device,
+            device_batch_size,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            resolution=(res, res),
+            mesh_mapper=inputs_mesh_mapper,
+            weights_mesh_mapper=weights_mesh_mapper,
+            mesh_composer=outputs_mesh_composer,
+            model_location_generator=model_location_generator,
+        )
+
+    evaluation(
+        device=device,
+        model=performant_runner if model_type == "tt_model" else torch_model,
+        model_location_generator=model_location_generator,
+        model_type=model_type,
+        model_name="efficientnet_b0",
+        batch_size=device_batch_size * device.get_num_devices(),
+        res=res,
+        get_batch=get_batch,
+    )
+
 
 @pytest.mark.parametrize(
     "device_params",
@@ -473,7 +519,7 @@ def test_vovnet_image_classification_eval_dp(
 )
 @pytest.mark.parametrize("batch_size, res", [[1, 224]])
 def test_efficientnetb0_image_classification_eval(
-  device, model_type, batch_size, res, model_location_generator, reset_seeds
+    device, model_type, batch_size, res, model_location_generator, reset_seeds
 ):
     run_efficientnetb0_image_classification_eval(
         device, model_type, batch_size, res, model_location_generator, reset_seeds
