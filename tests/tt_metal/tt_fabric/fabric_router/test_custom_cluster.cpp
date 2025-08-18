@@ -43,9 +43,16 @@ TEST_F(ClusterFixture, TestCustomCluster) {
 
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/custom_2x2_mesh_graph_descriptor.yaml";
+        //"tests/tt_metal/tt_fabric/custom_mesh_descriptors/custom_2x2_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
 
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+
+    control_plane->initialize_fabric_context(tt::tt_fabric::FabricConfig::FABRIC_1D);
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+    // TODO: Check if these routing tables generated are correct // test on TG
 }
 
 }  // namespace mock_cluster_tests
