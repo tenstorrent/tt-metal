@@ -245,7 +245,6 @@ class TT_CCL:
             memory_config=self.model_config["AG_MM_RECV_MEMCFG"],
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        breakpoint()
         persistent_buffers["AG_MM"] = tt_buffer
 
         return persistent_buffers
