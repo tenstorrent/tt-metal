@@ -177,12 +177,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [unicast_forward_args, unicast_backward_args] =
-        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
-    auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
+    auto [unicast_forward_args, unicast_backward_args] =
+        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology,
+        sender_device,
+        forward_device,
+        backward_device,
+        topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
+        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1);
+
+    auto [ring_barrier_mcast_forward_args, ring_barrier_mcast_backward_args] =
+        ccl::get_forward_backward_line_mcast_configuration(
+            topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
 
@@ -474,12 +483,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
+                        sender_writer_compile_args.end(),
+                        barrier_mcast_backward_args.begin(),
+                        barrier_mcast_backward_args.end());
                 } else {
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
+                        sender_writer_compile_args.end(),
+                        barrier_mcast_forward_args.begin(),
+                        barrier_mcast_forward_args.end());
                 }
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
