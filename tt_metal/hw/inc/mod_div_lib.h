@@ -76,14 +76,11 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
     } else if constexpr (d == 12) {
         // fast divide for 12 divisor
         return fast_udiv_12(n);
-<<<<<<< HEAD
     } else if constexpr (d == 20) {
         // fast divide for 20 divisor
         return fast_udiv_20(n);
-=======
     } else if constexpr (d == 48) {
         return fast_udiv_48(n);
->>>>>>> address comment
     } else if constexpr (d == 56) {
         // fast divide for 56 divisor. Handles Banked L1 address generation for N300
         return fast_udiv_56(n);
