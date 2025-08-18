@@ -56,7 +56,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         state_dict_prefix = configuration.get_state_dict_prefix("", None)
         self.configuration = configuration
         self.model_config = configuration.get_model_config()
-        self.state_dict = state_dict
 
         # NOTE: Running all embeddings in torch for now since learnable embeddings use complex indexing ops which must be in torch
         self.tok_embeddings = torch.nn.Embedding(configuration.vocab_size, configuration.dim)
@@ -84,7 +83,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         )
 
         # TODO: Generalize LMHead, maybe use llama_model's single-tile-sequence LMHead
-        lm_head_torch = self.state_dict[f"{state_dict_prefix}output.weight"].transpose(-1, -2)
+        lm_head_torch = state_dict[f"{state_dict_prefix}output.weight"].transpose(-1, -2)
         total_splits = 8  # Arbitrary value which allows whole-tile splits in LM Head
         num_splits = total_splits // self.configuration.num_devices
         lm_head_torch = torch.chunk(lm_head_torch, num_splits, dim=-1)

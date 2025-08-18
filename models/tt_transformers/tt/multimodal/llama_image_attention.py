@@ -22,7 +22,6 @@ class TtLlamaImageAttention(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
@@ -79,10 +78,10 @@ class TtLlamaImageAttention(LightweightModule):
                     weight = weight.transpose(-1, -2)
             return weight
 
-        wq_padded = pad_head_dim(self.state_dict[wq_str])
-        wk_padded = pad_head_dim(self.state_dict[wk_str])
-        wv_padded = pad_head_dim(self.state_dict[wv_str])
-        wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
+        wq_padded = pad_head_dim(state_dict[wq_str])
+        wk_padded = pad_head_dim(state_dict[wk_str])
+        wv_padded = pad_head_dim(state_dict[wv_str])
+        wo_padded = pad_head_dim(state_dict[wo_str], heads_out=False)
         wq_chunked, wk_chunked, wv_chunked = (
             torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
         )
