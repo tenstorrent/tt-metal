@@ -5,6 +5,7 @@
 import torch
 import random
 import ttnn
+import pytest
 
 from typing import Optional, Tuple
 
@@ -413,7 +414,7 @@ parameters = {
             {"shape": [8, 920, 32], "dim0": 0, "dim1": 1},
             {"shape": [920, 8, 32], "dim0": 0, "dim1": 1},
         ],
-        "dtype": [ttnn.bfloat16],
+        "dtype": [ttnn.bfloat16, ttnn.int32],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
@@ -427,6 +428,16 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
 def run(
     transpose_specs,
     dtype,
@@ -434,9 +445,7 @@ def run(
     *,
     device,
 ):
-    torch_input_tensor = torch_random(
-        transpose_specs["shape"], -0.1, 0.1, dtype=torch.bfloat16
-    )  # returns to torch tensor
+    torch_input_tensor = random_torch_tensor(dtype, transpose_specs["shape"])
     torch_output_tensor = torch.transpose(torch_input_tensor, transpose_specs["dim0"], transpose_specs["dim1"])
 
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=dtype, layout=layout)
@@ -447,3 +456,21 @@ def run(
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
     return [check_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.9999), e2e_perf]
+
+
+@pytest.mark.parametrize("transpose_specs", parameters["nightly"]["transpose_specs"])
+@pytest.mark.parametrize("dtype", parameters["nightly"]["dtype"])
+@pytest.mark.parametrize("layout", parameters["nightly"]["layout"])
+def test_run(
+    transpose_specs,
+    dtype,
+    layout,
+    *,
+    device,
+):
+    return run(
+        transpose_specs,
+        dtype,
+        layout,
+        device=device,
+    )
