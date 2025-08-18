@@ -402,7 +402,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(single_tile_size * num_tiles, {{src0_cb_index, DataFormat::UInt32}})
             .set_page_size(src0_cb_index, single_tile_size);
-    CBHandle cb_src0 = CreateCircularBuffer(datacopy_program, datacopy_core, cb_src0_config);
+    CreateCircularBuffer(datacopy_program, datacopy_core, cb_src0_config);
     // Program copies data from DRAM, does addition in RISC once notified
     Program add_program = CreateProgram();
     auto add_kernel = CreateKernel(
@@ -421,7 +421,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         add_core_phys.y,
         1};
     SetRuntimeArgs(add_program, add_kernel, datacopy_core, add_rt_args);
-    CBHandle add_cb = CreateCircularBuffer(add_program, datacopy_core, cb_src0_config);
+    CreateCircularBuffer(add_program, datacopy_core, cb_src0_config);
     // Same program as above, but runs on different SubDevice. Reads from DRAM, once
     // notified by previous program
     Program add_program_2 = CreateProgram();
@@ -433,7 +433,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     std::array<uint32_t, 9> add_rt_args_2 = {
         global_sem.address(), 0, 0, output_buf->address(), output_buf->address(), num_tiles, 0, 0, 2};
     SetRuntimeArgs(add_program_2, add_kernel_2, add_core, add_rt_args_2);
-    CBHandle add_cb_2 = CreateCircularBuffer(add_program_2, add_core, cb_src0_config);
+    CreateCircularBuffer(add_program_2, add_core, cb_src0_config);
 
     uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
     MeshCoordinateRange devices(mesh_device_->shape());
