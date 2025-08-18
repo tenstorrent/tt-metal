@@ -321,7 +321,12 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     float min_val = min.has_value() ? min.value() : std::numeric_limits<float>::lowest();
     float max_val = max.has_value() ? max.value() : std::numeric_limits<float>::max();
 
+<<<<<<< HEAD
     return ttnn::clamp_tss(a, min_val, max_val, output_mem_config);
+=======
+    Tensor result = ttnn::clamp_tss(a, min_val, max_val, output_memory_config);
+    return result;
+>>>>>>> 8fc5c08391 (#25407: Migrate clamp scalar version to llk)
 }
 
 Tensor ExecuteUnaryCompositeClamp::invoke(
