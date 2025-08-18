@@ -47,17 +47,20 @@ def run_demo_inference(
     width = 1024
 
     # 1. Load components
+    profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
     )
+    profiler.end("diffusion_pipeline_from_pretrained")
 
     # Have to throttle matmuls due to di/dt
     if is_galaxy():
         logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
+    profiler.start("load_tt_componenets")
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
         # 2. Load tt_unet, tt_vae and tt_scheduler
         tt_model_config = ModelOptimisations()
@@ -93,9 +96,11 @@ def run_demo_inference(
             pipeline.scheduler.config.final_sigmas_type,
         )
     pipeline.scheduler = tt_scheduler
+    ttnn.synchronize_device(ttnn_device)
+    profiler.end("load_tt_componenets")
 
     cpu_device = "cpu"
-
+    profiler.start("encode_prompt")
     all_embeds = [
         pipeline.encode_prompt(
             prompt=prompt,
@@ -114,7 +119,9 @@ def run_demo_inference(
         )
         for prompt in prompts
     ]
+    profiler.end("encode_prompt")
 
+    profiler.start("prepare_latents")
     # Reorder all_embeds to prepare for splitting across devices
     items_per_core = len(all_embeds) // batch_size  # this will always be a multiple of batch_size because of padding
 
@@ -203,7 +210,10 @@ def run_demo_inference(
         tt_text_embeds=tt_add_text_embeds,
         tt_time_ids=[negative_add_time_ids, add_time_ids],
     )
+    ttnn.synchronize_device(ttnn_device)
+    profiler.end("prepare_latents")
 
+    profiler.start("warmup_run")
     logger.info("Performing warmup run, to make use of program caching in actual inference...")
     prepare_input_tensors(
         [
@@ -231,12 +241,15 @@ def run_demo_inference(
         batch_size,
         capture_trace=False,
     )
+    ttnn.synchronize_device(ttnn_device)
+    profiler.end("warmup_run")
 
     tid = None
     output_device = None
     tid_vae = None
     if capture_trace:
         logger.info("Capturing model trace...")
+        profiler.start("capture_model_trace")
         prepare_input_tensors(
             [
                 tt_latents,
@@ -263,6 +276,14 @@ def run_demo_inference(
             batch_size,
             capture_trace=True,
         )
+        ttnn.synchronize_device(ttnn_device)
+        profiler.end("capture_model_trace")
+
+    logger.info("=" * 80)
+    for key, data in profiler.times.items():
+        logger.info(f"{key}: {data[-1]:.2f} seconds")
+    logger.info("=" * 80)
+
     profiler.clear()
 
     if not is_ci_env and not os.path.exists("output"):
@@ -304,6 +325,9 @@ def run_demo_inference(
             tid_vae=tid_vae,
         )
 
+        logger.info(
+            f"Prepare input tensors for {batch_size} prompts completed in {profiler.times['prepare_input_tensors'][-1]:.2f} seconds"
+        )
         logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
         logger.info(
             f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
@@ -311,6 +335,7 @@ def run_demo_inference(
         logger.info(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
+        logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
 
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:

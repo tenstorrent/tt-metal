@@ -8,7 +8,7 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.ccl import TT_CCL, ag_on_padded_dim_3
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
@@ -384,12 +384,21 @@ class Transformer(LightweightModule):
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
-            tt_logits = ag_on_padded_dim_3(
+            cluster_axis = 0 if self.args.is_galaxy else None
+            num_links = 2 if self.args.is_galaxy else 1
+            tt_logits = ttnn.experimental.all_gather_async(
                 tt_logits,
-                self.tt_ccl,
-                cluster_axis=0 if self.args.is_galaxy else None,
-                num_links=2 if self.args.is_galaxy else 1,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=tt_logits.memory_config(),
+                cluster_axis=cluster_axis,
                 topology=self.args.ccl_topology(),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
