@@ -11,7 +11,7 @@ from helpers.device import (
 from helpers.dimensions import (
     calculate_matmul_dimensions,
 )
-from helpers.format_arg_mapping import MathFidelity, format_dict
+from helpers.format_arg_mapping import DestAccumulation, MathFidelity, format_dict
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.param_config import (
@@ -33,7 +33,10 @@ MATMUL_FORMATS = input_output_formats(
     ]
 )
 
-ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(MATMUL_FORMATS)
+DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
+    MATMUL_FORMATS, DEST_ACC_MODES
+)
 
 
 @parametrize(
@@ -81,13 +84,8 @@ def test_matmul(
         math_fidelity,
         input_A_dimensions=input_A_dimensions,
         input_B_dimensions=input_B_dimensions,
+        tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
     )
-    golden_tensor = tilize_block(
-        golden_tensor,
-        dimensions=matmul_dims["output_dimensions"],
-        stimuli_format=formats.output_format,
-    ).to(torch_format)
-    golden_tensor = golden_tensor.flatten()
 
     if formats.input_format != DataFormat.Bfp8_b:
         tilized_A = tilize_block(

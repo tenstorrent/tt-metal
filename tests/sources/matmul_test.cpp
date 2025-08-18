@@ -25,19 +25,8 @@ void run_kernel()
     std::uint32_t rt_dim = RT_DIM;
     std::uint32_t kt_dim = KT_DIM;
 
-    std::uint32_t tile_size = 128;
-
-    if constexpr (static_cast<DataFormat>(formats.unpack_src) == DataFormat::Bfp8_b)
-    {
-        tile_size = 68;
-    }
-    else if constexpr (static_cast<DataFormat>(formats.unpack_src) == DataFormat::Float32)
-    {
-        tile_size = 256;
-    }
-
     _llk_unpack_AB_matmul_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(
-        formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, 0, 4, 4, tile_size, tile_size);
+        formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, 0, 4, 4, TILE_SIZE_UNPACK, TILE_SIZE_UNPACK);
     _llk_unpack_AB_matmul_init_<>(0, ct_dim, rt_dim, kt_dim, FACE_R_DIM, FACE_R_DIM);
     for (uint32_t j = 0; j < kt_dim; j++)
     {
@@ -46,8 +35,8 @@ void run_kernel()
             L1_ADDRESS(buffer_B[0]),
             j,
             j * ct_dim,
-            tile_size,
-            tile_size,
+            TILE_SIZE_UNPACK,
+            TILE_SIZE_UNPACK,
             FACE_R_DIM,
             FACE_R_DIM,
             false,
@@ -93,23 +82,12 @@ void run_kernel()
 
 void run_kernel()
 {
-    std::uint32_t tile_size = 128;
-
-    if constexpr (static_cast<DataFormat>(formats.pack_dst) == DataFormat::Bfp8_b)
-    {
-        tile_size = 68;
-    }
-    else if constexpr (static_cast<DataFormat>(formats.pack_dst) == DataFormat::Float32)
-    {
-        tile_size = 256;
-    }
-
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, tile_size);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
     _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false, false>(formats.pack_dst);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>();
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, tile_size);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
     _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(formats.pack_dst);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor, false>();
 #endif
