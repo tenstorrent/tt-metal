@@ -18,7 +18,7 @@ namespace ttnn::distributed {
  *
  * The FabricSocket wraps a MeshSocket to handle tensor serialization and fabric
  * message routing. It supports efficient tensor transfer between specific sender
- * and receiver ranks in a fabric-connected mesh topology, making it ideal for
+ * and receiver ranks in a fabric-connected topology, making it ideal for
  * high-throughput distributed training and inference workloads.
  */
 class FabricSocket : public ISocket {

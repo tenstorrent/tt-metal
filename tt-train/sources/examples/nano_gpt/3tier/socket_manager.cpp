@@ -11,6 +11,7 @@ namespace {
 tt::tt_metal::distributed::SocketMemoryConfig _make_socket_mem_config() {
     tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config{};
     socket_mem_config.socket_storage_type = ttnn::BufferType::L1;
+    // TODO(rfurko): remove hardcoded values
     socket_mem_config.fifo_size = 32U * 32U * 2U * 8U;  // 16KB, 8 bfloat16 tiles
     return socket_mem_config;
 }
@@ -21,6 +22,7 @@ std::vector<tt::tt_metal::distributed::SocketConnection> _make_socket_connection
     auto mesh_cols = mesh_device->num_cols();
     std::vector<tt::tt_metal::distributed::SocketConnection> socket_connection_config;
     socket_connection_config.reserve(mesh_rows * mesh_cols);
+    // TODO(rfurko): remove hardcoded values
     for (size_t row = 0; row < mesh_rows; ++row) {
         for (size_t col = 0; col < mesh_cols; ++col) {
             tt::tt_metal::distributed::MeshCoreCoord mesh_core_coord{
