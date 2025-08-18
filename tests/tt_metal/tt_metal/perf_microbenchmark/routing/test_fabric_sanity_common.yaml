@@ -368,3 +368,32 @@ Tests:
             num_packets: 100
             destination:
               device: [0, 1]
+
+  - name: "FabricMuxAllToAllUnicastMesh"
+    fabric_setup:
+      topology: Mesh
+      fabric_tensix_config: Mux
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FabricMuxAllToAllUnicastMeshDynamic"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+      fabric_tensix_config: Mux
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
