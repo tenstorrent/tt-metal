@@ -6,7 +6,6 @@
 
 void kernel_main() {
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
-    constexpr bool input_is_dram = get_compile_time_arg_val(1) == 1;
 
     uint32_t input_addr = get_arg_val<uint32_t>(0);
     uint32_t start_id = get_arg_val<uint32_t>(1);

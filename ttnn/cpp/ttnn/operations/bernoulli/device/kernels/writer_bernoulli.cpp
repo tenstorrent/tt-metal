@@ -10,7 +10,6 @@ void kernel_main() {
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t intermed1_cb_id = get_compile_time_arg_val(2);
-    constexpr bool output_is_dram = get_compile_time_arg_val(3) == 1;
 
     auto out_addr = get_arg_val<uint32_t>(0);
     auto start_id = get_arg_val<uint32_t>(1);
