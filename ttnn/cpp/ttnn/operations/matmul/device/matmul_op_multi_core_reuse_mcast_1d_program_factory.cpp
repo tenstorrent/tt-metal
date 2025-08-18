@@ -341,8 +341,9 @@ process_mcast_in0_program_and_create_override_variables(
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
             // sparsity args
-            (std::uint32_t)0,  // batchB
-            (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
+            (std::uint32_t)0,   // batchB
+            (std::uint32_t)0,   // sparsity_pagesize (placeholder since sparsity not used in this case)
+            (std::uint32_t)true // bcast_A
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
@@ -1107,8 +1108,9 @@ process_mcast_in1_program_and_create_override_variables(
         (std::uint32_t)B,      // batch
 
         // sparsity args
-        (std::uint32_t)0,  // batchB
-        (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
+        (std::uint32_t)0,   // batchB
+        (std::uint32_t)0,   // sparsity_pagesize (placeholder since sparsity not used in this case)
+        (std::uint32_t)true // bcast_A
     };
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(in0_sender_compile_time_args);
@@ -2989,7 +2991,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const auto B_A = get_batch_size(ashape);
+    const auto B_A = is_input_a_sparse ? 1 : get_batch_size(ashape);
     const auto B_B = get_batch_size(bshape);
     const uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     const uint32_t Kt = ashape[-1] / in0_tile_shape[1];
@@ -3147,6 +3149,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         // sparsity args
         (std::uint32_t)B_B,                               // batchB
         (std::uint32_t)B_B * (uint32_t)sizeof(uint32_t),  // sparsity_pagesize
+        (std::uint32_t)!is_input_a_sparse,                // bcast_A
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
