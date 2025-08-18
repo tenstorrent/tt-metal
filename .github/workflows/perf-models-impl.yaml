@@ -29,16 +29,19 @@ jobs:
         ]
         model-group:
           - name: llm_javelin
+            timeout: 20
             model-list:
               - models/demos/falcon7b_common/tests
               - models/demos/wormhole/mamba/tests
 
           - name: cnn_javelin
+            timeout: 10
             model-list:
               - models/experimental/functional_unet/tests
               - models/demos/wormhole/stable_diffusion/tests
 
           - name: other
+            timeout: 5
             model-list:
               - models/demos/convnet_mnist/tests/
               # This is bad. These should be referencing .../tests directories
@@ -47,6 +50,7 @@ jobs:
               - models/demos/roberta/tests/test_performance.py
 
           - name: other_magic_env
+            timeout: 45
             model-list:
               - models/demos/yolov10x/tests/perf/
               - models/demos/sentence_bert/tests/perf/
@@ -105,7 +109,7 @@ jobs:
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
       - name: Run performance regressions
-        timeout-minutes: 35
+        timeout-minutes: ${{ matrix.model-group.timeout }}
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO
