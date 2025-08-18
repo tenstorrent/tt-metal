@@ -36,6 +36,7 @@ FORCE_INLINE void perform_atomic_fabric_write(
     const uint16_t wrap,
     const bool flush) {
     tt::tt_fabric::linear::to_noc_fused_unicast_write_atomic_inc(
+        payload_size_bytes,
         pkt_hdr,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, val, wrap, flush},
         dest_id,
@@ -113,9 +114,9 @@ void scatter_write_for_fabric_write(
     uint32_t second_id,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
     tt::tt_fabric::WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& fabric_mux_connection,
-    size_t& l1_read_addr) {
-    uint32_t payload_size_bytes = tt::tt_fabric::linear::addrgen_detail::get_page_size(addrgen) * 2;
-    tt::tt_fabric::linear::to_noc_unicast_scatter_write(pkt_hdr, first_id, second_id, addrgen);
+    size_t& l1_read_addr,
+    uint32_t payload_size_bytes) {
+    tt::tt_fabric::linear::to_noc_unicast_scatter_write(payload_size_bytes, pkt_hdr, first_id, second_id, addrgen);
 
     tt::tt_fabric::fabric_async_write(fabric_mux_connection, pkt_hdr, l1_read_addr, payload_size_bytes);
     noc_async_writes_flushed();
@@ -132,7 +133,7 @@ void write_for_fabric_write(
     tt::tt_fabric::WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& fabric_mux_connection,
     size_t& l1_read_addr,
     uint32_t payload_size_bytes) {
-    tt::tt_fabric::linear::to_noc_unicast_write(pkt_hdr, id, addrgen);
+    tt::tt_fabric::linear::to_noc_unicast_write(payload_size_bytes, pkt_hdr, id, addrgen);
 
     tt::tt_fabric::fabric_async_write(fabric_mux_connection, pkt_hdr, l1_read_addr, payload_size_bytes);
     noc_async_writes_flushed();
@@ -237,7 +238,7 @@ FORCE_INLINE void fabric_write_unidir(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
     size_t l1_read_addr,
     uint32_t payload_size_bytes) {
-    tt::tt_fabric::linear::to_noc_unicast_write(pkt_hdr, dest_id, addrgen);
+    tt::tt_fabric::linear::to_noc_unicast_write(payload_size_bytes, pkt_hdr, dest_id, addrgen);
     perform_payload_send(fabric_direction_connection, l1_read_addr, payload_size_bytes, pkt_hdr);
     noc_async_writes_flushed();
 }
@@ -250,16 +251,12 @@ FORCE_INLINE void scatter_fabric_write_unidir(
     volatile PACKET_HEADER_TYPE* pkt_hdr,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
     size_t l1_read_addr,
-    uint16_t payload_size_bytes_first_core,
-    uint32_t payload_size_bytes_second_core) {
+    uint32_t payload_size_bytes_per_core) {
     const size_t payload_l1_address = l1_read_addr;
-    tt::tt_fabric::linear::to_noc_unicast_scatter_write(pkt_hdr, first_id, second_id, addrgen);
+    tt::tt_fabric::linear::to_noc_unicast_scatter_write(
+        payload_size_bytes_per_core, pkt_hdr, first_id, second_id, addrgen);
 
     fabric_direction_connection.wait_for_empty_write_slot();
-    perform_payload_send(
-        fabric_direction_connection,
-        l1_read_addr,
-        payload_size_bytes_first_core + payload_size_bytes_second_core,
-        pkt_hdr);
+    perform_payload_send(fabric_direction_connection, l1_read_addr, payload_size_bytes_per_core * 2, pkt_hdr);
     noc_async_writes_flushed();
 }

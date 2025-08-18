@@ -151,7 +151,6 @@ void kernel_main() {
                             pkt_hdr,
                             *fabric_direction_connection,
                             l1_read_addr,
-                            (uint16_t)output_page_size,
                             output_page_size);
                     }
 
@@ -292,7 +291,6 @@ void kernel_main() {
                             pkt_hdr,
                             *fabric_direction_connection,
                             l1_read_addr,
-                            (uint16_t)output_page_size,
                             output_page_size);
                     } else {
                         ASSERT(num_pages_to_read == 1);
