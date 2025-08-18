@@ -32,8 +32,6 @@ run_t3000_llama3_70b_tests() {
 
   LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
 
-  # Output verification demo for old llama3-70b codebase, to be removed once old codebase is deleted
-  env pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=900 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
