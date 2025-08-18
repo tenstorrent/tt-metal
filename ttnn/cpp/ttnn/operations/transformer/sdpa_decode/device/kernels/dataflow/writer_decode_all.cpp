@@ -9,6 +9,7 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);     // batch size
@@ -28,16 +29,19 @@ void kernel_main() {
     constexpr uint32_t k_chunk_size = get_compile_time_arg_val(14);
     constexpr uint32_t num_q_heads = get_compile_time_arg_val(15);
     constexpr uint32_t num_kv_heads = get_compile_time_arg_val(16);
-    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(17);
-    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(18);
-    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(19);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(20);
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(21);
-    constexpr bool is_causal = get_compile_time_arg_val(22) == 1;
-    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
-    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(17);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(18);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(19);
+    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(20);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(21);
+    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(22);
+    constexpr bool is_causal = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(24);
+    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(25);
+    constexpr bool enable_split_reader = get_compile_time_arg_val(26);
 
     uint32_t arg_idx = 0;
+    const uint32_t k_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id_for_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id_for_output = get_arg_val<uint32_t>(arg_idx++);
@@ -79,6 +83,7 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Sequence length assignment
+
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
         get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
 
@@ -115,11 +120,12 @@ void kernel_main() {
     constexpr uint32_t cb_out_o = tt::CBIndex::c_16;
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
-
+    constexpr uint32_t cb_k_in1 = tt::CBIndex::c_14;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
     constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
+    constexpr uint32_t cb_page_table = tt::CBIndex::c_9;
 
     constexpr uint32_t cb_out_worker = tt::CBIndex::c_16;
     constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
@@ -127,9 +133,19 @@ void kernel_main() {
 
     // generate and send scaler to compute
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
-    generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
-    generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+
+    // {
+    // generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    // }
+    cb_reserve_back(cb_identity_scale_in, 1);
+    cb_push_back(cb_identity_scale_in, 1);
+
+    cb_reserve_back(cb_zero_in, 1);
+    cb_push_back(cb_zero_in, 1);
+
+    // {
+    // generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
+    // }
 
     if (is_worker) {
         ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
@@ -141,6 +157,11 @@ void kernel_main() {
     }
 
     // *** Reducer Compute Below ***
+    constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in1);
+    constexpr DataFormat k_data_format = get_dataformat(cb_k_in1);
+    const InterleavedAddrGenFast<is_dram> k_reader = {
+        .bank_base_address = k_addr, .page_size = k_tile_bytes, .data_format = k_data_format};
+
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
     constexpr DataFormat data_format = get_dataformat(cb_out);
@@ -160,14 +181,32 @@ void kernel_main() {
 
     if constexpr (is_causal) {
         // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
+
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
 
     noc_async_write_barrier();  // #19201 BH hang workaround
 
+    volatile tt_l1_ptr uint32_t* page_table_ptr;
+    if constexpr (enable_split_reader) {
+        cb_wait_front(cb_page_table, 1);
+        uint32_t page_table_cb_rd_ptr = get_read_ptr(cb_page_table);
+        page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
+    }
+
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
+        // OPTIMIZATION: TRISC 2 will read other half of K chunk tiles
+        if constexpr (enable_split_reader) {
+            for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk++) {
+                {
+                    read_k_chunks<num_kv_heads, block_size_t, DHt, true, true>(
+                        k_tile_bytes, Sk_chunk_t_dynamic, cb_k_in1, k_chunk, cur_head, page_table_ptr, k_reader, 1);
+                }
+            }
+        }
+
         if (k_chunk_end - k_chunk_start < k_num_chunks) {
             ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
                                               // should not be more than one head per core

@@ -373,6 +373,56 @@ uint32_t write_partial_tiles_to_memory(
 /******************************************************************************
  *                   Reader Kernel Specific Functions                         *
  ******************************************************************************/
+template <uint32_t num_kv_heads, uint32_t block_size_t, uint32_t num_k_cols, bool enable_split_reader, bool is_dram>
+void read_k_chunks(
+    uint32_t k_tile_bytes,
+    uint32_t num_k_rows,
+    uint32_t cb_k_in,
+    uint32_t k_chunk,
+    uint32_t cur_head,
+    volatile tt_l1_ptr uint32_t* page_table_ptr,
+    const InterleavedAddrGenFast<true>& k_reader,
+    uint32_t reader_id) {
+    uint32_t row_start = 0;
+    uint32_t col_start = 0;
+    uint32_t k_chunk_tiles = num_k_rows * num_k_cols;
+    uint32_t num_k_cols_split = num_k_cols;
+
+    // OPTIMIZATION: split reader such that writer also reads in other half of k chunks
+    if constexpr (enable_split_reader) {
+        k_chunk_tiles /= 2;
+        num_k_cols_split = num_k_cols / 2;
+        col_start = reader_id > 0 ? num_k_cols : 0;  // TRISC 2 reads other half of DHt
+    }
+
+    cb_reserve_back(cb_k_in, k_chunk_tiles);
+    uint32_t k_chunk_start_row_num = k_chunk * num_k_rows;
+    uint32_t k_write_ptr = get_write_ptr(cb_k_in);
+    uint32_t k_base_read_ptr = get_noc_addr(k_write_ptr);
+    uint32_t barrier_count = 0;
+
+    // Iterate through Sk_chunk_t
+    for (uint32_t row = row_start; row < num_k_rows; ++row) {
+        uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
+        uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
+        uint32_t physical_k_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, num_k_cols>(
+            virtual_k_tile_row_num, cur_head, page_table_ptr);
+
+        // If split reader enabled TRISC 2 will skip ahead 2 physical tiles and advance k writer pointer by 2 columns
+        if (enable_split_reader && reader_id == 1) {
+            physical_k_tile_id += 2;
+        }
+
+        // Iterate through DHt
+        for (uint32_t col = col_start; col < col_start + num_k_cols_split; ++col) {
+            noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+            physical_k_tile_id += 1;                       // Go to next tile in row
+            k_write_ptr_col += num_k_rows * k_tile_bytes;  // Go to next column in CB
+        }
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_k_in, k_chunk_tiles);
+}
 
 template <
     uint32_t DHt,
@@ -381,12 +431,12 @@ template <
     uint32_t mask_tile_bytes,
     uint32_t PNHt,
     bool use_attention_mask,
-    uint32_t cb_k_in,
     uint32_t cb_v_in,
     uint32_t cb_mask_in,
     bool reuse_k  // If enabled, read V from K, instead of from DRAM
     >
 void read_kv_mask_chunks(
+    uint32_t cb_k_in,
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     uint32_t k_start_tile_id,

@@ -26,6 +26,7 @@ struct ScaledDotProductAttentionDecode {
 
     const std::optional<bool> use_mla;
     const std::optional<uint32_t> head_dim_v;
+    const std::optional<bool> enable_split_reader;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
