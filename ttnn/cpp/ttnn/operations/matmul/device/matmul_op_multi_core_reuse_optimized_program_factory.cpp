@@ -7,6 +7,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -163,13 +164,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
         (std::uint32_t)in0_last_ktile_w,
     };
-    std::vector<uint32_t> reader_writer_compile_time_args = {// interleaved accessor args
-                                                             (std::uint32_t)in1_is_dram,
-                                                             (std::uint32_t)out_is_dram};
+    tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
+    std::vector<uint32_t> reader_writer_compile_time_args = {};
+    tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(reader_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(reader_writer_compile_time_args);
     std::map<std::string, std::string> mm_kernel_in0_reader_defines;
     std::map<std::string, std::string> mm_kernel_in1_reader_writer_defines;
     if (in0_is_sharded) {
