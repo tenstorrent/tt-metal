@@ -18,6 +18,8 @@ REPORT_DIR="coverage_report"
 # Exit immediately if a command fails
 set -e
 
+cd build_Release
+
 echo "INFO: Using Clang version ${CLANG_VERSION}"
 
 # --- Step 1: Create the llvm-cov wrapper script ---
