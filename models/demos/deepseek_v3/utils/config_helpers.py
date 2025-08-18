@@ -494,6 +494,29 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
     return tensor
 
 
+def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
+    dequantized_state_dict = {}
+
+    for name, tensor in state_dict.items():
+        if name.endswith("_scale_inv"):
+            continue
+
+        if tensor is not None:
+            # Look for corresponding scale tensor
+            scale_name = name + "_scale_inv"
+            if scale_name in state_dict:
+                scale_tensor = state_dict[scale_name]
+                # Dequantize using the scale
+                dequantized_tensor = dequantize(
+                    tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]
+                )
+                dequantized_state_dict[name] = dequantized_tensor.to(dtype)
+            else:
+                dequantized_state_dict[name] = tensor.to(dtype)
+
+    return dequantized_state_dict
+
+
 def get_state_dicts(
     dicts: Sequence[dict[str, torch.Tensor] | None],
     key: Any,
