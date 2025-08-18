@@ -74,6 +74,7 @@ public:
     void apply(const ApplyFn& fn, ProcessShardExecutionPolicy policy = ProcessShardExecutionPolicy::SEQUENTIAL) const;
 
     // NOTE: `coords` are global, so this will skip non local shards.
+    // Calls emplace_shard for each coordinate in `coords` using the specified execution policy.
     void emplace_shards(
         const std::vector<distributed::MeshCoordinate>& coords,
         const ProduceBufferFn& produce_buffer,
