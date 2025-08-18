@@ -715,7 +715,7 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 }
 
 Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
-    auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
     std::vector<distributed::MeshCoordinate> coords;
     coords.reserve(device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
@@ -749,7 +749,7 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) 
         dst.storage_type());
 
     if (is_device_tensor(src)) {
-        tensor_impl::copy_to_host_tensor_wrapper(src, dst, blocking, cq_id);
+        tensor_impl::copy_to_host_wrapper(src, dst, blocking, cq_id);
         return;
     }
 
@@ -759,7 +759,7 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) 
 
     auto mesh_buffer = dst.device_storage().mesh_buffer;
     TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
-    tensor_impl::copy_to_device_tensor_wrapper(src, dst, cq_id);
+    tensor_impl::copy_to_device_wrapper(src, dst, cq_id);
 }
 
 Tensor set_tensor_id(const Tensor& tensor) {
