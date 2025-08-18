@@ -12,6 +12,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     routing/test_tt_fabric_multi_hop_sanity.cpp
     routing/test_tt_fabric_socket_sanity.cpp
     routing/test_tt_fabric.cpp
+    routing/test_tt_fabric_socket_perf.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
     tensix/test_gathering.cpp
     old/matmul/matmul_global_l1.cpp
