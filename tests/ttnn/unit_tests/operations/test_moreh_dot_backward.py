@@ -109,7 +109,7 @@ def run_moreh_dot_backward(input_shape, requires_grad, device, dtype=ttnn.bfloat
         tt_output_grad, tt_input, tt_other, input_grad=tt_input_grad, other_grad=tt_other_grad
     )
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     if require_input_grad:
@@ -136,7 +136,7 @@ def run_moreh_dot_backward(input_shape, requires_grad, device, dtype=ttnn.bfloat
 @pytest.mark.parametrize(
     "input_shape",
     (
-        [1, 1, 1, 10],  # test not mutiple of 32 case
+        [1, 1, 1, 10],  # test not multiple of 32 case
         [1, 1, 1, 32],  # test single tile
         [1, 1, 1, 352],  # test multiple tiles
         [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
@@ -159,7 +159,7 @@ def test_moreh_dot_backward(input_shape, requires_grad, dtype, use_randint, devi
 @pytest.mark.parametrize(
     "input_shape",
     (
-        [1, 1, 1, 10],  # test not mutiple of 32 case
+        [1, 1, 1, 10],  # test not multiple of 32 case
         [1, 1, 1, 32],  # test single tile
         [1, 1, 1, 352],  # test multiple tiles
         [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32

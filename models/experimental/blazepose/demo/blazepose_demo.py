@@ -93,7 +93,7 @@ landmarks = pose_regressor.denormalize_landmarks(normalized_landmarks, affine)
 print("Denormalized landmarks **********************")
 print(landmarks)
 
-# Originaly landmarks should be (x,y,z,visibility,presence) for every 33 keypoints .
+# Originally landmarks should be (x,y,z,visibility,presence) for every 33 keypoints .
 # But this is only upper body detection
 print(landmarks.size())
 

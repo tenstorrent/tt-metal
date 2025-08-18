@@ -107,7 +107,7 @@ def test_cumprod_backward(dim, shape, dtypes, device):
 
         assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
 
-        # test for equivalance
+        # test for equivalence
         rtol = atol = 0.1
         assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 

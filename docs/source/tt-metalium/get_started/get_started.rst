@@ -43,7 +43,7 @@ Intermediate Usage
 **Step 4: Single-core Matrix Multiplication**
     Implement a :ref:`Single-core Matrix Multiplication Kernel<MatMul_Single_Core example>` that performs matrix multiplication using the matrix engine. This will help you understand how to handle complex dataflow and computations on the Tensix core.
 
-    **What you'll learn:** Complex dataflow, tilized operatins and using the matrix engine for matrix multiplication.
+    **What you'll learn:** Complex dataflow, tilized operations and using the matrix engine for matrix multiplication.
 
 Advanced Usage
 ^^^^^^^^^^^^^^

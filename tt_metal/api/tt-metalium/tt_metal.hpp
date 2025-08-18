@@ -171,7 +171,7 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  * | Argument            | Description                                                            | Type | Valid Range
  * | Required |
  * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device              | The device to whcih runtime args will be written                       | IDevice* | | Yes |
+ * | device              | The device to which runtime args will be written                       | IDevice* | | Yes |
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */

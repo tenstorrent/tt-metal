@@ -718,7 +718,7 @@ class ModelArgs:
 
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
-            # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
+            # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
             # TODO: #26657 (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
                 self.num_devices == 8

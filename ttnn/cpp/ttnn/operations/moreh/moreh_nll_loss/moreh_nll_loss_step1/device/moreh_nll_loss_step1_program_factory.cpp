@@ -96,7 +96,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             });
     }
 
-    // create read/wrtie kernel
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(weight_has_value)};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);

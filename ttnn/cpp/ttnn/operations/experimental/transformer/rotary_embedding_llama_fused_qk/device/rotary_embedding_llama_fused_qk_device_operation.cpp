@@ -38,7 +38,7 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
     // Check for decode mode
     TT_FATAL(
         q_input_tensor.logical_shape()[0] == 1 && k_input_tensor.logical_shape()[0] == 1,
-        "rotary_embedding_llama_fused_qk currently only supports deocde mode qith seq_len=1.");
+        "rotary_embedding_llama_fused_qk currently only supports decode mode with seq_len=1.");
 
     TT_FATAL(
         q_input_tensor.logical_shape()[-1] == k_input_tensor.logical_shape()[-1],

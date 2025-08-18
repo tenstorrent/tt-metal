@@ -14,7 +14,7 @@ def test_exp_arange_masking(device):
     low = -87.0
     high = 88.5
 
-    # Generate all possible bit pattersn for bf16
+    # Generate all possible bit patterns for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor_f32 = input_tensor.to(torch.float32)

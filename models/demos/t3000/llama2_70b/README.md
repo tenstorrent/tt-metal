@@ -48,7 +48,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 
 3. Run the demo:
 
-    NOTE: Run the following comand twice.
+    NOTE: Run the following command twice.
     1. The first run will cache the weights. This will take some time.
     2. The second run will use the cached weights, thereby running much faster.
 

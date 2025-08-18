@@ -111,13 +111,13 @@ autograd::TensorPtr composite_layernorm(
     auto out = autograd::create_tensor(output);
 
     autograd::GradFunction grad = [tensor, out, gamma, beta, mean, rstd]() {
-        auto dout = out->get_grad();
+        auto doubt = out->get_grad();
 
         // recalculate normalized tensor to save memory and avoid storing it
         auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
 
         auto dbeta = ttnn::moreh_sum(
-            dout,
+            doubt,
             /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
             /* keep_dim */ true,
             /* output */ std::nullopt,
@@ -125,14 +125,14 @@ autograd::TensorPtr composite_layernorm(
             /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
         auto dgamma = ttnn::moreh_sum(
-            ttnn::multiply(dout, normalized_tensor),
+            ttnn::multiply(doubt, normalized_tensor),
             /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
             /* keep_dim */ true,
             /* output */ std::nullopt,
             /* output_mem_config */ std::nullopt,
             /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
-        auto dtensor_normalized = ttnn::multiply(dout, gamma->get_value());
+        auto dtensor_normalized = ttnn::multiply(doubt, gamma->get_value());
 
         // dtensor = (dnorm - dnorm.mean(-1, keepdim=True) - norm * (dnorm * norm).mean(-1, keepdim=True)) * rstd
 

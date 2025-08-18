@@ -48,7 +48,7 @@ def find_max_subblock(out_block_h, out_block_w):
 def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_tile):
     if tile_h < 16 and transpose_tile:
         pytest.skip("transpose tile does not support tile height less than 16")
-    # minimum tile_h = 4 for fbloat, as exponents are packed into uint32 (4 exponents minmum)
+    # minimum tile_h = 4 for fbloat, as exponents are packed into uint32 (4 exponents minimum)
     torch.manual_seed(0)
     torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(

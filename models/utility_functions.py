@@ -631,7 +631,7 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
 
     if not _comp_nonfinite(golden, calculated):
         return False, "Tensors are not finite at the same positions"
-    # nonfinite elments can intefere with ULP error calculation
+    # nonfinite elements can interfere with ULP error calculation
     # To avoid this, replace nan, +inf, -inf with 0
     # (we have already checked that both tensors have the same nonfinite elements)
     mask_finite = ~torch.isfinite(golden)

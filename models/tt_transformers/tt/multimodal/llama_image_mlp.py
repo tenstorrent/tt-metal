@@ -102,7 +102,7 @@ class TtLlamaImageFeedForward(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # NOTE: Need to reshape to 4D so that fast_reduce_nc hsa a dim1 to work on
+        # NOTE: Need to reshape to 4D so that fast_reduce_nc has a dim1 to work on
         c_proj_out = ttnn.reshape(c_proj_out, [1, 1, seq_len, -1])
 
         # All reduce

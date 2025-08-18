@@ -48,7 +48,7 @@ constexpr int MAX_NUM_PACKS = 4;
 
 /*
   The following are TEST envionrment only legacy commands
-  PRODCTION flag is used to exclude their compilation
+  PRODUCTION flag is used to exclude their compilation
 */
 
 #ifndef PRODUCTION

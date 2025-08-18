@@ -544,7 +544,7 @@ The APIs presented above expose the ability to interface with a buffer over the 
 
 ## 3.4 MeshWorkload: Overview, Data-Structures and APIs <a id="meshworkload"></a>
 
-The MeshWorkload object is the main unit of compute on a Virtual Mesh. This class allows users to directly run homogenous or heterogenous compute, by programming each core on each device in a Mesh through a single data-structure.
+The MeshWorkload object is the main unit of compute on a Virtual Mesh. This class allows users to directly run homogeneous or heterogeneous compute, by programming each core on each device in a Mesh through a single data-structure.
 
 This is analogous to the Program class in the single device use case. A Program object consists of Kernels, Runtime Arguments, Semaphores and CB Configs. Each *CoreRange* can be independently configured with these objects, allowing users to fully specify the behavior of each core in a device. A MeshWorkload object will consist of Programs and configurable Runtime Arguments on different *DeviceRanges* within a Virtual Mesh, allowing users to fully specify the behavior of each physical device.
 
@@ -602,8 +602,8 @@ The MeshWorkload class does not allow for this level of heterogeneity. **A user 
 
 This design decision can be justified as follows:
 
-* Exposing the MeshWorkload class as an object built up from existing programs allows users to work with the single-device and Virtual Mesh problems independently. A Distributed Runtime user can first optimally place Programs on a single device and then lay them out on a Virtual Mesh. This property is useful when compute is homogenous across the Mesh (ex: data-parallel workloads), or when the MeshWorkload contains several heterogeneous programs (each optimized for a single device, before being placed on a Virtual Mesh with other programs and inter-device data dependencies).
-* Breaking the hierarchy between a MeshWorkload and a Program, by allowing users to configure Runtime Args, is useful for performance optimization and advanced use-cases, where heterogeneity across a Mesh can be fully expressed through an identical Program + varying Runtime Args. When Program attributes are “nearly identical” across the Mesh, it’s not ideal for users to set them up individually and nonoptimal for Runtime Infrastructure to unicast attributes to each device in the Mesh. Instead, with configurable Runtime Args, users can setup the entire MeshWorkload as a homogenous program and inject heterogeneity by modifying Runtime Args within the Mesh. The dispatch layer will then broadcast all attributes except for the Runtime Args to the entire grid, which will be unicasted to each device.
+* Exposing the MeshWorkload class as an object built up from existing programs allows users to work with the single-device and Virtual Mesh problems independently. A Distributed Runtime user can first optimally place Programs on a single device and then lay them out on a Virtual Mesh. This property is useful when compute is homogeneous across the Mesh (ex: data-parallel workloads), or when the MeshWorkload contains several heterogeneous programs (each optimized for a single device, before being placed on a Virtual Mesh with other programs and inter-device data dependencies).
+* Breaking the hierarchy between a MeshWorkload and a Program, by allowing users to configure Runtime Args, is useful for performance optimization and advanced use-cases, where heterogeneity across a Mesh can be fully expressed through an identical Program + varying Runtime Args. When Program attributes are “nearly identical” across the Mesh, it’s not ideal for users to set them up individually and nonoptimal for Runtime Infrastructure to unicast attributes to each device in the Mesh. Instead, with configurable Runtime Args, users can setup the entire MeshWorkload as a homogeneous program and inject heterogeneity by modifying Runtime Args within the Mesh. The dispatch layer will then broadcast all attributes except for the Runtime Args to the entire grid, which will be unicasted to each device.
 * Given that a MeshWorkload must be configured to respect the constraints of a Virtual Mesh, directly exposing additional program attributes at the Mesh level likely has very limited use-cases.
 
 Based on the design presented above, the next section discusses the high level implementation details of the MeshWorkload class and provides examples.
@@ -632,7 +632,7 @@ public:
     // Initialize an empty MeshWorkload. Programs and RTAs can be added to this
     MeshWorkload();
 
-    // This API can be used for Lock Step Parallel Execution and Heterogenous Execution
+    // This API can be used for Lock Step Parallel Execution and Heterogeneous Execution
     // Homogeneity is encoded by adding a single program, spanning the Virtual Mesh
     // Heterogeneity is encoded by adding multiple programs over disjoint device ranges
     void add_program(const LogicalDeviceRange& device_range, const Program& program);
@@ -648,9 +648,9 @@ public:
 };
 ```
 
-For homogenous MeshWorkloads, we use the *MaxDeviceRange* data-structure, which allows defining the workload attributes without binding the data-structure to a grid. When an unbound MeshWorkload is lowered to the VirtualMesh, its placement and grid dimensions and are inferred during runtime, based on the dimensions of the VirtualMesh.
+For homogeneous MeshWorkloads, we use the *MaxDeviceRange* data-structure, which allows defining the workload attributes without binding the data-structure to a grid. When an unbound MeshWorkload is lowered to the VirtualMesh, its placement and grid dimensions and are inferred during runtime, based on the dimensions of the VirtualMesh.
 
-For heterogenous compute, Programs and Runtime Arguments must be bound to a specific *LogicalDeviceRange*. Validation steps ensure that out of bounds errors during workload placement, Runtime Args mutation, etc. are caught gracefully.
+For heterogeneous compute, Programs and Runtime Arguments must be bound to a specific *LogicalDeviceRange*. Validation steps ensure that out of bounds errors during workload placement, Runtime Args mutation, etc. are caught gracefully.
 
 ### 3.4.3 User Facing APIs for MeshWorkload
 
@@ -689,7 +689,7 @@ void EnqueueMeshWorkload(
     bool blocking
 );
 
-// Utility API: Interpret a single-device program as a broadcastable/homogenous
+// Utility API: Interpret a single-device program as a broadcastable/homogeneous
 // MeshWorkload that will be enqueued to the entire Virtual Mesh. Using this API is
 // equivalent to adding a single program spanning the entire MeshDevice extent to a
 // MeshWorkload and then enqueueing that MeshWorkload
@@ -760,11 +760,11 @@ auto mm_program = mm_struct.create_program({input_tensor_a, input_tensor_b}, {},
 distributed::EnqueueMeshWorkload(mm_program.program, input_tensors.at(0).mesh());
 ```
 
-**Runtime Args Example: Setting Heterogenous Runtime Args for a CCL Program**
+**Runtime Args Example: Setting Heterogeneous Runtime Args for a CCL Program**
 
-The Runtime Args for a CCL Program are a function of the Mesh topology and location of the device in the Mesh. For cases like these, if all attributes of the Program are identical across devices, except for the Runtime Args for a subset of kernels, the entire MeshWorkload can be represented as a single Program (spanning the entire Virtual Mesh) with heterogenous runtime args for the required kernels.
+The Runtime Args for a CCL Program are a function of the Mesh topology and location of the device in the Mesh. For cases like these, if all attributes of the Program are identical across devices, except for the Runtime Args for a subset of kernels, the entire MeshWorkload can be represented as a single Program (spanning the entire Virtual Mesh) with heterogeneous runtime args for the required kernels.
 
-The code below captures how a CCL can be expressed as a MeshWorkload with heterogenous Runtime Args.
+The code below captures how a CCL can be expressed as a MeshWorkload with heterogeneous Runtime Args.
 
 ```cpp
 distributed::MeshWorkload AllGather::create_mesh_workload(
@@ -1464,9 +1464,9 @@ Optimizations such as thread pinning only help to an extent. Once Runtime spawns
 
 Given that units of compute are dispatched at a Virtual Mesh level, through the MeshWorkload, the number of threads required on Host can be relaxed -> linearly scaling the number of Dispatch Threads with the number of physical devices is no longer required.
 
-For homogenous compute and data movement across the Mesh, the main thread can be used directly: compute/data primitives are identical across all devices and need to be constructed once. Similarly, Fast Dispatch Commands corresponding to these data structures need to be constructed and written once, since the Broadcast CQ can be used.
+For homogeneous compute and data movement across the Mesh, the main thread can be used directly: compute/data primitives are identical across all devices and need to be constructed once. Similarly, Fast Dispatch Commands corresponding to these data structures need to be constructed and written once, since the Broadcast CQ can be used.
 
-For heterogenous workloads, a persistent thread-pool can be used to parallelize different phases of host dispatch (Op Creation/Program Construction and Fast Dispatch) across devices within a Virtual Mesh. Unicast CQs can be used to work with heterogeneity across the Mesh.
+For heterogeneous workloads, a persistent thread-pool can be used to parallelize different phases of host dispatch (Op Creation/Program Construction and Fast Dispatch) across devices within a Virtual Mesh. Unicast CQs can be used to work with heterogeneity across the Mesh.
 
 Additionally, since Host -> Device notifications occur at the granularity of a Virtual Mesh (through the Event Notification Queue), a dedicated Completion Queue Reader thread is no longer needed per device. Instead, the number of reader threads spawned on host can scale with the number of Virtual Meshes in the workload. Each reader thread can offload heavy data-movement/read operations to a thread-pool shared with the dispatch path. Offloading is required if a user chooses to read from each device in the Virtual Mesh, instead of gathering outputs across the Mesh and performing a single read.
 
@@ -1486,7 +1486,7 @@ The number of threads made available in the thread-pool will be determined based
 
 ### 3.11.1 Instantiating Binaries for Physical Devices in Distributed Memory
 
-For heterogenous MeshWorkloads, the kernel binary size can vary across devices, since each physical device may be running different individual programs. To ensure that memory allocations are in lock-step across the Virtual Mesh and that kernel binaries fit on each device, Host Runtime is responsible for allocating a MeshBuffer that is correctly sized.
+For heterogeneous MeshWorkloads, the kernel binary size can vary across devices, since each physical device may be running different individual programs. To ensure that memory allocations are in lock-step across the Virtual Mesh and that kernel binaries fit on each device, Host Runtime is responsible for allocating a MeshBuffer that is correctly sized.
 
 The Kernel Binary Buffer size is computed as: *max(kb\_size\_sub\_grid\_0, ... kb\_size\_sub\_grid\_n)* and is obtainable when the MeshWorkload is compiled.
 
@@ -1647,15 +1647,15 @@ std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& t
 
 #### 3.12.2.1 Capture
 
-A MeshTrace can consist of a combination of homogenous and heterogeneous MeshWorkloads across the entire MeshDevice -> captured commands can be identical across the Virtual Mesh for certain sections of the trace and completely heterogenous for others, depending on the nature of the captured MeshWorkloads.
+A MeshTrace can consist of a combination of homogeneous and heterogeneous MeshWorkloads across the entire MeshDevice -> captured commands can be identical across the Virtual Mesh for certain sections of the trace and completely heterogeneous for others, depending on the nature of the captured MeshWorkloads.
 
 To enable capturing traces for the general case, we store device specific trace metadata, that is then individually serialized per device.
 
 This is done as follows, during MeshTrace capture mode:
 
 1. For a given MeshWorkload, Host Runtime will iterate over all LogicalDeviceCoordinates in the workload and individually capture/store dispatch commands required to setup and run Programs on workers (ex: sending Program Config, Launch Messages and Go Signals).
-2. The per-device Trace Command will be written to the Distributed Memory Space either as a series of unicasts (traces are heterogenous across devices) or as a single broadcast.
-3. **Most importantly:** No TT-Fabric broadcast-related or Dispatch\_d command ordering information is stored as part of the MeshTrace, since Trace objects are device-local during execution and are run from a single Mcast Prefetch\_d (as described below). **This only needs to be considered when broadcast functonality is integrated (not until V1.2).**
+2. The per-device Trace Command will be written to the Distributed Memory Space either as a series of unicasts (traces are heterogeneous across devices) or as a single broadcast.
+3. **Most importantly:** No TT-Fabric broadcast-related or Dispatch\_d command ordering information is stored as part of the MeshTrace, since Trace objects are device-local during execution and are run from a single Mcast Prefetch\_d (as described below). **This only needs to be considered when broadcast functionality is integrated (not until V1.2).**
 
 Depending on the nature of the MeshTrace, it must be sent to a single *Sharded* or *Replicated* MeshBuffer. It is thus up to Distributed Host Runtime to ensure that the MeshBuffer storing the MeshTrace is configured appropriately (*Replicated* for homogeneous traces and *Sharded* for heterogeneous traces). It is also up to the Host to ensure that MeshTrace data is appropriately laid out when *EnqueueWriteMeshBuffer* is called to serialize commands to the MeshBuffer.
 

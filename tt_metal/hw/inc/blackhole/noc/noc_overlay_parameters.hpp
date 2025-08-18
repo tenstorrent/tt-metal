@@ -12,7 +12,7 @@
 // -T - > noc_overlay_parameters.h                     // (echo '<% type=:cpp_header %>' && cat
 // noc_overlay_parameters.erb) | erb -T - > noc_overlay_parameters.hpp                 // (echo '<% type=:rb_header %>'
 // && cat noc_overlay_parameters.erb) | erb -T - > noc_overlay_parameters.rb                   // Open
-// noc_overlay_parameters.hpp and move static class varaible definitions to noc_overlay_parameters.cpp // overriding
+// noc_overlay_parameters.hpp and move static class variable definitions to noc_overlay_parameters.cpp // overriding
 // existing ones.                                                                                                   //
 //                                                                                                                             //
 // to regenerate //
@@ -147,14 +147,14 @@ public:
     static bool HasReg(std::string label) { return registers_by_name.count(label) >= 1; }
 
     // There might be multiple registers with the same index
-    // If so a register you didnt intend to access might be accessed.
+    // If so a register you didn't intend to access might be accessed.
     // Use accessor based on label if possible
     static bool HasReg(std::uint32_t index) { return registers_by_index.count(index) >= 1; }
 
     static const std::vector<OverlayReg>& GetAllRegs() { return registers; }
 
     // There might be multiple registers with the same index
-    // If so a register you didnt intend to access might be accessed.
+    // If so a register you didn't intend to access might be accessed.
     // Use accessor based on label if possible
     static std::string RegName(std::uint32_t index) {
         if (HasReg(index)) {
@@ -217,7 +217,7 @@ public:
     }
 
     // There might be multiple registers(fields) with the same index(offset)
-    // If so a register(field) you didnt intend to access might be accessed.
+    // If so a register(field) you didn't intend to access might be accessed.
     // Use accessor based on label if possible
     static bool HasFld(std::uint32_t reg_index, std::uint32_t field_offset) {
         return HasReg(reg_index) &&
@@ -233,7 +233,7 @@ public:
     }
 
     // There might be multiple registers(fields) with the same index(offset)
-    // If so a register(field) you didnt intend to access might be accessed.
+    // If so a register(field) you didn't intend to access might be accessed.
     // Use accessor based on label if possible
     static const std::vector<OverlayField>& GetAllFlds(std::uint32_t reg_index) {
         if (HasReg(reg_index)) {
@@ -244,7 +244,7 @@ public:
     }
 
     // There might be multiple registers(fields) with the same index(offset)
-    // If so a register(field) you didnt intend to access might be accessed.
+    // If so a register(field) you didn't intend to access might be accessed.
     // Use accessor based on label if possible
     static std::string FldName(std::uint32_t reg_index, std::uint32_t field_offset) {
         if (HasFld(reg_index, field_offset)) {
@@ -281,7 +281,7 @@ public:
     }
 
     // There might be multiple registers(fields) with the same index(offset)
-    // If so a register(field) you didnt intend to access might be accessed.
+    // If so a register(field) you didn't intend to access might be accessed.
     // Use accessor based on label if possible
     static std::uint32_t FldW(std::uint32_t reg_index, std::uint32_t field_offset) {
         if (HasFld(reg_index, field_offset)) {

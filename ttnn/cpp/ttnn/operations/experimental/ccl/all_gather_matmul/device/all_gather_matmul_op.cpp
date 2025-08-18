@@ -36,7 +36,7 @@ void AllGatherMatmul::validate(
     this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
 
     // All Gather Matmul validate
-    TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
+    TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operations.");
     TT_FATAL(
         input_tensor.padded_shape()[0] == 1 && input_tensor.padded_shape()[1] == 1,
         "AllGatherMatmul requires input tensor to have batch size of 1.");

@@ -12,7 +12,7 @@
 // -T - > noc_overlay_parameters.h                     // (echo '<% type=:cpp_header %>' && cat
 // noc_overlay_parameters.erb) | erb -T - > noc_overlay_parameters.hpp                 // (echo '<% type=:rb_header %>'
 // && cat noc_overlay_parameters.erb) | erb -T - > noc_overlay_parameters.rb                   // Open
-// noc_overlay_parameters.hpp and move static class varaible definitions to noc_overlay_parameters.cpp // overriding
+// noc_overlay_parameters.hpp and move static class variable definitions to noc_overlay_parameters.cpp // overriding
 // existing ones.                                                                                                   //
 //                                                                                                                             //
 // to regenerate // //
@@ -203,7 +203,7 @@ extern "C" {
 // set if REMOTE_RECEIVER==1 and you want the destination buffer to have wrapping:
 #define DEST_MSG_INFO_BUF_FLOW_CTRL (MSG_INFO_BUF_FLOW_CTRL + MSG_INFO_BUF_FLOW_CTRL_WIDTH)
 #define DEST_MSG_INFO_BUF_FLOW_CTRL_WIDTH 1
-// set if REMOTE_SOURCE==1 and has mulicast enabled (i.e. this stream is part of a multicast group)
+// set if REMOTE_SOURCE==1 and has multicast enabled (i.e. this stream is part of a multicast group)
 #define REMOTE_SRC_IS_MCAST (DEST_MSG_INFO_BUF_FLOW_CTRL + DEST_MSG_INFO_BUF_FLOW_CTRL_WIDTH)
 #define REMOTE_SRC_IS_MCAST_WIDTH 1
 // set if no need to flush outgoing remote data from previous phase
@@ -411,7 +411,7 @@ extern "C" {
 // within a phase, so unlike the buffer, it never needs to wrap.
 //
 // The buffer is filled automatically by snooping for streams with remote source.
-// For source enpoints, the buffer is written explicitly (along with the data buffer), after which
+// For source endpoints, the buffer is written explicitly (along with the data buffer), after which
 // STREAM_NUM_MSGS_RECEIVED_INC is written to notify the stream that messages are available for
 // sending.
 //
@@ -533,7 +533,7 @@ extern "C" {
 // is disabled.
 // PHASE_NUM_INCR is phase number increment relative to the previous executed phase (or 0 right
 // after reset). The increment happens after auto-config is done, and before the phase is executed.
-// (Therefore reading  STREAM_CURR_PHASE_REG while auto-config is ongoing, or if it hasnt started
+// (Therefore reading  STREAM_CURR_PHASE_REG while auto-config is ongoing, or if it hasn't started
 // yet, may return the old phase number.)
 // This enables up to 2^12-1 phases to be skipped. If more phases need to be skipped, it is
 // necessary to insert an intermediate phase with zero messages, whose only purpose is to provide
@@ -552,9 +552,9 @@ extern "C" {
 #define CLOCK_GATING_EN_WIDTH 1
 #define CLOCK_GATING_HYST (CLOCK_GATING_EN + CLOCK_GATING_EN_WIDTH)
 #define CLOCK_GATING_HYST_WIDTH 7
-// PARTIAL_SEND_WORDS_THR contols the minimum number of 16-byte words of a tile to accumulate in a relay stream before
+// PARTIAL_SEND_WORDS_THR controls the minimum number of 16-byte words of a tile to accumulate in a relay stream before
 // sending it off to the destination. If the size of the tile is less than or equal to PARTIAL_SEND_WORDS_THR, then this
-// feild is ignored. Default is 16 words
+// field is ignored. Default is 16 words
 #define PARTIAL_SEND_WORDS_THR (CLOCK_GATING_HYST + CLOCK_GATING_HYST_WIDTH)
 #define PARTIAL_SEND_WORDS_THR_WIDTH 8
 
@@ -614,7 +614,7 @@ extern "C" {
 #define STREAM_SCRATCH_5_REG_INDEX 41
 #define DRAM_FIFO_BASE_ADDR_WORDS_HI 0
 #define DRAM_FIFO_BASE_ADDR_WORDS_HI_WIDTH 16
-// Processes the read or write operation to completeion without processing other dram streams in the meantime
+// Processes the read or write operation to completion without processing other dram streams in the meantime
 #define DRAM_EN_BLOCKING (DRAM_FIFO_BASE_ADDR_WORDS_HI + DRAM_FIFO_BASE_ADDR_WORDS_HI_WIDTH)
 #define DRAM_EN_BLOCKING_WIDTH 1
 // Fifo structure in dram holds a dram pointer and size that is used as indirection to a tile in dram
@@ -659,7 +659,7 @@ extern "C" {
 // Does not map to any actual registers in streams
 #define FIRMWARE_SCRATCH_REG_INDEX 208
 
-// Bit mask of connnected local source. Dont care if LOCAL_SOURCES_CONNECTED == 0.
+// Bit mask of connected local source. Dont care if LOCAL_SOURCES_CONNECTED == 0.
 // Mask segments [23:0], [47:24], and [63:48] are at indexes STREAM_LOCAL_SRC_MASK_REG_INDEX,
 // STREAM_LOCAL_SRC_MASK_REG_INDEX+1, STREAM_LOCAL_SRC_MASK_REG_INDEX+2.
 #define STREAM_LOCAL_SRC_MASK_REG_INDEX 224
@@ -705,11 +705,11 @@ extern "C" {
 #define STREAM_NUM_MSGS_RECEIVED_REG_INDEX 259
 
 // Available buffer space at the stream (in 16B words).
-// Source cant send data unless available space > 0.
+// Source can't send data unless available space > 0.
 #define STREAM_BUF_SPACE_AVAILABLE_REG_INDEX 260
 
 // Available msg info buffer space at the stream (in 16B words).
-// Source cant send data unless available space > 0.
+// Source can't send data unless available space > 0.
 // Only valid when MSG_INFO_BUF_FLOW_CTRL is true
 #define STREAM_MSG_INFO_BUF_SPACE_AVAILABLE_REG_INDEX 261
 
@@ -720,7 +720,7 @@ extern "C" {
 #define STREAM_NEXT_RECEIVED_MSG_SIZE_REG_INDEX 263
 
 // Clear message info, move read pointer, and reclaim buffer space for one or more stored messages.
-// This is a special case of STREAM_MSG_INFO_CLEAR/STREAM_MSG_DATA_CLEAR where we arent streaming data
+// This is a special case of STREAM_MSG_INFO_CLEAR/STREAM_MSG_DATA_CLEAR where we aren't streaming data
 // and instead we just want to clear a bunch of messages after we have used them.
 // If you are using streaming it is better to use STREAM_MSG_INFO_CLEAR/STREAM_MSG_DATA_CLEAR instead.
 // You should not use both STREAM_MSG_INFO_CLEAR/STREAM_MSG_DATA_CLEAR and STREAM_MULTI_MSG_CLEAR at the same time
@@ -845,7 +845,7 @@ extern "C" {
 
 // Available buffer space at remote destination stream(s) for both the data buffer and msg info buffer.
 // Dont care unless REMOTE_RECEIVER == 1.
-// Source cant send data unless WORDS_FREE > 0.
+// Source can't send data unless WORDS_FREE > 0.
 // Read-only; updated automatically to maximum value when
 // STREAM_REMOTE_DEST_BUF_SIZE_REG/STREAM_REMOTE_DEST_MSG_INFO_BUF_SIZE_REG is updated.
 // For multicast streams, values for successive destinations are at

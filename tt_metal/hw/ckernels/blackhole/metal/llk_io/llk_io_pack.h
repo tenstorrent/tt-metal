@@ -50,7 +50,7 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
                                             0x3ffff);
 
     // get_local_cb_interface(output).tiles_received is used only by the TRISC2 (the one driving packer)
-    // we need it becasue tiles_received_ptr is updated by the packer, and in cb_reserve_back func (see above) we want
+    // we need it because tiles_received_ptr is updated by the packer, and in cb_reserve_back func (see above) we want
     // to avoid synchronization with packer cb_reserve_back must used the most recent value of tiles_received (cannot
     // use stale or delayed), otherwise it would think there's less tiles in the CB than there actually are so we use
     // get_local_cb_interface(output).tiles_received instead of tiles_received_ptr, because it is updated by TRISC2 and

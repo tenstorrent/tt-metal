@@ -171,7 +171,7 @@ void RowMajorPageConfig::validate_alignment(
     TT_FATAL(!alignment.empty(), "Alignment must contain at least one dimension for Row Major layout.");
     const uint32_t width_alignment = alignment[-1];
 
-    // TODO: Do we need to validate sharded width here if wee are guaranteed that physical_shard_width is set as
+    // TODO: Do we need to validate sharded width here if we are guaranteed that physical_shard_width is set as
     // width_alignment
     if (memory_config.shard_spec().has_value() && memory_config.shard_spec().value().mode == ShardMode::PHYSICAL &&
         memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {

@@ -845,7 +845,7 @@ void try_advance(command_context_t<Addrgen>& cmd_ctx) {
             cmd_ctx.complete_current_command();
             break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
-            // Technically we are implementating semaphore wait as WAIT_MIN. FUTURE work to make separate commands
+            // Technically we are implementing semaphore wait as WAIT_MIN. FUTURE work to make separate commands
             if (*reinterpret_cast<volatile uint32_t*>(cmd_ctx.src_addr_info.address) >=
                 cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
                 DPRINT << "Completing waitval command\n";

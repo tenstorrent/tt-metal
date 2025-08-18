@@ -8,7 +8,7 @@ There is a major change being merged to TT-Metal & TTNN in relation to working w
 This management of multiple devices is being lowered to Metal layer. More specifically:
 1.  A TTNN user will always see a MeshDevice.
     - This object has the same APIs as the Device object, currently exposed to users.
-	- When interfacing with mutiple devices, the MeshDevice will span the extent of the physical cluster.
+	- When interfacing with multiple devices, the MeshDevice will span the extent of the physical cluster.
 	- For cases where users want to control a single physical device a Unit-Mesh (1x1 MeshDevice) Handle will be provided.
 	- The user experience should remain unchanged in either case, since the MeshDevice APIs are backwards compatible with the Device APIs.
 2.  Tensors will be allocated in lock-step on multiple physical devices while being backed by the newly introduced MeshBuffer. The cluster of physical devices is virtualized by a single MeshDevice and the MeshBuffer resides in the distributed memory space exposed by the MeshDevice. This implies that:
@@ -37,7 +37,7 @@ This major change comes with a few limitations. Specifically:
 1.  It is impossible to interleave calls to MeshDevice and a single Device managed by it. The user has to make a choice which one to use and stick to it.
 2.  All Tensor buffers are allocated in lock-step on all devices within the Mesh. This means it is impossible to have a multi-device Tensor which has different addresses on different devices, unless one is willing to spawn a collection of MeshDevices.
 3.  You can not aggregate arbitrary Tensors from different mesh devices into a multi-device Tensor due to (1) and (2).
-4.  All workloads are executed in lock-step fashion across all devices within MeshDevice, one MeshWorkload at a time. The MeshWorkload itself can be homogenous (one program targeting the entire MeshDevice) or heterogenous (different programs running on different physical devices).
+4.  All workloads are executed in lock-step fashion across all devices within MeshDevice, one MeshWorkload at a time. The MeshWorkload itself can be homogeneous (one program targeting the entire MeshDevice) or heterogeneous (different programs running on different physical devices).
 
 
 ## Migration Steps (Applicable to C++ Users Only)

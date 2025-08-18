@@ -46,7 +46,7 @@ void kernel_main() {
                     continue;
                 }
 
-                // if we are here, this means that we have atleast 1 packet left to validate
+                // if we are here, this means that we have at least 1 packet left to validate
                 packets_left_to_validate = true;
                 bool got_new_data = traffic_config->poll();
                 if (!got_new_data) {

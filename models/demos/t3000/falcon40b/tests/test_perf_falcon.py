@@ -303,7 +303,7 @@ def run_test_FalconCausalLM_end_to_end(
         logger.info(f"Tokens per s per user: {tokens_per_s_per_user}")
     logger.info(f"Tokens per s overall: {tokens_per_s_overall}")
 
-    # This script does not asser the expected vs actual time since this is done based on the perf report and as part of the perf pipeline
+    # This script does not assert the expected vs actual time since this is done based on the perf report and as part of the perf pipeline
 
 
 @skip_for_grayskull("Requires eth connected devices to run")

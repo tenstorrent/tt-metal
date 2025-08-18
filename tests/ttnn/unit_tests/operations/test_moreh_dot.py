@@ -64,7 +64,7 @@ def run_moreh_dot_test(input_shape, ttnn_dtype, device, use_optional_output=Fals
     torch_other = torch.reshape(torch_other, (torch_other.shape[-1],))
     torch_out = torch.matmul(torch_input, torch_other)
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_out[0][0][0][0], pcc=0.999, rtol=rtol, atol=atol)
     logger.debug(f"Out passing={passing}")
@@ -76,7 +76,7 @@ def run_moreh_dot_test(input_shape, ttnn_dtype, device, use_optional_output=Fals
 @pytest.mark.parametrize(
     "input_shape",
     (
-        [1, 1, 1, 10],  # test not mutiple of 32 case
+        [1, 1, 1, 10],  # test not multiple of 32 case
         [1, 1, 1, 32],  # test single tile
         [1, 1, 1, 352],  # test multiple tiles
         [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
@@ -98,7 +98,7 @@ def test_moreh_dot(input_shape, dtype, device):
 @pytest.mark.parametrize(
     "input_shape",
     (
-        [1, 1, 1, 10],  # test not mutiple of 32 case
+        [1, 1, 1, 10],  # test not multiple of 32 case
         [1, 1, 1, 32],  # test single tile
         [1, 1, 1, 352],  # test multiple tiles
         [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
@@ -128,7 +128,7 @@ def test_moreh_matmul_1d_callback(input_shape, dtype, device):
 
 @pytest.mark.parametrize(
     "input_shape",
-    ([1, 1, 1, 10],),  # test not mutiple of 32 case
+    ([1, 1, 1, 10],),  # test not multiple of 32 case
 )
 @pytest.mark.parametrize(
     "dtype",

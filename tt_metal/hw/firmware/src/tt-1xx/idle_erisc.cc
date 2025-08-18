@@ -134,7 +134,7 @@ int main() {
     wait_subordinate_eriscs(heartbeat);
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
-    // Cleanup profiler buffer incase we never get the go message
+    // Cleanup profiler buffer in case we never get the go message
 
     DeviceProfilerInit();
     while (1) {

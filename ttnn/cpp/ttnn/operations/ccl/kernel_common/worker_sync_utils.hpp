@@ -275,7 +275,7 @@ struct MatmulOpReceiver {
             // Index of the current tensor slice in a certain direction
             uint32_t tensor_slice_cnt = (this->curr_transfer_idx) / this->num_directions;
 
-            // Wait for a sempaphore signal to start processing the tensor slice
+            // Wait for a semaphore signal to start processing the tensor slice
             if (this->wait_for_op_signal) {
                 noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], tensor_slice_cnt + 1);
             }
@@ -312,7 +312,7 @@ struct MatmulOpReceiver {
             // Update the alignment
             block_id = this->ring_idxs[this->curr_dir];
 
-            // Wait for a sempaphore signal to start processing the tensor slice
+            // Wait for a semaphore signal to start processing the tensor slice
             if (this->wait_for_op_signal && block_id == sender_id) {
                 uint32_t tensor_slice_cnt = (this->curr_transfer_idx) / this->num_directions;
                 noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], 1);

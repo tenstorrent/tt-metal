@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The routines in this file are not supported APIs and may change
-// These routines are split out reads/wrties into multiple calls for optimized
+// These routines are split out reads/writes into multiple calls for optimized
 // transfers
 
 #pragma once

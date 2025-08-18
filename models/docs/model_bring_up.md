@@ -34,7 +34,7 @@ After setting up the environment correctly, run a demo to test the environment.
   - First use a single device for simpler bring-up if models can fit on that single device; Wormhole has 12 GB DRAM storage and can support models of up to roughly 12B parameters in BFP8. If possible, use a smaller version of the model that fits on a single device. The model can be scaled up in size and on more devices.
 
 > [!NOTE]
-> In the llama3 demo implementation the decode stage supports batch=32. Each row is a separate user in 32x32 tiles used by the TT-Metalium stack. The prefill stage supports batch=1 where rows map to different iput tokens. Because prefill is compute-bound, multiple batches do not benefit performance. See [Converting Torch Model to TT-NN](https://docs.tenstorrent.com/docs-test/ttnn/latest/ttnn/converting_torch_model_to_ttnn.html) for model conversion.
+> In the llama3 demo implementation the decode stage supports batch=32. Each row is a separate user in 32x32 tiles used by the TT-Metalium stack. The prefill stage supports batch=1 where rows map to different input tokens. Because prefill is compute-bound, multiple batches do not benefit performance. See [Converting Torch Model to TT-NN](https://docs.tenstorrent.com/docs-test/ttnn/latest/ttnn/converting_torch_model_to_ttnn.html) for model conversion.
 
 ## Systematic Component-wise Large Language Model (LLM) Bring-Up
 

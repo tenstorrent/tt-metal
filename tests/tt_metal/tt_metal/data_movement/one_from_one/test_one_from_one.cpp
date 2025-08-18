@@ -32,7 +32,7 @@ struct OneFromOneConfig {
     //  2. Which NOC to use
 };
 
-/// @brief Does Requestor Core --> L1 Responder Core --> L1 Requestor Core
+/// @brief Does Requester Core --> L1 Responder Core --> L1 Requester Core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
@@ -77,7 +77,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     // Kernels
     auto requestor_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/requestor.cpp",
+        "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/requester.cpp",
         master_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,

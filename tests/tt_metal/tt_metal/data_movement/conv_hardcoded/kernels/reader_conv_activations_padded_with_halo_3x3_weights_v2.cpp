@@ -75,7 +75,7 @@ void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(1);
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(2);
-    // need to have these as compile-time, they are inner loop bouds / unroll loops / constexpr conditionals based on
+    // need to have these as compile-time, they are inner loop bounds / unroll loops / constexpr conditionals based on
     // them
     constexpr uint32_t window_outer = get_compile_time_arg_val(3);
     constexpr uint32_t window_inner = get_compile_time_arg_val(4);

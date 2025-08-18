@@ -572,7 +572,7 @@ class VoVNet(nn.Module):
             output_stride (int): Output stride of network, one of (8, 16, 32) (default: 32)
             norm_layer (Union[str, nn.Module]): normalization layer
             act_layer (Union[str, nn.Module]): activation layer
-            kwargs (dict): Extra kwargs overlayed onto cfg
+            kwargs (dict): Extra kwargs overlaid onto cfg
         """
         super(VoVNet, self).__init__()
         self.num_classes = num_classes

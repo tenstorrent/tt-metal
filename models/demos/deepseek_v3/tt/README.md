@@ -5,7 +5,7 @@ This codebase separates model execution into three distinct stages, each of whic
 2. Generate ModelConfigs for prefill and decode modes
 3. Load TTNN tensor files using WeightConfig, create a shared state using create_state, merge them with ModelPrefillConfig and ModelDecodeConfig to create a RunPrefillConfig and RunDecodeConfig, and execute the model with either of the model configs
 
-The modules are not instantiated directly, but rather used as a namespace for the methods that define the model's behavior in prefill and decode. This is to make it easy to separate the stateful and stateless parts of the model, and allow for easy re-use of the methods.
+The modules are not instantiated directly, but rather used as a namespace for the methods that define the model's behavior in prefill and decode. This is to make it easy to separate the stateful and stateless parts of the model, and allow for easy reuse of the methods.
 
 ## Weight Configuration
 
@@ -96,7 +96,7 @@ Since the module classes are meant to only exist as namespaces for the module-sp
 - Specifies the ttnn.Device on which to load the weights with the MESH_DEVICE_STATE_DICT_KEY key
 
 ## run config creation
-The `run_config(model_config: ModelPrefillConfig | ModelDecodeConfig, weight_config: WeightConfig, model_state: ModelState) -> RunPrefillConfig | RunDecodeConfig` function merges the model config, the weight config and the shared model state hierarchically over their structure. If a MESH_DEVICE_STATE_DICT_KEY key is specified somewhere in the model_state dictionary hierarchy, it will use the ttnn.MeshDevice from under that key as the device for instantiating the run_config for that hierarchy (unless said device is overriden by any of the deeper nodes). For given config items:
+The `run_config(model_config: ModelPrefillConfig | ModelDecodeConfig, weight_config: WeightConfig, model_state: ModelState) -> RunPrefillConfig | RunDecodeConfig` function merges the model config, the weight config and the shared model state hierarchically over their structure. If a MESH_DEVICE_STATE_DICT_KEY key is specified somewhere in the model_state dictionary hierarchy, it will use the ttnn.MeshDevice from under that key as the device for instantiating the run_config for that hierarchy (unless said device is overridden by any of the deeper nodes). For given config items:
 - if all of them are either the same container (list, tuple, dict) or a None, these containers are unified, and the matching items in these containers are merged using the same procedure
   - `OpConfigBase` subclasses are treated as dicts here, and re-wrapped in the same dataclass for `RunConfig`
   - if the container type is a dict, the containers are merged by keys. Note that, for merging the model_state in, MESH_DEVICE_STATE_DICT_KEY key is omitted to avoid name clashes with op configs which specify it as their argument.

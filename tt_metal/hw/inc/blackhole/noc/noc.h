@@ -431,7 +431,7 @@ void noc_multicast_atomic_read_and_increment(
     uint8_t transaction_id);
 
 /*
-  Set command buffer ID (0-3) to use for the next commmand issued.
+  Set command buffer ID (0-3) to use for the next command issued.
 */
 void noc_set_cmd_buf(uint32_t cmd_buf_id);
 
@@ -441,7 +441,7 @@ void noc_set_cmd_buf(uint32_t cmd_buf_id);
 uint32_t noc_get_cmd_buf();
 
 /*
-  Set NOC instance (0-1) to use for the next commmand issued.
+  Set NOC instance (0-1) to use for the next command issued.
 */
 void noc_set_active_instance(uint32_t noc_id);
 

@@ -23,7 +23,7 @@
 // 2) stream_phase_advance_wait can be used to wait for the current phase to complete
 //    -> in the scheme for this producer, it'll end up waiting until the message is sent out of L1
 // 3) How does initial stream handshake happen?
-//    -> Stream has hidden registers: curr_phase_src/dest_change. When comming out of reset, these are set true
+//    -> Stream has hidden registers: curr_phase_src/dest_change. When coming out of reset, these are set true
 //       This value is sticky and the next_phase_src/dest_change will override it for the next phase
 ///////
 

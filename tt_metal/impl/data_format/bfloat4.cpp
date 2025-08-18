@@ -193,7 +193,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                     simde_mm256_sub_epi32(exp_vector0, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
                                     simde_mm256_setzero_si256(),
                                     select_mask);  // Choose new (rebiased exponent) or keep previous exponent based on
-                                                   // mantissa intiial condition
+                                                   // mantissa initial condition
                             } else {
                                 man1 = simde_mm256_blendv_epi8(
                                     man_shifted, man1, select_mask);  // Choose new mantissa or keep old mantissa based
@@ -207,7 +207,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                     simde_mm256_sub_epi32(exp_vector1, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
                                     simde_mm256_setzero_si256(),
                                     select_mask);  // Choose new (rebiased exponent) or keep previous exponent based on
-                                                   // mantissa intiial condition
+                                                   // mantissa initial condition
                             }
                         }
 

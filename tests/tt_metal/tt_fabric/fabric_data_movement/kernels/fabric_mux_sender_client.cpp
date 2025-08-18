@@ -114,7 +114,7 @@ void kernel_main() {
         uint32_t seed = time_seed ^ sender_id ^ (iter + 1);
         uint32_t dest_payload_slot_id = 0;
         for (uint32_t packet_id = 0; packet_id < num_packets; packet_id++) {
-            // wait until we have atleast 1 credit
+            // wait until we have at least 1 credit
             while (credit_handshake_ptr[0] == 0) {
                 invalidate_l1_cache();
             }

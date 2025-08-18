@@ -144,7 +144,7 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
             // Case where in_nbytes_leftover and in_nbytes_c is different is when we are dealing with
             // tesnors that have last tile as partial. Cb page size is multiple of tile but when the last
             // tile is partial we have to read the smaller stick width. Therefore we need to write out the next stick
-            // right bellow the previous one and this is when increment of the write pointer and the read stick size is
+            // right below the previous one and this is when increment of the write pointer and the read stick size is
             // not compliant.
             bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c;
             if constexpr (is_large_kernel) {
@@ -183,9 +183,9 @@ ALWI void fill_scalar(
         scalar_end = config_ptr[3 * scalar_index + 2];
         scalar_index++;
     }
-    // We want to fill the scalar CB at most only the fisrt 2 times since the number of pages is 2, only for the
+    // We want to fill the scalar CB at most only the first 2 times since the number of pages is 2, only for the
     // intervals [x, y) where y >= x + 3 exactly 2 times and when y < x + 3 only once. When split reader is
-    // enabled counter takes even or odd values only depennding on the reader id so if the scalar start is even
+    // enabled counter takes even or odd values only depending on the reader id so if the scalar start is even
     // and counter is even it will fullfill the first half of the condition counter == scalar_start || counter
     // == scalar_start + 2. When reader is even and scalar_start is odd or vice versa we will fullfill the
     // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.

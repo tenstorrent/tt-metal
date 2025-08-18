@@ -26,7 +26,7 @@ class AbstractModule(ABC):
 
     This class defines the common interface for submodules. The modules are not instantiated directly, but rather
     used as a namespace for the methods that define the model's behavior in prefill and decode. This is to make it easy
-    to separate the stateful and stateless parts of the model, and allow for easy re-use of the methods.
+    to separate the stateful and stateless parts of the model, and allow for easy reuse of the methods.
 
     All subclasses must implement the following methods:
     - `forward_prefill` - defines the prefill-variant forward pass for the module.

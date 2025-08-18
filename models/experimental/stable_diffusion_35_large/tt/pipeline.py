@@ -278,7 +278,7 @@ class TtStableDiffusion3Pipeline:
 
         assert (
             batch_size * num_images_per_prompt == 1
-        ), "generating multiple images is not yet supported as it requires another mesh sharding stategy"
+        ), "generating multiple images is not yet supported as it requires another mesh sharding strategy"
 
         width = self._prepared_width
         height = self._prepared_height

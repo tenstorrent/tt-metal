@@ -324,7 +324,7 @@ struct dprint_buf_msg_t {
     uint32_t pad;  // to 1024 bytes
 };
 
-// NOC aligment max from BH
+// NOC alignment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
 static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;

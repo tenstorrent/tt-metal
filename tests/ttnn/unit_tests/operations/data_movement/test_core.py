@@ -528,7 +528,7 @@ def test_bh_alignment_i2s(
         memory_config=input_buffer_type,
         dtype=ttnn.bfloat16,
     )
-    # So far the sharded tensor alignment is controled by keep_l1_aligned flag, will remove it later after launch
+    # So far the sharded tensor alignment is controlled by keep_l1_aligned flag, will remove it later after launch
     x_t_sharded = ttnn.interleaved_to_sharded(x_t, shard_config, keep_l1_aligned=True)
     x_t = ttnn.sharded_to_interleaved(x_t_sharded, output_buffer_type, is_l1_aligned=True)
     output_data = ttnn.from_device(x_t)
@@ -606,7 +606,7 @@ def test_mnist_max_pool_s2i(
         ceil_mode=False,
     )(input_data)
 
-    ## test for equivalance
+    ## test for equivalence
     golden_shape = golden_pytorch.shape
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
 

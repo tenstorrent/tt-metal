@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
-// In order to make circular buffer indicies sequential, we use variable to keep track of the next available index.
+// In order to make circular buffer indices sequential, we use variable to keep track of the next available index.
 // Circular buffer indices should be assigned right before their creation.
 struct CBIndices {
     // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.

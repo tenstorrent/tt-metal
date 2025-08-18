@@ -18,7 +18,7 @@ namespace reduce_op_utils {
 std::map<std::string, std::string> get_defines(
     tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim) {
     std::map<std::string, std::string> defines;
-    // TOOD(AP): need a sync with Reduce::Max from HLK headers
+    // TODO(AP): need a sync with Reduce::Max from HLK headers
     bool do_max = reduce_op == tt::tt_metal::ReduceOpMath::MAX;
     std::string reduce_dim_str;
     switch (reduce_dim) {

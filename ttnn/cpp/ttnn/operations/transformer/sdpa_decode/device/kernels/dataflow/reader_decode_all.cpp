@@ -258,7 +258,7 @@ void kernel_main() {
 
                 {
                     if constexpr (reuse_k) {
-                        // Read V chunk (tranpose of K), from K's L1 buffer
+                        // Read V chunk (transpose of K), from K's L1 buffer
                         cb_reserve_back(cb_v_in, v_chunk_tiles);
                         uint32_t v_write_ptr = get_write_ptr(cb_v_in);
                         uint64_t k_read_ptr = k_base_read_ptr;

@@ -64,7 +64,7 @@ Each Tensix core has a register that programmer can read at any point in the ker
 #define RISCV_DEBUG_REG_FPU_STICKY_BITS         (0xffb1200 | 0x0B4)
 ```
 
-Compute API funcitons are provided to read and clear flags:
+Compute API functions are provided to read and clear flags:
 ```
 ALWI uint32_t get_compute_special_value_flags()
 ALWI uint32_t get_compute_special_value_flags_fpu(uint32_t special_value_flags_reg)
@@ -88,6 +88,6 @@ Some ideas for Wormhole:
    - Given that FPU/SFPU hardware detects if NaN/Inf numbers are detected at output and device inputs are filtered, detection at input isn't really necessary given that any special numbers would've already been caught at output of previous ops
 - to debug 2. -
    - To the best of our knowledge, activations and weights are numbers with normal distribution (mean = 0.0, stddev = 1.0)
-   - Numbers with really big magnitude are unlikely to be correct, so operations with `Inf/NaN` and `finite` that don't propagate special numbers properly will, sooner or later, likely yeild numbers with extremely big magnitude
+   - Numbers with really big magnitude are unlikely to be correct, so operations with `Inf/NaN` and `finite` that don't propagate special numbers properly will, sooner or later, likely yield numbers with extremely big magnitude
    - Cases like `Inf/NaN` + `normal magnitude finite` would produce output numbers would have really big magnitude and significantly stand out as incorrect. The debug tools allow us to DPRINT results after every tile is calculated so it should be possible to detect/spot erroneous numbers even though they are undetected.
    - Cases where `Inf/NaN` + `really big magnitude finite` could be entirely cancelled and fall into the "valid" range, but it shouldn't be possible to get `really big magnitude finite` number and still being correct. Debug tools could be used to detect those `really big magnitude finite` numbers and detect errors

@@ -23,7 +23,7 @@ class TtT5Model(nn.Module):
         self.config_use_cache = config["use_cache"] if "use_cache" in config else False
         self.config_use_return_dict = config["use_return_dict"] if "use_return_dict" in config else False
 
-        # Re-use embedding layer from reference_module
+        # Reuse embedding layer from reference_module
         self.shared = nn.Embedding(config["vocab_size"], config["d_model"])
         self.shared.weight = nn.Parameter(state_dict["shared.weight"])
 

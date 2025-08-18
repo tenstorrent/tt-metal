@@ -4,16 +4,16 @@ This test suite implements tests that measure the functionality and performance 
 
 ## Test Flow
 
-L1 space is allocated on all Tensix cores involved in the data movement test. Based on a given number of reservable pages, subsets of these pages are designated as either requestor pages (masters) or responder pages (subordinates).
+L1 space is allocated on all Tensix cores involved in the data movement test. Based on a given number of reservable pages, subsets of these pages are designated as either requester pages (masters) or responder pages (subordinates).
 
 The subsets are determined as follows:
 - num_responder_pages = num_reservable_pages / (1 + num_subordinate_cores)
 - num_requestor_pages = num_responder_pages * num_subordinate_cores
 
-The starting address of the requestor space in L1 immediately follows the final address allocated for the responder space.
+The starting address of the requester space in L1 immediately follows the final address allocated for the responder space.
 
 Each subordinate core contains a portion of the entire data that is to be received buy each master core.
-Each master core issues a NOC asynchronous read to each subordinate (responder) core, requesting and receiving data from all the subordinate cores and storing it its requestor pages.
+Each master core issues a NOC asynchronous read to each subordinate (responder) core, requesting and receiving data from all the subordinate cores and storing it its requester pages.
 By the end of the test, every master core should have received the same data from every subordinate core.
 
 Test attributes such as pages per transaction and number of transactions per subordinate core, and latency measures such as kernel and pre-determined scope cycles are recorded by the profiler.

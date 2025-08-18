@@ -25,7 +25,7 @@ enum class KernelBuildOptLevel : uint8_t {
     O0,     // Reduce compilation time and make debugging produce the expected results.
     Os,     // Optimize for size and also O2 optimizations except for those that increase binary size.
     Ofast,  // Turns on level O3 and also non standard optimizations.
-    Oz,     // Aggresively optimize for size rather than speed.
+    Oz,     // Aggressively optimize for size rather than speed.
 };
 
 struct DataMovementConfig {

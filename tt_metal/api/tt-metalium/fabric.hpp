@@ -33,11 +33,11 @@ size_t get_tt_fabric_channel_buffer_size_bytes();
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
 
-// Used to get the run-time args for estabilishing connection with the fabric router.
-// The API appends the connection specific run-time args to the set of exisiting
+// Used to get the run-time args for establishing connection with the fabric router.
+// The API appends the connection specific run-time args to the set of existing
 // run-time args for the worker programs, which allows the workers to conveniently
 // build connection management object(s) using the run-time args.
-// It is advised to call the API once all the other run-time args for the prgram are
+// It is advised to call the API once all the other run-time args for the program are
 // determined/pushed to keep things clean and avoid any extra arg management.
 //
 // Inputs:
@@ -84,7 +84,7 @@ tt::tt_fabric::Topology get_fabric_topology();
  * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
  * for that init sequence. The number of routing planes fabric will be initialized on will be the max
  * of all the values specified by different clients. If a client wants to initialize fabric on all the
- * available routing planes, num_routing_planes can be left unspecifed.
+ * available routing planes, num_routing_planes can be left unspecified.
  * NOTE: This does not 'reserve' routing planes for any clients, but is rather a global setting.
  *
  * Return value: void

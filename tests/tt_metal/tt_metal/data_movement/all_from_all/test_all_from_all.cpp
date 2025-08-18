@@ -128,7 +128,7 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
     // Create kernels
     auto requestor_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/all_from_all/kernels/requestor.cpp",
+        "tests/tt_metal/tt_metal/data_movement/all_from_all/kernels/requester.cpp",
         mst_logical_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,

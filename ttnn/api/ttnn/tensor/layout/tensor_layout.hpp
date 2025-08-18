@@ -29,7 +29,7 @@ public:
         const MemoryConfig& memory_config,
         const Alignment& alignment = {});
 
-    // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a
+    // static method makes it easy to find and remove all of its usages in the codebase - that's why it is not a
     // constructor
     [[deprecated("Use of Padded Shape is deprecated")]]
     static TensorLayout fromPaddedShape(

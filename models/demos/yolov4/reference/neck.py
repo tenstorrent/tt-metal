@@ -123,7 +123,7 @@ class Neck(nn.Module):
         # upsample
         u1 = self.u(x10_m)
 
-        # Next CBR block to be concatinated with output of u1
+        # Next CBR block to be concatenated with output of u1
         # gets the output of downsample4 module which is dimensions: [1, 512, 20, 20] - make a random tensor with that shape for the purpose of running the neck unit test stand-alone
         outDownSample4 = input2
         # CBR block for conc2

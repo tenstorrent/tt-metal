@@ -81,7 +81,7 @@ private:
 
     // Size segregated list of free blocks. Idea comes from the TLSF paper, but instead of aiming for realtime
     // the goal there is to not look at small blocks when allocating large blocks. Which the naive free list
-    // algorithm does not do. Confiugring these 2 parameters is needs real world data, but for now it's just
+    // algorithm does not do. Configuring these 2 parameters is needs real world data, but for now it's just
     // number pulled out of thin air. Too low and it devolves into an array search, too high you pay cache misses
 
     // Size class index is calculated by taking the log2 of the block size divided by the base size

@@ -99,7 +99,7 @@ Arguments:
 * `groups` _optional_ `int` to control the connections between inputs and outputs. Both `in_channels` and `out_channels` should be divisible by `groups`.
 * `memory_config` _optional_ output tensor memory configuration. This is described below.
 * `return_weights_and_bias = False` _optional_ `bool` indicating whether to return pre-processed weights and bias tensors on device.
-* `return_output_dim = False` _optional_ `bool` indicating whether to return the outout tensor height and width.
+* `return_output_dim = False` _optional_ `bool` indicating whether to return the output tensor height and width.
 
 #### `Conv2dConfig`
 
@@ -197,7 +197,7 @@ Once the inputs are prepared, we can call the `conv2d` operation as shown in the
     )
 ```
 
-Note that the `conv2d` supports controling the return of output dimensions, through argument `return_output_dim`, and for processed weights and bias tensors, through argument `return_weights_and_bias`.
+Note that the `conv2d` supports controlling the return of output dimensions, through argument `return_output_dim`, and for processed weights and bias tensors, through argument `return_weights_and_bias`.
 
 To achieve higher performance it is advisable to use the following optional arguments:
 
@@ -209,7 +209,7 @@ To achieve higher performance it is advisable to use the following optional argu
 
 ##### Output post-processing
 
-The generated output of the `conv2d` operation is a 4D tensor with the `NHWC` order of dimensions, and requires a permute operation to convert to the standard `NCHW` order. The following is an example of how to typically post-process the output tensor. Note that the `reshape` is used to un-flatten the outout tensor. The slice operation removes any padding that may have been added by the operation to the last dimension.
+The generated output of the `conv2d` operation is a 4D tensor with the `NHWC` order of dimensions, and requires a permute operation to convert to the standard `NCHW` order. The following is an example of how to typically post-process the output tensor. Note that the `reshape` is used to un-flatten the output tensor. The slice operation removes any padding that may have been added by the operation to the last dimension.
 
 ```python
     ttnn_output_tensor = ttnn.from_device(ttnn_output_tensor_on_device)
@@ -273,7 +273,7 @@ been computed. The partitioning of the inputs and the sequence of
 transfers to the local memory must be meticulously managed to minimize
 accesses to the global DRAM memory or remote L1 memory, which are
 significantly slower than accesses to the local L1 memory, and maximize
-the re-use of loaded input data into local L1 memory.
+the reuse of loaded input data into local L1 memory.
 
 The input and output matrices are partitioned into *blocks*, the size of
 which would be dictated by the maximum data size that can be

@@ -329,7 +329,7 @@ For example, the Llama model is implemented as follows:
         return self.wo(output)
 ```
 
-The generic `torch` implementation is agnostic to **prefill** and **decode** modes, however, our implementation differientiates them. For more information about differences between modes and how we handle them in TT-NN, see [3.2 Prefill and Decode](#32-prefill-and-decode). In general, our high performance attention module uses specialized implementations for each mode as they have different memory and compute patterns and bottlenecks, requiring different optimizations.
+The generic `torch` implementation is agnostic to **prefill** and **decode** modes, however, our implementation differentiates them. For more information about differences between modes and how we handle them in TT-NN, see [3.2 Prefill and Decode](#32-prefill-and-decode). In general, our high performance attention module uses specialized implementations for each mode as they have different memory and compute patterns and bottlenecks, requiring different optimizations.
 
 In this section we split the attention module into two parts -- **prefill** and **decode** -- and describe the six implementation steps for each mode. We discuss limitations of the current implementation and helpful facts for debugging and performance optimization.
 
@@ -671,7 +671,7 @@ The first set of operations in the MLP are:
 w1_out = FF1(x)
 w3_out = FF3(x)
 ```
-Based on the program configs we computed beforehand, we perform the FF1/FF3 matmuls, making sure that the ouputs are L1 sharded in in decode mode, and interleaved in DRAM if in prefill mode. For the `compute_kernel_config`, we use `ttnn.MathFidelity.HiFi2` to retain accuracy while still being performant. Using `ttnn.MathFidelity.HiFi4` instead, would mean that this matmul would become compute bound.
+Based on the program configs we computed beforehand, we perform the FF1/FF3 matmuls, making sure that the outputs are L1 sharded in in decode mode, and interleaved in DRAM if in prefill mode. For the `compute_kernel_config`, we use `ttnn.MathFidelity.HiFi2` to retain accuracy while still being performant. Using `ttnn.MathFidelity.HiFi4` instead, would mean that this matmul would become compute bound.
 
 ```py
 compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
@@ -1312,7 +1312,7 @@ Additionally use an AllGather operation (ReduceScatter+AllGather = AllReduce) to
 
 ##### 3.3.7 1D Column Parallel Followed by Row Parallel (1D Weight Sharding)
 
-1D Weight Sharding is a sharding scheme that combines column and row parallel matmuls and can reduce the data volume sent over CCL operation and thus speed up computation. It consists of a column parallel matmul followed by a row parallel matmul. In this scheme the initial activations are gathered, and the column parallel matmul produces width-sharded outputs. The row parallel matmul consumes those sharded activations and produces parial outputs. Use an AllReduce (ReduceScatter+AllGather) operation to compute the final reduced and gathered outputs.
+1D Weight Sharding is a sharding scheme that combines column and row parallel matmuls and can reduce the data volume sent over CCL operation and thus speed up computation. It consists of a column parallel matmul followed by a row parallel matmul. In this scheme the initial activations are gathered, and the column parallel matmul produces width-sharded outputs. The row parallel matmul consumes those sharded activations and produces partial outputs. Use an AllReduce (ReduceScatter+AllGather) operation to compute the final reduced and gathered outputs.
 
 Optimization potential in this scheme depends highly on the input dimensions to the CCL operations. Use this scheme for the MLP and any sequence of matmuls that expand and then narrow the output dimension again, because it moves the CCL operation to a more beneficial location in the computational graph and thus reduces the CCL data volume.
 
@@ -1353,7 +1353,7 @@ The overall data movement (DM) is then computed using:
 
 Where K and N are height and width of the weight tensor, DF is the data format multiplyer (number of bytes per datum) and D is the number of devices along the axis that the CCL operation is performed on. Ring topology is more optimized and results in less overall data movement.
 
-##### 3.3.10 Examplary parallelization scheme: Llama3
+##### 3.3.10 Exemplary parallelization scheme: Llama3
 
 For our [Llama3 family of models](/../../models/tt_transformers) we are using the following sharding schemes in our multi-device architectures:
 
@@ -1408,7 +1408,7 @@ Tracing doesn’t work with prefill; sequence length and matmul row counts will 
 
 ### 4.2 Multiple CQs
 
-  - How to feed back output to input and read output asyncronously.
+  - How to feed back output to input and read output asynchronously.
 
 ### 4.3 Op Configs
 
@@ -1521,7 +1521,7 @@ fuse_batch=False,
 Since we use matmul 2D for large matmuls, there might be issues where we run out of L1 space to store intermediate values in the kernel. When this happens, reduce `in0_block_w` and `out_subblock_h` and `out_subblock_w`.
 
 ##### 4.3.2.2 DRAM-Sharded Matmul
-DRAM-sharded matmul should be used in decode mode, where activations are small and DRAM-bandwidth to read weights is the limiting factor in OP performance. DRAM-Sharded matmul is named because rather than having weights interleaved in DRAM, they are sharded across DRAM banks to optimally collocate weights with compute. For more details on implmentation see: [DRAM-Sharded Matmul](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md).
+DRAM-sharded matmul should be used in decode mode, where activations are small and DRAM-bandwidth to read weights is the limiting factor in OP performance. DRAM-Sharded matmul is named because rather than having weights interleaved in DRAM, they are sharded across DRAM banks to optimally collocate weights with compute. For more details on implementation see: [DRAM-Sharded Matmul](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md).
 
 DRAM-Sharded matmul is used for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights width-sharded in DRAM.
 
@@ -1638,7 +1638,7 @@ TT-NN performance has five components:
 > Confirm that Tracing has been enabled!
 > Tracing is used for decode mode, NOT prefill mode! For decode mode, don't worry about 1-3, but for prefill mode you will.
 
-For more inforation see: [4.1 Tracing](#41-tracing).
+For more information see: [4.1 Tracing](#41-tracing).
 
 #### 4.5.1 Main Python Thread
 
@@ -1686,7 +1686,7 @@ As little communication as possible between the host and the device is preferred
 * Perform embeddings on-device, token IDs are smaller than embeddings.
 * Return only the last token from prefill, not all tokens.
 * Perform sampling (argmax etc) on-device if possible.
-* Avoid pushing attention masks or rotation matrices if they can be generated on-device or re-used between iterations.
+* Avoid pushing attention masks or rotation matrices if they can be generated on-device or reused between iterations.
 
 Take note where data is tilized and untilized. Do NOT tilize or untilize data on the host. The API `to_torch` will by default do this on the host. You can untilize on-device like this:
 

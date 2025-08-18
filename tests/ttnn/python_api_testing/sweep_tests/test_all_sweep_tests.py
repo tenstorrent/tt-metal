@@ -38,10 +38,10 @@ def create_test_function(file_name):
         test_pass = run_sweep_test(sweep_test.parameters, op_map, device)
         assert test_pass
 
-    splitted = file_name.split("/")
+    split = file_name.split("/")
     basename = os.path.basename(file_name).replace(".yaml", "")
-    working_splitted = splitted[-3].split("_")[-1]
-    test_name = f"test_{working_splitted}_{splitted[-2]}_{basename}"
+    working_splitted = split[-3].split("_")[-1]
+    test_name = f"test_{working_splitted}_{split[-2]}_{basename}"
 
     if test_name.endswith("_test"):
         test_name = test_name[: -len("_test")]

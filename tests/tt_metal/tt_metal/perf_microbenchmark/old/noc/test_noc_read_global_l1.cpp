@@ -298,7 +298,7 @@ int main(int argc, char** argv) {
         auto end = std::chrono::steady_clock::now();
         auto elapsed_us = duration_cast<microseconds>(end - begin).count();
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-        log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
+        log_info(LogTest, "Total bytes transferred: {} Bytes", total_tiles_size_bytes);
         log_info(LogTest, "Read global to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
         tt_metal::detail::ReadDeviceProfilerResults(device);
 
@@ -332,11 +332,11 @@ int main(int argc, char** argv) {
                             sliced_tensor, 1, "sliced_tensor " + std::to_string(r) + " " + std::to_string(c));
                     }
                     if (sliced_tensor != result_bfp16) {
-                        log_error(LogTest, "{}/{} - comparision failed ", r, c);
+                        log_error(LogTest, "{}/{} - comparison failed ", r, c);
                         pass = false;
                     } else {
                         if (debug) {
-                            log_info(LogTest, "{}/{} - comparision passed", r, c);
+                            log_info(LogTest, "{}/{} - comparison passed", r, c);
                         }
                     }
                 }

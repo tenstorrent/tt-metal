@@ -89,7 +89,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
 
 # Output the individual test vectors.
 def export_suite_vectors(module_name, suite_name, vectors):
-    # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
+    # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducibility)
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
 
     index_name = VECTOR_INDEX_PREFIX + module_name

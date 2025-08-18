@@ -38,8 +38,8 @@ def find_closest_largest_divisor(num: int, start_divisor: int) -> int:
     return divisor
 
 
-# Determins input memory config for a height sharded conv operation.
-# If override_num_cores is set to True, the number of cores will be overriden to the closest largest divisor of the number of tiles
+# Determines input memory config for a height sharded conv operation.
+# If override_num_cores is set to True, the number of cores will be overridden to the closest largest divisor of the number of tiles
 # This will avoid default conv codepath which can pad-up the nhw num tiles and produce padded output
 # This can lead to issues with data-movment ops not handling padding correctly
 def get_conv_input_memory_config(

@@ -159,10 +159,10 @@ def profile_host_overhead(output_directory, output_csv, op_to_profile=""):
 
 @click.command()
 @click.option(
-    "-o", "--output_directory", default="host_overhead_profile/", type=str, help="Ouput folder path for csv's"
+    "-o", "--output_directory", default="host_overhead_profile/", type=str, help="Output folder path for csv's"
 )
-@click.option("-c", "--output_csv", default="final.csv", type=str, help="Ouput csv filename")
-@click.option("-n", "--op_name", default="", type=str, help="Ouput csv filename")
+@click.option("-c", "--output_csv", default="final.csv", type=str, help="Output csv filename")
+@click.option("-n", "--op_name", default="", type=str, help="Output csv filename")
 def main(output_directory, output_csv, op_name):
     """
     Profile all ops:

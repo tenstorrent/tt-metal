@@ -569,7 +569,7 @@ def run_llama3_demo(
         logger.info(f"95 percentile tsu throughput: {percentile_95}")
 
         logger.info(
-            f"Suggested taget range is 5 percentile: {int(percentile_5)} - max: {int(max(all_tokens_per_second_per_user))+1}"
+            f"Suggested target range is 5 percentile: {int(percentile_5)} - max: {int(max(all_tokens_per_second_per_user))+1}"
         )
 
         if tokens_per_second_per_user_token127 is not None:
@@ -667,7 +667,7 @@ def run_llama3_demo(
             True,  # stress_test
             0,  # start_pos
         ),
-        (  # 10 layers for devive perf measurements
+        (  # 10 layers for device perf measurements
             "instruct",
             10,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts

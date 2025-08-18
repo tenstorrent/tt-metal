@@ -50,7 +50,7 @@ Tensor pre_sort_transform_tensor(
     }
     // If dim is not last dimension transpose it
     const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
-    // If input is not rank 4 transorm it to 4D
+    // If input is not rank 4 transform it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
     // Fill implicit tile padding with the appropriate value
     Tensor padded_tensor = ttnn::fill_implicit_tile_padding(

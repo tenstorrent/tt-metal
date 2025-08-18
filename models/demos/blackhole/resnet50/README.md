@@ -37,7 +37,7 @@ The 16 (or 32 )refers to batch size per device here and 100 is the number of ite
 pytest models/demos/blackhole/resnet50/tests/test_perf_device_resnet50.py::test_perf_device
 ```
 + This will run the model for 4 times and generate CSV reports under `<this repo dir>/generated/profiler/reports/ops/<report name>`. The report file name is logged in the run output.
-+ It will also show a sumary of the device throughput in the run output.
++ It will also show a summary of the device throughput in the run output.
 
 ### Blackhole End-to-End Performance
 + For end-to-end performance, run

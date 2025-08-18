@@ -47,7 +47,7 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
 
     // All Gather Matmul validate
     TT_FATAL(
-        this->all_gather_async_struct.dim == 3, "AllGatherMatmulAsync requires dim=3 for the AllGather operaitons.");
+        this->all_gather_async_struct.dim == 3, "AllGatherMatmulAsync requires dim=3 for the AllGather operations.");
     TT_FATAL(
         input_tensor.padded_shape()[0] == 1 && input_tensor.padded_shape()[1] == 1,
         "AllGatherMatmulAsync requires input tensor to have batch size of 1.");

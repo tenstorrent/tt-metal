@@ -198,7 +198,7 @@ public:
                         auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                             sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
 
-                        // for 2d, we need to spcify the mcast start node id
+                        // for 2d, we need to specify the mcast start node id
                         std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
                         if (fixture_->is_2D_routing_enabled() &&
                             sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
@@ -549,7 +549,7 @@ private:
             }
         }
 
-        // for 2d, we need to spcify the mcast start node id
+        // for 2d, we need to specify the mcast start node id
         // TODO: in future, we should be able to specify the mcast start node id in the traffic config
         std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
         if (fixture_->is_2D_routing_enabled() &&
@@ -910,7 +910,7 @@ private:
                     const auto device_frequency_mhz =
                         tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
                     uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
-                    // use min frequency (in real senario we will have the same freq)
+                    // use min frequency (in real scenario we will have the same freq)
                     device_freq = std::min(device_freq, device_frequency_hz);
                     const auto duration_seconds =
                         static_cast<double>(cycles) / static_cast<double>(device_frequency_hz);

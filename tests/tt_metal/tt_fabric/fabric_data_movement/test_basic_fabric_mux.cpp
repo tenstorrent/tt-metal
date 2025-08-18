@@ -145,8 +145,8 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
 
     if (chip_0_neigbors.size() > 2) {
         log_fatal(
-            LogTest, "Expected 2 or less than 2 neigbors for a corner chip, but found {}", chip_0_neigbors.size());
-        throw std::runtime_error("Unexpected number of neigbors for corner chip");
+            LogTest, "Expected 2 or less than 2 neighbors for a corner chip, but found {}", chip_0_neigbors.size());
+        throw std::runtime_error("Unexpected number of neighbors for corner chip");
     }
 
     if (!chip_1_direction.has_value()) {
@@ -275,7 +275,7 @@ void create_mux_kernel(
     const auto& available_links = get_forwarding_link_indices(src_node_id, dst_node_id);
     TT_FATAL(
         available_links.size() > 0,
-        "Couldnt find any forwarding routing planes from: {} to: {}",
+        "Couldn't find any forwarding routing planes from: {} to: {}",
         device->id(),
         dest_device->id());
 
@@ -439,7 +439,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
 
     // if the sender-receiver split is uniform, i.e., same number of senders and receivers on a device,
     // the number of full size and header only channels
-    // will be the same across devices, else the deivces (following the 1st one
+    // will be the same across devices, else the devices (following the 1st one
     // in the sequence) will have unequal number of full size and header only channels
     int8_t offset = 0;
     if (!test_config.uniform_sender_receiver_split) {

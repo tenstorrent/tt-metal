@@ -140,7 +140,7 @@ def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_opti
         .to_torch()
     )
 
-    # test for equivalance
+    # test for equivalence
     # TODO(Dongjin) : check while changing rtol after enabling fp32_dest_acc_en
     rtol = atol = 0.12
     passing, output_pcc = comp_allclose_and_pcc(
@@ -339,7 +339,7 @@ def moreh_sum_backward(
         .to_torch()
     )
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 

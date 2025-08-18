@@ -40,7 +40,7 @@ Columns:
 * `count`: Number of profile runs.
 * `python min dispatch time (ms)`: Minimum measured dispatch time (overhead).
 * `python mean dispatch time(ms)`: Mean of measured dispatch times.
-* `python mean dispatch + sync time (ms)`: Total time needed to run the op (both dispatch and kernel time). Measured after syncronize.
+* `python mean dispatch + sync time (ms)`: Total time needed to run the op (both dispatch and kernel time). Measured after synchronize.
 
 
 ## profile_host_overhead_with_tracy.py

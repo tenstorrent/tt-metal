@@ -4196,7 +4196,7 @@ mkdir -p generated/test_reports
 2025-02-13T20:10:37.9905534Z
 2025-02-13T20:10:38.0377328Z [38;2;000;128;000m                   Test[0m | [1m[38;2;100;149;237mINFO    [0m | Finished running test on device 0.
 2025-02-13T20:10:38.0379528Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
-2025-02-13T20:10:38.0432815Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | DPRINT Server dettached device 0
+2025-02-13T20:10:38.0432815Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | DPRINT Server detached device 0
 2025-02-13T20:10:38.0450567Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
 2025-02-13T20:10:38.0455659Z [       OK ] DPrintFixture.TensixTestPrintHanging (1769 ms)
 2025-02-13T20:10:38.0458275Z [----------] 1 test from DPrintFixture (1769 ms total)

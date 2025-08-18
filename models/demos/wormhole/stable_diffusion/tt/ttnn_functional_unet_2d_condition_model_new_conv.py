@@ -300,7 +300,7 @@ class UNet2DConditionModel:
         timesteps = timestep
 
         # # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-        # timesteps = timesteps.expand(sample.shape[0]) # Nonte: IS ON TORCH
+        # timesteps = timesteps.expand(sample.shape[0]) # Note: IS ON TORCH
 
         # Note: keep this code for future references; this is constant propped currently!
         # t_emb = self.time_proj(timesteps)
@@ -327,7 +327,7 @@ class UNet2DConditionModel:
             class_embedding = None
 
         if class_embedding is not None:
-            assert False, "This should not be triggerred!"
+            assert False, "This should not be triggered!"
             if class_labels is None:
                 raise ValueError("class_labels should be provided when num_class_embeds > 0")
 
@@ -341,7 +341,7 @@ class UNet2DConditionModel:
         sample = ttnn.pad(sample, padding=((0, 0), (0, 28), (0, 0), (0, 0)), value=0)
         sample = ttnn.permute(sample, (0, 2, 3, 1))  # permute from nchw to nhwc
         sample = ttnn.reshape(sample, (1, 1, sample.shape[0] * sample.shape[1] * sample.shape[2], sample.shape[3]))
-        # sample in l1 interelaved and tiled and nhwc
+        # sample in l1 interleaved and tiled and nhwc
 
         # sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
         # sample = self.conv_in(sample)

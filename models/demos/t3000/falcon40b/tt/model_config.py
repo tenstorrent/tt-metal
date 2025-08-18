@@ -156,7 +156,7 @@ def get_model_config(model_config_str, llm_mode, input_shape, num_devices):
 def get_decode_model_config(model_config_str, input_shape, num_devices):
     assert model_config_str in ACCEPTABLE_DECODE_MODEL_CONFIG_STRS
     assert len(input_shape) == 2
-    assert num_devices == 8, "Decode is currently only supported on 8 devicess"
+    assert num_devices == 8, "Decode is currently only supported on 8 devices"
 
     DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
     L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
@@ -630,7 +630,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
 def get_prefill_model_config(model_config_str, input_shape, num_devices):
     assert model_config_str in ACCEPTABLE_PREFILL_MODEL_CONFIG_STRS
     assert len(input_shape) == 2
-    assert num_devices == 8, "Prefill is currently only supported on 8 devicess"
+    assert num_devices == 8, "Prefill is currently only supported on 8 devices"
 
     DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
     L1_MEMCFG = ttnn.L1_MEMORY_CONFIG

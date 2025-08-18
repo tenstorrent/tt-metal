@@ -104,7 +104,7 @@ def run_elt_silu_relu(
         torch_result = torch_relu(input)
         output_tensor = ttnn.relu(input_tensor, memory_config=in_sharded_mem_config)
 
-    # output comparision
+    # output comparison
     output_tensor = ttnn.to_memory_config(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor.reshape(batch_size, input_height, input_width, input_channels)

@@ -89,7 +89,7 @@ public:
     // Returns the distributed context with only one host.
     const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_host_local_context() const;
 
-    // Return valid ethernet channels on the specificed routing plane
+    // Return valid ethernet channels on the specified routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
 

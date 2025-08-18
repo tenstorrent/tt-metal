@@ -1300,7 +1300,7 @@ private:
         tt::tt_fabric::SetFabricConfig(fabric_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
-        // first need to re-init contorl plane so that it checks out the latest fabric config.
+        // first need to re-init control plane so that it checks out the latest fabric config.
         tt::tt_metal::MetalContext::instance().initialize_control_plane();
         control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
 

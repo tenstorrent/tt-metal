@@ -431,7 +431,7 @@ def skip_unsupported_config(device, model_config_str, batch):
     if device.arch() == ttnn.device.Arch.WORMHOLE_B0 and model_config_str != "BFLOAT8_B-SHARDED":
         pytest.skip("Only BFLOAT8_B-SHARDED supported for WH B0")
 
-    # Requires a minumum 8xB or Bx8 grid size for sharding
+    # Requires a minimum 8xB or Bx8 grid size for sharding
     if "SHARDED" in model_config_str and not (
         (grid_size.x >= 8 and grid_size.y >= batch) or (grid_size.x >= batch and grid_size.y >= 8)
     ):

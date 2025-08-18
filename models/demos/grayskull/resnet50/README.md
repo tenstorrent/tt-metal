@@ -38,7 +38,7 @@ pytest models/demos/grayskull/resnet50/tests/test_perf_device_resnet50.py::test_
 ```
 + This will run the model for 4 times and generate CSV reports under `<this repo dir>/generated/profiler/reports/ops/<report name>`.
 + The report file name is logged in the run output.
-+ It will also show a sumary of the device throughput in the run output.
++ It will also show a summary of the device throughput in the run output.
 
 ### Grayskull End-to-End Performance
 + For end-to-end performance, run

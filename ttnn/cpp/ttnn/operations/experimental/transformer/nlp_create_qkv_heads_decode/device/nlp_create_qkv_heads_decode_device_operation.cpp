@@ -90,7 +90,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
     } else {
         TT_FATAL(
             num_cores >= 2 * num_users,
-            "Input coregrid size is {}. Need cores atleast double of num_users for decode when q and k heads are not "
+            "Input coregrid size is {}. Need cores at least double of num_users for decode when q and k heads are not "
             "overlapping "
             "coregrid",
             num_cores);

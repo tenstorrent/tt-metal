@@ -115,7 +115,7 @@ std::shared_ptr<tt::tt_metal::Buffer> pad_buffer = CreateBuffer(pad_dram_config)
 uint32_t pad_addr = pad_buffer->address();
 ```
 
-We create another DRAM buffer for the pad value. This buffer will only contain a single value (the pad value). The reader kernel will use the value in this buffer to pad the corresponding data in the `CircularBuffer`; once this kernel is executed, the correspoding tensor row will be padded and be stored in the `CircularBuffer`.
+We create another DRAM buffer for the pad value. This buffer will only contain a single value (the pad value). The reader kernel will use the value in this buffer to pad the corresponding data in the `CircularBuffer`; once this kernel is executed, the corresponding tensor row will be padded and be stored in the `CircularBuffer`.
 
 ``` cpp
 uint32_t dst_buffer_size = packed_data_size * dst_num_values_packed;

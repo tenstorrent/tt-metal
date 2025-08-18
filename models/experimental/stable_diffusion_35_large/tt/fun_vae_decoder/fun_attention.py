@@ -75,7 +75,7 @@ def vae_attention(x: ttnn.Tensor, parameters: TtAttentionParameters) -> ttnn.Ten
 
     [b, h, w, c] = list(x.shape)
 
-    # No need to transpose like reference. x is alredy channel last
+    # No need to transpose like reference. x is already channel last
     x = vae_group_norm(x, parameters.group_norm)
 
     # output will be bxhxwx(num_heads*head_dims)

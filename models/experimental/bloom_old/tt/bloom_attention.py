@@ -37,7 +37,7 @@ def split_heads(fused_qkv: torch.Tensor, num_heads, head_dim) -> Tuple[torch.Ten
 
 def merge_heads(x: torch.Tensor, num_heads, head_dim) -> torch.Tensor:
     """
-    Merge heads together over the last dimenstion
+    Merge heads together over the last dimension
 
     Args:
         x: (`torch.tensor`, *required*): [batch_size * num_heads, seq_length, head_dim]

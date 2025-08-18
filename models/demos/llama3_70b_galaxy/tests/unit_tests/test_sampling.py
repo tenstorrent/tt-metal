@@ -299,7 +299,7 @@ def test_llama_sampling_inference(
 
             tt_outputs = tt_sampling(tt_input)  # Compiling without seed; will generate new pseudo-random numbers
 
-            logger.info("Done comiling Llama Sampling Trace")
+            logger.info("Done compiling Llama Sampling Trace")
 
             logger.info("Capture Llama Sampling Trace")
 

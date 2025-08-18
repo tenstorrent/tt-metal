@@ -46,7 +46,7 @@ CircularBuffer::CircularBuffer(
     this->validate_set_config_attributes();
     TT_FATAL(
         !config.globally_allocated_address().has_value(),
-        "Connot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
+        "Cannot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
     TT_FATAL(
         !this->config_.remote_buffer_indices().empty(),
         "Remote buffer indices should be specified when using a GlobalCircularBuffer");
@@ -62,7 +62,7 @@ CircularBuffer::CircularBuffer(const CBDescriptor& descriptor) :
     if (descriptor.global_circular_buffer) {
         TT_FATAL(
             !config_.globally_allocated_address().has_value(),
-            "Connot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
+            "Cannot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
         TT_FATAL(
             !this->config_.remote_buffer_indices().empty(),
             "Remote buffer indices should be specified when using a GlobalCircularBuffer");

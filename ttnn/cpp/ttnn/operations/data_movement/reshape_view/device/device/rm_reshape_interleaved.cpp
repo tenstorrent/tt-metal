@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 /*
 Function reads from RM and writes to RM
 
@@ -14,7 +13,7 @@ Compile arguments
 2. log_base_2_of_page_size: log base 2 of page size
 3. write_size_is_pow2: 1 if write size is power of 2 else 0
 4. log_base_2_of_page_size: log base 2 of page size
-5. needs_read_allignment: 1 if read needs allignment else 0
+5. needs_read_allignment: 1 if read needs alignment else 0
 //Needed if BRAM and page size is not multiple of 64 bytes
 
 Runtime arguments
@@ -33,7 +32,7 @@ Runtime arguments
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
-    //We are guranteed to be in 2D going to 2D
+    // We are guaranteed to be in 2D going to 2D
 
     const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
@@ -92,11 +91,11 @@ void kernel_main() {
             tt::data_movement::common::enhanced_noc_async_read<source_page_size_bytes, false>(
                 src_noc_addr, source_buffer, source_page_size_bytes);
             read_offset = 0;
-        } else if constexpr (src_args.is_dram) {  // DDR but not alligned to 64 (potentially also not alligned to 16)
+        } else if constexpr (src_args.is_dram) {  // DDR but not aligned to 64 (potentially also not aligned to 16)
             tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
                 src_noc_addr & MASK_64, source_buffer, source_read_size_bytes);
             read_offset = src_noc_addr & OFFSET_64;
-        } else {  // L1 but not alligned to 16
+        } else {  // L1 but not aligned to 16
             tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
                 src_noc_addr & MASK_16, source_buffer, source_read_size_bytes);
             read_offset = src_noc_addr & OFFSET_16;

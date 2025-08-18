@@ -128,7 +128,7 @@ void kernel_main() {
                             // Wait for reducer to ack that it has read our data
                             noc_semaphore_wait(local_semaphore_addr_ptr, 1);
 
-                            // Hanshake with compute so it can continue
+                            // Handshake with compute so it can continue
                             cb_pop_front(cb_reduction_tiled, output_tiles);
                             cb_reserve_back(cb_worker_ack_back, 1);
                             cb_push_back(cb_worker_ack_back, 1);

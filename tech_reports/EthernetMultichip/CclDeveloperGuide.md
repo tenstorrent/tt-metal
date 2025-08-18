@@ -37,7 +37,7 @@ Above this are APIs to direct write to Ethernet command queue registers, which c
 
 The third level is the ethernet dataflow API which lets the user initiate writes over the ethernet link. These APIs are similar to the noc async APIs in that commands are issued to command buffers and dispatched at some later, unknown time.
 
-The fourth level is the Erisc datamover which encapsulates many common pieces of functionality that are required by multichip operations: startup/teardown synchronization, flow constrol, virtual channels, and multi-buffering.
+The fourth level is the Erisc datamover which encapsulates many common pieces of functionality that are required by multichip operations: startup/teardown synchronization, flow control, virtual channels, and multi-buffering.
 
 Finally, higher level CCL operations are implemented.
 

@@ -508,7 +508,7 @@ Converts convolution weights to grouped layout with padded zeros
 This function will take in a weight tensor with shape [out_channels, in_channels // groups, H, W] and return a newly
 allocated output tensor with shape [out_channels, in_channels, H, W] The extra channels in shape[1] will be padded with
 0 - then the entire weight tensor is convolved with the input tensor - equivalent to convolution if the input tensor was
-divided into num_groups for each groupped filter
+divided into num_groups for each grouped filter
 */
 Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {

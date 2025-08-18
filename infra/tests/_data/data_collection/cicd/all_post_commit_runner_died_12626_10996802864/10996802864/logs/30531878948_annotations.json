@@ -20,7 +20,7 @@
       "end_column": null,
       "annotation_level": "warning",
       "title": "",
-      "message": "Runner tt-metal-ci-vm-83 did not respond to a cancelation request with 00:05:00.",
+      "message": "Runner tt-metal-ci-vm-83 did not respond to a cancellation request with 00:05:00.",
       "raw_details": ""
     }
   ]

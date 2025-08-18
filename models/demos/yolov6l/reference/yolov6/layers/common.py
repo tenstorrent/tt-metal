@@ -511,7 +511,7 @@ def get_block(mode):
     elif mode == "conv_silu":
         return ConvBNSiLU
     else:
-        raise NotImplementedError("Undefied Repblock choice for mode {}".format(mode))
+        raise NotImplementedError("Undefined Repblock choice for mode {}".format(mode))
 
 
 class SEBlock(nn.Module):

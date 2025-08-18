@@ -418,7 +418,7 @@ int main(int argc, char** argv) {
 
     if (pass) {
         // goal is 70% of PCI-e Gen3 x16 for grayskull
-        // TODO: check the theoritical peak of wormhole
+        // TODO: check the theoretical peak of wormhole
         double target_bandwidth = 16.0 * 0.7;
 
         if (avg_h2d_bandwidth < target_bandwidth) {

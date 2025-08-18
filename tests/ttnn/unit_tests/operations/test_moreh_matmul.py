@@ -147,7 +147,7 @@ def moreh_matmul(
     # torch matmul
     torch_out = torch.matmul(torch_input, torch_other)
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(
         torch_out, tt_output_cpu, pcc=0.999 if use_randint else 0.99, rtol=rtol, atol=atol
@@ -201,7 +201,7 @@ def moreh_matmul_backward(params, requires_grad, device, dtype=ttnn.bfloat16, us
         input_b_grad=tt_other_grad,
     )
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     if require_input_grad:
@@ -366,7 +366,7 @@ def test_moreh_matmul_fp32_dest_acc(params, device):
     # torch matmul (float)
     torch_out = torch.matmul(torch_input.float(), torch_other.float())
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_output_cpu_fp32, pcc=0.99, rtol=rtol, atol=atol)
     logger.debug(f"Out passing={passing}")
@@ -458,7 +458,7 @@ def test_moreh_matmul_with_bias_add_fp32_dest_acc(params, device):
 
     # torch matmul (float)
     torch_out = torch.matmul(torch_input.float(), torch_other.float()) + torch_bias
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_output_cpu_fp32, pcc=0.99, rtol=rtol, atol=atol)
     logger.debug(f"Out passing={passing}")

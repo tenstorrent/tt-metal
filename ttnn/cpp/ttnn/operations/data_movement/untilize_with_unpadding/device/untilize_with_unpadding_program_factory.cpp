@@ -817,7 +817,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             if (compare_assignments(ref_el, el)) {
                 count_repeated++;
             } else {
-                // push back information for previious elements
+                // push back information for previous elements
                 writer_rt_args.push_back(ref_el.n_data);
                 writer_rt_args.push_back(ref_el.n_mixed);
                 writer_rt_args.push_back(ref_el.n_pads);

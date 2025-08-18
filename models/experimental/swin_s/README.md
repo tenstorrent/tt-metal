@@ -20,7 +20,7 @@ pytest --disable-warnings models/experimental/swin_s/tests/pcc/test_ttnn_swin_tr
 ## Model performant running with Trace+2CQ
 Use the following command to run the e2e perf:
 
--  For overall rutime inference (end-2-end), use the following command to run:
+-  For overall runtime inference (end-2-end), use the following command to run:
 ```sh
 pytest --disable-warnings models/experimental/swin_s/tests/perf/test_e2e_performant.py
 ```

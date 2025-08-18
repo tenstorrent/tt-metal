@@ -131,7 +131,7 @@ class TtTransformer(LightweightModule):
                     self.args.head_dim, self.mesh_device, [pos + 1 for pos in start_pos_ids]
                 )
             else:
-                # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output
+                # assigning to a new variable to explicitly deallocate since matmul creates a new buffer for the output
                 prev_rot_mat = self.current_rot_mat
                 self.current_rot_mat = ttnn.matmul(
                     self.rot_matrix,

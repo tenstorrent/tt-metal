@@ -191,10 +191,10 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * | Argument       | Description                                                   | Type          | Valid Range | Required |
  * |----------------|---------------------------------------------------------------|---------------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t      | 0 to 31     | True     |
- * | icb1           | The indentifier of the circular buffer (CB) containing B      | uint32_t      | 0 to 31     | True     |
- * | ocb            | The indentifier of the circular buffer (CB) containing output | uint32_t      | 0 to 31     | False    |
+ * | icb1           | The identifier of the circular buffer (CB) containing B      | uint32_t      | 0 to 31     | True     |
+ * | ocb            | The identifier of the circular buffer (CB) containing output | uint32_t      | 0 to 31     | False    |
  */
- // clang-format on
+// clang-format on
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     if constexpr (tBcastOp == ELWMUL) {
@@ -264,7 +264,7 @@ ALWI void any_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
  * |----------------|----------------------------------------------------------|---------------|------------------------------------------------|----------|
  * | tBcastDim      | Broadcast dimension                                      | BroadcastType | One of Dim::R, Dim::C, Dim::RC.                | True     |
  * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t      | 0 to 31                                        | True     |
- * | in1_cb_id      | The indentifier of the circular buffer (CB) containing B | uint32_t      | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the circular buffer (CB) containing B | uint32_t      | 0 to 31                                        | True     |
  * | in0_tile_index | The index of tile A within the first CB                  | uint32_t      | Must be less than the size of the CB           | True     |
  * | in1_tile_index | The index of tile B within the second CB                 | uint32_t      | Must be less than the size of the CB           | True     |
  * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t      | Must be less than the acquired size of DST REG | True     |

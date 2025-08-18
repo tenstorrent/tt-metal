@@ -75,7 +75,7 @@ int main(int argc, char* argv[]) {
     risc_init();
     signal_subordinate_idle_erisc_completion();
 
-    // Cleanup profiler buffer incase we never get the go message
+    // Cleanup profiler buffer in case we never get the go message
     while (1) {
         WAYPOINT("W");
         while (*subordinate_idle_erisc_run != RUN_SYNC_MSG_GO) {

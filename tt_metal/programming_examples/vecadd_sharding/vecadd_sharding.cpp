@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
     // need for NoC bandwidth. This example demonstrates how to set up sharded L1 buffers and perform vector addition
     // across them.
     //
-    // Sharding is quite percise and requires exact division of the data across the cores. The example tries to
+    // Sharding is quite precise and requires exact division of the data across the cores. The example tries to
     // distribute 64 (4x4) tiles across 4 cores. But in different sharding modes:
     // * height: Shard the tensors across the height dimension
     // * width: Shard the tensors across the width dimension

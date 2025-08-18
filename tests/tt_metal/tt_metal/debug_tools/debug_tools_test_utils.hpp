@@ -215,7 +215,7 @@ inline bool FileContainsAllStringsInOrder(std::string file_name, const std::vect
     return false;
 }
 
-// Checkes whether a given file matches a golden string.
+// Checks whether a given file matches a golden string.
 inline bool FilesMatchesString(std::string file_name, const std::string& expected) {
     // Open the input file.
     std::fstream file;

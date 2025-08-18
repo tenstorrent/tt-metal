@@ -448,7 +448,7 @@ KernelGroup::KernelGroup(
     std::memset(&this->launch_msg, 0, sizeof(launch_msg_t));
 
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
-    // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
+    // Fast dispatch kernel config management happens under the CQ and will re-program the base
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         this->launch_msg.kernel_config.kernel_config_base[index] =
@@ -1155,7 +1155,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
                 const ll_api::memory& kernel_bin = *binaries[sub_kernel_index];
 
-                // TODO: Pack erisc spans too, and then everthing is
+                // TODO: Pack erisc spans too, and then everything is
                 // one span
                 uint32_t num_spans = kernel_bin.num_spans();
                 dst_base_addrs.resize(dst_base_addrs.size() + num_spans);

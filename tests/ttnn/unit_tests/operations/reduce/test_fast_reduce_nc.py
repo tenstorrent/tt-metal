@@ -82,7 +82,7 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
     )
     tt_output_cpu = tt_output.cpu().to(cpu_layout).to_torch()
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.12
     if dataformat == ttnn.bfloat8_b:
         passing, output_pcc = comp_pcc(torch_output, tt_output_cpu, pcc=0.999)
@@ -156,7 +156,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         tt_output = ttnn.experimental.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_1).to_torch()
 
-        # test for equivalance
+        # test for equivalence
         rtol = atol = 0.12
         passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
@@ -182,7 +182,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         tt_output = ttnn.experimental.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_2).to_torch()
 
-        # test for equivalance
+        # test for equivalence
         rtol = atol = 0.12
         passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 

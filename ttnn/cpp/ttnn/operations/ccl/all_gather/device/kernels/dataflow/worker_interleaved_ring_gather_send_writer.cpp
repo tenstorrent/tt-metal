@@ -90,7 +90,7 @@ void kernel_main() {
             output_tensor_shard_grid_transposed),
         output_page_size,
         dst_addr);
-    ASSSERT(false);  // unimplemented and untested
+    ASSERT(false);  // unimplemented and untested
 #endif
 #elif defined TILED_LAYOUT
 #ifdef INTERLEAVED_MEM_LAYOUT

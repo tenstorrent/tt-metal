@@ -1187,7 +1187,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
     CQDispatchCmd dcmd;
     memset(&dcmd, 0, sizeof(CQDispatchCmd));
 
-    // cmddat_q in prefetch_d is re-used for exec_buf
+    // cmddat_q in prefetch_d is reused for exec_buf
     // prefetch_h stalls at start of exec_buf by removing its downstream credits
     // This command releases prefetch_h from the stall by restoring credits
     dcmd.base.cmd_id = CQ_DISPATCH_CMD_EXEC_BUF_END;

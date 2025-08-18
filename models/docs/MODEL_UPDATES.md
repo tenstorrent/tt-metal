@@ -99,7 +99,7 @@
 
 ### [Llama 3.1/3.2](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 - Added support for batch size 32 and the maximum context length (131072 tokens).
-- Added full hardware compatibilty for the 1B/3B/8B/11B/70B models (all models are now compatible with N150, N300, QuietBox, Galaxy except for 70B which is only supported on QuietBox and Galaxy due to its large size).
+- Added full hardware compatibility for the 1B/3B/8B/11B/70B models (all models are now compatible with N150, N300, QuietBox, Galaxy except for 70B which is only supported on QuietBox and Galaxy due to its large size).
 
 ## December 2, 2024
 

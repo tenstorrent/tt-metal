@@ -12,7 +12,7 @@
 #include <cstdint>
 
 // If the hop/distance counter equals to the below value, it indicates that it has
-// arrived at (atleast one of) the intended destination(s)
+// arrived at (at least one of) the intended destination(s)
 static constexpr size_t DESTINATION_HOP_COUNT = 1;
 // TODO: make 0 and the associated field to num mcast destinations
 static constexpr size_t LAST_MCAST_DESTINATION = 1;
@@ -247,7 +247,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyMeshPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
     // This is the hop index. At every ethernet hop, we increment by 1
-    // so that the next receiver indexes into its respecive hop command
+    // so that the next receiver indexes into its respective hop command
     // in packet_header.route_buffer[]
     packet_header->routing_fields.value = cached_routing_fields.value + 1;
 }

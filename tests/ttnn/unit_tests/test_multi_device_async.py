@@ -246,7 +246,7 @@ def test_multi_device_explicit_dealloc(pcie_mesh_device):
         pytest.skip("Requires multiple devices to run")
 
     # Create input tensors that cause OOM during op execution
-    # Explictly deallocate buffers after each op to ensure we don't run OOM.
+    # Explicitly deallocate buffers after each op to ensure we don't run OOM.
     torch_input_a_tensor = torch.rand((512, 1, 2048, 2048), dtype=torch.bfloat16)
     torch_input_b_tensor = torch.rand((1, 1, 2048, 2048), dtype=torch.bfloat16)
 

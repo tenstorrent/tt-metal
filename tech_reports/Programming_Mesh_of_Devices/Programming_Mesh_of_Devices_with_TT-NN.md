@@ -489,7 +489,7 @@ Key benefits of tensor parallelism include:
 
 ### 7.1 Tensor Parallel Programming Example:
 
-Let's re-use the same example as the data-parallel example above, but this time we'll run it with tensor-parallel. In this example, we'll implement a simple tensor-parallel where we shard all model parameters on the width dimension.
+Let's reuse the same example as the data-parallel example above, but this time we'll run it with tensor-parallel. In this example, we'll implement a simple tensor-parallel where we shard all model parameters on the width dimension.
 
 
 1. **Create a TT-NN Falcon-7B MLP Module implementation**

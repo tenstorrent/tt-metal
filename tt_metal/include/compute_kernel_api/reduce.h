@@ -22,7 +22,7 @@ namespace ckernel {
  * If another reduce op is needed which uses different CB IDs, then another reduce_init needs to be called as a part of that reduce operation.
  *
  * The `icb_scaler` circular buffer must contain the scaling factors for the reduction. The most straightforward way of filling the `icb_scaler` with the scaling
- * factors is to populate first row of each face with the followin values:
+ * factors is to populate first row of each face with the following values:
  * - If `reduce_type = SUM`, all scaling factors should preferably be 1.
  * - If `reduce_type = AVG`, all scaling factors should preferably be 1/N (where N is the number of elements being averaged, except if the reduction dimension is scalar,
  * in which case the scaling factor should be 1/sqrt(N)).
@@ -76,7 +76,7 @@ ALWI void reduce_uninit() { PACK((llk_pack_reduce_mask_clear())); }
  * dimension(s) to be reduced in size to 1. The DST register buffer must be in acquired state via *acquire_dst* call.
  *
  * The `icb_scaler` circular buffer must contain the scaling factors for the reduction. The most straightforward way of filling the `icb_scaler` with the scaling
- * factors is to populate first row of each face with the followin values:
+ * factors is to populate first row of each face with the following values:
  * - If `reduce_type = SUM`, all scaling factors should preferably be 1.
  * - If `reduce_type = AVG`, all scaling factors should preferably be 1/N (where N is the number of elements being averaged, except if the reduction dimension is scalar,
  * in which case the scaling factor should be 1/sqrt(N)).

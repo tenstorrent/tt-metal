@@ -99,15 +99,15 @@ void MAIN {
 #if __riscv_tt_blackhole
     {  // test -2 >> 1 is -1
         vInt minusTwo = -2;
-        vInt shft = minusTwo >> 1;
+        vInt shift = minusTwo >> 1;
 
         vUInt allOnes = vUInt(0xffff) | vUInt(0xffff) << 16;
-        vUInt not2sComp = shft ^ allOnes;
+        vUInt not2sComp = shift ^ allOnes;
         // not2sComp should be all bits zero
         FAIL_IF(not2sComp != 0);
 
         vUInt signOne = vUInt(1) | vUInt(0x8000) << 16;
-        vUInt notSignMag = shft ^ signOne;
+        vUInt notSignMag = shift ^ signOne;
         // notSignMag will be zero, if sign-mag
         FAIL_IF(notSignMag == 0);
     }
@@ -115,15 +115,15 @@ void MAIN {
 
     {  // test unsigned(-2) >> 1 is mostPos
         vUInt minusTwo = -2;
-        vUInt shft = minusTwo >> 1;
+        vUInt shift = minusTwo >> 1;
 
         vUInt mostPos = vUInt(0xffff) | vUInt(0x7fff) << 16;
-        vUInt not2sComp = vInt(shft) ^ mostPos;
+        vUInt not2sComp = vInt(shift) ^ mostPos;
         // not2sComp should be all bits zero
         FAIL_IF(not2sComp != 0);
 
         vUInt smExpected = vUInt(1) | vUInt(0x4000) << 16;
-        vUInt notSignMag = shft ^ smExpected;
+        vUInt notSignMag = shift ^ smExpected;
         // notSignMag will be zero, if sign-mag
         FAIL_IF(notSignMag == 0);
     }

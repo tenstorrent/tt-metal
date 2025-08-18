@@ -104,7 +104,7 @@ def run_mixtral_demo(user_input, batch_size):
         # Save output token to print out later
         for user in range(batch_size):
             user_tok = pt_out_tok[user].item()
-            if user_tok != tokenizer.eos_id:  # Stop saving the ouput after hitting the EOS token
+            if user_tok != tokenizer.eos_id:  # Stop saving the output after hitting the EOS token
                 all_outputs[user].append(user_tok)
             else:
                 if (

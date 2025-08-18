@@ -135,7 +135,7 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
     uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
     constexpr uint32_t max_num_procs_per_device = 2;
     // When using multiple command queues, assign separate CPU cores to worker and completion queue reader threads,
-    // if enough processors exist on host. Atleast one core is given to the main thread.
+    // if enough processors exist on host. At least one core is given to the main thread.
     bool separate_procs_for_worker_and_reader =
         (num_hw_cqs > 1) && (max_num_procs_per_device * device_ids.size() <= num_online_processors - 1);
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map = {};

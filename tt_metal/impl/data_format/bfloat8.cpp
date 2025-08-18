@@ -154,7 +154,7 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                             simde_mm256_sub_epi32(exp_vector, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
                             simde_mm256_setzero_si256(),
                             select_mask);  // Choose new (rebiased exponent) or keep previous exponent based on mantissa
-                                           // intiial condition
+                                           // initial condition
 
                         sign = simde_mm256_sll_epi32(sign, simde_mm_set_epi64x(0, 31));              // Shift sign
                         exp_vector = simde_mm256_sll_epi32(exp_vector, simde_mm_set_epi64x(0, 23));  // Shift exp

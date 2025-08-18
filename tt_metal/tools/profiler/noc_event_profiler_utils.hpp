@@ -46,7 +46,7 @@ public:
 
         for (chip_id_t chip_id_src : physical_chip_ids) {
             if (device->is_mmio_capable() && (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG)) {
-                // skip lauching on gateways for TG
+                // skip launching on gateways for TG
                 continue;
             }
 

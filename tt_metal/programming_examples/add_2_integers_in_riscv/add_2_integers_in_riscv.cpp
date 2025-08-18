@@ -96,7 +96,7 @@ int main() {
 
     // Enqueue the kernel for execution on the device. Setting blocking to false allows the program to continue
     // executing while the kernel is being executed on the device (which is for demonstration purposes here as
-    // immidiately after we read the result).
+    // immediately after we read the result).
     EnqueueProgram(cq, program, /*blocking=*/false);
 
     // Read in result into a host vector. This time we set blocking to true as we can only compare the result after the

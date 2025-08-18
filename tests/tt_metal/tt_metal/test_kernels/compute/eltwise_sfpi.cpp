@@ -28,7 +28,7 @@ void MAIN {
 
             SFPI_OP_AND_PACK
             // comes from add_define in kernel config
-            // Also is epxected to include pack_tile(0, CBIndex::c_16); for non-relu
+            // Also is expected to include pack_tile(0, CBIndex::c_16); for non-relu
             // For relu it expects the hlk_pack_relu variant
 
             cb_pop_front(CBIndex::c_0, 1);

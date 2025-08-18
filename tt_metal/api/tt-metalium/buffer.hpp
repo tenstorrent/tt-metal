@@ -55,7 +55,7 @@ struct ShardSpec {
     /* Canonical tensor shape where the depth dimensions ([:-2] are folded along y) */
     std::array<uint32_t, 2> shape;
 
-    /* The sequence order of the grid cores that the shards are layed out onto. */
+    /* The sequence order of the grid cores that the shards are laid out onto. */
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
 
     // In ShardMode::PHYSICAL, physical_shard_shape will always be std::nullopt

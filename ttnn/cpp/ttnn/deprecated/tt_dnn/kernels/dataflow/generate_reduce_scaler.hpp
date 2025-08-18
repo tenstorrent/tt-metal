@@ -38,7 +38,7 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
 }
 template <bool needs_zeroing = true>
 FORCE_INLINE void wh_generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler) {
-    // This is much faster but WILL NOT WORK IN BLACKHOLE since it assumes 32B allignment noc reads are allowed, done
+    // This is much faster but WILL NOT WORK IN BLACKHOLE since it assumes 32B alignment noc reads are allowed, done
     // for llama effort
     cb_reserve_back(cb_id, 1);
     uint32_t write_addr_base = get_write_ptr(cb_id);

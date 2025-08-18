@@ -250,7 +250,7 @@ class TtDetectionModel(BaseModel):
             self.stride = m.stride
 
         self.info()
-        logger.info("Initialization compelted")
+        logger.info("Initialization completed")
 
     def forward(self, x, augment=False, profile=False, visualize=False):
         if augment:

@@ -480,7 +480,7 @@ public:
     inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
 private:
-    // Helper functions to parse feature-specific environment vaiables.
+    // Helper functions to parse feature-specific environment variables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
     void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);

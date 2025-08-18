@@ -44,7 +44,7 @@ You can configure which parts of the accessor arguments are passed through runti
 
 These flags can be combined with bitwise OR (|) to specify multiple runtime parameters.
 
-There is one important limitation: In case size of container (rank/num_banks) is runtime argument, then values of containers (tensor_shape/shard_shape/bank_coords) must also be runtime arguments. The reason is that all compile-time indecies must be constexpr expressions, and it's impossible to calculate offset for shapes without knowing their sizes.
+There is one important limitation: In case size of container (rank/num_banks) is runtime argument, then values of containers (tensor_shape/shard_shape/bank_coords) must also be runtime arguments. The reason is that all compile-time indices must be constexpr expressions, and it's impossible to calculate offset for shapes without knowing their sizes.
 
 ## Device-Side Usage
 **Creating an Accessor**
@@ -170,7 +170,7 @@ bool is_local = tensor_accessor.is_local_page(page_id);
 bool is_local = tensor_accessor.is_local_shard(shard_id);
 ```
 
-Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwide `Span<uint32_t>`
+Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwise `Span<uint32_t>`
 
 **Shard pages iterator**
 
@@ -213,7 +213,7 @@ for (uint32_t i = 0; i < num_shards; ++i) {
 
 ## Performance Considerations
 - If rank is static, then construction of TensorAccessor is 0-cost, meaning that everything is precomputed in compile time.
-- Calculation of address scales ~lineary with number rank
+- Calculation of address scales ~linearly with number rank
 
 
 ## Examples:

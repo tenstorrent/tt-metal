@@ -40,7 +40,7 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
     if min_val == max_val:
         return False
 
-    # torch ops don't suport integer data types, convert to list
+    # torch ops don't support integer data types, convert to list
     data = data.detach().cpu().flatten().tolist()
 
     # Calculate sample statistics

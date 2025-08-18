@@ -41,7 +41,7 @@ FORCE_INLINE void roundtrip_ping(
                 }
 
                 // We need to wait for the write packet to flush out of L1 otherwise this may no longer be a
-                // particularly realistic microbenchmark (although it's unlikely this causes any latency degredation)
+                // particularly realistic microbenchmark (although it's unlikely this causes any latency degradation)
                 if constexpr (DISABLE_CONTEXT_SWITCHING) {
                     noc_async_writes_flushed();
                 } else {

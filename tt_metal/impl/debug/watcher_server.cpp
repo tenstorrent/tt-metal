@@ -288,7 +288,7 @@ void WatcherServer::Impl::create_log_file() {
 
     fprintf(f, "At %.3lfs starting\n", get_elapsed_secs());
     fprintf(f, "Legend:\n");
-    fprintf(f, "\tComma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2\n");
+    fprintf(f, "\tComma separated list specifies waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2\n");
     fprintf(f, "\tI=initialization sequence\n");
     fprintf(f, "\tW=wait (top of spin loop)\n");
     fprintf(f, "\tR=run (entering kernel)\n");

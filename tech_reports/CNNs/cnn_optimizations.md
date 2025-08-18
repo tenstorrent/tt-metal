@@ -1,6 +1,6 @@
 # CNN Bring-up & Optimization in TT-NN
 
-Authors: Evan Smal
+Authors: Evan Small
 
 ## Contents
 - [Contents](#contents)
@@ -178,7 +178,7 @@ There are several parameters in `ttnn.conv2d` that can meaningfully affect perfo
 - `act_block_w_div`: Increasing output activation block size increases L1 usage but can also improve performance
 - `enable_weights_double_buffer`, `enable_act_double_buffer`, `enable_split_reader`: Enabling can improve performance but also increases total L1 usage.
 
-Determining the combination of these parameters that is the most performant but does not exceed the availible L1 is done iteratively. More details on these parameters are found here: [link](./ttcnn.md).
+Determining the combination of these parameters that is the most performant but does not exceed the available L1 is done iteratively. More details on these parameters are found here: [link](./ttcnn.md).
 
 ### Tracing and Multiple CQs
 
@@ -192,7 +192,7 @@ Combining these two features should For more details on tracing and multi-CQs, c
 
 ### Data Parallel
 
-Throughput can be improved if multiple chips are availible by replicating the CNN across each chip. For our UNet model, we replicate across the outermost dimension:
+Throughput can be improved if multiple chips are available by replicating the CNN across each chip. For our UNet model, we replicate across the outermost dimension:
 
 ```python
 inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0) # Shard input tensor on dimension 0 across each device

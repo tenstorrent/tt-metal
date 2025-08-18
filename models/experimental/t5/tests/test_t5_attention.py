@@ -96,9 +96,9 @@ def run_test_transpose(device):
     assert does_pass
 
     if does_pass:
-        logger.info("Test traspose Passed!")
+        logger.info("Test transpose Passed!")
     else:
-        logger.warning("Test traspose Failed!")
+        logger.warning("Test transpose Failed!")
 
 
 def run_test_matmul(device):

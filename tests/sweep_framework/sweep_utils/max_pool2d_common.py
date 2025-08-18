@@ -117,7 +117,7 @@ def run_max_pool2d(
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
-    ## test for equivalance
+    ## test for equivalence
     allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
     isequal = torch.equal(output_pytorch, golden_pytorch)
 

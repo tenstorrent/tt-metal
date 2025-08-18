@@ -1342,7 +1342,7 @@ def test_resnet50_conv_wh_fp32(
         # (1, 640, 640, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
         # (1, 640, 640, 16, 16, 3, 3, 2, 2, 1, 1, BS, None),
         # (1, 640, 640, 16, 16, 3, 3, 2, 2, 1, 1, BS, None), # bfloat16 activations doesnt fit
-        # (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, BS, None), # slighlty low pcc with 0.99689. bfloat16 weights doesnt fit
+        # (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, BS, None), # slightly low pcc with 0.99689. bfloat16 weights doesnt fit
         # (1, 1280, 1280, 8, 8, 3, 3, 2, 2, 1, 1, BS, None), #fails to parallelize with sharding
         # (1, 1280, 1280, 4, 4, 3, 3, 1, 1, 1, 1, BS, None), #fails to parallelize with sharding
         # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, BS, None), # slightly low pcc with 0.99698. bfloat16 weights doesnt fit
@@ -1477,7 +1477,7 @@ def test_sd_conv(
         # (1, 640, 640, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
         # (1, 640, 640, 16, 16, 3, 3, 2, 2, 1, 1, BS, None),
         # (1, 640, 640, 16, 16, 3, 3, 2, 2, 1, 1, BS, None), # bfloat16 activations doesnt fit
-        # (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, BS, None), # slighlty low pcc with 0.99689. bfloat16 weights doesnt fit
+        # (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, BS, None), # slightly low pcc with 0.99689. bfloat16 weights doesnt fit
         # (1, 1280, 1280, 8, 8, 3, 3, 2, 2, 1, 1, BS, None), #fails to parallelize with sharding
         # (1, 1280, 1280, 4, 4, 3, 3, 1, 1, 1, 1, BS, None), #fails to parallelize with sharding
         # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, BS, None), # slightly low pcc with 0.99698. bfloat16 weights doesnt fit

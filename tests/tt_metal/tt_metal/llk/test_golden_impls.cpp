@@ -21,12 +21,12 @@ namespace unit_tests::compute {
 std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_vec, const GoldenConfig& config) {
     vector<uint32_t> dst_vec;
 
-    // Due to each element being 32 bits, for bfloat16 thats 2 elements
+    // Due to each element being 32 bits, for bfloat16 that's 2 elements
 
     int num_tile_rows = config.num_tiles_r_dim;
     int num_tile_cols = config.num_tiles_c_dim;
 
-    // Due to each element being 32 bits, for bfloat16 thats 2 elements
+    // Due to each element being 32 bits, for bfloat16 that's 2 elements
     int num_c_dim = config.face_c_dim / 2;
     // Untilize outputs correct number of r_dim & num_faces
     // But assumes increments are still default 16x16 faces
@@ -78,7 +78,7 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
 
     // TODO: RT update this one to use variable tile sizes
     int num_rows = config.num_tiles_r_dim * config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
-    // Due to each element being 32 bits, for bfloat16 thats 2 elements
+    // Due to each element being 32 bits, for bfloat16 that's 2 elements
     int num_cols = (config.num_tiles_c_dim * config.face_c_dim * (config.num_faces >= 2 ? 2 : 1)) / 2;
     for (int x = 0; x < num_rows; x += 32) {
         for (int y = 0; y < num_cols; y += 16) {

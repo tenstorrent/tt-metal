@@ -214,7 +214,7 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
     NdShardSpec nd_shard_spec{params.shard_shape, cores, ShardOrientation::ROW_MAJOR};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
-    // NOTE: currently binary op does not support interger data types with uneven shard size, so we use float32
+    // NOTE: currently binary op does not support integer data types with uneven shard size, so we use float32
     TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::TILE), memory_config);
     TensorSpec tensor_spec(params.shape, tensor_layout);
 

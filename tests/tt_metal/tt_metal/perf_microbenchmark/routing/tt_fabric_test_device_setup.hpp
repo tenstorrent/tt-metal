@@ -77,7 +77,7 @@ public:
     // global line sync configs - stores sync traffic configs with their fabric connection indices
     std::vector<std::pair<TestTrafficSenderConfig, uint32_t>> global_sync_configs_;
 
-    // stores traffic config and the correspoding fabric_connection idx to use
+    // stores traffic config and the corresponding fabric_connection idx to use
     std::vector<std::pair<TestTrafficSenderConfig, uint32_t>> configs_;
 
     // book-keeping for all the fabric connections needed for this sender
@@ -261,7 +261,7 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
     }
 
     std::optional<uint32_t> fabric_connection_idx;
-    // first try to re-use an existing fabric connection as much as possible
+    // first try to reuse an existing fabric connection as much as possible
     for (const auto& idx : outgoing_link_indices) {
         auto it = std::find(
             this->fabric_connections_.begin(),
@@ -295,7 +295,7 @@ inline void TestSender::add_sync_config(TestTrafficSenderConfig sync_config) {
         this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());
 
     std::optional<uint32_t> sync_fabric_connection_idx;
-    // Try to re-use existing sync fabric connection first
+    // Try to reuse existing sync fabric connection first
     for (const auto& idx : outgoing_link_indices) {
         auto it = std::find(
             this->sync_fabric_connections_.begin(),

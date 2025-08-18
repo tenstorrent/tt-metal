@@ -181,7 +181,7 @@ Set the following environment variables as needed
     # enable_detailed_buffer_report (if report_name is set) - Enable to visualize the detailed buffer report after every operation
     # enable_graph_report (if report_name is set) - Enable to visualize the graph after every operation
     # enable_detailed_tensor_report (if report_name is set) - Enable to visualize the values of input and output tensors of every operation
-    # enable_comparison_mode (if report_name is set) - Enable to test the output of operations against their golden implementaiton
+    # enable_comparison_mode (if report_name is set) - Enable to test the output of operations against their golden implementation
 
 
      # If running a pytest that is located inside of tests/ttnn, use this config (unless you want to override "report_name" manually)

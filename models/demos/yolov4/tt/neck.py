@@ -201,7 +201,7 @@ class TtNeck:
         pool_3 = ttnn.sharded_to_interleaved(pool_3, ttnn.L1_MEMORY_CONFIG)
 
         pool_all = ttnn.concat([pool_3, pool_2, pool_1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        pool_all = ttnn.to_layout(pool_all, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
+        pool_all = ttnn.to_layout(pool_all, layout=ttnn.TILE_LAYOUT)  # This is because output_tensor is in TILE_LAYOUT
         ttnn.deallocate(pool_3)
         ttnn.deallocate(pool_2)
         ttnn.deallocate(pool_1)

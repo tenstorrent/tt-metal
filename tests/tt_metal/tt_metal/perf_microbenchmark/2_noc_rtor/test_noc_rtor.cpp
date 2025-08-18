@@ -213,7 +213,7 @@ int main(int argc, char** argv) {
             if (use_device_profiler) {
                 elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
                 elapsed_us.push_back((double)elapsed_cc / clock_freq_mhz);
-                log_info(LogTest, "Time elapsed uisng device profiler: {}us ({}cycles)", elapsed_us[i], elapsed_cc);
+                log_info(LogTest, "Time elapsed using device profiler: {}us ({}cycles)", elapsed_us[i], elapsed_cc);
             }
         }
 

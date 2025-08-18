@@ -178,7 +178,7 @@ FORCE_INLINE void write_perf_recording_window_results<LowResolutionBandwidthTele
     // we want to exclude large idle times from the bandwidth calculation
     buffer_ptr[0] = added_cycles & 0xFFFFFFFF;
     buffer_ptr[1] = added_cycles >> 32;
-    // Skip end timstamp
+    // Skip end timestamp
     buffer_ptr[4] = num_words_sent_l1_copy + perf_telemetry_collector.num_words_sent;
     buffer_ptr[5] = num_packets_sent_l1_copy + perf_telemetry_collector.num_packets_sent;
 }

@@ -19,7 +19,7 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_ILLEGAL = 0,               // common error value
     CQ_PREFETCH_CMD_RELAY_LINEAR = 1,          // relay banked/paged data from src_noc to dispatcher
     CQ_PREFETCH_CMD_RELAY_PAGED = 2,           // relay banked/paged data from src_noc to dispatcher
-    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED = 3,    // relay banked/paged data from multiple srcs to dispacher
+    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED = 3,    // relay banked/paged data from multiple srcs to dispatcher
     CQ_PREFETCH_CMD_RELAY_INLINE = 4,          // relay (inline) data from CmdDatQ to dispatcher
     CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 5,  // same as above, but doesn't flush the page to dispatcher
     CQ_PREFETCH_CMD_EXEC_BUF = 6,              // execute commands from a buffer

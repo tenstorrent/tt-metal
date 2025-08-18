@@ -185,7 +185,7 @@ void copy_sticks_async_local(
 
             if constexpr (main_thread) {
                 cb_reserve_back(sync_cb_id, 1);
-                noc_async_write_barrier();  // wait for last local copy to finish to preseve order
+                noc_async_write_barrier();  // wait for last local copy to finish to preserve order
                 cb_push_back(sync_cb_id, 1);
             } else {
                 cb_wait_front(sync_cb_id, 1);  // wait for main thread to be ready to copy
@@ -363,7 +363,7 @@ void kernel_main() {
         cb_wait_front(sync_cb_id2, 1);
         cb_pop_front(sync_cb_id2, 1);
 
-        // incremement the semaphore
+        // increment the semaphore
         noc_semaphore_inc(semaphore_noc_addr, 1);
     } else {
         cb_reserve_back(sync_cb_id2, 1);

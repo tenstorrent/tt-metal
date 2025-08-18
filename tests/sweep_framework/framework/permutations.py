@@ -13,7 +13,7 @@ def get_parameter_names(parameters):
         first_parameter, *other_parameters = parameters
         name, _ = first_parameter
         if "," in name:
-            # Mutliple parameters in one string
+            # Multiple parameters in one string
             names = name.split(",")
             return names + get_parameter_names(other_parameters)
         else:
@@ -33,7 +33,7 @@ def permutations(parameters):
             name, values = first_parameter
 
             if "," in name:
-                # Mutliple parameters in one string
+                # Multiple parameters in one string
                 names = name.split(",")
                 for value in values:
                     yield {**permutation, **dict(zip(names, value))}

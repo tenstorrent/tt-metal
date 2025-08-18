@@ -260,7 +260,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         "slice_write expects output start for the last dimension to be 0. Got {}",
         output_tensor_start[-1]);
 
-    log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
+    log_debug(tt::LogOp, "Output Buffer address: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
         output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
         output_row_size_bytes,
@@ -564,7 +564,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         "slice_write expects output start for the last dimension to be 0. Got {}",
         output_tensor_start[-1]);
 
-    log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
+    log_debug(tt::LogOp, "Output Buffer address: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
         output_buffer->address(),
         input_single_tile_size,
@@ -973,7 +973,7 @@ operation::ProgramWithCallbacks slice_write_multi_core(
     } else if (!a.is_sharded()) {
         return slice_write_rm_interleaved_multi_core(a, output, output_tensor_start, output_tensor_end);
     }
-    TT_THROW("Unsupport input memory layout for slice_write operation");
+    TT_THROW("Unsupported input memory layout for slice_write operation");
 }
 
 }  // namespace ttnn::operations::experimental::detail

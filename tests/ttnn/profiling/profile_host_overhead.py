@@ -316,7 +316,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
 
 def test_host_overhead(device, user_input):
     """
-    Run witout tracy:
+    Run without tracy:
     pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile
 
     Run only for one op:
@@ -327,9 +327,9 @@ def test_host_overhead(device, user_input):
     """
 
     if "::" in user_input[0]:
-        splitted = user_input[0].split("::")
-        out_directory = splitted[0]
-        op_name = splitted[1]
+        split = user_input[0].split("::")
+        out_directory = split[0]
+        op_name = split[1]
         out_file_path = os.path.join(out_directory, f"host_overhead_{op_name}.csv")
     else:
         out_directory = user_input[0]

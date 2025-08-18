@@ -81,7 +81,7 @@ def test_roberta_for_multiple_choice(device):
 
         does_pass, pcc_message = comp_pcc(torch_outputs.logits, tt_output_to_torch, 0.98)
 
-        # Temporarily change passing codition to allclose until layernorm accuracy is updated
+        # Temporarily change passing condition to allclose until layernorm accuracy is updated
         does_pass, allclose_message = comp_allclose(torch_outputs.logits, tt_output_to_torch, 0, 0.0081)
         logger.info(allclose_message)
         logger.info(pcc_message)

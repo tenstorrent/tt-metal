@@ -82,7 +82,7 @@ def compute_bias(config, query_length, key_length, *, is_decoder, parameters):
 
 def t5_layer_norm(config, hidden_states, *, weight):
     # T5 uses a layer_norm which only scales and doesn't shift, which is also known as Root Mean
-    # Square Layer Normalization https://arxiv.org/abs/1910.07467 thus varience is calculated
+    # Square Layer Normalization https://arxiv.org/abs/1910.07467 thus variance is calculated
     # w/o mean and there is no bias. Additionally we want to make sure that the accumulation for
     # half-precision inputs is done in fp32
 

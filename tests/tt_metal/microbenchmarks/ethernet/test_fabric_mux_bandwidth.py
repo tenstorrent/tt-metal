@@ -77,7 +77,7 @@ def process_results(test_params, current_bw):
     summarize_to_csv(test_params, current_bw)
 
     if expected_bw is None:
-        assert 0, "Probably a new test, please update the golden file accrodingly"
+        assert 0, "Probably a new test, please update the golden file accordingly"
     else:
         assert (
             expected_bw - BW_THRESHOLD <= current_bw <= expected_bw + BW_THRESHOLD

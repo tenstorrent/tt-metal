@@ -435,7 +435,7 @@ def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_
             in str(e.value)
         )
 
-    # Manually each head to a mutliple of 32
+    # Manually each head to a multiple of 32
     input_tensor_heads = torch.split(torch_input_tensor, head_size, dim=-1)
     input_tensor_heads = [
         torch.nn.functional.pad(head, (0, padded_head_size - head_size), "constant", 0) for head in input_tensor_heads

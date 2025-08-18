@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 ## Parameters
 
 
-# Asumption: If the input is sharded, the output is sharded. If the input is not sharded, the output is replicated across mesh.
+# Assumption: If the input is sharded, the output is sharded. If the input is not sharded, the output is replicated across mesh.
 @dataclass
 class TtUpDecoderBlock2DParameters:
     resnets: list[TtResnetBlock2DParameters]

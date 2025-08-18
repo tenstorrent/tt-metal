@@ -9,7 +9,7 @@
 using namespace tt::data_movement::common;
 
 void kernel_main() {
-    // We are guranteed to be in 4D going to 4D
+    // We are guaranteed to be in 4D going to 4D
     //<higher_dim,rep_dim,lower_dim,page_size>
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);

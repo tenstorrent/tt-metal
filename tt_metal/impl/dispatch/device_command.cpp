@@ -951,7 +951,7 @@ void DeviceCommand<hugepage_write>::validate_cmd_write(uint32_t data_sizeB) cons
     uint32_t data_endB = this->cmd_write_offsetB + data_sizeB;
     TT_ASSERT(
         data_endB <= this->cmd_sequence_sizeB,
-        "Out of bounds command sequence write: attemping to write {} B but only {} B available",
+        "Out of bounds command sequence write: attempting to write {} B but only {} B available",
         data_sizeB,
         this->cmd_sequence_sizeB - this->cmd_write_offsetB);
 }

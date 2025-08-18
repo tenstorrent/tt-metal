@@ -18,7 +18,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  *
- * Template scale parameter is used when aprox and fast_and_approx are true and exp_tile is called with scale_en set to
+ * Template scale parameter is used when approx and fast_and_approx are true and exp_tile is called with scale_en set to
  * true.
  *
  */

@@ -90,7 +90,7 @@ It supports the following parameters:
 #### Mixing topologies in prefill ccl ops [Debug-Only]
 Please note that using line topology on a galaxy system might affect model accuracy. This functionality is for debug purposes only!
 
-When running `text_demo.py` on a machine with torus, all ops will by default use ring topology. To use line implementation of ops you can set enviroment variables:
+When running `text_demo.py` on a machine with torus, all ops will by default use ring topology. To use line implementation of ops you can set environment variables:
 
 - LINE_RS = 1: to use line for all ReduceScatter ops
 - LINE_AG = 1: use line for all AllGather ops

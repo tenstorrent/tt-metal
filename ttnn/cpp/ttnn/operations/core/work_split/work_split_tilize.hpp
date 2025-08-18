@@ -269,7 +269,7 @@ struct BlockRep {
 
 // FullRep is a repeated sequence of data rows followed by pure padding. It represents the row
 // pattern seen from the outer-most dimension of a 4D tensor when padding is added to the second
-// or the thrird dimension.
+// or the third dimension.
 struct FullRep {
     BlockRep rep;
     BlockRep pad;

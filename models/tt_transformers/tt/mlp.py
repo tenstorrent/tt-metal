@@ -36,7 +36,7 @@ class MLP(LightweightModule):
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
-        # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
+        # If padding was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
 
         if args.dummy_weights:
@@ -66,7 +66,7 @@ class MLP(LightweightModule):
         w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
         w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
 
-        layer_num = max(layer_num, 0)  # cross_block uses the configutation of the first decoder
+        layer_num = max(layer_num, 0)  # cross_block uses the configuration of the first decoder
 
         ff1_3_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF1_FF3
@@ -93,7 +93,7 @@ class MLP(LightweightModule):
         """
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
-        layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
+        layer_num = max(self.layer_num, 0)  # cross_block uses the configuration of the first decoder
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )

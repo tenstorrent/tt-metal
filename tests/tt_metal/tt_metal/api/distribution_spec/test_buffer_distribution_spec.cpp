@@ -424,7 +424,7 @@ INSTANTIATE_TEST_SUITE_P(
                 },
             },
             // ND sharding with multiple shards per bank; row major layout with non-aligned page size
-            // Coaslescing possible based on shard spec but must be noncoalesced due to non-aligned pages
+            // Coalescing possible based on shard spec but must be noncoalesced due to non-aligned pages
             // page size = 1 x 4 x 1 = 4 bytes (eg. uint8, int8, etc...)
             BufferReadWriteParams{
                 BufferDistributionSpecInputs{

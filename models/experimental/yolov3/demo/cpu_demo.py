@@ -52,7 +52,7 @@ def test_cpu_demo(model_location_generator):
         for path, im, im0s, _, s in dataset:
             im = torch.from_numpy(im)
             im = im.float()
-            im /= 255  # scalin from 0 - 255 to 0.0 - 1.0
+            im /= 255  # scaling from 0 - 255 to 0.0 - 1.0
             if len(im.shape) == 3:
                 im = im[None]  # expand for batch dim
 

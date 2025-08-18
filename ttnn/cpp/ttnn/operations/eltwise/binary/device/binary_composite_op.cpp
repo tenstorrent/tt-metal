@@ -398,7 +398,7 @@ Tensor ExecutePrelu::invoke(
 Tensor run_remainder(
     const Tensor& input_a, const Tensor& input_b, float t_nan, const std::optional<MemoryConfig>& output_mem_config) {
     using FusedActivations = tt::stl::Span<const unary::UnaryWithParam>;
-    // explicitly using binary_ng to avoid fallback to legacy because of row boradcast
+    // explicitly using binary_ng to avoid fallback to legacy because of row broadcast
     Tensor result = ttnn::subtract(
         input_a,
         ttnn::multiply(

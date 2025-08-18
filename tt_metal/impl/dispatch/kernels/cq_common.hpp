@@ -56,12 +56,12 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
 }
 
 // The fast CQ noc commands write a subset of the NOC registers for each transaction
-// leveraging the fact that many transactions re-use certain values (eg, length)
+// leveraging the fact that many transactions reuse certain values (eg, length)
 // Since there are a variety of dispatch paradigms, which values get reused
 // depend on the fn
 // Making template fns w/ a long list of booleans makes understanding what
 // is/not sent tedious
-// This is an attempt to pack that data in a way thats ~easy to visually parse
+// This is an attempt to pack that data in a way that's ~easy to visually parse
 // S/s: send, do not send src address
 // N/n: send, do not send noc address
 // D/d: send, do not send dst address
@@ -160,8 +160,8 @@ FORCE_INLINE void cq_noc_async_write_with_state(
     }
 }
 
-// More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config
-// (dst_noc, VC..) have been specified.
+// More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
+// config (dst_noc, VC..) have been specified.
 template <
     bool write_last_packet = true,
     bool update_counters = false,

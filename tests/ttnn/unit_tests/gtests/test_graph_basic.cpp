@@ -220,7 +220,7 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
         EXPECT_EQ(ttnn::graph::extract_calltrace(json_trace), ref_calltrace);
 
         EXPECT_EQ(json_trace.size(), ref_json_trace.size());
-        // tensor ids can be different, therfore checking if general structure is the same
+        // tensor ids can be different, therefore checking if general structure is the same
         for (size_t i = 0; i < json_trace.size(); i++) {
             const auto& v = json_trace[i];
             const auto& ref_v = ref_json_trace[i];

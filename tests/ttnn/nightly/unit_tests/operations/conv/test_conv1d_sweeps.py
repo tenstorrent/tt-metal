@@ -25,8 +25,8 @@ def test_ttnn_pytorch_sweep(device, input_spec):
     if input_spec in failing_parameters_ttnn_pytorch:
         pytest.skip(f"Skipping test for failing input_spec: {input_spec}")
 
-    pcc, messsage = run_conv1d_short_sweep(
+    pcc, message = run_conv1d_short_sweep(
         input_spec,
         device,
     )[0]
-    assert pcc, messsage
+    assert pcc, message

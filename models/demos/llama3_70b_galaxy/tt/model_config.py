@@ -757,7 +757,7 @@ class TtModelArgs:
 
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
-            # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
+            # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
                 self.ccl_topology() == ttnn.Topology.Ring
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
@@ -866,7 +866,7 @@ class TtModelArgs:
                 # so that there are many options for out_block_h and out_block_w. Padding to the next multiple of 8 ensures that
                 # per_core_M can at least be divisible by 2, 4, and 8 in addition to 1 and itself.
                 #
-                # If the number is less than or equal to 320 we still wouldn't want it to be prime so we'll add one if thats the case.
+                # If the number is less than or equal to 320 we still wouldn't want it to be prime so we'll add one if that's the case.
                 next_multiple_of_8 = lambda x: int(x + (8 - x % 8) % 8)
                 add_one_if_prime = (
                     lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n

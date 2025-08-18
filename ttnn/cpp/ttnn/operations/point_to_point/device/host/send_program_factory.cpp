@@ -54,7 +54,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             .set_page_size(sender_cb_id, aligned_input_page_size_bytes);
     tt::tt_metal::CBHandle cb_sender_handle = CreateCircularBuffer(program, all_cores, cb_sender_config);
 
-    // allocate space for packet headers for payload sempahore
+    // allocate space for packet headers for payload semaphore
     constexpr auto packet_header_cb_id = tt::CBIndex::c_1;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;

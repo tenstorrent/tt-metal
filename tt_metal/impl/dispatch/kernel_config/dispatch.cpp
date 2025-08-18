@@ -362,7 +362,7 @@ void DispatchKernel::CreateKernel() {
     // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
     // Num num_virtual_active_eth_cores is set if the user application requested virtualizing the
     // number of ethernet cores across devices (to essentially fake uniformity). This value is the
-    // max number of ethernet cores acorss all chip in the cluster.
+    // max number of ethernet cores across all chip in the cluster.
     // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
     // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
     // ethernet cores in the chip.

@@ -510,7 +510,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
 
-    // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
+    // TODO(pgk): move the procssor types into the build system.  or just use integer indices
     // TODO(pgk): consolidate read_binaries where possible
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());

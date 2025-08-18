@@ -82,7 +82,7 @@ def test_mamba_block_inference(
 
     loader = TtTensorLoader(reference_model.state_dict(), device)
 
-    logger.info(f"Initalizing Mamba block from layer {layer}")
+    logger.info(f"Initializing Mamba block from layer {layer}")
     start = time.time()
     model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(layer))
     logger.info(f"Finished initializing Mamba block (took {time.time() - start:.3f} sec)")

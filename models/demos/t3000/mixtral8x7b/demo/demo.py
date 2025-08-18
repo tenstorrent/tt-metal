@@ -209,7 +209,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
         # Get the generated tokens for each user for printing in the log
         for user in range(batch_size):
             user_tok = int(tt_token_batch[user].item())
-            if user_tok == tokenizer.eos_id:  # Stop saving the ouput after hitting the EOS token
+            if user_tok == tokenizer.eos_id:  # Stop saving the output after hitting the EOS token
                 finished_generation[user] = True
             if finished_generation[user] == False:
                 all_outputs[user].append(user_tok)

@@ -153,7 +153,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             }
 
             auto edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-            // change to long axis variantion, and using more buffer slots.
+            // change to long axis variation, and using more buffer slots.
             if (device_sequence.size() >=
                 tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
                 edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
@@ -281,7 +281,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 auto& edm_fwd = forward_direction_edm[l];
                 auto& edm_bwd = backward_direction_edm[l];
                 // currently is_galaxy is only being passed in through the fabric unit test, once we switch to fabric
-                // device init, will use proper cluster type to decide which machine it is. For the optimzation on noc
+                // device init, will use proper cluster type to decide which machine it is. For the optimization on noc
                 // selection, we empirically optimize on 3/4 links for linear, and 4 links on ring, as less links caused
                 // perf degradation, potentially caused by sw overhead of checking two nocs.
                 bool enable_core_placement_opt = false;
@@ -477,7 +477,7 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(
                                                 : edm_builders_backward_direction.at(device->id());
     auto& link_count_map =
         (direction == FORWARD) ? next_forward_direction_edm_available : next_backward_direction_edm_available;
-    log_trace(tt::LogOp, "EDM conecting in {} direction", direction == FORWARD ? "FORWARD" : "BACKWARD");
+    log_trace(tt::LogOp, "EDM connecting in {} direction", direction == FORWARD ? "FORWARD" : "BACKWARD");
     const auto next_link = link_count_map[device->id()];
     link_count_map[device->id()] = (next_link + 1) % edm_builders.size();
 

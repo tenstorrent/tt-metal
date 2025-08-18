@@ -43,7 +43,7 @@ struct DropoutMeshWorkloadFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     // Dropout generates N different programs, but they differ only in the per-device seed set as a runtime argument.
-    // TODO: when heterogenous runtime arguments are supported, create a single program for all devices, and only
+    // TODO: when heterogeneous runtime arguments are supported, create a single program for all devices, and only
     // override the runtime arguments for each device. In addition, use `CachedMeshWorkload` instead of
     // `AdaptedCachedMeshWorkload`, as only a single `shared_variables_t` is needed.
     static cached_mesh_workload_t create_mesh_workload(

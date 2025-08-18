@@ -230,7 +230,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     ////////////////////////////////////////////////////////////////////////////
     // Each core is assigned an output work unit in a row wise round robin
     // fashion. For a given core, the first index is i, and all subsequent
-    // indicies are increments of num_cores_to_be_used. The total number of
+    // indices are increments of num_cores_to_be_used. The total number of
     // units is num_tiles_per_group times num_cores_to_be_used.
     // For example, with 130 output tiles to be processed and no shards (shard
     // factor is 1) on an 8x8 grid
@@ -243,7 +243,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     // - etc
     // The first tile that needs to be reduced has the same as the output tile.
     // That is the starting point for the reader, which then processes all
-    // subsequent tiles to be reduced. The increment for the input indicies is
+    // subsequent tiles to be reduced. The increment for the input indices is
     // the size of the inner dimensions in tiles (inner_tile_size). The number
     // of tiles to process is the size of the reduce dimension in tiles
     // (reduce_tile_size).

@@ -111,6 +111,6 @@ def run(
         ceil_mode=False,
     )(act)
 
-    ## test for equivalance
+    ## test for equivalence
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
     return check_with_pcc(out_pytorch, golden_pytorch)

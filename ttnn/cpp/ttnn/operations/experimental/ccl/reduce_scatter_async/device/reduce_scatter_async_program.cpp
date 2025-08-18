@@ -532,8 +532,8 @@ static ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
     LineTopology const& topology_config,
     ttnn::operations::binary::BinaryOpType reduce_op) {
     using namespace ttnn::ccl::worker_detail;
-    // Why does something as simple as calling `CreateKernel` need to be so complicated to coelesce kernel launches?
-    // Surely there must be a better way to do this - it introduces a lot of complexity, unneccesary code, and is error prone
+    // Why does something as simple as calling `CreateKernel` need to be so complicated to coalesce kernel launches?
+    // Surely there must be a better way to do this - it introduces a lot of complexity, unnecessary code, and is error prone
     // Would be great if we could do something like `DefineKernel` to create a temporary handle which can later be used to
     // merge with other kernels (if all args are identical), to produce a merged kernel.
 

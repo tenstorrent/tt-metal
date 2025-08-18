@@ -324,7 +324,7 @@ void gen_paged_write_test(
         xfer_size_16B = (buffer_size - total_size_bytes) >> 4;
     }
 
-    // Treat xfer size test in test as page write page size here. Keep consistend for all cmds.
+    // Treat xfer size test in test as page write page size here. Keep consistent for all cmds.
     uint32_t page_size_bytes = xfer_size_16B << 4;
     if (page_size_bytes > max_xfer_size_bytes_g) {
         page_size_bytes = max_xfer_size_bytes_g;
@@ -501,7 +501,7 @@ int main(int argc, char** argv) {
             }
 
             // Need to be careful with write buffer address, especially for cases where L1 banks have negative offset
-            // (occurs for storage cores) so find minmum required bank offset such that the negative offsets will not
+            // (occurs for storage cores) so find minimum required bank offset such that the negative offsets will not
             // cause underflow and bump up range to not be less.
             bool is_dram = is_paged_dram_test();
             uint32_t min_buffer_addr = get_min_required_buffer_addr(device, is_dram);

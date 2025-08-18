@@ -78,7 +78,7 @@ private:
     bool initialize_fabric_and_dispatch_fw_ = false;
     // This variable tracks the state of dispatch firmware on device.
     // It is set to true when dispatch firmware is launched, and reset
-    // after the terimnate command is sent.
+    // after the terminate command is sent.
     bool dispatch_firmware_active_ = false;
 
     std::mutex lock;

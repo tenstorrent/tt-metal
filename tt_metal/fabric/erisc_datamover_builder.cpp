@@ -529,7 +529,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                 break;
             case FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
                 if (buffer_config.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
-                    // set downstream_num_sender_buffer_slots, downstream is dateline upstream adjcent edm
+                    // set downstream_num_sender_buffer_slots, downstream is dateline upstream adjacent edm
                     num_downstream_sender_buffer_slots.fill(dateline_upstream_adjcent_num_sender_buffer_slots);
                 }
                 break;
@@ -1275,7 +1275,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
                                                                       // receiver_channel_forwarding_sync_cmd_buf_ids
     }
     for (size_t i = 0; i < num_receiver_channels; i++) {
-        // TODO: pass this to the tranmission file
+        // TODO: pass this to the transmission file
         ct_args.push_back(
             config.receiver_channel_local_write_noc_ids[i]);  // maps to receiver_channel_local_write_noc_ids
     }
@@ -1431,7 +1431,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
                 config.receiver_channels_downstream_teardown_semaphore_address[i];
         }
         // Setup VC1 downstream edm
-        // 1D and 2D have 1 downstream edm for VC1 in the diretion of respective axis
+        // 1D and 2D have 1 downstream edm for VC1 in the direction of respective axis
         receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms] =
             config.receiver_channels_downstream_flow_control_semaphore_address[num_vc0_downstream_edms];
         receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms] =
@@ -1470,7 +1470,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         sender_channels_buffer_index_semaphore_id[worker_chan] !=
             sender_channels_flow_control_semaphore_id[worker_chan],
         "Internal error - sender_channel_buffer_index_semaphore_id and sender_channel_flow_control_semaphore_id "
-        "aliased eachother");
+        "aliased each other");
     return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,

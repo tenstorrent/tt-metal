@@ -838,7 +838,7 @@ void build_and_run_roundtrip_latency_test(
    receiver_kernel_ids.reserve(n_hops);
    sender_kernel_ids.reserve(n_hops);
 
-   // In case we want a 12-hop ring, we maps from device to program incase two
+   // In case we want a 12-hop ring, we maps from device to program in case two
    // different hops land on the same device (though use different sockets.
    std::unordered_map<Device*,Program*> device_program_map;
    for (std::size_t i = 0; i < n_hops; i++) {

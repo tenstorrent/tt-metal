@@ -355,11 +355,11 @@ int main(int argc, char** argv) {
                     }
 
                     if (!(per_core_golden == result_untilized)) {
-                        log_error(LogTest, "{}/{} - comparision failed ", r, c);
+                        log_error(LogTest, "{}/{} - comparison failed ", r, c);
                         pass = false;
                     } else {
                         if (debug) {
-                            log_info(LogTest, "{}/{} - comparision passed", r, c);
+                            log_info(LogTest, "{}/{} - comparison passed", r, c);
                         }
                     }
                 }

@@ -383,7 +383,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 // clang-format off
 /**
  * A non-blocking call that tells the caller if the specified number of pages are available in the specified circular
- * buffer (CB). This call is used by the consumer of the CB to see if the prodcuers has fill the CB with at least the
+ * buffer (CB). This call is used by the consumer of the CB to see if the producers has fill the CB with at least the
  * specified number of tiles. Important note: in case multiple calls of cb_wait_front(n) are issued without a paired
  * cb_pop_front() call, n is expected to be incremented by the user to be equal to a cumulative total of tiles. Example:
  * 4 calls of cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of
@@ -830,7 +830,7 @@ void noc_async_write_multicast_one_packet(
  * | src_local_l1_addr                 | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast            | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
  * | size                              | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                     | True     |
- * | num_dests                         | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores -1)                    | True     |
+ * | num_dests                         | Number of destinations that the multicast source is targeting           | uint32_t | 0..(number of cores -1)                    | True     |
  * | linked                            | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes                            | uint32_t | Any uint32_t number                        | False    |
@@ -1359,7 +1359,7 @@ inline void noc_semaphore_set_remote(
  * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                   | True     |
+ * | num_dests              | Number of destinations that the multicast source is targeting           | uint32_t | 0..(number of cores - 1)                   | True     |
  * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
@@ -1408,7 +1408,7 @@ inline void noc_semaphore_set_multicast(
  * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores)                       | True     |
+ * | num_dests              | Number of destinations that the multicast source is targeting           | uint32_t | 0..(number of cores)                       | True     |
  * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */

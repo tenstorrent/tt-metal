@@ -200,7 +200,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t in1_block_tiles = per_core_N_in1_sender * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
-        in1_CB_tiles = in1_CB_tiles * 3;  // tripple buffer
+        in1_CB_tiles = in1_CB_tiles * 3;  // triple buffer
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -528,7 +528,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
             interm0_CB_size / interm0_single_tile_size,
             interm0_CB_size);
     } else {
-        log_debug(tt::LogOp, "inplace interm and outout cb");
+        log_debug(tt::LogOp, "inplace interm and output cb");
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};

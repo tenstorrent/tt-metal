@@ -214,7 +214,7 @@ def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, st
     ],
 )
 def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
-    # Test that program cache does not re-use the same program for different inputs
+    # Test that program cache does not reuse the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
     dummy = []
     for _ in range(3):

@@ -48,7 +48,7 @@ struct SocketConfig {
     std::vector<SocketConnection> socket_connection_config;
     SocketMemoryConfig socket_mem_config;
     // Specifies the ranks of the sender and receiver hosts in a multi-host context.
-    // Used for inital handshaking and validation of the socket configs.
+    // Used for initial handshaking and validation of the socket configs.
     multihost::Rank sender_rank{0};
     multihost::Rank receiver_rank{0};
     std::shared_ptr<multihost::DistributedContext> distributed_context = nullptr;
@@ -69,7 +69,7 @@ public:
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,
         const SocketConfig& config);
-    // Access the data-buffer associated with the socket on the reciver mesh. Can only be queried for receiver sockets.
+    // Access the data-buffer associated with the socket on the receiver mesh. Can only be queried for receiver sockets.
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     // Access the config buffer associated with this socket.
     std::shared_ptr<MeshBuffer> get_config_buffer() const;

@@ -238,7 +238,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     // common compile time args for sender and receiver
-    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // Note: Fabric Mcast with NOC writes to DRAM provides redundant coverage,
     // so use_dram_dst is set to 0; see run_unicast_bw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
@@ -889,7 +889,7 @@ void RunTestMCastConnAPI(
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     // common compile time args for sender and receiver
-    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // Note: Fabric Mcast with NOC writes to DRAM provides redundant coverage,
     // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
@@ -1636,7 +1636,7 @@ void RunTestChipMCast1D(
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     // common compile time args for sender and receiver
-    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // Note: Fabric Mcast with NOC writes to DRAM provides redundant coverage,
     // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
@@ -2272,7 +2272,7 @@ void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     // common compile time args for sender and receiver
-    // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
+    // Note: Fabric Mcast with NOC writes to DRAM provides redundant coverage,
     // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,

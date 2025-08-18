@@ -74,7 +74,7 @@ void kernel_main() {
 #endif
 
     for (uint32_t ncht = 0; ncht < NCht; ncht++) {
-        // We need to pass once in order to calcualte the sum and then to calculate the final value.
+        // We need to pass once in order to calculate the sum and then to calculate the final value.
         for (uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
             // We want to fill up the CB for input, and do so in chunks of blk
             uint32_t tile_index = tile_offset + (ncht * Wt);

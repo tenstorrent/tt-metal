@@ -295,10 +295,10 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
     tt::tt_metal::Program& program,
     const tt::tt_metal::IDevice* device,
     int privilaged_index) {
-    // pick the privilaged core, record the number of matmul cores
+    // pick the privileged core, record the number of matmul cores
     TT_FATAL(initialized_llama_reduce_scatter_part1, "reduce scatter half needs to be initialized first");
     auto cores = corerange_to_cores(matmul_cores);
-    TT_FATAL(cores.size() > privilaged_index, "Privilaged index is out of range of the matmul cores");
+    TT_FATAL(cores.size() > privilaged_index, "Privileged index is out of range of the matmul cores");
     this->privilaged_core = cores.at(privilaged_index);
     this->privilaged_core_physical = device->worker_core_from_logical_core(this->privilaged_core);
     this->matmul_privilaged_semaphore = tt::tt_metal::CreateSemaphore(program, privilaged_core, 0);

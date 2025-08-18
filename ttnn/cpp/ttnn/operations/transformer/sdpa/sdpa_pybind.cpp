@@ -16,7 +16,7 @@ namespace ttnn::operations::transformer {
 void py_bind_sdpa(py::module& module) {
     auto doc =
         R"doc(
-        Causal scaled dot product attention. This API mimicks the PyTorch API of the same name.
+        Causal scaled dot product attention. This API mimics the PyTorch API of the same name.
         The implementation is FlashAttention-2."
 
         Accepts a `SDPAProgramConfig` which specifies the grid size and chunk tiles in the Q and K sequence lengths. The op parallelizes over `b`, `nqh`, and Q's `s` dimension.

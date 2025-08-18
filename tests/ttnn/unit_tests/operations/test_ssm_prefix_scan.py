@@ -33,7 +33,7 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
 
     # Note that 8x8 grid won't run on CI
     if num_availible_cores < num_cores:
-        pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
+        pytest.skip(f"Not enough cores available (was {num_availible_cores} but need {num_cores})")
 
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     shard_spec = ttnn.ShardSpec(
@@ -115,7 +115,7 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
 
     # Note that 8x8 grid won't run on CI
     if num_availible_cores < num_cores:
-        pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
+        pytest.skip(f"Not enough cores available (was {num_availible_cores} but need {num_cores})")
 
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     shard_spec = ttnn.ShardSpec(

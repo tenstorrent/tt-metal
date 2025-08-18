@@ -86,7 +86,7 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
 
-    assert llm_mode == "prefill" and num_layers == 60, "PCC tresholds only valid for prefill and 60 layers."
+    assert llm_mode == "prefill" and num_layers == 60, "PCC thresholds only valid for prefill and 60 layers."
 
     if data_type == "BFLOAT8_B":
         if seq_len == 32:

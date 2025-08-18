@@ -247,7 +247,7 @@ DataFormat get_single_pack_src_format(
     } else if (int_fpu_en) {
         TT_THROW("Integer math is not supported");
         // If output is integer, then pack_src_format is integer as conversion in packer is not supported
-        // If output if float, then pack_src_format is Float32 as sfpu outut if Float32
+        // If output if float, then pack_src_format is Float32 as sfpu output if Float32
         if (tt::is_integer_format(data_format)) {
             pack_src_format = data_format;
         } else {

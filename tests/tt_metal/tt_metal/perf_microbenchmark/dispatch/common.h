@@ -650,7 +650,7 @@ inline void generate_random_paged_payload(
     DeviceData& data,
     uint32_t start_page,
     bool is_dram) {
-    static uint32_t coherent_count = 0x100;  // Abitrary starting value, avoid 0x0 since matches with DRAM prefill.
+    static uint32_t coherent_count = 0x100;  // Arbitrary starting value, avoid 0x0 since matches with DRAM prefill.
     auto buf_type = is_dram ? BufferType::DRAM : BufferType::L1;
     uint32_t num_banks = device->allocator()->get_num_banks(buf_type);
     uint32_t words_per_page = cmd.write_paged.page_size / sizeof(uint32_t);
@@ -777,7 +777,7 @@ inline size_t debug_prologue(std::vector<uint32_t>& cmds) {
         memset(&debug_cmd, 0, sizeof(CQDispatchCmd));
 
         debug_cmd.base.cmd_id = CQ_DISPATCH_CMD_DEBUG;
-        // compiler compains w/o these filled in later fields
+        // compiler complains w/o these filled in later fields
         debug_cmd.debug.key = 0;
         debug_cmd.debug.size = 0;
         debug_cmd.debug.stride = 0;

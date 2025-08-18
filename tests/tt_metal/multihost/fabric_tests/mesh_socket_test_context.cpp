@@ -247,7 +247,7 @@ bool MeshSocketTestContext::should_participate_in_test(const ParsedTestConfig& t
 
 /*
     We assume rank to mesh is 1-to-1, each rank sends its mesh_id and we receive all mesh_ids
-    Sockets APIs will need to change to use mesh_id instead of rank to supprot Big Mesh x Multi Mesh case
+    Sockets APIs will need to change to use mesh_id instead of rank to support Big Mesh x Multi Mesh case
     Need this to generate high level patterns such as all to all, since we need to know the mesh_ id to
     know the number of devices per host.
 */

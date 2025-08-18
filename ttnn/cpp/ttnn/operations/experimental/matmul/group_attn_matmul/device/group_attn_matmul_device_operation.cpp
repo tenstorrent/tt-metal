@@ -98,7 +98,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
         TT_FATAL(
             (this->num_tokens.has_value() and this->transpose_hw.has_value()),
             "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
-        TT_FATAL(this->num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
+        TT_FATAL(this->num_tokens.value() % 32 == 0, "Number of tokens must be divisible by 32!");
         read_from_kv_cache = true;
     }
 

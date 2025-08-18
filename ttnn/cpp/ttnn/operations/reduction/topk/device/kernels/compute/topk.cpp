@@ -47,7 +47,7 @@ FORCE_INLINE void read_cb_and_transpose(uint32_t cb, uint32_t base_offset, bool 
     }
 }
 
-// just to refactor because of code overlow
+// just to refactor because of code overflow
 FORCE_INLINE void cb_wait_pop_front(uint32_t cb, uint32_t count) {
     cb_wait_front(cb, count);
     cb_pop_front(cb, count);

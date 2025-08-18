@@ -383,7 +383,7 @@ void fabric_set_mcast_route(
 
     // For 2D Mcast, mcast spine runs N/S and branches are E/W
     // If api is called with east and/or west hops != 0, it may be a 2D mcast
-    // If so, set the forwarding flags for east and/or west branchs.
+    // If so, set the forwarding flags for east and/or west branches.
     if (e_num_hops) {
         mcast_branch |= LowLatencyMeshRoutingFields::FORWARD_EAST;
     }

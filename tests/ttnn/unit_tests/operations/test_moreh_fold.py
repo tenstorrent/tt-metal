@@ -15,7 +15,7 @@ def run_fold_test(device, input_shape, output_size, kernel_size, dilation, paddi
         torch_input = torch.randn(input_shape, dtype=dtype)
     elif dtype == torch.bfloat16:
         # Make bfloat16 input mostly positive by adding 1, thus making output result
-        # more positive and futher from 0 to avoid rounding precision problem with bfloat16
+        # more positive and further from 0 to avoid rounding precision problem with bfloat16
         torch_input = torch.randn(input_shape, dtype=dtype) + 1
     torch_fold = torch.nn.Fold(
         output_size=output_size, kernel_size=kernel_size, dilation=dilation, padding=padding, stride=stride

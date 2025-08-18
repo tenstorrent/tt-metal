@@ -213,7 +213,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
         EXPECT_THAT(tensor_shard.to_vector<float>(), Pointwise(FloatEq(), host_data));
     }
 
-    // Expect coordiantes to cover the entire mesh.
+    // Expect coordinates to cover the entire mesh.
     std::vector<::testing::Matcher<distributed::MeshCoordinate>> coord_matchers;
     for (const auto& expected_coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
         coord_matchers.push_back(Eq(expected_coord));

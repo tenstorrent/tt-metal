@@ -331,7 +331,7 @@ TEST(DistributedContextExtraTest, CreateSubContextTranslateRanks) {
     // Sub‑context containing ranks 0,1,2 (or all if smaller)
     std::array<int, 3> group = {0, 1, 2};
     if (world_rank > 2) {
-        // skiping this test for ranks which are not in the group
+        // skipping this test for ranks which are not in the group
         SUCCEED();
         return;
     }

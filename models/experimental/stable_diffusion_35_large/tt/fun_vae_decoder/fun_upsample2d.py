@@ -13,8 +13,8 @@ from .fun_conv2d import vae_conv2d, TtConv2dParameters
 from ..parallel_config import VAEParallelConfig
 
 
-# Asumption: If the input is sharded, the output is sharded. If the input is not sharded, the output is replicated across mesh.
-# TODO: See if there is any benefits of paralellizing upsample2d since we have to go between layouts
+# Assumption: If the input is sharded, the output is sharded. If the input is not sharded, the output is replicated across mesh.
+# TODO: See if there is any benefits of parallelizing upsample2d since we have to go between layouts
 @dataclass
 class TtUpsample2DParameters:
     conv: TtConv2dParameters

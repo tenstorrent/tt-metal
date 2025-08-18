@@ -145,7 +145,7 @@ def moreh_linear(shapes, has_bias, has_output, compute_kernel_config, device, np
     ## reference
     torch_output = torch.nn.functional.linear(torch_input, torch_weight, torch_bias)
 
-    ## test for equivalance
+    ## test for equivalence
     rtol = atol = 0.1
     ttcpu_output = ttnn.to_torch(tt_output).to(cpu_dtype)
     passing, output_pcc = comp_allclose_and_pcc(torch_output, ttcpu_output, pcc=0.999, rtol=rtol, atol=atol)
@@ -290,7 +290,7 @@ def moreh_linear_backward(
     )
     torch_output.backward(torch_output_grad)
 
-    ## test for equivalance
+    ## test for equivalence
     rtol = atol = 0.1
     if requires_input_grad:
         ttcpu_input_grad = ttnn.to_torch(tt_input_grad).to(cpu_dtype)
@@ -485,7 +485,7 @@ def test_moreh_bias_backward_fp32(shapes, device):
         torch_bias_fp32.requires_grad_(requires_bias_grad),
     )
     torch_output.backward(torch_output_grad.float())
-    ## test for equivalance
+    ## test for equivalence
     rtol = atol = 0.1
     tt_bias_grad_fp32_cpu = tt_bias_grad_fp32.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(bias_shape).to_torch()
     tt_bias_grad_cpu = tt_bias_grad.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(bias_shape).to_torch()

@@ -46,7 +46,7 @@ class TtUNet2DConditionModel(nn.Module):
         self.time_proj = TtTimesteps(device, 320, True, 0, 1)
         self.add_time_proj = TtTimesteps(device, 256, True, 0, 1)
 
-        # Initialze embeddings with attention_weights_dtype for the time being.
+        # Initialize embeddings with attention_weights_dtype for the time being.
         self.time_embedding = TtTimestepEmbedding(
             device, state_dict, "time_embedding", linear_weights_dtype=model_config.attention_weights_dtype
         )

@@ -618,7 +618,7 @@ struct StreamBinaryParams : StreamUnaryBinaryCommonParams {
         // MM Feb 15 2022: Changed std::memset to this member initialization list.
         // If you check the assembly it does actually boil down to a memset, and
         // it's actually more efficient (in general) because it won't try to
-        // default-construct each member before calling the cosntructor body.
+        // default-construct each member before calling the constructor body.
         //(Of course, for POD types, there is no default construction of members,
         // but you get the point)
         input_B_stream_id(0),
@@ -688,7 +688,7 @@ struct BinaryOperationParams : UnaryOperationParams {
         // MM Feb 15 2022: Changed std::memset to this member initialization list.
         // If you check the assembly it does actually boil down to a memset, and
         // it's actually more efficient (in general) because it won't try to
-        // default-construct each member before calling the cosntructor body.
+        // default-construct each member before calling the constructor body.
         //(Of course, for POD types, there is no default construction of members,
         // but you get the point)
         math_fidelity(0),

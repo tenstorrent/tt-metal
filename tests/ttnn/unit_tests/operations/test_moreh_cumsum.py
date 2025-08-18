@@ -85,7 +85,7 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
         .to_torch()
     )
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
@@ -136,7 +136,7 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
         .to_torch()
     )
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
@@ -189,7 +189,7 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
 
         cpu_layout = ttnn.ROW_MAJOR_LAYOUT
 
-        # test for equivalance
+        # test for equivalence
         rtol = atol = 0.1
 
         for i in range(2):
@@ -241,7 +241,7 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
         .to_torch()
     )
 
-    # test for equivalance
+    # test for equivalence
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
@@ -295,7 +295,7 @@ def test_moreh_cumsum_backward_callback(input_shape, dim, device):
         torch_output.backward(torch_output_grad)
 
         cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-        # test for equivalance
+        # test for equivalence
         rtol = atol = 0.1
 
         for i in range(2):

@@ -238,7 +238,7 @@ bool send_over_eth(
         llrt::write_hex_vec_to_core(receiver_device->id(), eth_core, zero, app_sync_info_base_addr);
     }
 
-    // TODO: is it possible that receiver core app is stil running when we push inputs here???
+    // TODO: is it possible that receiver core app is still running when we push inputs here???
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     llrt::write_hex_vec_to_core(sender_device->id(), sender_core, inputs, erisc_unreserved_base_addr);
 

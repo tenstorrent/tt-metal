@@ -71,7 +71,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/core_bidirectional/kernels/";
 
     if (test_config.same_kernel) {
-        // Sender and Requestor Kernel
+        // Sender and Requester Kernel
 
         std::string sender_and_requestor_kernel_filename = "sender_and_requestor.cpp";
         std::string sender_and_requestor_kernel_path = kernels_dir + sender_and_requestor_kernel_filename;
@@ -117,9 +117,9 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
                 .noc = NOC::RISCV_0_default,
                 .compile_args = sender_compile_args});
 
-        // Requestor Kernel
+        // Requester Kernel
 
-        std::string requestor_kernel_filename = "requestor.cpp";
+        std::string requestor_kernel_filename = "requester.cpp";
         std::string requestor_kernel_path = kernels_dir + requestor_kernel_filename;
 
         vector<uint32_t> requestor_compile_args = {
@@ -181,7 +181,7 @@ bool run_dm(IDevice* device, const CoreBidirectionalConfig& test_config) {
         print_vector<uint32_t>(packed_golden);
         log_info(tt::LogTest, "Sender output vector");
         print_vector<uint32_t>(packed_sender_output);
-        log_info(tt::LogTest, "Requestor output vector");
+        log_info(tt::LogTest, "Requester output vector");
         print_vector<uint32_t>(packed_requestor_output);
         return false;
     }

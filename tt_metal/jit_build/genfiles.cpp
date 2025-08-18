@@ -277,7 +277,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
     tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) =
         generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch);
 
-    // equalize "upack src" and "pack dst" data format vectors
+    // equalize "unpack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
     // in order to allow any CB to be read and written to/from L1, these formats should be the same (one cannot be
     // DataFromat::Invalid if the other is set) if both formats are DataFormat::Invalid then this CB is not used this

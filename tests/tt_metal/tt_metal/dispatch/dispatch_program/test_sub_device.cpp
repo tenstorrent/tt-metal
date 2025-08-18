@@ -519,7 +519,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     EXPECT_THROW(
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_1, false), std::exception);
 
-    // Finish allows transfering ownership of sub device 1.
+    // Finish allows transferring ownership of sub device 1.
     distributed::Finish(mesh_device->mesh_command_queue(0));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_1, false);
 

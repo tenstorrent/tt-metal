@@ -19,7 +19,7 @@ using namespace tt::tt_metal::distributed;
 // 3. Allocating MeshBuffers in the distributed memory space exposed by the Virtual Mesh, to shard data across physical
 // devices
 // 4. Constructing programs targeting different SubDevices
-// 5. Constructing homogenous (same program dispatched to all physical devices) and heterogenous (different programs
+// 5. Constructing homogeneous (same program dispatched to all physical devices) and heterogeneous (different programs
 // dispatched
 //    to physical different devices) MeshWorkloads from programs
 // 6. Capturing the execution of MeshWorkloads inside a MeshTrace that gets loaded onto the Virtual Mesh

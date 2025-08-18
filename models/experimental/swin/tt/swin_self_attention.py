@@ -72,9 +72,9 @@ class TtSwinSelfAttention(nn.Module):
         return ttnn.full(shape, value)
 
     def transpose_for_scores(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # x must be 4d originaly
-        # 1 is appended to the beggining
-        # so create tensor shape by ommiting the first dimension
+        # x must be 4d originally
+        # 1 is appended to the beginning
+        # so create tensor shape by omitting the first dimension
         new_x_shape = list(x.padded_shape)[1:-1] + [
             self.num_attention_heads,
             self.attention_head_size,

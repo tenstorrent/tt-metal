@@ -414,7 +414,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             return RowMajorHostBuffer::create_padded(std::move(host_buffer), tensor_spec);
         }
 
-        // No modifications needed; direclty return buffer
+        // No modifications needed; directly return buffer
         if (tensor_impl::logical_matches_physical(tensor_spec)) {
             return RowMajorHostBuffer::create_logical(std::move(host_buffer), tensor_spec);
         }
@@ -791,7 +791,7 @@ void pytensor_module(py::module& m_tensor) {
 
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
 
-                Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisble by 2.
+                Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisible by 2.
 
                 Example of creating a TT Tensor on TT accelerator device:
 
@@ -857,7 +857,7 @@ void pytensor_module(py::module& m_tensor) {
 
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
 
-                Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisble by 2.
+                Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisible by 2.
 
                 Example of creating a TT Tensor on TT accelerator device with specified mem_config:
 
@@ -949,7 +949,7 @@ void pytensor_module(py::module& m_tensor) {
             [](Tensor& self, bool force) { return self.deallocate(force); },
             py::arg("force") = false,
             R"doc(
-                Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
+                Deallocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
             )doc")
         .def(
             "to",

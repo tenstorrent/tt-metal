@@ -126,7 +126,7 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
 def get_output_tensor(input_tokens, expert_indices, expert_mapping, seq_len, mesh_shape, dtype=torch.bfloat16):
     # output tensor is [devices, batch, seq_len, hidden_size]
     # depending on the expert indices, the input tokens are scattered to different experts
-    # these experts are sent to one ore more device based on the expert mapping
+    # these experts are sent to one or more device based on the expert mapping
     batch = input_tokens.shape[0]
     mesh_columns = mesh_shape[1]
     mesh_rows = mesh_shape[0]

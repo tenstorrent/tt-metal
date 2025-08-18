@@ -173,7 +173,7 @@ def test_mixtral_model_with_prefill_perf(
     else:
         seq_len = (
             prefill_seqlen * 2
-        )  # The prompts being used here have sligtly more tokens than the prefill seq. this accounts for that.
+        )  # The prompts being used here have slightly more tokens than the prefill seq. this accounts for that.
         batch_size = 32
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower

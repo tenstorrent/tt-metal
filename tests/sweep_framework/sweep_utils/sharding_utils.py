@@ -184,6 +184,6 @@ def invalidate_vector_sharding(input_spec):
         and shard_orientation == "COL_MAJOR"
         and (input_shape[-1] % input_shape[-2] != 0)
     ):
-        return True, "Physical size <width, height> must be a multuple of page size <1, width>"
+        return True, "Physical size <width, height> must be a multiple of page size <1, width>"
 
     return False, None

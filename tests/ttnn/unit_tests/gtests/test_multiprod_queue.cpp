@@ -40,7 +40,7 @@ using ::tt::tt_metal::is_device_tensor;
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 
 TEST_F(MultiProducerCommandQueueTest, Stress) {
-    // Spawn 2 application level threads intefacing with the same device through the async engine.
+    // Spawn 2 application level threads interfacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
     auto device = this->device_;

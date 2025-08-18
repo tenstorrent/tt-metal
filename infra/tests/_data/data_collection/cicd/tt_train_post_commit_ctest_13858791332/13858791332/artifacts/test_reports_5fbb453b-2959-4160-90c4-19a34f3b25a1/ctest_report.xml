@@ -911,7 +911,7 @@ Note: Google Test filter = TensorUtilsTest.TestIsInitialized
 
 [NON-XML-CHAR-0x1B][32m2025-03-14 14:41:12.002[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Opened PCI device 0; KMD version: 1.29.0, IOMMU: disabled
 [NON-XML-CHAR-0x1B][32m2025-03-14 14:41:12.005[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Harvesting mask for chip 0 is 0x201 (physical layout: 0x3, logical: 0x201, simulated harvesting mask: 0x0).
-[NON-XML-CHAR-0x1B][32m2025-03-14 14:41:12.007[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Opened PCI device 0; KMD version: 1.29.0, IOMMU: disabl...
+[NON-XML-CHAR-0x1B][32m2025-03-14 14:41:12.007[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Opened PCI device 0; KMD version: 1.29.0, IOMMU: disable...
 [This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
 </system-out>
 	</testcase>
@@ -981,7 +981,7 @@ Note: Google Test filter = TensorUtilsTest.TestUint32XTensor
 
 [NON-XML-CHAR-0x1B][32m2025-03-14 14:41:18.747[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Opened PCI device 0; KMD version: 1.29.0, IOMMU: disabled
 [NON-XML-CHAR-0x1B][32m2025-03-14 14:41:18.751[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Harvesting mask for chip 0 is 0x201 (physical layout: 0x3, logical: 0x201, simulated harvesting mask: 0x0).
-[NON-XML-CHAR-0x1B][32m2025-03-14 14:41:18.753[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Opened PCI device 0; KMD version: 1.29.0, IOMMU: disabl...
+[NON-XML-CHAR-0x1B][32m2025-03-14 14:41:18.753[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Opened PCI device 0; KMD version: 1.29.0, IOMMU: disable...
 [This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
 </system-out>
 	</testcase>
@@ -2005,7 +2005,7 @@ Note: Google Test filter = LayerNormOpTest.CompositeLayerNormOp_backward
 
 [NON-XML-CHAR-0x1B][32m2025-03-14 14:45:33.963[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Opened PCI device 0; KMD version: 1.29.0, IOMMU: disabled
 [NON-XML-CHAR-0x1B][32m2025-03-14 14:45:33.966[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Harvesting mask for chip 0 is 0x201 (physical layout: 0x3, logical: 0x201, simulated harvesting mask: 0x0).
-[NON-XML-CHAR-0x1B][32m2025-03-14 14:45:33.968[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Opened PCI device 0; KMD versio...
+[NON-XML-CHAR-0x1B][32m2025-03-14 14:45:33.968[NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][1m[NON-XML-CHAR-0x1B][38;2;100;149;237mINFO    [NON-XML-CHAR-0x1B][0m | [NON-XML-CHAR-0x1B][36mSiliconDriver  [NON-XML-CHAR-0x1B][0m - Opened PCI device 0; KMD version...
 [This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
 </system-out>
 	</testcase>

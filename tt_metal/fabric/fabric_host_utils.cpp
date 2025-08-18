@@ -399,7 +399,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     auto dist_from_nw = compute_distances(nw_corner, topology_info.adjacency_map);
 
     // 2) Identify the NE corner (distance of mesh_ew_size-1 from NW) and run a second
-    //    BFS from it to obtain dNE[chip].
+    //    BFS from it to obtain done[chip].
     chip_id_t ne_corner = nw_corner;  // initialise
     bool ne_found = false;
     for (auto corner : topology_info.corners) {
@@ -441,7 +441,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
         int d_nw_int = static_cast<int>(d_nw);
         // Solve the 2-equation system:
         //   dNW = row + col
-        //   dNE = row + (mesh_cols-1 - col)
+        //   done = row + (mesh_cols-1 - col)
         int col = (mesh_cols - 1 + d_nw_int - d_ne) / 2;
         int row = d_nw_int - col;
 

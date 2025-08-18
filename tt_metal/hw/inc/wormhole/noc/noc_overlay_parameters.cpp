@@ -93,7 +93,7 @@ const std::vector<OverlayReg> OLP::registers = {
      "are read\n// from the buffer, thus doubling as the read pointer during phase execution. \n//\n// Stream hardware "
      "will assume that this buffer is large enough to hold info for all messages\n// within a phase, so unlike the "
      "buffer, it never needs to wrap.\n// \n// The buffer is filled automatically by snooping for streams with remote "
-     "source. \n// For source enpoints, the buffer is written explicitly (along with the data buffer), after which "
+     "source. \n// For source endpoints, the buffer is written explicitly (along with the data buffer), after which "
      "\n// STREAM_NUM_MSGS_RECEIVED_INC is written to notify the stream that messages are available for\n// sending. "
      "\n// \n// Write pointer is also managed automatically by hardware, but can be read or reset using \n// "
      "STREAM_MSG_INFO_WR_PTR_REG. Write pointer is also reset when writing this register.\n"},
@@ -163,7 +163,7 @@ const std::vector<OverlayReg> OLP::registers = {
       {"REMOTE_SRC_IS_MCAST",
        (DEST_DATA_BUF_NO_FLOW_CTRL + DEST_DATA_BUF_NO_FLOW_CTRL_WIDTH),
        1,
-       "// set if REMOTE_SOURCE==1 and has mulicast enabled (i.e. this stream is part of a multicast group)\n"},
+       "// set if REMOTE_SOURCE==1 and has multicast enabled (i.e. this stream is part of a multicast group)\n"},
       {"NO_PREV_PHASE_OUTGOING_DATA_FLUSH",
        (REMOTE_SRC_IS_MCAST + REMOTE_SRC_IS_MCAST_WIDTH),
        1,
@@ -331,7 +331,7 @@ const std::vector<OverlayReg> OLP::registers = {
      {},
      {},
      {},
-     "// Available buffer space at the stream (in 16B words). \n// Source cant send data unless available space > "
+     "// Available buffer space at the stream (in 16B words). \n// Source can't send data unless available space > "
      "0.\n"},
     {"STREAM_SOURCE_ENDPOINT_NEW_MSG_INFO",
      29,
@@ -441,7 +441,7 @@ const std::vector<OverlayReg> OLP::registers = {
      "start, can be also written by software for initial configuration or if auto-config\n// is disabled. \n// "
      "PHASE_NUM_INCR is phase number increment relative to the previous executed phase (or 0 right\n// after reset). "
      "The increment happens after auto-config is done, and before the phase is executed.\n// (Therefore reading  "
-     "STREAM_CURR_PHASE_REG while auto-config is ongoing, or if it hasnt started\n// yet, may return the old phase "
+     "STREAM_CURR_PHASE_REG while auto-config is ongoing, or if it hasn't started\n// yet, may return the old phase "
      "number.)\n// This enables up to 2^12-1 phases to be skipped. If more phases need to be skipped, it is\n// "
      "necessary to insert an intermediate phase with zero messages, whose only purpose is to provide\n// an additional "
      "skip offset.\n"},
@@ -454,9 +454,9 @@ const std::vector<OverlayReg> OLP::registers = {
       {"PARTIAL_SEND_WORDS_THR",
        (CLOCK_GATING_HYST + CLOCK_GATING_HYST_WIDTH),
        8,
-       "// PARTIAL_SEND_WORDS_THR contols the minimum number of 16-byte words of a tile to accumulate in a relay "
+       "// PARTIAL_SEND_WORDS_THR controls the minimum number of 16-byte words of a tile to accumulate in a relay "
        "stream before sending it off to the destination.\n// If the size of the tile is less than or equal to "
-       "PARTIAL_SEND_WORDS_THR, then this feild is ignored.\n// Default is 16 words\n"}},
+       "PARTIAL_SEND_WORDS_THR, then this field is ignored.\n// Default is 16 words\n"}},
      "// Should be written only for stream 0, applies to all streams.\n"},
     {"STREAM_MSG_GROUP_ZERO_MASK_AND",
      38,
@@ -539,7 +539,7 @@ const std::vector<OverlayReg> OLP::registers = {
      {},
      {},
      {},
-     "// Bit mask of connnected local source. Dont care if LOCAL_SOURCES_CONNECTED == 0.\n// Mask segments [23:0], "
+     "// Bit mask of connected local source. Dont care if LOCAL_SOURCES_CONNECTED == 0.\n// Mask segments [23:0], "
      "[47:24], and [63:48] are at indexes STREAM_LOCAL_SRC_MASK_REG_INDEX, \n// STREAM_LOCAL_SRC_MASK_REG_INDEX+1, "
      "STREAM_LOCAL_SRC_MASK_REG_INDEX+2.\n"},
     {"STREAM_RECEIVER_ENDPOINT_SET_MSG_HEADER",
@@ -557,7 +557,7 @@ const std::vector<OverlayReg> OLP::registers = {
      {{0, 0}},
      {{"REMOTE_DEST_WORDS_FREE", 0, MEM_WORD_ADDR_WIDTH, ""}},
      "// Available buffer space at remote destination stream(s). \n// Dont care unless REMOTE_RECEIVER == 1. \n// "
-     "Source cant send data unless WORDS_FREE > 0.  \n// Read-only; updated automatically to maximum value when \n// "
+     "Source can't send data unless WORDS_FREE > 0.  \n// Read-only; updated automatically to maximum value when \n// "
      "STREAM_REMOTE_DEST_BUF_SIZE_REG is updated. \n// For multicast streams, values for successive destinations are "
      "at \n// subsequent indexes (STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX+1, \n// "
      "STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX+2, etc.).\n"},
@@ -712,7 +712,7 @@ const std::vector<OverlayReg> OLP::registers = {
       {"DRAM_EN_BLOCKING",
        (DRAM_FIFO_BASE_ADDR_WORDS_HI + DRAM_FIFO_BASE_ADDR_WORDS_HI_WIDTH),
        1,
-       "// Processes the read or write operation to completeion without processing other dram streams in the "
+       "// Processes the read or write operation to completion without processing other dram streams in the "
        "meantime\n"},
       {"DRAM_DATA_STRUCTURE_IS_LUT",
        (DRAM_EN_BLOCKING + DRAM_EN_BLOCKING_WIDTH),
@@ -866,7 +866,7 @@ const std::vector<OverlayField> OLP::fields = {
     {"REMOTE_SRC_IS_MCAST",
      (DEST_DATA_BUF_NO_FLOW_CTRL + DEST_DATA_BUF_NO_FLOW_CTRL_WIDTH),
      1,
-     "// set if REMOTE_SOURCE==1 and has mulicast enabled (i.e. this stream is part of a multicast group)\n"},
+     "// set if REMOTE_SOURCE==1 and has multicast enabled (i.e. this stream is part of a multicast group)\n"},
     {"NO_PREV_PHASE_OUTGOING_DATA_FLUSH",
      (REMOTE_SRC_IS_MCAST + REMOTE_SRC_IS_MCAST_WIDTH),
      1,
@@ -946,9 +946,9 @@ const std::vector<OverlayField> OLP::fields = {
     {"PARTIAL_SEND_WORDS_THR",
      (CLOCK_GATING_HYST + CLOCK_GATING_HYST_WIDTH),
      8,
-     "// PARTIAL_SEND_WORDS_THR contols the minimum number of 16-byte words of a tile to accumulate in a relay stream "
+     "// PARTIAL_SEND_WORDS_THR controls the minimum number of 16-byte words of a tile to accumulate in a relay stream "
      "before sending it off to the destination.\n// If the size of the tile is less than or equal to "
-     "PARTIAL_SEND_WORDS_THR, then this feild is ignored.\n// Default is 16 words\n"},
+     "PARTIAL_SEND_WORDS_THR, then this field is ignored.\n// Default is 16 words\n"},
     {"MSG_LOCAL_STREAM_CLEAR_NUM", 0, 16, ""},
     {"MSG_GROUP_STREAM_CLEAR_TYPE", (MSG_LOCAL_STREAM_CLEAR_NUM + MSG_LOCAL_STREAM_CLEAR_NUM_WIDTH), 1, ""},
     {"DEBUG_STATUS_STREAM_ID_SEL", 0, STREAM_ID_WIDTH, ""},
@@ -984,7 +984,7 @@ const std::vector<OverlayField> OLP::fields = {
     {"DRAM_EN_BLOCKING",
      (DRAM_FIFO_BASE_ADDR_WORDS_HI + DRAM_FIFO_BASE_ADDR_WORDS_HI_WIDTH),
      1,
-     "// Processes the read or write operation to completeion without processing other dram streams in the meantime\n"},
+     "// Processes the read or write operation to completion without processing other dram streams in the meantime\n"},
     {"DRAM_DATA_STRUCTURE_IS_LUT",
      (DRAM_EN_BLOCKING + DRAM_EN_BLOCKING_WIDTH),
      1,

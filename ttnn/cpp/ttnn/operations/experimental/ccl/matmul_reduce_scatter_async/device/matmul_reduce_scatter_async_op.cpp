@@ -45,7 +45,7 @@ void MatmulReduceScatterAsync::validate_with_output_tensors(
     // Matmul Reduce Scatter validate
     TT_FATAL(
         this->reduce_scatter_minimal_async_struct.dim == 3,
-        "MatmulReduceScatterAsync requires dim=3 for the AllGather operaitons.");
+        "MatmulReduceScatterAsync requires dim=3 for the AllGather operations.");
     if (this->matmul_struct.program_config.has_value()) {
         std::visit(
             [&](const auto& config) {

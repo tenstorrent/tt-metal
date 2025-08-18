@@ -19,7 +19,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-// Verify some knowledge of, and compatibilty with, RiscV
+// Verify some knowledge of, and compatibility with, RiscV
 #ifndef EM_RISCV
 #error "Don't know RISCV elf details"
 #endif
@@ -107,8 +107,8 @@ private:
         // segments, so do not have to consider the case of a zero
         // length section sitting at that boundary. We also take
         // advantage of the (a) fact that sections cannot straddle
-        // segment boundaries -- they're either wholey inside or
-        // wholey outside, and (b) unsigned arithmetic.
+        // segment boundaries -- they're either wholly inside or
+        // wholly outside, and (b) unsigned arithmetic.
         return shdr.sh_flags & SHF_ALLOC && shdr.sh_addr + shdr.sh_size - segment.address <= segment.membytes;
     }
     [[nodiscard]] bool IsInSegment(unsigned _ix, Elf32_Shdr const& shdr) const {

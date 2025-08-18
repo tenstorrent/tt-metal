@@ -58,7 +58,7 @@ struct MuxTestConfig {
 };
 
 struct DrainerTestConfig {
-    // we can re-use the mux infra to get the address layout for the drainer kernel as well
+    // we can reuse the mux infra to get the address layout for the drainer kernel as well
     tt::tt_fabric::FabricMuxConfig* drainer_kernel_config = nullptr;
     CoreCoord drainer_logical_core;
     CoreCoord drainer_virtual_core;
@@ -223,7 +223,7 @@ void create_drainer_kernel(
     auto drainer_logical_core = drainer_test_config.drainer_logical_core;
     auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
 
-    // This is dummy channel as drainer kernel terminates incomming packet without forwarding outbound channel
+    // This is dummy channel as drainer kernel terminates incoming packet without forwarding outbound channel
     // This number can be any in 0-15 (WH), 0-12 (BH)
     uint32_t dummy_eth_channel = 0;
 
@@ -454,7 +454,7 @@ int main(int argc, char** argv) {
 
     create_drainer_kernel(drainer_test_config, device, program);
 
-    // keep the receiver noc xy encoding same for all workers, wont matter since we are not committing any
+    // keep the receiver noc xy encoding same for all workers, won't matter since we are not committing any
     // packets into receiver's L1
     CoreCoord default_receiver_virtual_core = mesh_device->worker_core_from_logical_core(worker_logical_cores.back());
     uint32_t default_receiver_noc_xy_encoding = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(

@@ -43,7 +43,7 @@ inline void calculate_remainder(const uint value, const uint recip) {
         // shifting it back using (0 - (exp - 23)).
         v_elseif(exp < 23) {
             quotient =
-                reinterpret<vFloat>(shft((shft(reinterpret<vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
+                reinterpret<vFloat>(shift((shift(reinterpret<vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
         }
         v_else { quotient = v * recip_val; }
         v_endif

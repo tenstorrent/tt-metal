@@ -268,7 +268,7 @@ inline uint c_tensix_core::read_accumulated_packed_size(uint thread) {
 }
 
 inline void c_tensix_core::initialize_tensix_semaphores(vptr_uint instrn_buf) {
-    // Initialize sempahores - check if we need to do this still
+    // Initialize semaphores - check if we need to do this still
     // math->packer semaphore - max set to 1, as double-buffering is disabled by default
     ex_sem_init(ckernel::semaphore::MATH_PACK, 1, 0, instrn_buf);
     ex_sem_init(ckernel::semaphore::UNPACK_TO_DEST, 1, 0, instrn_buf);

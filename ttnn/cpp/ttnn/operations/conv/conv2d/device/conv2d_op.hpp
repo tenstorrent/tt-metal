@@ -79,7 +79,7 @@ struct Conv2dConfig {
     // Increases perf if op is reader bound. Act_block_h should be >= 64, if true
     bool enable_split_reader = false;
 
-    // Re-use input tensor storage when creating output tensor
+    // Reuse input tensor storage when creating output tensor
     bool in_place = false;
 
     // ==================== EXPERIMENTAL FEATURES ====================

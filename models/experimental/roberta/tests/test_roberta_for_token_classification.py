@@ -67,7 +67,7 @@ def test_roberta_for_token_classification(device):
         torch_predicted_tokens_classes = [model.config.id2label[t.item()] for t in torch_predicted_token_class_ids[0]]
         logger.info(f"Torch Predicted {torch_predicted_tokens_classes}")
 
-        # Tt ouptut
+        # Tt output
         tt_output_torch = tt2torch_tensor(tt_output)
         tt_output_torch = tt_output_torch.squeeze(0)
 

@@ -35,7 +35,7 @@ To run a demo, choose one of the methods below for downloading the model weights
 
 Set the `HF_MODEL` environment variable to the Huggingface org/name of the model you want to run, This will automatically download the weights into your HuggingFace cache directory and run the model directly.
 
-Check the models chart on the top of the page and substitue the <org/name> on the following command:
+Check the models chart on the top of the page and substitute the <org/name> on the following command:
 ```
 export HF_MODEL=deepseek-ai/<org/name>
 ```
@@ -120,7 +120,7 @@ At the time of writing this covers the majority of popular HuggingFace text-gene
 
 ### 2. Set environment variables
 
-For completeness by now you should have set either `HF_MODEL` or `LLAMA_DIR` as decribed above:
+For completeness by now you should have set either `HF_MODEL` or `LLAMA_DIR` as described above:
 
 ```
 export HF_MODEL=<hf_model_name or hf_downlaoded_directory>

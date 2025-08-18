@@ -281,7 +281,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
         auto start = std::chrono::system_clock::now();
 
         for (uint buf_idx = 0; buf_idx < num_buffers_per_cq; buf_idx++) {
-            // Increase number of pages and page size every 10 buffers, to change async timing betwen CQs.
+            // Increase number of pages and page size every 10 buffers, to change async timing between CQs.
             if (buf_idx > 0 && ((buf_idx % 10) == 0)) {
                 config.page_size *= 2;
                 config.num_pages *= 2;
@@ -341,7 +341,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 }
 
 // 2 CQs with single Buffer, and a loop where each iteration has non-blocking Write to Buffer via CQ0 and non-blocking
-// Read to Bufffer via CQ1. Ping-Pongs between Writes and Reads to same buffer. Use events to synchronze read after
+// Read to Buffer via CQ1. Ping-Pongs between Writes and Reads to same buffer. Use events to synchronze read after
 // write and write after read before checking correct data read at the end after all cmds finished on device.
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
@@ -385,7 +385,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 
                 // Number of write-read combos per buffer. Fewer make RAW race without events easier to hit.
                 for (uint j = 0; j < num_wr_rd_per_buf; j++) {
-                    // Add entry in resutls vector, and construct write data, unique per loop
+                    // Add entry in results vector, and construct write data, unique per loop
                     read_results.emplace_back();
                     write_data.push_back(generate_arange_vector(buffers.back()->size(), j * 100));
 

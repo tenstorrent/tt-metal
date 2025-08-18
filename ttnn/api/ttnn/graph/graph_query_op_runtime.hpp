@@ -111,7 +111,7 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
  * @brief Extracts a trace of the graph operations and returns the trace execution runtime.
  *
  * This function runs trace capture by invoking the provided operation with the given arguments,
- * then excutes the trace and returns the runtime of the trace in nanoseconds.
+ * then executes the trace and returns the runtime of the trace in nanoseconds.
  *
  * @tparam Op The type of the operation or a callable op chain that will be invoked to capture the trace operations.
  * @tparam Args The types of the arguments that will be passed to the operation or op chain.

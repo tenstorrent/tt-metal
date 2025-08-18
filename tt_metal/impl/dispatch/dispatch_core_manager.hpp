@@ -24,7 +24,7 @@ namespace tt::tt_metal {
 
 // A command queue is split into an issue queue and completion queue
 //  Host enqueues commands and data to be sent to device into the issue queue, and device reads from the issue queue.
-//  prefetcher kernels read commands targetting the MMIO or remote device respectively from the issue queue
+//  prefetcher kernels read commands targeting the MMIO or remote device respectively from the issue queue
 //  Device writes data into the completion queue for host to read back
 //  command_queue_consumer and remote_completion_queue_writer (to be added) kernels write into the completion queue for
 //  MMIO or remote device respectively Currently two cores are used to interface with each command queue region, marked
@@ -61,7 +61,7 @@ public:
     /// dispatch functionality
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
     /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
-    /// @param dispatch_core_config specfies the core type that is designated for dispatch functionality
+    /// @param dispatch_core_config specifies the core type that is designated for dispatch functionality
     dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
 
     // TODO: this should probably be in command_queue_interface.hpp, but it's here for now due to circular dependency
@@ -94,7 +94,7 @@ public:
     /// command queue
     ///         Each command queue has one completion queue
     ///         For MMIO devices this core is the same as the issue queue reader core core because one kernel is
-    ///         responisble for interpreting + relaying commands and writing to completion queue For remote devices,
+    ///         responsible for interpreting + relaying commands and writing to completion queue For remote devices,
     ///         this core is located on the associated MMIO device since it can access sysmem (location of command
     ///         queue)
     /// @param device_id ID of the device that a fast dispatch command targets
@@ -153,7 +153,7 @@ public:
 
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
-    /// @param dispatch_core_config specfies the core type for dispatch kernels
+    /// @param dispatch_core_config specifies the core type for dispatch kernels
     void reset_dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
 
     /// @brief getting any available dispatch core for a device

@@ -38,7 +38,7 @@ namespace tt::tt_metal {
 
 using std::vector;
 
-// Test sync w/ semaphores betweeen eth/tensix cores
+// Test sync w/ semaphores between eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
 static void test_sems_across_core_types(
     tt::tt_metal::MeshDispatchFixture* fixture,

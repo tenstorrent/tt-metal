@@ -94,7 +94,7 @@ std::vector<T> untilize_act(std::vector<T> tilized_act, std::uint32_t output_row
                 for (auto c = 0; c < num_tiles_c; c++) {
                     for (auto fj = 0; fj < 2; fj++) {
                         for (auto j = 0; j < 16; j++) {
-                            // determin index in tilized data. Tiles are arranged in col major order. But faces are row
+                            // determine index in tilized data. Tiles are arranged in col major order. But faces are row
                             // major order within the tile
                             uint32_t index = c * TILE_HEIGHT * TILE_WIDTH * num_tiles_r + r * TILE_WIDTH * TILE_HEIGHT +
                                              fi * 16 * 16 * 2 + fj * 16 * 16 + i * 16 + j;

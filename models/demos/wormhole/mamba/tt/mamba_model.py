@@ -86,7 +86,7 @@ class MambaTT(torch.nn.Module):
         else:
             self.num_layers = num_layers
 
-        logger.info(f"Initalizing Mamba with {self.num_layers} layers")
+        logger.info(f"Initializing Mamba with {self.num_layers} layers")
 
         loader = TtTensorLoader(reference_model.state_dict(), self.device, tt_cache_path=tt_cache_path)
         self.layers = [

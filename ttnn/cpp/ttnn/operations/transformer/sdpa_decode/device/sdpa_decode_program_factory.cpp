@@ -266,7 +266,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
 
-    // If using dyanmic chunk size, set it to some max number of tiles (less than DST for now)
+    // If using dynamic chunk size, set it to some max number of tiles (less than DST for now)
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t max_dynamic_chunk_size = dst_size;
     const uint32_t Sk_chunk_t_cb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;

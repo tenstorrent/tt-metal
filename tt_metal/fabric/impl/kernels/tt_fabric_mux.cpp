@@ -86,7 +86,7 @@ void forward_data(
     StreamId my_channel_free_slots_stream_id,
 
     // Note that while `channel_id` is unused and can be deleted, there was a severe performance impact when that
-    // was tried. Time has not been spent yet to root cause but the current suspicion is some pathalogical codegen
+    // was tried. Time has not been spent yet to root cause but the current suspicion is some pathological codegen
     // issue. Given that the inclusion of the arg is functionally harmless (if only slightly visually noisy), and
     // the substantial performance loss (> 1GB/s), when removed, it's being kept for now. The performance drop was
     // measured in the mux bandwidth tests and was root caused to the isolated change of simply removing this arg.

@@ -314,7 +314,7 @@ def vit_attention(
     )
 
     # reshard back to 64 cores
-    # cant use reshard as it's not working here, so use s2i followed by i2s
+    # can't use reshard as it's not working here, so use s2i followed by i2s
     # workaround for issue #22640, once fixed first call can be removed
     context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
     context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)

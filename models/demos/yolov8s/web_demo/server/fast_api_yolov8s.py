@@ -61,7 +61,7 @@ async def objdetection_v2(file: UploadFile = File(...)):
     elif type(image1) == np.ndarray and len(image1.shape) == 4:
         image = torch.from_numpy(image1).float().div(255.0)
     else:
-        print("unknow image type")
+        print("unknown image type")
         exit(-1)
 
     image = torch.permute(image, (0, 3, 1, 2))

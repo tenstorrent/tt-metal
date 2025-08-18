@@ -772,7 +772,7 @@ class MLA1D(SharedStateAddOn, AbstractModule):
         config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        """Helper funtion to create the page table for MLA1D.
+        """Helper function to create the page table for MLA1D.
 
         When doing DP, this function replicates the page table across DP shards.
         Assumptions:
@@ -796,7 +796,7 @@ class MLA1D(SharedStateAddOn, AbstractModule):
         max_num_blocks = config.max_num_blocks
         batch_per_shard = even_int_div(batch_size, dp_factor)
 
-        page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigourous
+        page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
         page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
 
         tt_page_table = ttnn.from_torch(

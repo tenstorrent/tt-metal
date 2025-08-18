@@ -112,7 +112,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, mesh_device):
 
 def prepare_rotation_mat_ttnn(head_dim, max_seq_len, mesh_device):
     """
-    Prepare rotation matricies for decode mode.
+    Prepare rotation matrices for decode mode.
     """
     rot_mat = get_rotation_mat(dhead=head_dim, end=max_seq_len * 2)
     rot_mats = [

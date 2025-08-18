@@ -133,11 +133,11 @@ def run_moreh_logsoftmax_backward_test(
     "shape_dim",
     (
         [[32, 32], 1],  # single tile
-        [[3, 32, 32 * 5], 2],  # mutiple tile with dim W
+        [[3, 32, 32 * 5], 2],  # multiple tile with dim W
         [[5, 6, 32, 32], 3],  # multiple cores
         [[10, 20, 32 * 3, 32 * 5], 3],  # multiple tiles per core
         [[32, 32], 0],  # single tile
-        [[3, 32 * 5, 32], 1],  # mutiple tile with dim H
+        [[3, 32 * 5, 32], 1],  # multiple tile with dim H
         [[5, 6, 32, 32], 2],  # multiple cores
         [[10, 20, 32 * 3, 32 * 5], 2],  # multiple tiles per core
     ),
@@ -204,9 +204,9 @@ def test_logsoftmax_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_
     "shape_dim",
     (
         [[1, 1, 10, 15], 3],  # single tile
-        [[1, 1, 10, 32 * 2 + 10], 3],  # mutiple tile with dim
+        [[1, 1, 10, 32 * 2 + 10], 3],  # multiple tile with dim
         [[1, 1, 15, 10], 2],  # single tile
-        [[1, 1, 32 * 2 + 10, 32], 2],  # mutiple tile with dim
+        [[1, 1, 32 * 2 + 10, 32], 2],  # multiple tile with dim
     ),
 )
 @pytest.mark.parametrize(
@@ -238,11 +238,11 @@ def test_logsoftmax_not_multiple_of_32_for_dim_hw(shape_dim, dtype, compute_kern
     "shape_dim",
     (
         [[1, 15, 32, 32], 1],  # single tile c
-        [[1, 15, 32 * 7, 32 * 5], 1],  # mutiple cores
-        [[109, 15, 32, 32], 1],  # mutiple tiles per cores
+        [[1, 15, 32 * 7, 32 * 5], 1],  # multiple cores
+        [[109, 15, 32, 32], 1],  # multiple tiles per cores
         [[15, 1, 32, 32], 0],  # single tile n
-        [[15, 1, 32 * 7, 32 * 5], 0],  # mutiple cores
-        [[15, 109, 32 * 2, 32 * 2], 0],  # mutiple tiles per cores
+        [[15, 1, 32 * 7, 32 * 5], 0],  # multiple cores
+        [[15, 109, 32 * 2, 32 * 2], 0],  # multiple tiles per cores
     ),
 )
 @pytest.mark.parametrize(
@@ -274,11 +274,11 @@ def test_logsoftmax_for_dim_nc(shape_dim, dtype, compute_kernel_options, device)
     "shape_dim",
     (
         [[32, 32], 1],  # single tile
-        [[3, 32, 32 * 2], 2],  # mutiple tile with dim W
+        [[3, 32, 32 * 2], 2],  # multiple tile with dim W
         [[5, 6, 32, 32], 3],  # multiple cores
         [[10, 20, 32 * 3, 32 * 5], 3],  # multiple tiles per core
         [[32, 32], 0],  # single tile
-        [[3, 32 * 5, 32], 1],  # mutiple tile with dim H
+        [[3, 32 * 5, 32], 1],  # multiple tile with dim H
         [[5, 6, 32, 32], 2],  # multiple cores
         [[10, 20, 32 * 5, 32], 2],  # multiple tiles per core
     ),
@@ -345,9 +345,9 @@ def test_logsoftmax_backward_large_algorithm_for_dim_hw(shape_dim, dtype, comput
     "shape_dim",
     (
         [[1, 1, 10, 15], 3],  # single tile
-        [[1, 1, 10, 32 * 2 + 10], 3],  # mutiple tile with dim
+        [[1, 1, 10, 32 * 2 + 10], 3],  # multiple tile with dim
         [[1, 1, 15, 10], 2],  # single tile
-        [[1, 1, 32 * 2 + 10, 32], 2],  # mutiple tile with dim
+        [[1, 1, 32 * 2 + 10, 32], 2],  # multiple tile with dim
     ),
 )
 @pytest.mark.parametrize(
@@ -379,11 +379,11 @@ def test_logsoftmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, dtype, com
     "shape_dim",
     (
         [[1, 15, 32, 32], 1],  # single tile c
-        [[1, 15, 32 * 7, 32 * 5], 1],  # mutiple cores
-        [[109, 15, 32, 32], 1],  # mutiple tiles per cores
+        [[1, 15, 32 * 7, 32 * 5], 1],  # multiple cores
+        [[109, 15, 32, 32], 1],  # multiple tiles per cores
         [[15, 1, 32, 32], 0],  # single tile n
-        [[15, 1, 32 * 7, 32 * 5], 0],  # mutiple cores
-        [[15, 109, 32 * 2, 32 * 2], 0],  # mutiple tiles per cores
+        [[15, 1, 32 * 7, 32 * 5], 0],  # multiple cores
+        [[15, 109, 32 * 2, 32 * 2], 0],  # multiple tiles per cores
     ),
 )
 @pytest.mark.parametrize(

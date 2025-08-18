@@ -27,7 +27,7 @@ def compare(tensor, name, permute=False):
         tensor = tensor.unsqueeze(0)
 
     passed, message = comp_pcc(tensor, golden, 0.95)
-    print(f"Maches on {name}: {passed} with message {message}, tensor shape: {tensor.shape}")
+    print(f"Matches on {name}: {passed} with message {message}, tensor shape: {tensor.shape}")
 
 
 class basic_transformer_block:

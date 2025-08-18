@@ -405,7 +405,7 @@ void kernel_main() {
     uint32_t start_ring_index = args.my_ring_idx;
     while (args.worker_slice_offset.x < args.tensor_slice_shape.x &&
            args.worker_slice_offset.y < args.tensor_slice_shape.y) {
-        // Need to reset back to the start ring index because the last iteration of the tranfers read chunks
+        // Need to reset back to the start ring index because the last iteration of the transfers read chunks
         // loop won't increment after the last iteration since the increment is within the loop body
         args.my_ring_idx = start_ring_index;
         uint32_t curr_ring_slice_start_page_offset =

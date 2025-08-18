@@ -53,7 +53,7 @@ def main():
         "--process-logs-only",
         dest="processLogsOnly",
         action="store_true",
-        help="Only process the logs avaialble in the default logs folder",
+        help="Only process the logs available in the default logs folder",
         default=False,
     )
     parser.add_option(

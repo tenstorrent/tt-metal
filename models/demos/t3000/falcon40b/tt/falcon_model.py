@@ -191,7 +191,7 @@ class TtFalconModelShared:
 
             tt_attention_mask = self.slice_attn_mask(sequence_size)
 
-            # Genereate ln output tensors for prefill if not existing
+            # Generate ln output tensors for prefill if not existing
             do_generate_ln_tensors = (
                 sequence_size > self.model_config["layernorm_params"]["slice_size"]
                 and sequence_size not in self.ln_output_tensors_dict["final_layernorm"]

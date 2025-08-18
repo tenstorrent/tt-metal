@@ -25,7 +25,7 @@ namespace unit_tests::multichip::cluster {
 using namespace tt;
 using namespace tt::test_utils;
 
-// Run this on Nebula X2 only, validate etherent core apis are correct
+// Run this on Nebula X2 only, validate ethernet core apis are correct
 // Known connectivity: chip 0 (x=9, y=6) <--> chip 1 (x=9, y=0)
 //                     chip 0 (x=1, y=6) <--> chip 1 (x=1, y=0)
 TEST_F(N300DeviceFixture, EthValidateEthernetConnectivity) {

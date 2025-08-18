@@ -10,7 +10,7 @@
 
 namespace NAMESPACE {
 void MAIN {
-    // IMPORTANT: since there is no read kernel, and data is alraedy in circular buffers
+    // IMPORTANT: since there is no read kernel, and data is already in circular buffers
     // do not call cb_wait_front() because there is no wait. And we ensured there is enough
     // spece in the circular buffers for the entirty of the computation.
     // if calling cb_wait_front() here, the kernel will hang forever as no one is producing

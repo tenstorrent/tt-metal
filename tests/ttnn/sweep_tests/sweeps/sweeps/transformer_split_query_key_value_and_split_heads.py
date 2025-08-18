@@ -14,7 +14,7 @@ from models.utility_functions import is_wormhole_b0, is_grayskull
 # use combinations of batch_size/core height and q_heads/kv_heads/core width to keep permutations under control
 # some failures are known (e.g. batch_size > cores_h, seq_q > seq_kv, num_kv_heads != num_q_heads when transpose = true) though they shouldn't be failures
 # try to minimize the number of permutations of known failures that shouldn't fail to keep test quick
-# interleaved tests are all expected to fail since the input format is different for sharded and interleaved, and the test mimicks the sharded path
+# interleaved tests are all expected to fail since the input format is different for sharded and interleaved, and the test mimics the sharded path
 # they need to be changed to match the sharded path
 
 parameters = {

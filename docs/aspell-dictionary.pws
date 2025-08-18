@@ -211,7 +211,7 @@ boolean
 breakpoint
 brisc
 brisck
-cachable
+cacheable
 cb
 cbid
 cbrt
@@ -394,7 +394,7 @@ pcc
 perf
 performant
 phiyodr
-phyiscally
+physically
 png
 polygamma
 polyval
@@ -422,7 +422,7 @@ recip
 reconfig
 reglu
 regs
-reigster
+register
 relu
 repo
 resnet
@@ -453,7 +453,7 @@ sharded
 sharding
 shflror
 shflshr
-shft
+shift
 sigmoid
 signbit
 silu

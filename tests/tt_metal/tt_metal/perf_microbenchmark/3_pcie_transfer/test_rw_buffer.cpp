@@ -195,7 +195,7 @@ int main(int argc, char** argv) {
     auto avg_h2d_bandwidth = calculate_average(h2d_bandwidth);
     auto avg_d2h_bandwidth = calculate_average(d2h_bandwidth);
     if (pass && !bypass_check) {
-        // TODO: check the theoritical peak of wormhole
+        // TODO: check the theoretical peak of wormhole
         static constexpr double k_PcieMax = 16.0;  // GB/s
         double target_read_bandwidth;
         double target_write_bandwidth;

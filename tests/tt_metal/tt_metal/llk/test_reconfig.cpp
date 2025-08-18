@@ -90,7 +90,7 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
     static float out0_result_old = 0;
     // Since golden is not perfect, some corner cases for these values will
     // make the tests fail. However, this is a representative example since
-    // it utilizes the full BFP16 presicion and range:
+    // it utilizes the full BFP16 precision and range:
     float in0_val = 1.0;
     float in1_val = 127.0;
     float in2_val = 0.0078125;

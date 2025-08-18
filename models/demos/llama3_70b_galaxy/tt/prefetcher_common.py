@@ -73,7 +73,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
         else:
             ##### Set up the global circular buffer #####
-            # Global CB must be large enough to atleast double buffer weights
+            # Global CB must be large enough to at least double buffer weights
             # This ensures that back to back matmuls (for eg. in MLP) can run
             # without stalling on the weight prefetch
             # To fit entire MLP we'd need ~742 * 1088 but using block-wise prefetching and 732 tiles this is sufficient for now

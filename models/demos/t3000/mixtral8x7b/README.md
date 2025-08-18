@@ -21,7 +21,7 @@ Read more about Mixtral-8x7B at the Huggingface page for [mistralai/Mixtral-8x7B
 -  Substitute:
 
 `<path_to_checkpoint_dir>` with the directory containing the consolidated weights.<br>
-`<repacked_output_dir>` with the directory for the repacked weigths to be stored.
+`<repacked_output_dir>` with the directory for the repacked weights to be stored.
 
 ```
 python models/demos/t3000/mixtral8x7b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir>

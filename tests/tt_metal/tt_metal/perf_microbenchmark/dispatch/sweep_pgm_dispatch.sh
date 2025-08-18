@@ -82,7 +82,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 12288 -n $trace_option $eth_dispatch_option
 
 #all processors
-echo "###" all procesors
+echo "###" all processors
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 $trace_option $eth_dispatch_option
@@ -92,7 +92,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 12288 $trace_option $eth_dispatch_option
 
 #all processors, all cores
-echo "###" all procesors all cores
+echo "###" all processors all cores
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 -x $max_x -y $max_y $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 -x $max_x -y $max_y $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 -x $max_x -y $max_y $trace_option $eth_dispatch_option
@@ -102,7 +102,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 12288 -x $max_x -y $max_y $trace_option $eth_dispatch_option
 
 #all processors, all cores, 1 CB
-echo "###" all procesors all cores 1cb
+echo "###" all processors all cores 1cb
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 -x $max_x -y $max_y -c 1 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 -x $max_x -y $max_y -c 1 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 -x $max_x -y $max_y -c 1 $trace_option $eth_dispatch_option
@@ -111,7 +111,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 8192 -x $max_x -y $max_y -c 1 $trace_option $eth_dispatch_option
 
 #all processors, all cores, 32 CB
-echo "###" all procesors all cores 32cb
+echo "###" all processors all cores 32cb
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 -x $max_x -y $max_y -c 32 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 -x $max_x -y $max_y -c 32 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 -x $max_x -y $max_y -c 32 $trace_option $eth_dispatch_option
@@ -120,7 +120,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 8192 -x $max_x -y $max_y -c 32 $trace_option $eth_dispatch_option
 
 #all processors, 1 core, 1 rt arg
-echo "###" all procesors 1 core 1 rta
+echo "###" all processors 1 core 1 rta
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 -a 1 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 -a 1 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 -a 1 $trace_option $eth_dispatch_option
@@ -129,7 +129,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 8192 -a 1 $trace_option $eth_dispatch_option
 
 #1 processors, alls core, 128 rt arg
-echo "###" all procesors all cores 128 rta
+echo "###" all processors all cores 128 rta
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 -n -t -x $max_x -y $max_y -a 128 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 -n -t -x $max_x -y $max_y -a 128 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 -n -t -x $max_x -y $max_y -a 128 $trace_option $eth_dispatch_option
@@ -138,7 +138,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 8192 -n -t -x $max_x -y $max_y -a 128 $trace_option $eth_dispatch_option
 
 #1 processors, alls core, 1 rt arg
-echo "###" all procesors all cores 1 rta
+echo "###" all processors all cores 1 rta
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 -n -t -x $max_x -y $max_y -a 1 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 -n -t -x $max_x -y $max_y -a 1 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 -n -t -x $max_x -y $max_y -a 1 $trace_option $eth_dispatch_option
@@ -147,7 +147,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 8192 -n -t -x $max_x -y $max_y -a 1 $trace_option $eth_dispatch_option
 
 #all processors, alls core, 1 rt arg
-echo "###" all procesors all cores 1 rta
+echo "###" all processors all cores 1 rta
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 -x $max_x -y $max_y -a 1 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 -x $max_x -y $max_y -a 1 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 -x $max_x -y $max_y -a 1 $trace_option $eth_dispatch_option
@@ -156,7 +156,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 8192 -x $max_x -y $max_y -a 1 $trace_option $eth_dispatch_option
 
 #all processors, all cores, 32 args
-echo "###" all procesors all cores 32 rta
+echo "###" all processors all cores 32 rta
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 -x $max_x -y $max_y -a 32 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 -x $max_x -y $max_y -a 32 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 -x $max_x -y $max_y -a 32 $trace_option $eth_dispatch_option
@@ -165,7 +165,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 8192 -x $max_x -y $max_y -a 32 $trace_option $eth_dispatch_option
 
 #all processors, all cores, 128 args
-echo "###" all procesors all cores 128 rta
+echo "###" all processors all cores 128 rta
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 256 -x $max_x -y $max_y -a 128 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 512 -x $max_x -y $max_y -a 128 $trace_option $eth_dispatch_option
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --custom -w 5000 -s 1024 -x $max_x -y $max_y -a 128 $trace_option $eth_dispatch_option

@@ -110,8 +110,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     uint32_t q_base_addr = input_tensor.buffer()->address();
 
-    // We parallize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of a
-    // tile respectively)
+    // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of
+    // a tile respectively)
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,
@@ -326,7 +326,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             process_k = 0;
         }
 
-        // We parallize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of a tile respectively)
+        // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and
+        // phase2 of a tile respectively)
         std::vector<uint32_t> q_reader_compile_time_args = {
             (std::uint32_t)element_size,
             (std::uint32_t)sub_tile_line_bytes,
@@ -603,8 +604,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
         process_k = 0;
     }
 
-    // We parallize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of a
-    // tile respectively)
+    // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of
+    // a tile respectively)
     std::vector<uint32_t> q_reader_compile_time_args = {
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,

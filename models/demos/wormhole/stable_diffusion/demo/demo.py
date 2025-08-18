@@ -110,7 +110,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     model = UNet2D(device, parameters, 2, input_height, input_width)
 
     guidance_scale = 7.5  # Scale for classifier-free guidance
-    generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise
+    generator = torch.manual_seed(174)  # 10233 Seed generator to create the initial latent noise
     batch_size = 1
 
     # Initial random noise
@@ -269,7 +269,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
     model = UNet2D(device, parameters, 2, input_height, input_width)
 
     guidance_scale = 7.5  # Scale for classifier-free guidance
-    generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise
+    generator = torch.manual_seed(174)  # 10233 Seed generator to create the initial latent noise
     batch_size = 1
 
     # Initial random noise
@@ -312,7 +312,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
     while 1:
         ttnn_scheduler.set_timesteps(num_inference_steps)
-        print("Enter the input promt, or q to exit:")
+        print("Enter the input prompt, or q to exit:")
         new_prompt = input()
         if len(new_prompt) > 0:
             input_prompt = [new_prompt]
@@ -413,7 +413,7 @@ def run_demo_inference_diffusiondb(
     model = UNet2D(device, parameters, 2, input_height, input_width)
 
     guidance_scale = 7.5  # Scale for classifier-free guidance
-    generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise
+    generator = torch.manual_seed(174)  # 10233 Seed generator to create the initial latent noise
     batch_size = 1
 
     # Initial random noise

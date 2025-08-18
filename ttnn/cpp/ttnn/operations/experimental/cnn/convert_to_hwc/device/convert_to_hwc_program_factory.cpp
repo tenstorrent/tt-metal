@@ -25,7 +25,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     TT_FATAL(input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller");
-    TT_FATAL(input_shard_height % 8 == 0, "Shard height must be mutliple of 8");
+    TT_FATAL(input_shard_height % 8 == 0, "Shard height must be multiple of 8");
     TT_FATAL(input_shard_width % TILE_WIDTH == 0, "Shard width must be multiple of tile width");
 
     const auto create_circular_buffer = [&program, &input_core_grid](

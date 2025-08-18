@@ -40,11 +40,11 @@ the input_index_tensor.
     - Wt_input represents the number of tiles in the last dimension of the input tensor.
     - Wt_index represents the number of tiles in the last dimension of the input index tensor.
     - A full row of tiles of input tensor (size `Wt_input`) is read from DRAM into L1 memory.
-    - One tile in the ouput buffer is reserved for each tile in the input index tensor.
+    - One tile in the output buffer is reserved for each tile in the input index tensor.
 
 2. **Computation mechanism**:
     - Tiles from Wt_index are read from L1 memory one by one.
-    - For each index tile the one ouput tile is reserved in the output buffer.
+    - For each index tile the one output tile is reserved in the output buffer.
     - Algorithm iterates over the values in the index tile (`global_index`) - these values represents the indexes of the
 values in the input tensor that should be gathered.
     - The values are read regardless of the datatype. The datatype of the tile determines read/write mechanism

@@ -2191,8 +2191,8 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
             direction_to_channel_map[intermesh_routing_direction].push_back(eth_chan);
         }
     }
-    // Compute the number of intermesh links requsted by the user and ensure that they could be mapped to physical links
-    // on the fabric node
+    // Compute the number of intermesh links requested by the user and ensure that they could be mapped to physical
+    // links on the fabric node
     uint32_t num_links_requested_on_node = 0;
     for (const auto& [connected_mesh_id, edge] :
          inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {

@@ -1461,7 +1461,7 @@ void Run1DFabricPacketSendTest(
         "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
         "same time is not yet supported");
     if (use_device_init_fabric && params.num_fabric_rows == 0 && params.num_fabric_cols == 0) {
-        TT_FATAL(use_t3k, "Using the full mesh as one ring topoplogy is only supported for T3K");
+        TT_FATAL(use_t3k, "Using the full mesh as one ring topology is only supported for T3K");
     }
 
     tt::tt_fabric::Topology topology;
@@ -1617,7 +1617,7 @@ void Run1DFabricPacketSendTest(
                     [&sync_core_coord](const CoreCoord& core) {
                         return core.x == sync_core_coord.x && core.y == sync_core_coord.y;
                     }),
-                "Atleast one worker core must be mapped onto sync core: x={}, y={}",
+                "At least one worker core must be mapped onto sync core: x={}, y={}",
                 sync_core_coord.x,
                 sync_core_coord.y);
             auto worker_kernel_id = tt_metal::CreateKernel(
@@ -1905,7 +1905,7 @@ static void validate_sync_core_is_on_a_worker(
         }
         TT_FATAL(
             sync_core_found,
-            "Atleast one worker core must be mapped onto sync core: x={}, y={}, device={}",
+            "At least one worker core must be mapped onto sync core: x={}, y={}, device={}",
             sync_core_coord.x,
             sync_core_coord.y,
             device);

@@ -138,7 +138,7 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [8.1. Available Dispatch Cores](#available_cores)
 
-[8.2. Fast Dispatch and Fabric Kernel Resouces](#fd_and_fabric)
+[8.2. Fast Dispatch and Fabric Kernel Resources](#fd_and_fabric)
 
 # 1 Overview <a id="overview"></a>
 
@@ -369,7 +369,7 @@ A ticket becomes active when shared resource’s Active Ticket becomes equal to 
 
 Once active, the producer can push packets into fabric router’s RB. When finished, the producer frees the resource by incrementing the active ticket by 1.
 
-This approach guarantees all producers/requestors access to FVC RB in the order of their acquired tickets.
+This approach guarantees all producers/requesters access to FVC RB in the order of their acquired tickets.
 
 A core can keep its ticket active as long as
 
@@ -567,7 +567,7 @@ The following diagram shows how traffic gets rerouted when Eth A link becomes in
 
 ## 2.3 TT-transport (Layer 4) <a id="layer_4"></a>
 
-TT-Transport implements buffering and Fabric Virtual Channels (FVCs). Buffer sizes and number of FVCs depend on amount of available SRAM space on fabric workers for these functions. FVCs guarantee independent progress of traffic on unique channels. Traffic from multiple sources on the same FVC gets serialized. All traffic on the same FVC is guaranteed to be ordered. Both the number of FVCs and the size of underlaying RBs are configurable.
+TT-Transport implements buffering and Fabric Virtual Channels (FVCs). Buffer sizes and number of FVCs depend on amount of available SRAM space on fabric workers for these functions. FVCs guarantee independent progress of traffic on unique channels. Traffic from multiple sources on the same FVC gets serialized. All traffic on the same FVC is guaranteed to be ordered. Both the number of FVCs and the size of underlying RBs are configurable.
 
 ### 2.3.1 Fabric Virtual Channel <a id="fvc"></a>
 
@@ -715,7 +715,7 @@ fabric_async_write(
   dst_addr, // destination write address
   size, // number of bytes to write to remote destination
   fvc, // fabric virtual channel. Set to –1 for automatic selection
-  transaction_id, // transaction id used to track commpletion
+  transaction_id, // transaction id used to track completion
   return_status_addr // TT-Fabric returns api call status at this address
 )
 ```
@@ -774,7 +774,7 @@ fabric_async_read(
   routing_plane, // the network plane to use for this transaction
   src_addr, // read address in remote device
   return_addr, // address in local memory where read data is copied
-  size, // number of bytes to read from remote deivce (src\_addr)
+  size, // number of bytes to read from remote device (src\_addr)
   fvc,
   transaction_id
   return_status_addr // status of async read
@@ -1274,7 +1274,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 </table>
 
 # 8 Resource Allocation <a id="resource_alloc"></a>
-This seciton estimates the hardware resources required to implement different TT-Fabric workers.
+This section estimates the hardware resources required to implement different TT-Fabric workers.
 
 ## 8.1 Available Dispatch Cores <a id="available_cores"></a>
 
@@ -1287,7 +1287,7 @@ This seciton estimates the hardware resources required to implement different TT
 | Blackhole Chip |  |  |  |
 | Galaxy Blackhole Chip |  |  |  |
 
-## 8.2 Fast Dispatch and Fabric Kernel Resouces <a id="fd_and_fabric"></a>
+## 8.2 Fast Dispatch and Fabric Kernel Resources <a id="fd_and_fabric"></a>
 
 ![](images/image022.png)
 

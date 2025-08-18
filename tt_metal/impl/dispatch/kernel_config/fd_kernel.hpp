@@ -100,7 +100,7 @@ public:
     // Use all configs and add this kernel to its Program. Called after GenerateStaticConfigs/GenerateDependentConfigs.
     virtual void CreateKernel() = 0;
 
-    // Override for specific kernels that need host-side configureation (special values written to l1, etc.). Is called
+    // Override for specific kernels that need host-side configuration (special values written to l1, etc.). Is called
     // after above functions and before FD kernels are launched.
     virtual void ConfigureCore() {}
 

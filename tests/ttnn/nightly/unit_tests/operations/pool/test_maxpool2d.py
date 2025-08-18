@@ -210,7 +210,7 @@ def run_max_pool(
     ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
 
-    # test for equivalance
+    # test for equivalence
     pcc_thresh = 1.0
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttnn.bfloat8_b:

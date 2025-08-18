@@ -460,7 +460,7 @@ void setSyncInfo(
 }
 
 void syncAllDevices(chip_id_t host_connected_device) {
-    // Check if profiler on host connected device is initilized
+    // Check if profiler on host connected device is initialized
     if (tt_metal_device_profiler_map.find(host_connected_device) == tt_metal_device_profiler_map.end()) {
         return;
     }
@@ -490,7 +490,7 @@ void syncAllDevices(chip_id_t host_connected_device) {
             double receiverSquareSum = 0;
             double senderReceiverProductSum = 0;
 
-            // Direct computation causes large error because sqaure of clock is very big
+            // Direct computation causes large error because square of clock is very big
             // So apply linear regression on shifted values
             uint64_t senderBase = 0;
             uint64_t receiverBase = 0;

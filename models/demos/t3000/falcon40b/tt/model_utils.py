@@ -194,9 +194,9 @@ def matmul_2d_config(
         grid_x = grid.x
         grid_y = grid.y
 
-    assert m % (tile_height * grid_y) == 0, f"m: {m} // 32 not devisible by grid.y: {grid_y}"
-    # assert(k % (tile_height * grid_x) == 0), f"k: {k} // 32 not devisible by grid.x: {grid_x}"
-    # assert(n % (tile_height * grid_x) == 0), f"n: {n} // 32 not devisible by grid.x: {grid_x}"
+    assert m % (tile_height * grid_y) == 0, f"m: {m} // 32 not divisible by grid.y: {grid_y}"
+    # assert(k % (tile_height * grid_x) == 0), f"k: {k} // 32 not divisible by grid.x: {grid_x}"
+    # assert(n % (tile_height * grid_x) == 0), f"n: {n} // 32 not divisible by grid.x: {grid_x}"
 
     per_core_m = m // tile_height // grid_y
     # per_core_k = k // tile_width // grid_x

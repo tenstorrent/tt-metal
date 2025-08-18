@@ -23,7 +23,7 @@ def run_demo_t5(t5_model_constructor):
         log=False,
     )
 
-    logger.info(f"Input sentance: '{input_sentance}'")
+    logger.info(f"Input sentence: '{input_sentance}'")
     logger.info(f"Tt output: '{output_sentance}'")
 
     ttnn.close_device(device)

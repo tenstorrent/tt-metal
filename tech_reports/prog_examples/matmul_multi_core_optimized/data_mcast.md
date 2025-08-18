@@ -3,7 +3,7 @@
 **Note**: This example only works on Grayskull.
 
 Let\'s level up our code and show how you can leverage and fully customize METALIUM\'s core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work.
-This example builds off of the data_reuse one, so we employ the same intemediate (partial) results handling scheme on-core. However, rather than map tile-work statically to your coregrid, we map in0\'s rows and in1\'s columns to the coregrid\'s edges, and cascade work core-to-core dynamically.
+This example builds off of the data_reuse one, so we employ the same intermediate (partial) results handling scheme on-core. However, rather than map tile-work statically to your coregrid, we map in0\'s rows and in1\'s columns to the coregrid\'s edges, and cascade work core-to-core dynamically.
 A fun tidbit: \"torrent\" in Tenstorrent pays homage to this concept of tensor computation flowing like an ultra fast stream of water.
 
 ## Additional Compile-Time Argument
@@ -55,7 +55,7 @@ Next, we define the mcast role of the entire coregrid, the uppermost edge, and t
         {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_r - 1});
     ```
 
--   **\`\`all_except_left_column\`\`**: Designates which cores will peform their share of in0 and in1 tile work, and calculate their partial results.
+-   **\`\`all_except_left_column\`\`**: Designates which cores will perform their share of in0 and in1 tile work, and calculate their partial results.
 
     ``` cpp
     CoreRange all_except_left_column(
@@ -86,7 +86,7 @@ CoreRange in0_receiver_in1_sender(
     {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y});
 ```
 
-The remining tiles act as receivers for both in0 and in1 tile data.
+The remaining tiles act as receivers for both in0 and in1 tile data.
 Essentially we are computing output_tile work (partial results of our output matrix) on each core, wherein each core has been simultaneously mcasted a unique chunk of in0 and in1 tile data to compute on.
 
 ``` cpp
@@ -241,7 +241,7 @@ auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores
 
 ## Kernel Runtime Arguments
 
-Recall that we just desginated NCRISCs to handle our DRAM-\>CoreGrid L1 data movement. METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordintates.
+Recall that we just desginated NCRISCs to handle our DRAM-\>CoreGrid L1 data movement. METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordinates.
 
 ``` cpp
 std::vector<uint32_tmm_reader_args = {

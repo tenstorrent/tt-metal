@@ -169,7 +169,7 @@ struct fvc_outbound_push_state_t {
                 *slots_cleared_ack_addr >> NOC_ADDR_COORD_SHIFT,
                 write_at_cmd_buf,
                 1);
-            // clear the credits receied from ethernet receiver.
+            // clear the credits received from ethernet receiver.
             *update_sender_slots_cleared = (-slots_cleared) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
     }
@@ -354,14 +354,14 @@ struct fvc_inbound_push_state_t {
                 // fourth is a local device worker. Each pusher has to register its local address where
                 // outbound router should return credits for available buffer space.
                 // Each NOC return address is 64-bits (8 Bytes).
-                // A pusher registers its return address by calculating its respecitve its entry in the 4 entry
+                // A pusher registers its return address by calculating its respective its entry in the 4 entry
                 // outbound router table.
                 // direction can be one of 0, 1, 2, 3. Respective 64-bit entry is direction * 8
                 uint32_t my_direction_offset = my_direction * sizeof(uint64_t);
                 uint64_t router_addr = get_noc_addr_helper(
                     eth_chan_to_noc_xy[noc_index][forwarding_channel],
                     FABRIC_ROUTER_REQ_QUEUE_START + my_direction_offset);
-                // Split 64-bit wirte data to two 4-byte write.
+                // Split 64-bit write data to two 4-byte write.
                 // Write lower 4 Bytes of 8 Byte entry.
                 noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
                 // Write upper 4 Bytes of 8 Byte entry.

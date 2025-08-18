@@ -741,7 +741,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     if (packet_start->mcast_params[EAST]) {
                         // decrement east hop count
                         cached_routing_fields.value = packet_start->mcast_params[EAST] - 1;
-                        // north/south hop counts will be cleared when making trunk->branch trun.
+                        // north/south hop counts will be cleared when making trunk->branch turn.
                         forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                             packet_start,
                             payload_size_bytes,
@@ -752,7 +752,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     if (packet_start->mcast_params[WEST]) {
                         // decrement west hop count
                         cached_routing_fields.value = (packet_start->mcast_params[WEST] - 1) << 16;
-                        // north/south hop counts will be cleared when making trunk->branch trun.
+                        // north/south hop counts will be cleared when making trunk->branch turn.
                         forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
                             packet_start,
                             payload_size_bytes,

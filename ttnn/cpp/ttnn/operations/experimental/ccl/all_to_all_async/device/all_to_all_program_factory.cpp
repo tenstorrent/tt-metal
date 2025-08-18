@@ -233,7 +233,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const uint32_t receiver_cb_index = tt::CB::c_in0;
 
     /**
-     * Syncrhonization and Algorithm
+     * Synchronization and Algorithm
      *
      * Sender writer has 2 jobs:
      * 1. Write packed payloads to DRAM, 2 tiles per packet.

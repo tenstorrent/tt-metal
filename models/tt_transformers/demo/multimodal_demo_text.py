@@ -97,7 +97,7 @@ def test_multimodal_demo_text(
     interleaved_contents = [
         # image understanding
         [ImageMedia(image=img), "If I had to write a haiku for this one"],
-        [ImageMedia(image=img2), "Couting the number of individual spaghetti strands in this image"],
+        [ImageMedia(image=img2), "Counting the number of individual spaghetti strands in this image"],
         [ImageMedia(image=ocr_image), "The full text in this image is as follows"],
         [ImageMedia(image=clutter), "The count of vases, books, and miscellaneous items in this image is"],
     ]

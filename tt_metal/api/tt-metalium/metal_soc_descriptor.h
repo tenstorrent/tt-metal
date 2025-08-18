@@ -19,7 +19,7 @@
 
 enum BoardType : uint32_t;
 
-//! tt_SocDescriptor contains information regarding the SOC configuration targetted.
+//! tt_SocDescriptor contains information regarding the SOC configuration targeted.
 /*!
     Should only contain relevant configuration for SOC
 */

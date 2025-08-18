@@ -27,7 +27,7 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RISCV1");
         for (uint32_t j = 0; j < num_subordinates; j++) {
-            // Subordinate coordiantes are stored in the runtime arguments starting at index 1
+            // Subordinate coordinates are stored in the runtime arguments starting at index 1
             // Each x coordinate is stores in an odd index
             // Each y coordinate is stored in the next even index
             // The first subordinate's coordinates are at indices 1 and 2, the second at indices 3 and 4, etc.

@@ -26,7 +26,7 @@ void MorehNllLossStep1DeviceOperation::validate_inputs(
         TT_FATAL(
             weight_tensor.value().buffer() != nullptr,
             "Operands to nll_loss need to be allocated in buffers on device!");
-        TT_FATAL(weight_tensor.value().dtype() == DataType::BFLOAT16, "weigth tensor dtype must be bfloat16");
+        TT_FATAL(weight_tensor.value().dtype() == DataType::BFLOAT16, "weight tensor dtype must be bfloat16");
     }
 }
 

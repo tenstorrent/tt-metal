@@ -58,7 +58,7 @@ def prepare_split_conv_weights_bias(
 # --- Input channel split
 # When splitting by input channels, we split input tensor and weights tensors on the input channel dimension.
 # We call conv op on each input and weight slice and accumulate the result in a DRAM tensor.
-# --- Ouptut channel split
+# --- Output channel split
 # When splitting by output channels, we split conv weights and bias tensors.
 # We call conv op on the whole input tensor and each output slice of weights and bias.
 # The result is concatenated along the output channel dimension in DRAM.

@@ -194,7 +194,7 @@ def run_mamba_decode(
 def split_into_tokens_into_prefill_and_decode_slices(tokenized_prompts):
     prefill_chunk_size = select_chunk_size(tokenized_prompts.shape[1], model_config.MAMBA_MAX_SEQUENCE_LEN)
     if prefill_chunk_size == 0:
-        prefill_chunk_size = 32  # If there is no valid chunk size use the smalles possible value
+        prefill_chunk_size = 32  # If there is no valid chunk size use the smallest possible value
     prefill_tokens, decode_tokens = split_input_into_prefill_and_decode_segments(tokenized_prompts, prefill_chunk_size)
 
     if prefill_tokens is None:
@@ -250,7 +250,7 @@ def run_mamba_demo(
 
     profiler.end("tokenizing_inputs")
 
-    logger.info(f"Initalizing Mamba model in prefill mode")
+    logger.info(f"Initializing Mamba model in prefill mode")
     profiler.start("loading_model")
     model = get_tt_metal_model(
         model_version,

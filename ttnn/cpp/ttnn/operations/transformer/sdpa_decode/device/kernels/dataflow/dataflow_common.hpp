@@ -420,7 +420,7 @@ void read_kv_mask_chunks(
                 PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
         }
 
-        // Read V chunk (tranpose of K), from K's L1 buffer
+        // Read V chunk (transpose of K), from K's L1 buffer
         if constexpr (reuse_k) {
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);

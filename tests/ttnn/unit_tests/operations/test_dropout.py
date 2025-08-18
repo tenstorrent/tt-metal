@@ -32,6 +32,6 @@ def test_dopout(device):
 
     mean = np.mean(tt_ratios)
     std = np.std(tt_ratios)
-    # current dropout has pretty high variance so we just checking with some reasonable nubmers
+    # current dropout has pretty high variance so we just checking with some reasonable numbers
     assert np.allclose(mean, prob, rtol=0.02)
     assert std < prob

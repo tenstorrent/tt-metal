@@ -580,7 +580,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
 
 // `dst_type` is "Don't care" on Wormhole, it's required on Blackhole to workaround bug that manifests with noc
 // transactions using all 4 memory ports. Issuing inline writes and atomics requires all 4 memory ports to accept the
-// transaction at the same time. If one port on the receipient has no back-pressure then the transaction will hang
+// transaction at the same time. If one port on the recipient has no back-pressure then the transaction will hang
 // because there is no mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate
 // inline writes on Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
 template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT>

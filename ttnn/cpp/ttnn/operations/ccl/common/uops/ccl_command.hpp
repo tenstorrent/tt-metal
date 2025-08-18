@@ -549,7 +549,7 @@ using CclCommandCoreDescriptorArgs = std::variant<
 // A command is composed of one or more arguments
 // This enum specifies the high level command
 // Future commands are to be added and will enable
-// functionalilty such as synchronizing
+// functionality such as synchronizing
 enum class CclCommandCode : uint8_t {
     STREAM_TENSOR_TO_EDM = 0,  // TODO: rename uses of to the below
     STREAM_TENSOR_TO_CB = 0,
