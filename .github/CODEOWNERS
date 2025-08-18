@@ -288,6 +288,7 @@ models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
