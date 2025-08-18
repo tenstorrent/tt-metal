@@ -190,27 +190,21 @@ ttnn::Tensor pad_impl(
         extra_index = 0;
     }
     auto input_shape_with_tile_padding = input_tensor_4D.padded_shape();
+    std::vector<uint32_t> pad_front_array(padding_size, 0);
     std::vector<uint32_t> output_padded_shape(padding_size, 0);
     for (size_t i = 0; i < padding_size; i++) {
+        pad_front_array[i] = padding[i + extra_index].before_elements;
         output_padded_shape[i] = padding[i + extra_index].before_elements + input_shape_with_tile_padding[i] +
                                  padding[i + extra_index].after_elements;
     }
-
-    auto pad_front = padding | std::views::transform([](const auto& p) { return p.before_elements; });
 
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
         const int target_height = output_padded_shape[padding_size - 2];
         const int target_width = output_padded_shape[padding_size - 1];
         TT_FATAL(
-            target_height % ttnn::TILE_SIZE == 0 || target_width % ttnn::TILE_SIZE == 0,
+            target_height % ttnn::TILE_SIZE == 0 && target_width % ttnn::TILE_SIZE == 0,
             "ttnn.pad: for tiled tensors padding end must be a multiple of the tile size on height and width for a "
             "tensor in tile layout");
-    }
-
-    // Performing actual padding
-    std::vector<uint32_t> pad_front_array(padding_size, 0);
-    for (size_t i = 0; i < pad_front.size(); i++) {
-        pad_front_array[i] = pad_front[i];
     }
 
     return pad_impl(
