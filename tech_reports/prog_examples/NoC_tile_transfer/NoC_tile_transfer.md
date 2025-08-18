@@ -3,7 +3,7 @@
 In this example, we build a TT-Metal program that demonstrates how to transfer data between two cores using the NoC (Network-on-Chip) for direct **L1-to-L1 memory communication**.
 
 You can find the full example in
-[`noc_tile_transfer.cpp`](tt_metal/programming_examples/NoC_tile_transfer/noc_tile_transfer.cpp).
+[`noc_tile_transfer.cpp`](/tt_metal/programming_examples/NoC_tile_transfer/noc_tile_transfer.cpp).
 
 ## Building and Running the Example
 
