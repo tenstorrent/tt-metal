@@ -31,6 +31,21 @@ std::unordered_map<MeshCoordinate, std::vector<std::pair<uint32_t, SocketConnect
     return grouped_connections;
 }
 
+// Helper function to assign unique IDs to receivers for each sender
+// Returns a map from SocketConnection to unique receiver ID for that sender
+std::unordered_map<SocketConnection, uint32_t> get_receiver_ids_per_sender(const SocketConfig& config) {
+    std::unordered_map<SocketConnection, uint32_t> connection_to_receiver_id;
+    std::unordered_map<MeshCoreCoord, uint32_t> sender_counter;
+
+    // Assign unique IDs starting from 0 for each sender
+    for (const auto& connection : config.socket_connection_config) {
+        uint32_t receiver_id = sender_counter[connection.sender_core]++;
+        connection_to_receiver_id[connection] = receiver_id;
+    }
+
+    return connection_to_receiver_id;
+}
+
 std::unordered_map<MeshCoreCoord, uint32_t> get_num_downstreams_per_core(const SocketConfig& config) {
     std::unordered_map<MeshCoreCoord, uint32_t> num_downstreams_per_core;
     for (const auto& connection : config.socket_connection_config) {
@@ -312,6 +327,7 @@ void write_socket_configs(
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     } else {
+        auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
         std::vector<receiver_socket_md> config_data(
             config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
 
@@ -339,7 +355,7 @@ void write_socket_configs(
                 md.upstream_noc_y = sender_virtual_core.y;
                 md.upstream_noc_x = sender_virtual_core.x;
                 md.upstream_bytes_acked_addr = peer_config_buf_addr + align_up(sizeof(sender_socket_md)) +
-                                               align_up(sizeof(uint32_t)) * downstream_num;
+                                               align_up(sizeof(uint32_t)) * receiver_ids_per_sender.at(connection);
                 md.is_sender = is_sender;
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
