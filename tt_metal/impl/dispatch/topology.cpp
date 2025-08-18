@@ -8,6 +8,7 @@
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -31,6 +32,7 @@
 #include "dispatch_core_common.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "kernel_config/fd_kernel.hpp"
+#include "dispatch/kernel_config/relay_mux.hpp"
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
 #include "persistent_kernel_cache.hpp"
@@ -956,7 +958,8 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
 void build_tt_fabric_program(
     IDevice* device,
     Program* fabric_program_ptr,
-    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder>& edm_builders) {
+    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder>& edm_builders,
+    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricTensixDatamoverBuilder>& tensix_builders) {
     using namespace tt_fabric;
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
@@ -1079,6 +1082,13 @@ void build_tt_fabric_program(
                            fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline;
 
         const auto& curr_edm_config = fabric_context.get_fabric_router_config(fabric_edm_type, fabric_edm_axis);
+
+        // Create fabric tensix builder for this ethernet channel
+        // Skip the link used by dispatch using relay mux API
+        uint32_t dispatch_link_idx = RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
+        bool fabric_tensix_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                     tt::tt_fabric::FabricTensixConfig::DISABLED;
+
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
@@ -1092,6 +1102,16 @@ void build_tt_fabric_program(
                 is_dateline,
                 control_plane.routing_direction_to_eth_direction(direction));
             edm_builders.insert({eth_chan, edm_builder});
+
+            auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
+            if (fabric_tensix_enabled) {
+                // Only create tensix builder if this channel is not used by dispatch
+                if (!(device_has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
+                    auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
+                        device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan);
+                    tensix_builders.insert({eth_chan, tensix_builder});
+                }
+            }
         }
 
         // Last link may be used by dispatch if there is tunneling
@@ -1130,6 +1150,11 @@ void build_tt_fabric_program(
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
+
+                // TODO: issue #26792, if have fabric_tensix_builders, need to get the tensix builder 1/2,
+                // then edm_builder1 connect_to_downstream_edm (tensix builder 2)
+                // edm_builder2 connect_to_downstream_edm (tensix builder 1)
+
                 edm_builder1.connect_to_downstream_edm(edm_builder2);
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
 
@@ -1172,14 +1197,23 @@ void build_tt_fabric_program(
 std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     std::unique_ptr<Program> fabric_program_ptr = std::make_unique<Program>();
     std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
+    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricTensixDatamoverBuilder> tensix_builders;
 
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();
 
-    build_tt_fabric_program(device, fabric_program_ptr.get(), edm_builders);
+    build_tt_fabric_program(device, fabric_program_ptr.get(), edm_builders, tensix_builders);
     fabric_context.set_num_fabric_initialized_routers(device->id(), edm_builders.size());
     if (edm_builders.empty()) {
         return nullptr;
+    }
+
+    // Compile all fabric tensix builders
+    if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+        tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        for (auto& [eth_chan, tensix_builder] : tensix_builders) {
+            tensix_builder.create_and_compile(device, *fabric_program_ptr);
+        }
     }
 
     // for now it doesnt matter which channel is the master, so just pick the 1st in the map
