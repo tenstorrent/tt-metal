@@ -4,6 +4,8 @@
 
 #include "fd_mesh_command_queue.hpp"
 
+#include <tracy/Tracy.hpp>
+
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -57,7 +59,7 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
-template<typename Container, typename Func>
+template <typename Container, typename Func>
 void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& func) {
     for (auto it = container.begin(); it != container.end(); ++it) {
         const auto& coord = *it;
@@ -76,7 +78,7 @@ MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordina
     TT_THROW("No local device found for range");
 }
 
-} // namespace
+}  // namespace
 
 struct MeshReadEventDescriptor {
     ReadEventDescriptor single_device_descriptor;
@@ -244,7 +246,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // in the dispatch infra. This support should eventually be deprecated.
         // This function currently assumes a uniform number of ethernet cores across all physical devices in the mesh
         // through the num_virtual_eth_cores() function.
-        // The physical device itself may have less etherent cores than what is queried here and will dispatch
+        // The physical device itself may have less ethernet cores than what is queried here and will dispatch
         // accordingly.
         num_virtual_eth_cores = mesh_device_->num_virtual_eth_cores(sub_device_id);
         num_workers += num_virtual_eth_cores;
@@ -477,6 +479,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 }
 
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("FDMeshCommandQueue::finish_nolock");
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
@@ -811,7 +814,10 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
 }
 
 void FDMeshCommandQueue::reset_worker_state(
-    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
+    bool reset_launch_msg_state,
+    uint32_t num_sub_devices,
+    const vector_aligned<uint32_t>& go_signal_noc_data,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
     for (auto device : mesh_device_->get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
@@ -829,6 +835,10 @@ void FDMeshCommandQueue::reset_worker_state(
         program_dispatch::set_num_worker_sems_on_dispatch(mesh_device_, device->sysmem_manager(), id_, num_sub_devices);
         program_dispatch::set_go_signal_noc_data_on_dispatch(
             mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
+        if (reset_launch_msg_state) {
+            program_dispatch::set_core_go_message_mapping_on_device(
+                device, core_go_message_mapping, device->sysmem_manager(), id_);
+        }
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_,

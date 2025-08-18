@@ -1,0 +1,75 @@
+name: "[internal] Blackhole 20-cores tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      build-artifact-name:
+        description: 'Build artifact name'
+        required: true
+        type: string
+      wheel-artifact-name:
+        description: 'Wheel artifact name'
+        required: true
+        type: string
+      docker-image:
+        description: 'Docker image'
+        required: true
+        type: string
+      runner-label:
+        description: 'Runner label'
+        required: false
+        type: string
+        default: "BH"
+
+jobs:
+  blackhole-20-cores-unit-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: "test_sharding_on_bh_20_cores_test1"
+            cmd:  tests/ttnn/unit_tests/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
+    name: ${{ matrix.test-group.name }}
+    runs-on: >-
+      ${{
+        (github.event.pull_request.head.repo.fork == true || contains('P150b', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run ${{ matrix.test-group.name }}
+        env:
+          ARCH_NAME: ${{ inputs.arch }}
+          CORE_GRID_OVERRIDE_TODEPRECATE: "4, 3"
+        run: |
+          pytest ${{ matrix.test-group.cmd }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
