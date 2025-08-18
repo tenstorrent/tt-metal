@@ -17,6 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.vadv2.common import load_torch_model
 
 
+@pytest.mark.skip("#27009: Failure about banks")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 def test_vadv2(
     device,
