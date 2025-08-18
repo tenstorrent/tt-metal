@@ -17,38 +17,10 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/welford.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "dprint_pages.h"
-#include "dprint_tensix.h"
+#include "compute_kernel_api/transpose_wh.h"
 
 namespace NAMESPACE {
-
-// ================================
-// Remove when Welford's is hooked up
-// Dummy mean and variance calculations
-// Mean = 2 * Wt * x (dst1)
-// Variance = 4 * Wt * x (dst2)
-inline void dummy_mean_and_variance(
-    uint32_t cb_x, uint32_t j, uint32_t wt, uint32_t Wt, uint32_t dst0, uint32_t dst1, uint32_t dst2) {
-    if (wt + j < Wt - 1) {
-        return;
-    }
-
-    copy_tile_to_dst_init_short(cb_x, 0);
-    copy_tile(cb_x, 0, dst1);
-    copy_tile_to_dst_init_short(cb_x, 0);
-    copy_tile(cb_x, 0, dst2);
-
-    add_binary_tile_init();
-    for (uint32_t i = 0; i < 4 * Wt - 1; i++) {
-        if (i < 2 * Wt - 1) {
-            add_binary_tile(dst1, dst0);
-        }
-        add_binary_tile(dst2, dst0);
-    }
-}
-// ================================
 
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -87,18 +59,15 @@ void MAIN {
     } else {
         constexpr auto first_out_cb = layernorm ? cb_ex : cb_ex2;
         unary_op_init_common(cb_in, first_out_cb);
+        pack_reconfig_data_format(cb_ex);
     }
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
-    // =====================================
-    // Hack before Welford's is hooked up
-    // Change to 0, 1, 2 when Welford's is hooked up
-    constexpr int dst0 = 2;
-    constexpr int dst1 = 1;
-    constexpr int dst2 = 0;
-    // =====================================
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
+    constexpr uint32_t dst2 = 2;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         tile_regs_acquire();
@@ -118,11 +87,6 @@ void MAIN {
                 // Layernorm: Calculate E[x] and Var[x] using Welford's algorithm
                 // Go tile-by-tile in the block
                 for (uint32_t j = 0; j < blk; j++) {
-                    // Copy input tile to dst0
-                    // Welford's requires a transposed input tile
-                    copy_tile_to_dst_init_short(cb_in, /*transpose*/ 1);
-                    copy_tile(cb_in, j, dst0);
-
                     if constexpr (fuse_pre_add) {
                         // Fuse in = in + b in dst0
                         cb_wait_front(cb_inb, 1);
@@ -132,12 +96,16 @@ void MAIN {
                         cb_pop_front(cb_inb, 1);
                     }
 
-                    reconfig_data_format(cb_in, cb_scaler);
-                    // welford_init();
-                    // welford(dst0, dst1, dst2, /*start_N*/ (wt + j) * tile_width, /*end_N*/W, /*last_run*/ wt + j ==
-                    // Wt);
-                    dummy_mean_and_variance(cb_in, j, wt, Wt, dst0, dst1, dst2);
-                    cb_pop_front(cb_in, 1);
+                    // Copy input tile to dst0
+                    // Welford's requires a transposed input tile
+                    reconfig_data_format(cb_in, cb_in);
+                    transpose_wh_init_short(cb_in);
+                    transpose_wh_tile(cb_in, j, dst0);
+
+                    // Accumulate mean and variance
+                    welford_init();
+                    welford(
+                        dst0, dst1, dst2, /*start_N*/ (wt + j) * tile_width, /*end_N*/ W, /*last_run*/ wt + j == Wt);
                 }
             } else {
                 // RMS: Calculate (∑x^2)/n
@@ -193,23 +161,43 @@ void MAIN {
                 pack_tile(dst0, cb_ex2);
                 cb_push_back(cb_ex2, onetile);
             }
+            cb_pop_front(cb_in, blk);
         }
 
         if constexpr (layernorm) {
+            // Transpose dst1 and dst2 back to columns
+            tile_regs_commit();
             cb_reserve_back(cb_ex, onetile);
             pack_reconfig_data_format(cb_ex);
             pack_tile(dst1, cb_ex);
-            DPRINT << "Pushing to cb_ex" << ENDL();
-            cb_push_back(cb_ex, onetile);
-
             pack_reconfig_data_format(cb_ex2);
             pack_tile(dst2, cb_ex2);
-            DPRINT << "Pushing to cb_ex2" << ENDL();
+            cb_push_back(cb_ex, onetile);
             cb_push_back(cb_ex2, onetile);
+            tile_regs_release();
+            cb_wait_front(cb_ex, onetile);
+            cb_wait_front(cb_ex2, onetile);
+            tile_regs_acquire();
+            tile_regs_wait();
+            transpose_wh_init_short(cb_ex);
+            reconfig_data_format(cb_ex, cb_ex);
+            transpose_wh_tile(cb_ex, 0, dst1);
+            transpose_wh_init_short(cb_ex2);
+            reconfig_data_format(cb_ex2, cb_ex2);
+            transpose_wh_tile(cb_ex2, 0, dst2);
+            tile_regs_commit();
+            cb_pop_front(cb_ex, onetile);
+            cb_pop_front(cb_ex2, onetile);
+            cb_reserve_back(cb_ex, onetile);
+            cb_reserve_back(cb_ex2, onetile);
+            pack_reconfig_data_format(cb_ex);
+            pack_tile(dst1, cb_ex);
+            pack_reconfig_data_format(cb_ex2);
+            pack_tile(dst2, cb_ex2);
+            cb_push_back(cb_ex, onetile);
+            cb_push_back(cb_ex2, onetile);
+            tile_regs_release();
         }
-
-        tile_regs_commit();
-        tile_regs_release();
 
         // =====================================
         // Calculate 1/(√(Var(X) + ε)).
@@ -218,7 +206,6 @@ void MAIN {
         tile_regs_acquire();
         tile_regs_wait();
 
-        DPRINT << "Waiting for cb_ex2" << ENDL();
         cb_wait_front(cb_ex2, onetile);
 
         reconfig_data_format(cb_ex2, cb_eps);
@@ -234,11 +221,11 @@ void MAIN {
 
         tile_regs_commit();
 
+        cb_reserve_back(cb_ex2pe, onetile);
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, onetile);
         tile_regs_release();
 
-        DPRINT << "Popping from cb_ex2" << ENDL();
         cb_pop_front(cb_ex2, onetile);
         cb_wait_front(cb_ex2pe, onetile);
 
@@ -252,7 +239,6 @@ void MAIN {
         tile_regs_commit();
         pack_tile(dst0, cb_ex2pe);
         tile_regs_release();
-        DPRINT << "Pushing to cb_ex2pe" << ENDL();
         cb_push_back(cb_ex2pe, onetile);
 
         // =====================================
@@ -271,7 +257,7 @@ void MAIN {
             tile_regs_acquire();
             tile_regs_wait();
             cb_reserve_back(cb_out, blk);
-            cb_wait_front(cb_ex, 1);
+            cb_wait_front(cb_ex, onetile);
             cb_wait_front(cb_in, blk);
             if constexpr (layernorm) {
                 // Layernorm: Calculate x-E[x]
@@ -331,9 +317,6 @@ void MAIN {
                     pack_reconfig_data_format(cb_out);
                 }
                 cb_wait_front(cb_gamma, blk);
-                if (ncht == 1) {
-                    DPRINT << "\n\n\nFINAL VAL Pre Var Value wt: " << wt << ENDL();
-                }
                 cb_wait_front(cb_xmm, blk);
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (uint32_t j = 0; j < blk; j++) {
@@ -382,7 +365,6 @@ void MAIN {
             }
         }
 
-        UNPACK(DPRINT << "-----NCHt val: " << NCHt << "---------- ncht" << ncht << ENDL());
         cb_xmm = tt::CBIndex::c_24;  // x minus mean
         if constexpr (rms_norm) {
             cb_pop_front(cb_ex, 1);
