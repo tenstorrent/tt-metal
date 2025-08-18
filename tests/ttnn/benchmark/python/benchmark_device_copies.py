@@ -4,106 +4,80 @@
 
 import torch
 import ttnn
+import pytest
 
 
-def _make_host_tensor(shape):
-    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    return ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+@pytest.mark.parametrize(
+    "layout", [(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)]
+)
+@pytest.mark.parametrize("dtype", [(ttnn.bfloat16, ttnn.float32), (ttnn.float32, ttnn.bfloat16)])
+@pytest.mark.parametrize("tensor_size", [(8096, 8096)])
+def test_benchmark_from_torch_with_format_conversion(benchmark, layout, dtype, tensor_size):
+    from_layout, to_layout = layout
+    from_dtype, to_dtype = dtype
 
-
-def _make_device_tensor_like(host_tensor, device):
-    return ttnn.allocate_tensor_on_device(host_tensor.shape, host_tensor.dtype, host_tensor.layout, device)
-
-
-"""
-from_torch with device specified(both with format conversion and without)
-"""
-
-
-def test_benchmark_from_torch_to_device_row_major_no_format_conversion(benchmark):
-    # Host -> device, row-major layout (no conversion), same dtype
     device = ttnn.open_device(device_id=0)
-    torch_tensor = torch.rand((8096, 8096), dtype=torch.bfloat16)
+    torch_tensor = torch.rand(tensor_size, dtype=from_dtype, layout=from_layout)
 
     def run():
-        ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+        ttnn.from_torch(torch_tensor, dtype=to_dtype, layout=to_layout, device=device)
         ttnn.synchronize_device(device)
 
     benchmark(run)
 
 
-def test_benchmark_from_torch_to_device_tile_layout_with_format_conversion(benchmark):
-    # Host -> device, tile layout (conversion), same dtype
+@pytest.mark.parametrize(
+    "layout", [(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)]
+)
+@pytest.mark.parametrize("dtype", [(ttnn.bfloat16, ttnn.float32), (ttnn.float32, ttnn.bfloat16)])
+@pytest.mark.parametrize("tensor_size", [(8096, 8096)])
+def test_benchmark_to_torch(benchmark, layout, dtype, tensor_size):
+    from_layout, to_layout = layout
+    from_dtype, to_dtype = dtype
+
     device = ttnn.open_device(device_id=0)
-    torch_tensor = torch.rand((8096, 8096), dtype=torch.bfloat16)
+    ttnn_tensor = ttnn.rand(tensor_size, dtype=from_dtype, layout=from_layout, device=device)
 
     def run():
-        ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+        _ = ttnn.to_torch(ttnn_tensor, dtype=to_dtype, layout=to_layout, device=device)
         ttnn.synchronize_device(device)
 
     benchmark(run)
 
 
-"""
-copy_host_to_device_tensor
-"""
-
-
-def test_benchmark_copy_host_to_device_tensor(benchmark):
+@pytest.mark.parametrize("tensor_size", [(8096, 8096)])
+def test_benchmark_from_device(benchmark, tensor_size):
     device = ttnn.open_device(device_id=0)
-    host_tensor = _make_host_tensor((8096, 8096))
-    device_tensor = _make_device_tensor_like(host_tensor, device)
+    ttnn_tensor = ttnn.rand(tensor_size, device=device)
 
     def run():
-        ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+        _ = ttnn.from_device(ttnn_tensor)
         ttnn.synchronize_device(device)
 
     benchmark(run)
 
 
-def test_benchmark_copy_device_to_host_tensor(benchmark):
-    # Prepare a device tensor by creating on device directly
+@pytest.mark.parametrize("tensor_size", [(8096, 8096)])
+def test_benchmark_copy_host_to_device_tensor(benchmark, tensor_size):
     device = ttnn.open_device(device_id=0)
-    torch_tensor = torch.rand((8096, 8096), dtype=torch.bfloat16)
-    device_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    host_tensor = ttnn.allocate_tensor_on_host(device_tensor.shape, device_tensor.dtype, device_tensor.layout, device)
+    ttnn_tensor = ttnn.rand(tensor_size, device=device)
+    host_tensor = ttnn.allocate_tensor_on_host(ttnn_tensor.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
+
+    def run():
+        ttnn.copy_host_to_device_tensor(host_tensor, ttnn_tensor)
+        ttnn.synchronize_device(device)
+
+    benchmark(run)
+
+
+@pytest.mark.parametrize("tensor_size", [(8096, 8096)])
+def test_benchmark_copy_device_to_host_tensor(benchmark, tensor_size):
+    device = ttnn.open_device(device_id=0)
+    device_tensor = ttnn.rand(tensor_size, device=device)
+    host_tensor = ttnn.allocate_tensor_on_host(device_tensor.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
 
     def run():
         ttnn.copy_device_to_host_tensor(device_tensor, host_tensor)
-        ttnn.synchronize_device(device)
-
-    benchmark(run)
-
-
-"""
-from_device
-"""
-
-
-def test_benchmark_from_device(benchmark):
-    device = ttnn.open_device(device_id=0)
-    torch_tensor = torch.rand((8096, 8096), dtype=torch.bfloat16)
-    device_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
-
-    def run():
-        _ = ttnn.from_device(device_tensor)
-        ttnn.synchronize_device(device)
-
-    benchmark(run)
-
-
-"""
-to_torch (from device)
-"""
-
-
-def test_benchmark_to_torch_from_device(benchmark):
-    device = ttnn.open_device(device_id=0)
-    torch_tensor = torch.rand((8096, 8096), dtype=torch.bfloat16)
-    device_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
-
-    def run():
-        _ = ttnn.to_torch(device_tensor)
         ttnn.synchronize_device(device)
 
     benchmark(run)
