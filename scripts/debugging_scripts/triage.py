@@ -5,9 +5,12 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check]
 
 Options:
+    --remote-exalens                 Connect to remote exalens server.
+    --remote-server=<remote-server>  Specify the remote server to connect to. [default: localhost]
+    --remote-port=<remote-port>      Specify the remote server port. [default: 5555]
     --initialize-with-noc1           Initialize debugger context with NOC1 enabled. [default: False]
     --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
     --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
@@ -30,7 +33,7 @@ import utils
 from collections.abc import Iterable
 
 try:
-    from ttexalens.tt_exalens_init import init_ttexalens
+    from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
 except ImportError as e:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     install_script = os.path.join(os.path.dirname(script_dir), "install_debugger.sh")
@@ -501,7 +504,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     # Get installed version string
     try:
         installed_version = importlib_metadata.version("ttexalens")
-        print(f"Installed ttexalens version: {installed_version}")
+        utils.DEBUG(f"Installed ttexalens version: {installed_version}")
     except importlib_metadata.PackageNotFoundError:
         utils.WARN(
             "Required debugger component is not installed. Please run scripts/install_debugger.sh to install debugger dependencies."
@@ -536,6 +539,15 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             utils.WARN("Proceeding due to --skip-version-check")
         else:
             raise TTTriageError(message)
+
+
+def _init_ttexalens(args: ScriptArguments | None = None) -> Context | None:
+    """Initialize the ttexalens context."""
+    if args is None:
+        return None
+    if args["--remote-exalens"]:
+        return init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
+    return init_ttexalens(use_noc1=args["--initialize-with-noc1"])
 
 
 def run_script(
@@ -579,17 +591,17 @@ def run_script(
     # Initialize context if not provided
     if context is None:
         _enforce_dependencies(args)
-        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
+        context = _init_ttexalens(args)
 
     # Run scripts in order
     result: Any = None
     for script in script_queue:
         if not all(not dep.failed for dep in script.depends):
-            raise TTTriageError(f"Cannot run script {script.name} due to failed dependencies.")
+            raise TTTriageError(f"{script.name}: Cannot run script due to failed dependencies.")
         else:
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
-                raise TTTriageError(f"Data provider script {script.name} did not return any data.")
+                raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
     script = scripts[script_path] if script_path in scripts else None
     serialize_result(script, result)
 
@@ -652,7 +664,7 @@ def main():
 
     # Enforce debugger dependencies, then initialize
     _enforce_dependencies(args)
-    context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
+    context = _init_ttexalens(args)
 
     # Check if we should run specific scripts
     if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
@@ -662,11 +674,18 @@ def main():
         # Execute all scripts
         for script in script_queue:
             if not all(not dep.failed for dep in script.depends):
-                utils.WARN(f"Cannot run script {script.name} due to failed dependencies.")
+                utils.INFO(f"{script.name}:")
+                utils.WARN(f"  Cannot run script due to failed dependencies.")
+                script.failed = True
+                script.failure_message = "Cannot run script due to failed dependencies."
             else:
-                result = script.run(args=args, context=context, log_error=False)
+                result = script.run(args=args, context=context)
                 if script.config.data_provider and result is None:
-                    utils.ERROR(f"Data provider script {script.name} did not return any data.")
+                    utils.INFO(f"{script.name}:")
+                    if script.failure_message is not None:
+                        utils.ERROR(f"  Data provider script failed: {script.failure_message}")
+                    else:
+                        utils.ERROR(f"  Data provider script did not return any data.")
                 if not script.config.data_provider:
                     serialize_result(script, result)
 

@@ -18,9 +18,14 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::UINT32 or
-            input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32,
+        input_tensor_a.dtype() == DataType::BFLOAT8_B or input_tensor_a.dtype() == DataType::BFLOAT16 or
+            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::FLOAT32 or
+            input_tensor_a.dtype() == DataType::INT32,
         "Can only work with bfloat16/float32 or int32/uint32 tensors");
+    TT_FATAL(
+        !(input_tensor_a.layout() == TILE_LAYOUT && input_tensor_a.dtype() == DataType::BFLOAT8_B &&
+          input_tensor_a.logical_shape()[-1] != logical_output_shape[-1]),
+        "Reshape only supports bfp8 inputs and outputs with the same last dimension size");
     TT_FATAL(
         this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
         "Output tensor must have the same memory layout as input tensor");

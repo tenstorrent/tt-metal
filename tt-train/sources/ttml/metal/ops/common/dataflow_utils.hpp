@@ -50,7 +50,7 @@ inline std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uin
 
 // ----- Tile generation functions -----
 
-// Generater the mask tile with horizontal masking.
+// Generator the mask tile with horizontal masking.
 // Each tile face is 16x16, and there are 4 faces per tile.
 void generate_mask_tile(uint32_t cb_id, uint16_t fill_value, uint16_t mask_fill_value, uint32_t mask_width) {
     cb_reserve_back(cb_id, onetile);

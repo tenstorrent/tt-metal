@@ -19,6 +19,7 @@
 
 #include "assert.hpp"
 #include "data_types.hpp"
+#include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
@@ -28,6 +29,7 @@
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
+#include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>
 #include "kernel_impl.hpp"
 
@@ -84,10 +86,14 @@ KernelSource::KernelSource(const std::string& source, const SourceType& source_t
 };
 
 Kernel::Kernel(
+    HalProgrammableCoreType programmable_core_type,
+    HalProcessorClassType processor_class,
     const KernelSource& kernel_src,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& compile_args,
     const std::map<std::string, std::string>& defines) :
+    programmable_core_type_(programmable_core_type),
+    processor_class_(processor_class),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
     max_runtime_args_per_core_(0),
@@ -149,31 +155,14 @@ bool Kernel::is_on_logical_core(const CoreCoord& logical_core) const {
     return this->core_range_set_.contains(logical_core);
 }
 
-HalProgrammableCoreType Kernel::get_kernel_programmable_core_type() const {
-    RISCV riscv_processor = this->processor();
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: return HalProgrammableCoreType::TENSIX;
-        case RISCV::ERISC:
-        case RISCV::ERISC1:
-            return this->is_idle_eth() ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-        default: TT_ASSERT(false, "Unsupported kernel processor!");
-    }
-    return HalProgrammableCoreType::TENSIX;
-}
-
 CoreType Kernel::get_kernel_core_type() const {
-    RISCV riscv_processor = this->processor();
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: return CoreType::WORKER;
-        case RISCV::ERISC:
-        case RISCV::ERISC1: return CoreType::ETH;
-        default: TT_ASSERT(false, "Unsupported kernel processor!");
+    switch (programmable_core_type_) {
+        case HalProgrammableCoreType::TENSIX: return CoreType::WORKER;
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH: return CoreType::ETH;
+        case HalProgrammableCoreType::COUNT: TT_THROW("Bad programmable core type!");
     }
-    return CoreType::WORKER;
+    TT_THROW("Unreachable");
 }
 
 const std::string& KernelImpl::get_full_kernel_name() const { return this->kernel_full_name_; }
@@ -256,6 +245,21 @@ const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_ke
             this->name());
     }
     return iter->second;
+}
+
+uint32_t DataMovementKernel::get_kernel_processor_type(int index) const {
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    return enchantum::to_underlying(this->config_.processor);
+}
+
+uint32_t EthernetKernel::get_kernel_processor_type(int index) const {
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    return enchantum::to_underlying(this->config_.processor);
+}
+
+uint32_t ComputeKernel::get_kernel_processor_type(int index) const {
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    return index;
 }
 
 std::string DataMovementKernel::config_hash() const {
@@ -419,10 +423,7 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     this->common_runtime_args_data_.rt_args_count = count;
 }
 
-bool Kernel::is_idle_eth() const {
-    return std::holds_alternative<EthernetConfig>(this->config()) &&
-           std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
-}
+bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
 
 uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
@@ -477,14 +478,14 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    JitBuildStateSubset build_states = BuildEnvManager::get_instance().get_kernel_build_states(
+    auto build_states = BuildEnvManager::get_instance().get_kernel_build_states(
         device->build_id(), tensix_core_type, compute_class_idx);
     jit_build_subset(build_states, this);
 }
 
 void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries) {
-    // Try inserting an empry vector, as that is cheap to construct
-    // and avoids an additonal move.
+    // Try inserting an empty vector, as that is cheap to construct
+    // and avoids an additional move.
     auto pair = binaries_.insert({build_key, {}});
     if (pair.second) {
         pair.first->second = std::move(binaries);
@@ -598,12 +599,12 @@ bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    const JitBuildStateSubset& build_states = BuildEnvManager::get_instance().get_kernel_build_states(
+    const auto build_states = BuildEnvManager::get_instance().get_kernel_build_states(
         device->build_id(), tensix_core_type, compute_class_idx);
 
-    const std::string output_path = build_states.build_ptr[0]->get_out_path();
-    for (uint32_t i = 0; i < build_states.size; i++) {
-        TT_ASSERT(build_states.build_ptr[i]->get_out_path() == output_path);
+    const std::string output_path = build_states[0].get_out_path();
+    for (auto& build : build_states) {
+        TT_ASSERT(build.get_out_path() == output_path);
     }
 
     const std::string build_success_marker_path =
