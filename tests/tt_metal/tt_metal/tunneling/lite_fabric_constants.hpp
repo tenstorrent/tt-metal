@@ -71,7 +71,7 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 static_assert(NUM_SENDER_CHANNELS == 1);
 
 // Additional 16B to be used only for unaligned reads/writes
-constexpr uint32_t CHANNEL_BUFFER_SIZE = 4096 + 16 + sizeof(lite_fabric::LiteFabricHeader);
+constexpr uint32_t CHANNEL_BUFFER_SIZE = 2048 + 16 + sizeof(lite_fabric::LiteFabricHeader);
 
 constexpr size_t RECEIVER_CHANNEL_BASE_ID = NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_BASE_ID = 0;

@@ -5,9 +5,10 @@
 #include "lite_fabric_host_util.hpp"
 #include <enchantum/entries.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "blackhole/dev_mem_map.h"
+#include "lite_fabric_memory_config.h"
 #include "build.hpp"
 #include "lite_fabric.hpp"
+#include "lite_fabric_memory_defs.h"
 #include "tt_memory.h"
 
 namespace {
@@ -18,9 +19,7 @@ uint32_t GetStateAddressMetal() {
         offsetof(lite_fabric::LiteFabricMemoryMap, config) + offsetof(lite_fabric::LiteFabricConfig, current_state);
     return state_addr;
 }
-uint32_t GetStateAddress() {
-    return MEM_LITE_FABRIC_CONFIG_BASE + offsetof(lite_fabric::LiteFabricConfig, current_state);
-}
+uint32_t GetStateAddress() { return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::LiteFabricConfig, current_state); }
 }  // namespace
 
 namespace lite_fabric {
@@ -258,8 +257,8 @@ void LaunchLiteFabric(
     const tt::tt_metal::Hal& hal,
     const SystemDescriptor& desc,
     const std::filesystem::path& elf_path) {
-    constexpr uint32_t k_FirmwareStart = MEM_LITE_FABRIC_FIRMWARE_BASE;
-    constexpr uint32_t k_PcResetAddress = MEM_LITE_FABRIC_RESET_PC;
+    constexpr uint32_t k_FirmwareStart = LITE_FABRIC_TEXT_START;
+    constexpr uint32_t k_PcResetAddress = LITE_FABRIC_RESET_PC;
 
     lite_fabric::LiteFabricConfig config{};
     config.is_primary = true;
@@ -272,7 +271,7 @@ void LaunchLiteFabric(
     config.routing_enabled = true;
 
     // Need an abstraction layer for Lite Fabric
-    auto config_addr = MEM_LITE_FABRIC_CONFIG_BASE;
+    auto config_addr = LITE_FABRIC_CONFIG_START;
 
     for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
         lite_fabric::SetResetState(cluster, tunnel_1x.mmio_cxy_virtual(), true);
@@ -280,35 +279,23 @@ void LaunchLiteFabric(
 
         const ll_api::memory& bin = ll_api::memory(elf_path.string(), ll_api::memory::Loading::DISCRETE);
 
-        auto local_init = MEM_LITE_FABRIC_INIT_LOCAL_L1_BASE_SCRATCH;
-
         bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-            // Move data from private memory into L1 to be copied into private memory during kernel init
-            uint32_t relo_addr = hal.relocate_dev_addr(addr, local_init);
-            if (relo_addr != addr) {
-                // Local memory relocated to L1 for copying in kernel init
-                cluster.write_core(&*mem_ptr, len_words * sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), relo_addr);
-                log_info(
-                    tt::LogMetal,
-                    "Writing local memory to {:#x} -> reloc {:#x} size {} B",
-                    addr,
-                    relo_addr,
-                    len_words * sizeof(uint32_t));
-            } else {
-                config.binary_addr = relo_addr;
+            // Note
+            // First write is assumed to be binary.
+            // Second write is assumed to be data.
+            if (addr == LITE_FABRIC_TEXT_START) {
+                config.binary_addr = addr;
                 config.binary_size = len_words * sizeof(uint32_t);
                 config.binary_size = (config.binary_size + 15) & ~0xF;
 
                 cluster.write_core(
                     (void*)&config, sizeof(lite_fabric::LiteFabricConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
 
-                log_info(
-                    tt::LogMetal,
-                    "Writing binary to {:#x} -> reloc {:#x} size {} B",
-                    addr,
-                    relo_addr,
-                    len_words * sizeof(uint32_t));
-                cluster.write_core(&*mem_ptr, len_words * sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), relo_addr);
+                log_info(tt::LogMetal, "Writing binary to {:#x} size {} B", addr, len_words * sizeof(uint32_t));
+                cluster.write_core(&*mem_ptr, len_words * sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), addr);
+            } else {
+                log_info(tt::LogMetal, "Writing data to {:#x} size {} B", addr, len_words * sizeof(uint32_t));
+                cluster.write_core(&*mem_ptr, len_words * sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), addr);
             }
         });
 
@@ -376,8 +363,7 @@ void TerminateLiteFabricWithMetal(tt::Cluster& cluster, const SystemDescriptor& 
 }
 
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc) {
-    uint32_t routing_enabled_address = MEM_LITE_FABRIC_CONFIG_BASE +
-                                       offsetof(lite_fabric::LiteFabricMemoryMap, config) +
+    uint32_t routing_enabled_address = LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::LiteFabricMemoryMap, config) +
                                        offsetof(lite_fabric::LiteFabricConfig, routing_enabled);
     uint32_t enabled = 0;
     for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
