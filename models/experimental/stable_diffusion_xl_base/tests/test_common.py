@@ -179,8 +179,8 @@ def run_tt_image_gen(
 
     vae_on_device = isinstance(vae, TtAutoencoderKL)
 
-    profiler.start("vae_decode")
     if vae_on_device:
+        profiler.start("vae_decode")
         if tid_vae is None or capture_trace:
             tid_vae = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
             tt_latents = ttnn.div(tt_latents, scaling_factor)
@@ -197,13 +197,22 @@ def run_tt_image_gen(
             ttnn.execute_trace(ttnn_device, tid_vae, cq_id=0, blocking=False)
 
         ttnn.synchronize_device(ttnn_device)
+        profiler.end("vae_decode")
+
+        profiler.start("read_output_tensor")
         output_tensor = ttnn.to_torch(output_device, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0)).float()
+        ttnn.synchronize_device(ttnn_device)
+        profiler.end("read_output_tensor")
 
         B, C, H, W = output_shape
         output_tensor = output_tensor.reshape(batch_size * B, H, W, C)
         imgs = torch.permute(output_tensor, (0, 3, 1, 2))
     else:
+        profiler.start("read_output_tensor")
         latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))
+        ttnn.synchronize_device(ttnn_device)
+        profiler.end("read_output_tensor")
+        profiler.start("vae_decode")
         B, C, H, W = input_shape
         latents = latents.reshape(batch_size * B, H, W, C)
         latents = torch.permute(latents, (0, 3, 1, 2))
@@ -219,18 +228,23 @@ def run_tt_image_gen(
             imgs = None
         del latents
         gc.collect()
-    profiler.end("vae_decode")
+        profiler.end("vae_decode")
     profiler.end("image_gen")
 
     return imgs, tid, output_device, output_shape, tid_vae
 
 
 def prepare_input_tensors(host_tensors, device_tensors):
+    profiler.start("prepare_input_tensors")
     for host_tensor, device_tensor in zip(host_tensors, device_tensors):
         ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+    if device_tensors:
+        ttnn.synchronize_device(device_tensors[0].device())
+    profiler.end("prepare_input_tensors")
 
 
 def allocate_input_tensors(ttnn_device, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids):
+    profiler.start("allocate_input_tensors")
     is_mesh_device = isinstance(ttnn_device, ttnn._ttnn.multi_device.MeshDevice)
     tt_latents_device = ttnn.allocate_tensor_on_device(
         tt_latents.shape,
@@ -292,6 +306,8 @@ def allocate_input_tensors(ttnn_device, tt_latents, tt_prompt_embeds, tt_text_em
             mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device) if is_mesh_device else None,
         ),
     ]
+    ttnn.synchronize_device(ttnn_device)
+    profiler.end("prepare_input_tensors")
 
     return tt_latents_device, tt_prompt_embeds_device, tt_text_embeds_device, tt_time_ids_device
 
@@ -299,6 +315,7 @@ def allocate_input_tensors(ttnn_device, tt_latents, tt_prompt_embeds, tt_text_em
 def create_user_tensors(
     ttnn_device, latents, negative_prompt_embeds, prompt_embeds, negative_pooled_prompt_embeds, add_text_embeds
 ):
+    profiler.start("create_user_tensors")
     is_mesh_device = isinstance(ttnn_device, ttnn._ttnn.multi_device.MeshDevice)
     tt_latents = ttnn.from_torch(
         latents,
@@ -342,5 +359,6 @@ def create_user_tensors(
         ]
         for negative_pooled_prompt_embed, add_text_embed in zip(negative_pooled_prompt_embeds, add_text_embeds)
     ]
-
+    ttnn.synchronize_device(ttnn_device)
+    profiler.end("create_user_tensors")
     return tt_latents, tt_prompt_embeds, tt_add_text_embeds
