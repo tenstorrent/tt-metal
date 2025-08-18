@@ -14,7 +14,11 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-bool use_composite_all_gather(const ttnn::Tensor& input_tensor, const int32_t dim, const uint32_t semaphore_size) {
+bool use_composite_all_gather(
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t semaphore_size,
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -26,7 +30,8 @@ bool use_composite_all_gather(const ttnn::Tensor& input_tensor, const int32_t di
 
     auto input_memory_config = input_tensor.memory_config();
     auto output_memory_config = memory_config.value_or(input_memory_config);
-    if (input_memory_config != output_memory_config && semaphore_size < 2) {
+
+    if (input_memory_config.memory_layout() != output_memory_config.memory_layout() && semaphore_size < 2) {
         return true;
     }
 
@@ -100,7 +105,7 @@ ttnn::Tensor composite_all_gather(
         }
     }
 
-    if (input_memory_config != output_memory_config) {
+    if (input_memory_config.memory_layout() != output_memory_config.memory_layout()) {
         all_gather_output_tensor = ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
     }
 
@@ -134,7 +139,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size())) {
+    if (use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(
             input_tensor,
             dim,
@@ -171,7 +176,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    if (use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size())) {
+    if (use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
         return ttnn::operations::experimental::ccl::all_gather_async(
@@ -202,7 +207,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensors[0], dim, multi_device_global_semaphore.size())) {
+    if (use_composite_all_gather(input_tensors[0], dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(
             input_tensors,
             dim,
@@ -237,7 +242,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size())) {
+    if (use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
     } else {
@@ -270,7 +275,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensors[0], dim, multi_device_global_semaphore.size())) {
+    if (use_composite_all_gather(input_tensors[0], dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(
             input_tensors, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
     } else {
