@@ -18,7 +18,6 @@ namespace ttnn::operations::experimental::ccl {
 bool use_composite_reduce_scatter(
     const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
     // Composite currently only valid for scattering on dim 3

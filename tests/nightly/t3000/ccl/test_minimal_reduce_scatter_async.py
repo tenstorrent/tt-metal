@@ -260,6 +260,7 @@ def run_reduce_scatter_impl(
         "batch_1",
         "tt_training_test_one",
         "tt_training_test_two",
+        "tt_training_test_three",
     ],
 )
 @pytest.mark.parametrize(
@@ -323,8 +324,8 @@ def test_reduce_scatter_async(
     use_persistent_buffers,
     rs_topology,
 ):
-    if rs_input_dtype == ttnn.bfloat8_b and enable_trace:
-        pytest.skip("bfloat8_b invokes composite RS where we've seen ND pcc when running with trace with bfloat8_b")
+    if is_training_shape and enable_trace:
+        pytest.skip("We've seen ND PCC when running the composite-RS with trace")
 
     run_reduce_scatter_impl(
         t3k_mesh_device,
