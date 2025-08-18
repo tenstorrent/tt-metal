@@ -422,7 +422,7 @@
             _handleGridBoxClick(event) {
                 // Append the thing we clicked on to the path
                 const metricName = event.detail.name;
-                const newPath = [ ...this.currentPath, metricName ].join("_");
+                const newPath = [ ...this.currentPath, metricName ].join("/");
 
                 console.log(`Clicked ${metricName}: new_path=${newPath}`);
                 
@@ -450,13 +450,13 @@
 
             _getCurrentMetrics() {
                 // Get children of currently displayed path
-                const current_path = this.currentPath.join("_");
+                const current_path = this.currentPath.join("/");
                 const metric_names = this._telemetryStore.getChildNames(current_path);
 
                 // Create metric boxes
                 const metrics = [];
                 for (const metric_name of metric_names) {
-                    const metric_path = [...this.currentPath, metric_name].join("_");
+                    const metric_path = [...this.currentPath, metric_name].join("/");
                     metrics.push({
                         name: metric_name,
                         value: this._telemetryStore.getValue(metric_path)
