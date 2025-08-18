@@ -9,6 +9,7 @@
 | ViT          | (224, 224) | 8          | 512     | 81.25%               | 82.23%                 |
 | ResNet50     | (224, 224) | 16         | 512     | 78.52%                 | 75.59%                |
 | MobileNetV2  | (224, 224) | 10          | 512     | 68.36%                 | 70.62%                 |
+| VoVNet       | (224, 224) | 1          | 512     | 72.85%                 | 78.12%                 |
 
 ***Note:*** The accuracy is for the selected random samples from the validation dataset.
 
@@ -43,6 +44,19 @@ Where,
  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp[wormhole_b0-tt_model-10-device_params0]
  ```
 
+**VoVNet:** <br>
+**_For 224x224,_**<br>
+
+**_Single-Device (BS-1):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval[1-224-tt_model-device_params0]
+ ```
+
+**_Multi-Device (DP-2,N300):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval_dp[wormhole_b0-1-224-tt_model-device_params0]
+ ```
+
 ## To run the test of torch vs ground truth, please follow the following commands:
 
 **Vit:** <br>
@@ -68,4 +82,17 @@ Where,
 **_Multi-Device (DP-2,N300):_**<br>
  ```sh
  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp[wormhole_b0-torch_model-10-device_params0]
+ ```
+
+**VoVNet:** <br>
+**_For 224x224,_**<br>
+
+**_Single-Device (BS-1):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval[1-224-torch_model-device_params0]
+ ```
+
+**_Multi-Device (DP-2,N300):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval_dp[wormhole_b0-1-224-torch_model-device_params0]
  ```

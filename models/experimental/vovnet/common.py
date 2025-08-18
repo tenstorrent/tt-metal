@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-
-import torch
 import timm
+import torch
 
 VOVNET_L1_SMALL_SIZE = 16384
 
