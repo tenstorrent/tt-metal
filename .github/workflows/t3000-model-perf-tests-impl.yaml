@@ -78,7 +78,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf:/mnt/MLPerf
           install_wheel: true
           run_args: |
             source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_model_perf_tests.sh
@@ -169,7 +169,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf:/mnt/MLPerf
           install_wheel: true
           run_args: |
             source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_model_perf_tests.sh
