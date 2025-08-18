@@ -6,9 +6,6 @@
  * - Get rid of is_absolute. Contract should simply be that if names have been transmitted,
  *   all data represents new metrics. Otherwise, the snapshot contains delta metrics (of existing
  *   metrics).
- * - Hostname may contain "_" character, so using this as a path component delimiter is unsafe.
- *   We should instead use either a different separator (like "/") or encode paths as vectors.
- *   For future exporters that need to export a single string, these can be formed when exporting.
  */
 
 #include <future>
@@ -95,13 +92,13 @@ static std::string get_cluster_wide_telemetry_path(const Metric &metric) {
     auto local_path = metric.telemetry_path();
     path_components.insert(path_components.end(), local_path.begin(), local_path.end());
 
-    // Join with '_'
+    // Join with '/'
     std::string path;
     for (auto it = path_components.begin(); it != path_components.end(); ) {
         path += *it;
         ++it;
         if (it != path_components.end()) {
-            path += '_';
+            path += '/';
         }
     }
     return path;

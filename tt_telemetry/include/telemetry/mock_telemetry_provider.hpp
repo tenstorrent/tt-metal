@@ -28,10 +28,10 @@ private:
 
     // Telemetry metrics state
     const std::vector<std::string> bool_metric_names_ = {
-        "foo_bar_baz1", "foo_bar_baz2", "foo_bar_baz3", "foo_glorp_cpu1", "foo_glorp_cpu2", "foo_glorp_cpu3"};
+        "foo/bar/baz1", "foo/bar/baz2", "foo/bar/baz3", "foo/glorp/cpu1", "foo/glorp/cpu2", "foo/glorp/cpu3"};
     std::vector<size_t> bool_metric_ids_;
     std::vector<bool> bool_metric_values_;
-    const std::vector<std::string> uint_metric_names_ = {"foo_bar_baz4int", "ints_intermediate_intvalue"};
+    const std::vector<std::string> uint_metric_names_ = {"foo/bar/baz4int", "ints/intermediate/intvalue"};
     std::vector<size_t> uint_metric_ids_;
     std::vector<uint64_t> uint_metric_values_;
 

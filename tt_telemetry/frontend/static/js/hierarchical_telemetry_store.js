@@ -1,7 +1,7 @@
 /*
  * HierarchicalTelemetryStore.js
  *
- * Stores telemetry data, named by underscore-delimited paths, in a hierarchical tree. Leaf nodes
+ * Stores telemetry data, named by slash-delimited paths, in a hierarchical tree. Leaf nodes
  * contain actual reported telemetry data and intermediate nodes are aggregated from children.
  * 
  * TODO:
@@ -29,12 +29,12 @@ export class HierarchicalTelemetryStore {
         // aggregate value of all children (ANDed together). That is, "true" is good and if any
         // descendant is false (bad), all ancestors up the tree will be bad. Each time an actual
         // telemetry point (i.e., a leaf node) changes, the aggregate value is propagated upwards.
-        // So e.g. if "host_data1" and "host_data2" are telemetry points, their value will be
+        // So e.g. if "host/data1" and "host/data2" are telemetry points, their value will be
         // stored directly while "host" will also be present in the map and computed from both.
         this._valueByPath = new Map();
 
         // Hierarchical map of paths, allowing us to navigate to subsequently deeper levels. Given
-        // a path like foo_bar_baz, the first level of keys will include "foo", which will index a
+        // a path like foo/bar/baz, the first level of keys will include "foo", which will index a
         // map containing "bar", which will in turn index a map containing "baz". "baz" has no 
         // children and its value is nil.
         this._pathChildren = new Map();    // hierarchical map of paths
@@ -45,7 +45,7 @@ export class HierarchicalTelemetryStore {
     // returned. Non-boolean children are ignored in aggregation.
     _getAggregateHealth(path) {
         // First, we need to navigate to the correct position in the hierarchy
-        const parts = path.split("_");
+        const parts = path.split("/");
         let currentMap = this._pathChildren;
         
         // Navigate through the hierarchy to find the correct map
@@ -77,7 +77,7 @@ export class HierarchicalTelemetryStore {
         // to represent aggregate health of their descendants.
         let value = true;
         for (const nextPathComponent of currentMap.keys()) {
-            const childPath = path + "_" + nextPathComponent;
+            const childPath = path + "/" + nextPathComponent;
             let childValue = this._valueByPath.get(childPath);
             if (isBool(childValue)) {
                 // Only bools are considered for aggregate health
@@ -119,9 +119,9 @@ export class HierarchicalTelemetryStore {
         }
 
         // Split path into components. Then move upwards to propagate the boolean value.
-        const parts = path.split("_");
+        const parts = path.split("/");
         for (let i = parts.length; i > 0; i--) {
-            const currentPath = parts.slice(0, i).join("_");
+            const currentPath = parts.slice(0, i).join("/");
             this._valueByPath.set(currentPath, this._getAggregateHealth(currentPath));
         }
     }
@@ -154,9 +154,9 @@ export class HierarchicalTelemetryStore {
         }
 
         // Split path into components. Then move upwards to propagate the boolean value.
-        const parts = path.split("_");
+        const parts = path.split("/");
         for (let i = parts.length; i > 0; i--) {
-            const currentPath = parts.slice(0, i).join("_");
+            const currentPath = parts.slice(0, i).join("/");
             if (currentPath != path) {
                 // _getAggregateHealth only supports bools at leaf level, so we don't want to
                 // invoke it on our uint
@@ -176,7 +176,7 @@ export class HierarchicalTelemetryStore {
         this._pathById.set(id, path);
     
         // Now update path component maps. Note that terminal part of path must have no children.
-        const parts = path.split("_");
+        const parts = path.split("/");
         let map = this._pathChildren;
         for (let i = 0; i < parts.length; i++) {
             const currentPart = parts[i];
@@ -197,8 +197,8 @@ export class HierarchicalTelemetryStore {
         }
     }
 
-    // Gets the names of immediate children, if any. For example, if the store contains a_b_c1 and
-    // a_b_c2, getChildNames("a_b") will return [ "c1", "c2" ] and getChildNames("a") will return
+    // Gets the names of immediate children, if any. For example, if the store contains a/b/c1 and
+    // a/b/c2, getChildNames("a/b") will return [ "c1", "c2" ] and getChildNames("a") will return
     // [ "b" ].
     getChildNames(path) {
         // Special case: empty path, get first level
@@ -206,7 +206,7 @@ export class HierarchicalTelemetryStore {
             return [ ...this._pathChildren.keys() ];
         }
         // Navigate through the hierarchy to find the correct map
-        const parts = path.split("_");
+        const parts = path.split("/");
         let currentMap = this._pathChildren;
         for (const part of parts) {
             if (!currentMap || !currentMap.has(part)) {
