@@ -6,7 +6,8 @@
 #define DM_COMMON_HPP
 
 #include <cstdint>
-#include "device_fixture.hpp"
+// #include "device_fixture.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include <tuple>
 
 namespace tt::tt_metal::unit_tests::dm {
@@ -21,7 +22,8 @@ struct L1AddressInfo {
 };
 
 // Function to get L1 address and size
-L1AddressInfo get_l1_address_and_size(const IDevice* device, const CoreCoord& core_coord = {0, 0});
+L1AddressInfo get_l1_address_and_size(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& core_coord = {0, 0});
 
 struct DramAddressInfo {
     uint64_t base_address;
@@ -29,10 +31,11 @@ struct DramAddressInfo {
 };
 
 // Function to get DRAM address and size
-DramAddressInfo get_dram_address_and_size(const IDevice* device);
+DramAddressInfo get_dram_address_and_size(std::shared_ptr<distributed::MeshDevice> mesh_device);
 
 // Function to compute physical constraints
-std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(tt::ARCH arch, const IDevice* device);
+std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
+    std::shared_ptr<distributed::MeshDevice> mesh_device);
 
 }  // namespace tt::tt_metal::unit_tests::dm
 
