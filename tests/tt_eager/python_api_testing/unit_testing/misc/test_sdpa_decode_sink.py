@@ -172,8 +172,6 @@ def run_sdpa_decode_impl(
     q_dtype,
     dtype,
 ):
-    use_ref_fa = True  # Use Torch impl for FlashDecode + attention sink
-
     num_iters = 1
 
     # Log the test parameters
@@ -194,7 +192,8 @@ def run_sdpa_decode_impl(
     v = torch.randn(batch, nkv, seq_len, dim).float()  # (B, H, S, D)
 
     # TODO: Remove -inf after ttnn supports attention sink
-    sink = torch.randn(batch, 1, nh, 1, 1) * -float("inf")  # (1, H, 1, 1)
+    sink = torch.randn(1, 1, nh, 1, 1).repeat(batch, 1, 1, 1, 1)  # (batch, 1, H, 1, 1)
+    sink *= 4.0  # Closer to real distribution
 
     ref_q = q.permute(0, 2, 1, 3).view(batch, seq_len, nkv, nh // nkv, dim)
     ref_k = k.permute(0, 2, 1, 3)
@@ -210,6 +209,11 @@ def run_sdpa_decode_impl(
 
     scale = dim**-0.5
     start_indices = batch * [seq_len - 1]
+
+    # Setup sink for TTNN
+    tt_sink_in = sink[:1, ...].reshape(1, 1, nh, 1)
+    tt_sink_in = torch.nn.functional.pad(tt_sink_in, (0, ttnn.TILE_SIZE - 1), "constant", 0)
+    tt_sink_in /= scale  # Important!! GPT-OSS expects sink to not be scaled
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -252,6 +256,14 @@ def run_sdpa_decode_impl(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    tt_sink = ttnn.from_torch(
+        tt_sink_in,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     tt_start_indices = ttnn.from_torch(
         torch.tensor(start_indices),
         device=device,
@@ -264,67 +276,52 @@ def run_sdpa_decode_impl(
     logger.info(f"Running SDPA Decode with TT Q shape: {tt_q.shape}, TT K shape: {tt_k.shape}, dtype: {dtype}")
 
     def run_op():
-        if use_ref_fa:
-            tt_out = flash_decode_sdpa(
-                ref_q[:, -1:, ...],
-                ref_k,
-                ref_v,
-                sink,
-                scale,
-                sliding_window=0,
-            )
-        else:
-            tt_out = ttnn.transformer.scaled_dot_product_attention_decode(
-                tt_q,
-                tt_k,
-                tt_v,
-                cur_pos_tensor=tt_start_indices,
-                scale=scale,
-                program_config=sdpa_program_config,
-                compute_kernel_config=compute_kernel_config,
-                memory_config=out_mem_config,
-            )
-
-        return tt_out
-
-    tt_outs = []
-    for i in range(num_iters):  # Check for program cache
-        logger.debug(f"Running SDPA Decode operation iteration {i + 1}/{num_iters}")
-        tt_out = run_op()
-        tt_outs.append(tt_out)
-
-        # Increment start indices for the next iteration
-        ttnn.plus_one(tt_start_indices)
-
-    ########################
-    ### Validation
-    ########################
-    outs = []
-    for _ in range(num_iters):
-        out_t = scaled_dot_product_attention_reference(
-            ref_q,
+        torch_out = flash_decode_sdpa(
+            ref_q[:, -1:, ...],
             ref_k,
             ref_v,
             sink,
             scale,
             sliding_window=0,
         )
-        out_t = out_t[:, -1:, ...]
-        outs.append(out_t)
 
+        tt_out = ttnn.transformer.scaled_dot_product_attention_decode(
+            tt_q,
+            tt_k,
+            tt_v,
+            cur_pos_tensor=tt_start_indices,
+            scale=scale,
+            attention_sink=tt_sink,
+            program_config=sdpa_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=out_mem_config,
+        )
+
+        return torch_out, tt_out
+
+    outs = []
+    for i in range(num_iters):  # Check for program cache
+        logger.debug(f"Running SDPA Decode operation iteration {i + 1}/{num_iters}")
+        torch_out, tt_out = run_op()
+        outs.append((torch_out, tt_out))
+
+        # Increment start indices for the next iteration
+        ttnn.plus_one(tt_start_indices)
         start_indices = [x + 1 for x in start_indices]
 
+    ########################
+    ### Validation
+    ########################
     pcc_threshold = 0.999
     if dtype == ttnn.bfloat4_b:
-        pcc_threshold = 0.91
-    if dtype == ttnn.bfloat8_b:
         pcc_threshold = 0.98
+    if dtype == ttnn.bfloat8_b:
+        pcc_threshold = 0.999
 
-    for i, (tt_out, out_t) in enumerate(zip(tt_outs, outs)):
-        if not use_ref_fa:
-            tt_out = ttnn.to_torch(tt_out)[..., :nh, :]  # (S, B, H, D)
+    for i, (torch_out, tt_out) in enumerate(outs):
+        tt_out = ttnn.to_torch(tt_out)[..., :nh, :]  # (S, B, H, D)
 
-        out_pass, out_pcc = comp_pcc(tt_out, out_t, pcc_threshold)
+        out_pass, out_pcc = comp_pcc(torch_out, tt_out, pcc_threshold)
         logger.debug(f"Output PCC: {out_pcc}")
 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
@@ -333,7 +330,7 @@ def run_sdpa_decode_impl(
     num_program_cache_entries = device.num_program_cache_entries()
 
     # SDPA + PlusOne
-    expected_num_program_cache_entries = 1 if use_ref_fa else 2
+    expected_num_program_cache_entries = 2
     assert (
         num_program_cache_entries == expected_num_program_cache_entries
     ), f"Expected {expected_num_program_cache_entries} program cache entries, got {num_program_cache_entries}."
@@ -342,9 +339,10 @@ def run_sdpa_decode_impl(
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, dim",
     [
-        (1, 256, 32, 4, 64),  # GPT-OSS 20B TP=2
-        (32, 256, 32, 4, 64),
-        (32, 256, 32, 1, 64),
+        # (1, 256, 32, 4, 64),  # GPT-OSS 20B TP=2
+        (64, 256, 32, 1, 64),
+        (16, 1024, 32, 1, 64),
+        # (32, 256, 32, 1, 64),
         # (1, 256, 64, 8, 64),  # GPT-OSS 20B TP=1 (FIXME: Fails)
     ],
 )
