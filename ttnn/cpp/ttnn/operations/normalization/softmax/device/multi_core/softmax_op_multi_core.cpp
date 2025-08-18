@@ -714,11 +714,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
     // reader compile arg
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_wt};
-    if (mask.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(mask->buffer()).append_to(reader_compile_time_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs().append_to(reader_compile_time_args);  // placeholder for missing mask
-    }
+    tt::tt_metal::TensorAccessorArgs(mask ? mask->buffer() : nullptr).append_to(reader_compile_time_args);
     std::map<std::string, std::string> softmax_defines;
     // hw_dims_only_causal_mask does not support RM Layout atm
     bool use_row_major_kernel = (mask.has_value() and mask->layout() == tt::tt_metal::Layout::ROW_MAJOR);
