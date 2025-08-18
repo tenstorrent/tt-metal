@@ -370,7 +370,7 @@ struct HostToLiteFabricInterface {
         header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
 
         uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Reading data from {} {:#x} unaligned {}",
             receiver_core.str(),
@@ -390,6 +390,34 @@ struct HostToLiteFabricInterface {
         h2d.receiver_host_read_index =
             lite_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[0]>(h2d.receiver_host_read_index);
         flush_h2d(receiver_core);
+    }
+
+    void read_any_len(
+        void* mem_ptr,
+        size_t size,
+        tt_cxy_pair receiver_core,
+        uint64_t src_noc_addr,
+        uint8_t noc_index = lite_fabric::edm_to_local_chip_noc) {
+        size_t num_pages = size / get_max_payload_data_size_bytes();
+        for (size_t i = 0; i < num_pages; i++) {
+            read(
+                reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mem_ptr) + i * get_max_payload_data_size_bytes()),
+                get_max_payload_data_size_bytes(),
+                receiver_core,
+                src_noc_addr + i * get_max_payload_data_size_bytes(),
+                noc_index);
+        }
+        // Remaining bytes
+        size_t remaining_bytes = size % get_max_payload_data_size_bytes();
+        if (remaining_bytes > 0) {
+            read(
+                reinterpret_cast<void*>(
+                    reinterpret_cast<uintptr_t>(mem_ptr) + num_pages * get_max_payload_data_size_bytes()),
+                remaining_bytes,
+                receiver_core,
+                src_noc_addr + num_pages * get_max_payload_data_size_bytes(),
+                noc_index);
+        }
     }
 
 #endif
