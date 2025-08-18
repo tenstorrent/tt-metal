@@ -35,7 +35,7 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
     zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
     sparsity.view(-1)[zero_indices] = 0.0
 
-    sparsity = sparsity.to(dtype=torch.float32)
+    sparsity = sparsity.to(dtype=torch.bfloat16)
 
     nnz = int((sparsity != 0).sum().item())
     logger.info(f"nnz: {nnz}")
@@ -60,7 +60,7 @@ def test_sparse_matmul(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1
 
     sparsity_t = ttnn.from_torch(
         sparsity,
-        dtype=ttnn.float32,
+        dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
