@@ -11,6 +11,7 @@
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "eth_l1_address_map.h"
+#include "tests/tt_metal/tt_metal/tunneling/lite_fabric_memory_defs.h"
 
 // Validate assumptions on mailbox layout on host compile
 // Constexpr definitions allow for printing of breaking values at compile time
@@ -26,5 +27,9 @@ static constexpr uint32_t ETH_PROFILER_CHECK =
 static_assert(ETH_LAUNCH_CHECK == 0);
 static_assert(ETH_PROFILER_CHECK == 0);
 static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
-// Expected to be the same because UMD does not differentiate between idle and active
 static_assert(MEM_AERISC_FABRIC_LITE_BARRIER == MEM_IERISC_FABRIC_LITE_BARRIER);
+static_assert(MEM_AERISC_FABRIC_LITE_BARRIER == MEM_ERISC_FABRIC_LITE_BARRIER);
+static_assert(MEM_ERISC_LITE_FABRIC_RESERVED_BASE == MEM_LITE_FABRIC_MEMORY_BASE);
+static_assert(MEM_ERISC_LITE_FABRIC_RESERVED_SIZE == MEM_LITE_FABRIC_MEMORY_SIZE);
+static_assert(MEM_NOC_ATOMIC_RET_VAL_ADDR == MEM_LITE_FABRIC_NOC_ATOMIC_RET_VAL_ADDR);
+static_assert(MEMORY_LAYOUT_END < MEM_LITE_FABRIC_MEMORY_END);

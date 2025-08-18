@@ -80,7 +80,8 @@ int CompileLiteFabric(
         root_dir_str + "/tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc",
         root_dir_str + "/tt_metal/api/",
         root_dir_str + "/tt_metal/api/tt-metalium/",
-        root_dir_str + "/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib"};
+        root_dir_str + "/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib",
+        root_dir_str + "/tests/tt_metal/tt_metal/tunneling"};  // For memory configuration headers
 
     // TODO remove hardcoded defines
     std::vector<std::string> defines{
@@ -139,18 +140,40 @@ int CompileLiteFabric(
 
 int LinkLiteFabric(
     const std::filesystem::path& root_dir, const std::filesystem::path& out_dir, const std::filesystem::path& elf_out) {
-    std::ostringstream oss;
-    oss << "riscv32-tt-elf-g++ ";
-    oss << GetCommonOptions() << " ";
-    oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
-    oss << fmt::format("-T{}/runtime/hw/toolchain/blackhole/firmware_lite_fabric.ld ", root_dir.string());
-    oss << fmt::format("-Wl,-Map={}/lite_fabric.map ", out_dir.string());
-    oss << fmt::format("-save-temps {}/lite_fabric.o ", out_dir.string());
-    oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0.o ", root_dir.string());
-    oss << fmt::format("{}/runtime/hw/lib/blackhole/substitutes.o ", root_dir.string());
-    oss << fmt::format("-o {}", elf_out.string());
+    // First, preprocess the linker script to resolve #include directives
+    const std::string tunneling_dir = fmt::format("{}/tests/tt_metal/tt_metal/tunneling", root_dir.string());
+    const std::string input_ld = fmt::format("{}/lite_fabric.ld", tunneling_dir);
+    const std::string output_ld = fmt::format("{}/lite_fabric_preprocessed.ld", out_dir.string());
 
-    std::string link_cmd = oss.str();
+    std::ostringstream preprocess_oss;
+    preprocess_oss << "riscv32-tt-elf-g++ ";
+    preprocess_oss << fmt::format("-I{} ", tunneling_dir);  // Include path for the memory defs header
+    preprocess_oss << "-E -P -x c ";                        // Preprocess only, no line markers, treat as C
+    preprocess_oss << fmt::format("-o {} ", output_ld);
+    preprocess_oss << input_ld;
+
+    std::string preprocess_cmd = preprocess_oss.str();
+    log_info(tt::LogMetal, "Preprocess linker script command:\n{}", preprocess_cmd);
+
+    int preprocess_result = system(preprocess_cmd.c_str());
+    if (preprocess_result != 0) {
+        log_error(tt::LogMetal, "Failed to preprocess linker script");
+        return preprocess_result;
+    }
+
+    // Now link using the preprocessed linker script
+    std::ostringstream link_oss;
+    link_oss << "riscv32-tt-elf-g++ ";
+    link_oss << GetCommonOptions() << " ";
+    link_oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
+    link_oss << fmt::format("-T{} ", output_ld);  // Use preprocessed linker script
+    link_oss << fmt::format("-Wl,-Map={}/lite_fabric.map ", out_dir.string());
+    link_oss << fmt::format("-save-temps {}/lite_fabric.o ", out_dir.string());
+    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0.o ", root_dir.string());
+    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/substitutes.o ", root_dir.string());
+    link_oss << fmt::format("-o {}", elf_out.string());
+
+    std::string link_cmd = link_oss.str();
     log_info(tt::LogMetal, "Link LiteFabric command:\n{}", link_cmd);
 
     return system(link_cmd.c_str());
