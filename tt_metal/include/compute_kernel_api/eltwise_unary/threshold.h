@@ -23,11 +23,11 @@ namespace ckernel {
 *
 * Return value: None
 *
-* | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
-* |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
-* | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
-* | param0          | The threshold value for the threshold function                             | uint32_t |                                                       | True     |
-* | param1          | The value to replace the input with if it is greater than the threshold    | uint32_t |                                                       | True     |
+* | Argument        | Description                                                                         | Type     | Valid Range                                           | Required |
+* |-----------------|-------------------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+* | idst            | The index of the tile in DST register buffer to perform the computation on          | uint32_t | Must be less than the size of the DST register buffer | True     |
+* | param0          | The threshold value for the threshold function                                      | uint32_t |                                                       | True     |
+* | param1          | The value to replace the input with if it is less than or equal to the threshold    | uint32_t |                                                       | True     |
 */
 // clang-format on
 ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {

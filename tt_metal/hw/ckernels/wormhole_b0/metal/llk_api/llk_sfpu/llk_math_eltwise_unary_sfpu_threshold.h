@@ -20,7 +20,7 @@ template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_threshold(
     uint dst_index, uint32_t param0, uint32_t param1, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        static_cast<void (*)()>(ckernel::sfpu::_calculate_threshold_<APPROXIMATE, ITERATIONS>),
+        static_cast<void (*)(uint32_t, uint32_t)>(ckernel::sfpu::_calculate_threshold_<APPROXIMATE, ITERATIONS>),
         dst_index,
         vector_mode,
         param0,
