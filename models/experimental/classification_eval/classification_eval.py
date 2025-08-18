@@ -37,6 +37,8 @@ def evaluation(
     for i in range(iterations // batch_size):
         if model_name in ["vit", "resnet50", "mobilenetv2", "vovnet"]:
             inputs, labels = get_batch(data_loader, image_processor)
+        elif model_name == "efficientnet_b0":
+            inputs, labels = get_batch(data_loader)
         else:
             inputs, labels = get_batch(data_loader)
             inputs = image_processor(inputs, return_tensors="pt")
@@ -64,7 +66,7 @@ def evaluation(
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=model.test_infra.inputs_mesh_mapper,
                 )
-        elif model_name == "vovnet":
+        elif model_name in ["vovnet", "efficientnet_b0"]:
             torch_input_tensor = inputs
         else:
             torch_input_tensor = inputs
@@ -92,6 +94,8 @@ def evaluation(
                 output = model.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
             elif model_name == "vovnet":
                 output = model.run(torch_input_tensor)
+            elif model_name == "efficientnet_b0":
+                output = model.run(inputs)
         elif model_type == "torch_model":
             output = model(torch_input_tensor)
 
@@ -143,6 +147,17 @@ def evaluation(
             for i in range(batch_size):
                 pred_id.append(predicted_id[i].item())
                 gt_id.append(labels[i])
+        elif model_name == "efficientnet_b0":
+            if model_type == "tt_model":
+                final_output = ttnn.to_torch(output)
+                probabilities = torch.nn.functional.softmax(final_output[0], dim=0)
+                top_prob, predicted_id = torch.topk(probabilities, 1)
+            else:
+                probabilities = torch.nn.functional.softmax(output[0], dim=0)
+                top_prob, predicted_id = torch.topk(probabilities, 1)
+            for i in range(batch_size):
+                pred_id.append(predicted_id[i].item())
+                gt_id.append(labels[i])
 
     if model_type == "tt_model":
         if model_name == "mobilenetv2":
@@ -153,6 +168,8 @@ def evaluation(
             model.release_resnet50_trace_2cqs_inference()
         elif model_name == "vit":
             model.release_vit_trace_2cqs_inference()
+        elif model_name == "efficientnet_b0":
+            model.release()
 
     # Evaluation : Here we use correct_predection/total items
     correct_prediction = 0
@@ -438,4 +455,93 @@ def test_vovnet_image_classification_eval_dp(
 ):
     return run_vovnet_image_classification_eval(
         mesh_device, model_type, device_batch_size, res, model_location_generator, reset_seeds
+    )
+
+
+def run_efficientnetb0_image_classification_eval(
+    device, model_type, device_batch_size, res, model_location_generator, reset_seeds
+):
+    from models.experimental.efficientnetb0.reference import efficientnetb0
+    from efficientnet_pytorch import EfficientNet
+    from models.experimental.efficientnetb0.runner.performant_runner import EfficientNetb0PerformantRunner
+    from models.experimental.efficientnetb0.demo.demo_utils import get_batch
+    from models.experimental.efficientnetb0.tt.model_preprocessing import get_mesh_mappers
+
+    if model_type == "torch_model":
+        model = EfficientNet.from_pretrained("efficientnet-b0").eval()
+        state_dict = model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        torch_model = efficientnetb0.Efficientnetb0()
+
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            if isinstance(parameter2, torch.FloatTensor):
+                new_state_dict[name1] = parameter2
+        torch_model.load_state_dict(new_state_dict)
+        torch_model.eval()
+    else:
+        inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
+        performant_runner = EfficientNetb0PerformantRunner(
+            device,
+            device_batch_size,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            resolution=(res, res),
+            mesh_mapper=inputs_mesh_mapper,
+            weights_mesh_mapper=weights_mesh_mapper,
+            mesh_composer=outputs_mesh_composer,
+            model_location_generator=model_location_generator,
+        )
+
+    evaluation(
+        device=device,
+        model=performant_runner if model_type == "tt_model" else torch_model,
+        model_location_generator=model_location_generator,
+        model_type=model_type,
+        model_name="efficientnet_b0",
+        batch_size=device_batch_size * device.get_num_devices(),
+        res=res,
+        get_batch=get_batch,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 7 * 1024, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize("batch_size, res", [[1, 224]])
+def test_efficientnetb0_image_classification_eval(
+    device, model_type, batch_size, res, model_location_generator, reset_seeds
+):
+    run_efficientnetb0_image_classification_eval(
+        device, model_type, batch_size, res, model_location_generator, reset_seeds
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 7 * 1024, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize("batch_size, res", [[1, 224]])
+def test_efficientnetb0_image_classification_eval_dp(
+    mesh_device, model_type, batch_size, res, model_location_generator, reset_seeds
+):
+    run_efficientnetb0_image_classification_eval(
+        mesh_device, model_type, batch_size, res, model_location_generator, reset_seeds
     )
