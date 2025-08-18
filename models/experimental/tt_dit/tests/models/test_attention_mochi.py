@@ -155,8 +155,12 @@ def test_mochi_attention(
     rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, chunk_size_lcm=512, num_devices=sp_factor)
     rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, chunk_size_lcm=512, num_devices=sp_factor)
 
-    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
-    tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=-1)
+    # Sequence fractured spatial
+    tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+    # Replicated prompt
+    tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+
+    # Rope cos and sin sequence fractured and head fractured
     tt_rope_cos = bf16_tensor_2dshard(rope_cos_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
     tt_rope_sin = bf16_tensor_2dshard(rope_sin_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
 
@@ -189,7 +193,7 @@ def test_mochi_attention(
 
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
-    spatial_concat_dims[tp_axis] = 3
+    spatial_concat_dims[tp_axis] = 0
     tt_spatial_out = ttnn.to_torch(
         tt_spatial_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -198,12 +202,14 @@ def test_mochi_attention(
     )
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
 
-    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC)
+    logger.info(f"Checking spatial outputs")
+    for i in range(tt_spatial_out.shape[0]):
+        assert_quality(torch_spatial_out, tt_spatial_out[i], pcc=MIN_PCC)
 
     if not context_pre_only:
         prompt_concat_dims = [None, None]
         prompt_concat_dims[sp_axis] = 0
-        prompt_concat_dims[tp_axis] = 3
+        prompt_concat_dims[tp_axis] = 1
         tt_prompt_out = ttnn.to_torch(
             tt_prompt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -211,6 +217,9 @@ def test_mochi_attention(
             ),
         )
         tt_prompt_out = tt_prompt_out[:, :, :prompt_seq_len, :]
+        # Get all replicas into the first dimension for checking
+        tt_prompt_out = tt_prompt_out.reshape(-1, prompt_seq_len, added_kv_proj_dim)
 
+        logger.info(f"Checking prompt outputs")
         for i in range(tt_prompt_out.shape[0]):
             assert_quality(torch_prompt_out, tt_prompt_out[i], pcc=0.99)
