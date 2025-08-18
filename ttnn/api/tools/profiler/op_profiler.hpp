@@ -242,13 +242,18 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
         } else {
             datamovementKernels.push_back(std::move(kernelObj));
         }
-        auto core_type_name = enchantum::to_string(core_type);
-        auto processor_class_name = enchantum::to_string(processor_class);
-        for (int i = 0; i < num_binaries; i++) {
-            auto key = fmt::format(
-                "{}_{}_{}_max_kernel_size", core_type_name, processor_class_name, kernel->get_kernel_processor_type(i));
-            if (kernelSizes.value(key, 0) < kernel->get_binary_packed_size(device, i)) {
-                kernelSizes[key] = kernel->get_binary_packed_size(device, i);
+        if (device != nullptr) {
+            auto core_type_name = enchantum::to_string(core_type);
+            auto processor_class_name = enchantum::to_string(processor_class);
+            for (int i = 0; i < num_binaries; i++) {
+                auto key = fmt::format(
+                    "{}_{}_{}_max_kernel_size",
+                    core_type_name,
+                    processor_class_name,
+                    kernel->get_kernel_processor_type(i));
+                if (kernelSizes.value(key, 0) < kernel->get_binary_packed_size(device, i)) {
+                    kernelSizes[key] = kernel->get_binary_packed_size(device, i);
+                }
             }
         }
     }
