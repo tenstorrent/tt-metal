@@ -318,7 +318,7 @@ def prepare_device(mesh_device, use_tp):
         mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),
@@ -331,19 +331,18 @@ def prepare_device(mesh_device, use_tp):
     "vae_on_device",
     [
         (True),
-        # (False),
+        (False),
     ],
-    # ids=("device_vae", "host_vae"),
+    ids=("device_vae", "host_vae"),
 )
 @pytest.mark.parametrize(
     "use_tp",
     [
         (True),
-        # (False),
+        (False),
     ],
-    # ids=("use_tp", "no_tp"),
+    ids=("use_tp", "no_tp"),
 )
-# @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_demo(mesh_device, is_ci_env, prompt, num_inference_steps, vae_on_device, evaluation_range, use_tp):
     prepare_device(mesh_device, use_tp)
     return run_demo_inference(

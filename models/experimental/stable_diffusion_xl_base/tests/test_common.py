@@ -150,37 +150,19 @@ def run_tt_image_gen(
             unet_outputs.append(noise_pred)
 
         if use_tp:
-            # noise_pred = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
-            # noise_pred = ttnn.to_layout(noise_pred, ttnn.ROW_MAJOR_LAYOUT)
-            # noise_pred = ttnn.pad(noise_pred, [(0, 0), (0, 0), (0, 0), (0, 4)], 0)
-            # noise_pred = ttnn.all_gather(
-            #     noise_pred,
-            #     dim=0,
-            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            #     cluster_axis=0,
-            #     mesh_device=ttnn_device,
-            #     topology=ttnn.Topology.Linear,
-            # )
-            # noise_pred = ttnn.to_layout(noise_pred, ttnn.TILE_LAYOUT)
-            # works with this
-
-            # \/ hangs with these changes
-            compute_grid_size = ttnn_device.compute_with_storage_grid_size()
-            ccl_sub_device_crs = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-            )
-            semaphore = ttnn.create_global_semaphore(ttnn_device, ccl_sub_device_crs, 0)
-            noise_pred = ttnn.experimental.all_gather_async(
+            noise_pred = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
+            noise_pred = ttnn.to_layout(noise_pred, ttnn.ROW_MAJOR_LAYOUT)
+            noise_pred = ttnn.pad(noise_pred, [(0, 0), (0, 0), (0, 0), (0, 4)], 0)
+            # memory_config should be sharded, this is a workaround before issues #26852 and #26929 are resolved
+            noise_pred = ttnn.all_gather(
                 noise_pred,
                 dim=0,
-                multi_device_global_semaphore=semaphore,
-                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=0,
                 mesh_device=ttnn_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
-                subdevice_id=ttnn.SubDeviceId(0),
             )
+            noise_pred = ttnn.to_layout(noise_pred, ttnn.TILE_LAYOUT)
             noise_pred = noise_pred[..., :4]
             noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
         else:
