@@ -147,6 +147,10 @@ endif()
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
 #   in order to propagate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --coverage")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} --coverage")
+
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(
     metal_common_libs
