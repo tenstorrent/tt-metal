@@ -30,7 +30,7 @@ target_sources(
     tt_telemetry_server
     PRIVATE
         server/main.cpp
-        server/telemetry_provider.cpp
+        telemetry/telemetry_provider.cpp
         server/web_server.cpp
         telemetry/ethernet/chip_identifier.cpp
         telemetry/ethernet/ethernet_endpoint.cpp
