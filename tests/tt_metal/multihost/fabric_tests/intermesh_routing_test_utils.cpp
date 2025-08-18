@@ -12,10 +12,10 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric.hpp>
-#include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 
+#include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"
@@ -364,9 +364,8 @@ void run_mcast_sender_step(
 
     std::vector<uint32_t> mcast_header_rtas(4, 0);
     for (const auto& routing_info : mcast_routing_info) {
-        // Increment hop count to account for the mcast start node
-        mcast_header_rtas[static_cast<uint32_t>(control_plane.routing_direction_to_eth_direction(
-            routing_info.mcast_dir))] = routing_info.num_mcast_hops + 1;
+        mcast_header_rtas[static_cast<uint32_t>(
+            control_plane.routing_direction_to_eth_direction(routing_info.mcast_dir))] = routing_info.num_mcast_hops;
     }
 
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());

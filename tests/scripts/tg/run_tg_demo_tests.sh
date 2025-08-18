@@ -57,6 +57,32 @@ run_tg_llama3_long_context_tests() {
   fi
 }
 
+run_tg_llama3_evals_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_llama3_evals_tests"
+
+  # Llama3.3-70B
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+
+  for llama_dir in "$llama70b"; do
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-1" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-long-prompts" --timeout 1000; fail+=$?;
+    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_llama3_evals_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_tg_llama3_8b_dp_tests() {
   fail=0
 
@@ -97,6 +123,17 @@ run_tg_falcon7b_tests() {
   fi
 }
 
+run_tg_sd35_demo_tests() {
+  fail=0
+
+  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/stable_diffusion_35_large/fun_demo.py -k "tg_cfg2_sp4_tp4" --timeout=1500 ; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_sd35_demo_tests failed"
+    exit 1
+  fi
+}
+
 run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
@@ -105,10 +142,14 @@ run_tg_demo_tests() {
     run_tg_llama3_tests
   elif [[ "$1" == "llama3_long_context" ]]; then
     run_tg_llama3_long_context_tests
+  elif [[ "$1" == "llama3_evals" ]]; then
+    run_tg_llama3_evals_tests
   elif [[ "$1" == "llama3_8b_dp" ]]; then
     run_tg_llama3_8b_dp_tests
   elif [[ "$1" == "llama3_70b_dp" ]]; then
     run_tg_llama3_70b_dp_tests
+  elif [[ "$1" == "sd35" ]]; then
+    run_tg_sd35_demo_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1

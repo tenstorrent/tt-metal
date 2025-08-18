@@ -90,18 +90,20 @@ enum class RoutingType {
 };
 
 enum class HighLevelTrafficPattern {
-    AllToAllUnicast,
+    AllToAll,
+    OneToAll,
     FullDeviceRandomPairing,
-    AllToAllMulticast,
-    UnidirectionalLinearMulticast,
-    FullRingMulticast,
-    HalfRingMulticast,
+    UnidirectionalLinear,
+    FullRing,
+    HalfRing,
+    AllDevicesUniformPattern,
 };
 
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology;
     std::optional<RoutingType> routing_type;
     uint32_t num_links;
+    std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
 };
 
 struct HighLevelPatternConfig {

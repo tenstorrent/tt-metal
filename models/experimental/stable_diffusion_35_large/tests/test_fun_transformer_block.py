@@ -45,9 +45,9 @@ TILE_SIZE = 32
     [
         [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
-        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear, 3],
-        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
+        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear, 4],
+        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "t3k_cfg2_sp1_tp4",
@@ -75,7 +75,11 @@ def test_transformer_block(
     topology: ttnn.Topology,
     num_links: int,
     model_location_generator,
+    galaxy_type,
 ) -> None:
+    if galaxy_type == "4U":
+        pytest.skip("4U is not supported for this test")
+
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
     tp_factor, tp_axis = tp

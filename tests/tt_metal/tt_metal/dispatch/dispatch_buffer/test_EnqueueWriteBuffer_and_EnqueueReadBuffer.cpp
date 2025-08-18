@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
@@ -481,7 +481,6 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 uint32_t buf_size = num_pages * config.page_size();
                 vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
-                uint32_t page_size = config.page_size();
                 for (uint32_t i = 0; i < src.size(); i++) {
                     src.at(i) = i;
                 }
@@ -1552,8 +1551,8 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) {
                 config.page_shape.width(),
                 config.tensor2d_shape_in_pages.height(),
                 config.tensor2d_shape_in_pages.width(),
-                magic_enum::enum_name(config.layout).data(),
-                magic_enum::enum_name(config.orientation).data(),
+                enchantum::to_string(config.layout).data(),
+                enchantum::to_string(config.orientation).data(),
                 config.cores.str());
 
             ShardSpecBuffer shard_spec = ShardSpecBuffer(
@@ -1953,7 +1952,6 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestBackToBackNon32BAlignedPageSize) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (const auto& mesh_device : devices_) {
-        auto device = mesh_device->get_devices()[0];
         distributed::DeviceLocalBufferConfig l1_config1{.page_size = 100, .buffer_type = buff_type, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config1{.size = 125000};
         auto bufa = distributed::MeshBuffer::create(buffer_config1, l1_config1, mesh_device.get());
@@ -1983,8 +1981,6 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestBackToBackNon32BAlignedPageSize) {
 
 // This case was failing for FD v1.3 design
 TEST_F(UnitMeshCQSingleCardBufferFixture, TestLargeBuffer4096BPageSize) {
-    constexpr BufferType buff_type = BufferType::L1;
-
     for (const auto& mesh_device : devices_) {
         TestBufferConfig config = {.num_pages = 512, .page_size = 4096, .buftype = BufferType::L1};
 
@@ -2114,7 +2110,6 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestNonblockingReads) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (const auto& mesh_device : devices_) {
-        auto device = mesh_device->get_devices()[0];
         distributed::DeviceLocalBufferConfig l1_config1{
             .page_size = 2048, .buffer_type = buff_type, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config1{.size = 2048};
@@ -2230,7 +2225,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 mesh_device, mesh_device->mesh_command_queue(), config, BufferType::L1, false);
@@ -2290,7 +2285,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferDRAMReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 mesh_device, mesh_device->mesh_command_queue(), config, BufferType::DRAM, false);
@@ -2342,7 +2337,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 mesh_device, mesh_device->mesh_command_queue(), config, BufferType::L1, true);
@@ -2394,7 +2389,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 mesh_device, mesh_device->mesh_command_queue(), config, BufferType::DRAM, true);

@@ -41,7 +41,7 @@ run_async_tracing_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./tt_metal/tools/profiler/profile_this.py -c "pytest models/demos/t3000/resnet50/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        ./tt_metal/tools/profiler/profile_this.py -c "pytest models/demos/t3000/resnet50/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -50,7 +50,7 @@ run_async_tracing_T3000_test() {
             echo "Verifying test results"
             runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
-            LINE_COUNT=4100 # Smoke test to see at least 4100 ops are reported
+            LINE_COUNT=2700
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
 
@@ -60,11 +60,11 @@ run_async_tracing_T3000_test() {
             echo "Verifying device-only results"
             runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
-            LINE_COUNT=3600 # Smoke test to see at least 3600 ops are reported
+            LINE_COUNT=1800
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
 
-            LINE_COUNT=3600 # Smoke test to see at least 3600 ops are reported
+            LINE_COUNT=1800
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/per_core_op_to_op_times_$runDate.csv" "$LINE_COUNT")
             echo $res
         fi

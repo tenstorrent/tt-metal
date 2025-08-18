@@ -13,7 +13,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <nlohmann/json.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tt_metal.hpp>
@@ -224,7 +224,7 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
         if (kernel->processor() == RISCV::COMPUTE) {
             MathFidelity mathFidelity = std::get<ComputeConfig>(kernel->config()).math_fidelity;
             json computeKernelObj;
-            computeKernelObj["math_fidelity"] = fmt::format("{}", magic_enum::enum_name(mathFidelity));
+            computeKernelObj["math_fidelity"] = fmt::format("{}", enchantum::to_string(mathFidelity));
             computeKernelObj["source"] = kernel->kernel_source().source_;
             computeKernelObj["name"] = kernel->get_full_kernel_name();
             computeKernels.push_back(computeKernelObj);
@@ -274,20 +274,30 @@ static inline json get_tensor_json(const Tensor& tensor) {
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
         ret["storage_type"]["memory_config"]["buffer_type"] =
-            magic_enum::enum_name(tensor.memory_config().buffer_type());
+            enchantum::to_string(tensor.memory_config().buffer_type());
         ret["storage_type"]["memory_config"]["memory_layout"] =
-            magic_enum::enum_name(tensor.memory_config().memory_layout());
+            enchantum::to_string(tensor.memory_config().memory_layout());
     } else {
-        ret["storage_type"] = fmt::format("{}", magic_enum::enum_name(tensor.storage_type()));
+        ret["storage_type"] = fmt::format("{}", enchantum::to_string(tensor.storage_type()));
     }
 
-    auto tensor_shape = tensor.padded_shape();
-    ret["shape"]["W"] = tensor_shape.rank() >= 4 ? tensor_shape[-4] : 1;
-    ret["shape"]["Z"] = tensor_shape.rank() >= 3 ? tensor_shape[-3] : 1;
-    ret["shape"]["Y"] = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
-    ret["shape"]["X"] = tensor_shape[-1];
-    ret["layout"] = fmt::format("{}", magic_enum::enum_name(tensor.layout()));
-    ret["dtype"] = fmt::format("{}", magic_enum::enum_name(tensor.dtype()));
+    auto tensor_shape_padded = tensor.padded_shape();
+    auto tensor_shape_logical = tensor.logical_shape();
+    ret["shape"]["W"] = fmt::format(
+        "{}[{}]",
+        tensor_shape_padded.rank() >= 4 ? tensor_shape_padded[-4] : 1,
+        tensor_shape_logical.rank() >= 4 ? tensor_shape_logical[-4] : 1);
+    ret["shape"]["Z"] = fmt::format(
+        "{}[{}]",
+        tensor_shape_padded.rank() >= 3 ? tensor_shape_padded[-3] : 1,
+        tensor_shape_logical.rank() >= 3 ? tensor_shape_logical[-3] : 1);
+    ret["shape"]["Y"] = fmt::format(
+        "{}[{}]",
+        tensor_shape_padded.rank() >= 2 ? tensor_shape_padded[-2] : 1,
+        tensor_shape_logical.rank() >= 2 ? tensor_shape_logical[-2] : 1);
+    ret["shape"]["X"] = fmt::format("{}[{}]", tensor_shape_padded[-1], tensor_shape_logical[-1]);
+    ret["layout"] = fmt::format("{}", enchantum::to_string(tensor.layout()));
+    ret["dtype"] = fmt::format("{}", enchantum::to_string(tensor.dtype()));
 
     return ret;
 }
@@ -414,7 +424,7 @@ inline json get_base_json(
 inline std::string op_meta_data_serialized_json(
     uint32_t opID, const tt::tt_metal::operation::ExternalOperation& op, const std::vector<Tensor>& input_tensors) {
     auto j = get_base_json<true>(opID, op, input_tensors);
-    j["op_type"] = magic_enum::enum_name(OpType::python_fallback);
+    j["op_type"] = enchantum::to_string(OpType::python_fallback);
     std::string ser = j.dump(4);
     return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"].dump(), ser);
 }
@@ -435,7 +445,7 @@ inline std::string op_meta_data_serialized_json(
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {
         auto j =
             get_base_json<device_operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
-        j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
+        j["op_type"] = enchantum::to_string(OpType::tt_dnn_device);
         j["device_id"] = device_id;
         j["op_hash"] = program_hash;
         j["kernel_info"] = get_kernels_json(device_id, program);

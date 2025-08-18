@@ -15,7 +15,6 @@
 #include <iomanip>
 #include <sstream>
 #include <memory>
-#include <magic_enum/magic_enum.hpp>
 
 #include "tt_fabric_test_context.hpp"
 
@@ -25,6 +24,17 @@ const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_
         {{Topology::Ring, RoutingType::LowLatency}, FabricConfig::FABRIC_1D_RING},
         {{Topology::Mesh, RoutingType::LowLatency}, FabricConfig::FABRIC_2D},
         {{Topology::Mesh, RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC},
+};
+
+const std::
+    unordered_map<std::tuple<Topology, std::string, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::tuple_hash>
+        TestFixture::torus_topology_to_fabric_config_map = {
+            {{Topology::Torus, "X", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_X},
+            {{Topology::Torus, "X", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X},
+            {{Topology::Torus, "Y", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_Y},
+            {{Topology::Torus, "Y", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y},
+            {{Topology::Torus, "XY", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_XY},
+            {{Topology::Torus, "XY", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY},
 };
 
 int main(int argc, char** argv) {
@@ -118,7 +128,7 @@ int main(int argc, char** argv) {
         const auto& topology = test_config.fabric_setup.topology;
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
         log_info(tt::LogTest, "Opening devices with topology: {} and routing type: {}", topology, routing_type);
-        test_context.open_devices(topology, routing_type);
+        test_context.open_devices(test_config.fabric_setup);
 
         log_info(tt::LogTest, "Building tests");
         auto built_tests = builder.build_tests({test_config});
@@ -165,5 +175,18 @@ int main(int argc, char** argv) {
 
     test_context.close_devices();
 
+    // Check if any tests failed validation and throw at the end
+    if (test_context.has_test_failures()) {
+        const auto& failed_tests = test_context.get_all_failed_tests();
+        log_error(tt::LogTest, "=== FINAL TEST SUMMARY ===");
+        log_error(tt::LogTest, "Total failed tests: {}", failed_tests.size());
+        log_error(tt::LogTest, "Failed tests:");
+        for (const auto& failed_test : failed_tests) {
+            log_error(tt::LogTest, "  - {}", failed_test);
+        }
+        TT_THROW("Some tests failed golden comparison validation. See summary above.");
+    }
+
+    log_info(tt::LogTest, "All tests completed successfully");
     return 0;
 }

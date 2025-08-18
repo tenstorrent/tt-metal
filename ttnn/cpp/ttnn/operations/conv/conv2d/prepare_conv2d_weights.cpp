@@ -4,7 +4,9 @@
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "tt-metalium/assert.hpp"
+#include <cstdint>
 #include <tt-logger/tt-logger.hpp>
+#include "tt-metalium/constants.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -215,29 +217,39 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 
 template <typename T>
 Tensor to_weight_tile_layout_block_sharded(
-    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.padded_shape();
-
+    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, bool full_inner_dim, DataType output_dtype) {
+    ttnn::Shape w_shape = conv_weight_tensor.padded_shape();
     // Calculate dimensions outside lambda
-    auto weight_matrix_cols = w_shape[0];
+    uint32_t weight_matrix_cols = w_shape[0];
     TT_ASSERT(weight_matrix_cols % num_channel_shards == 0);
-    auto conv_output_shard_width = weight_matrix_cols / num_channel_shards;
-    auto conv_output_shard_width_padded =
-        (uint32_t)std::ceil((double)conv_output_shard_width / (double)constants::TILE_WIDTH) * constants::TILE_WIDTH;
+    uint32_t conv_output_shard_width = weight_matrix_cols / num_channel_shards;
+    uint32_t conv_output_shard_width_padded = tt::round_up(conv_output_shard_width, constants::TILE_WIDTH);
     if (conv_output_shard_width < conv_output_shard_width_padded) {
         // width padding for conv output shard padding
         weight_matrix_cols = conv_output_shard_width_padded * num_channel_shards;
     }
-    auto weight_matrix_rows = w_shape[1] * w_shape[2] * w_shape[3];
+    uint32_t weight_matrix_rows = w_shape[1] * w_shape[2] * w_shape[3];
     TT_ASSERT(w_shape[1] % num_channel_shards == 0);
-    auto conv_input_shard_width = w_shape[1] / num_channel_shards;
-    auto weight_block_height = conv_input_shard_width * w_shape[2] * w_shape[3];
-    auto weight_block_height_padded =
-        (uint32_t)std::ceil((double)weight_block_height / (double)constants::TILE_HEIGHT) * constants::TILE_HEIGHT;
+    uint32_t conv_input_shard_width = w_shape[1] / num_channel_shards;
+    uint32_t weight_block_height = conv_input_shard_width * w_shape[2] * w_shape[3];
+
+    // Change for case where we use full inner dim vs slicing by kernel height
+    uint32_t weight_block_height_padded;
+    if (full_inner_dim) {
+        // Use full inner dimension - round up the entire block height
+        weight_block_height_padded =
+            tt::round_up(conv_input_shard_width * w_shape[3] * w_shape[2], constants::TILE_HEIGHT);
+    } else {
+        // Original logic - slice by kernel height, round up kernel width portion
+        weight_block_height_padded =
+            tt::round_up(conv_input_shard_width * w_shape[3], constants::TILE_HEIGHT) * w_shape[2];
+    }
+
     if (weight_block_height < weight_block_height_padded) {
         // height padding for non tile multiple block height
         weight_matrix_rows = weight_block_height_padded * num_channel_shards;
     }
+
     ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
 
     auto compute = [&w_shape,
@@ -248,30 +260,61 @@ Tensor to_weight_tile_layout_block_sharded(
                     conv_output_shard_width,
                     conv_output_shard_width_padded,
                     conv_input_shard_width,
-                    weight_block_height_padded](const tt::tt_metal::HostBuffer& input_host_buffer) {
+                    weight_matrix_rows,
+                    weight_block_height_padded,
+                    full_inner_dim](const tt::tt_metal::HostBuffer& input_host_buffer) {
         auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
-        auto output_buffer = std::vector<T>(output_shape.volume());
-        for (auto ic = 0; ic < num_channel_shards; ic++) {
-            for (auto r = 0; r < w_shape[2]; r++) {
-                for (auto s = 0; s < w_shape[3]; s++) {
-                    for (auto c_s = 0; c_s < conv_input_shard_width; c_s++) {
-                        for (auto oc = 0; oc < num_channel_shards; oc++) {
-                            for (auto k_s = 0; k_s < conv_output_shard_width; k_s++) {
-                                auto matrix_idx = (oc * conv_output_shard_width_padded + k_s) +
-                                                  c_s * weight_matrix_cols +
-                                                  s * conv_input_shard_width * weight_matrix_cols +
-                                                  r * w_shape[3] * conv_input_shard_width * weight_matrix_cols +
-                                                  ic * weight_block_height_padded * weight_matrix_cols;
-                                auto idx = (oc * conv_output_shard_width + k_s) * w_shape[1] * w_shape[2] * w_shape[3] +
-                                           (ic * conv_input_shard_width + c_s) * w_shape[2] * w_shape[3] +
-                                           r * w_shape[3] + s;
-                                output_buffer[matrix_idx] = input_buffer[idx];
+        auto output_buffer = std::vector<T>(output_shape.volume(), T(0));  // Initialize with zeros
+
+        // Pre-calculate stride values
+        const uint32_t kernel_h = w_shape[2];
+        const uint32_t kernel_w = w_shape[3];
+
+        uint32_t height_stride_per_kernel_row =
+            tt::round_up(conv_input_shard_width * (full_inner_dim ? kernel_h : 1) * kernel_w, constants::TILE_HEIGHT);
+
+        for (uint32_t ic = 0; ic < num_channel_shards; ic++) {
+            for (uint32_t r = 0; r < kernel_h; r++) {
+                for (uint32_t s = 0; s < kernel_w; s++) {
+                    for (uint32_t c_s = 0; c_s < conv_input_shard_width; c_s++) {
+                        for (uint32_t oc = 0; oc < num_channel_shards; oc++) {
+                            for (uint32_t k_s = 0; k_s < conv_output_shard_width; k_s++) {
+                                // Calculate matrix row index based on full_inner_dim flag
+                                uint32_t matrix_row;
+                                if (full_inner_dim) {
+                                    // When using full inner dim, layout is: [ic_shard][flattened_inner_dim]
+                                    // where flattened_inner_dim = r*kernel_w*conv_input_shard_width +
+                                    // s*conv_input_shard_width + c_s
+                                    uint32_t flattened_inner_idx =
+                                        r * kernel_w * conv_input_shard_width + s * conv_input_shard_width + c_s;
+                                    matrix_row = ic * weight_block_height_padded + flattened_inner_idx;
+                                } else {
+                                    // Original logic - slice by kernel height
+                                    matrix_row = ic * weight_block_height_padded + r * height_stride_per_kernel_row +
+                                                 s * conv_input_shard_width + c_s;
+                                }
+
+                                uint32_t matrix_col = oc * conv_output_shard_width_padded + k_s;
+                                uint32_t matrix_idx = matrix_row * weight_matrix_cols + matrix_col;
+
+                                // Calculate input tensor index [OC][IC][KH][KW]
+                                uint32_t input_oc = oc * conv_output_shard_width + k_s;
+                                uint32_t input_ic = ic * conv_input_shard_width + c_s;
+                                uint32_t idx = input_oc * w_shape[1] * w_shape[2] * w_shape[3] +
+                                               input_ic * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+
+                                // Ensure we're within bounds before writing
+                                if (matrix_idx < output_buffer.size() && input_oc < w_shape[0] &&
+                                    input_ic < w_shape[1]) {
+                                    output_buffer[matrix_idx] = input_buffer[idx];
+                                }
                             }
                         }
                     }
                 }
             }
         }
+
         return create_host_buffer_for_conv_weight<T>(
             tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
@@ -284,15 +327,18 @@ Tensor to_weight_tile_layout_block_sharded(
 // Converts convolution weights to tilized 2d matrix layout for block sharded conv.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
-    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, DataType)>>
+    const Tensor& conv_weight_tensor,
+    uint32_t num_channel_shards,
+    bool full_inner_dim,
+    std::optional<DataType> output_dtype) {
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, bool, DataType)>>
         to_w_tile_layout_map = {
             {DataType::BFLOAT16, &to_weight_tile_layout_block_sharded<bfloat16>},
             {DataType::FLOAT32, &to_weight_tile_layout_block_sharded<float>},
             {DataType::UINT32, &to_weight_tile_layout_block_sharded<uint32_t>}};
 
     return convert_tensor_to_tiled_layout_common(
-        conv_weight_tensor, output_dtype, to_w_tile_layout_map, num_channel_shards);
+        conv_weight_tensor, output_dtype, to_w_tile_layout_map, num_channel_shards, full_inner_dim);
 }
 
 template <typename T>
@@ -567,41 +613,40 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
         {out_channels, in_channels * stride[0] * stride[1], padded_kernel_h / stride[0], padded_kernel_w / stride[1]});
 
     auto fold_weights = [&]<typename T>(const tt::tt_metal::HostStorage& storage) {
-        auto folded_storage =
-            storage.transform([&](const tt::tt_metal::HostBuffer& input_host_buffer) {
-                auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
+        auto folded_storage = storage.transform([&](const tt::tt_metal::HostBuffer& input_host_buffer) {
+            auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
 
-                std::vector<T> output_buffer(output_shape.volume(), T(0));
-                int new_h = padded_kernel_h / stride[0];
-                int new_w = padded_kernel_w / stride[1];
+            std::vector<T> output_buffer(output_shape.volume(), T(0));
+            int new_h = padded_kernel_h / stride[0];
+            int new_w = padded_kernel_w / stride[1];
 
-                for (auto oc = 0; oc < out_channels; oc++) {
-                    for (auto ic = 0; ic < in_channels; ic++) {
-                        for (auto kh = 0; kh < kernel_h; kh++) {
-                            for (auto kw = 0; kw < kernel_w; kw++) {
-                                uint32_t src_idx = ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
+            for (auto oc = 0; oc < out_channels; oc++) {
+                for (auto ic = 0; ic < in_channels; ic++) {
+                    for (auto kh = 0; kh < kernel_h; kh++) {
+                        for (auto kw = 0; kw < kernel_w; kw++) {
+                            uint32_t src_idx = ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
 
-                                int sh = kh % stride[0];
-                                int sw = kw % stride[1];
+                            int sh = kh % stride[0];
+                            int sw = kw % stride[1];
 
-                                // Calculate new y,x coordinates
-                                int y = kh / stride[0];
-                                int x = kw / stride[1];
+                            // Calculate new y,x coordinates
+                            int y = kh / stride[0];
+                            int x = kw / stride[1];
 
-                                // Calculate folded input channel index
-                                int folded_ic_idx = (sh * stride[1] + sw) * in_channels + ic;
+                            // Calculate folded input channel index
+                            int folded_ic_idx = (sh * stride[1] + sw) * in_channels + ic;
 
-                                // Calculate final destination index
-                                int dst_idx = oc * in_channels * stride[0] * stride[1] * new_h * new_w +
-                                              folded_ic_idx * new_h * new_w + y * new_w + x;
+                            // Calculate final destination index
+                            int dst_idx = oc * in_channels * stride[0] * stride[1] * new_h * new_w +
+                                          folded_ic_idx * new_h * new_w + y * new_w + x;
 
-                                output_buffer[dst_idx] = input_buffer[src_idx];
-                            }
+                            output_buffer[dst_idx] = input_buffer[src_idx];
                         }
                     }
                 }
-                return tt::tt_metal::HostBuffer(std::move(output_buffer));
-            });
+            }
+            return tt::tt_metal::HostBuffer(std::move(output_buffer));
+        });
         return Tensor(
             std::move(folded_storage),
             TensorSpec(
@@ -687,7 +732,6 @@ bool is_valid_device_conv_bias(
     return true;
 }
 
-template <typename T>
 static OptimizedConvBlockConfig get_opt_block_config(
     bool mm_conv,
     uint32_t in_channels,
@@ -700,7 +744,9 @@ static OptimizedConvBlockConfig get_opt_block_config(
     uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    T* device,
+    std::array<uint32_t, 2> dilation,
+    std::array<uint32_t, 4> padding,
+    MeshDevice* device,
     Conv2dConfig& conv_config,
     Layout input_layout,
     DataType input_dtype,
@@ -727,6 +773,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         output_dtype,
         input_memory_config,
         kernel_size,
+        dilation,
+        padding,
         groups,
         has_bias,
         compute_config);
@@ -737,6 +785,9 @@ static OptimizedConvBlockConfig get_opt_block_config(
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
+    const uint32_t in_channels_alignment =
+        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
+
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
@@ -751,6 +802,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
             output_height,
             output_width,
             out_channels,
+            in_channels_alignment,
             compute_grid_size,
             shard_orientation,
             !mm_conv,
@@ -789,8 +841,6 @@ static OptimizedConvBlockConfig get_opt_block_config(
         get_num_cores_nhw_from_parallel_config(largest_parallel_config),
         get_num_cores_channels_from_parallel_config(parallel_config));
 
-    const uint32_t in_channels_alignment =
-        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
     uint32_t in_channels_padded =
         tt::round_up(in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * in_channels_alignment);
 
@@ -807,7 +857,6 @@ static OptimizedConvBlockConfig get_opt_block_config(
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader,
         conv_config.full_inner_dim);
 }
 
@@ -816,7 +865,6 @@ static uint32_t calculate_out_channels_padded(uint32_t out_channels, const Paral
     return tt::round_up(out_channels, output_num_cores_channels * tt::constants::TILE_WIDTH);
 }
 
-template <typename T>
 static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_layout,
@@ -831,7 +879,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     std::array<uint32_t, 2> dilation,
     bool has_bias,
     uint32_t groups,
-    T* device,
+    MeshDevice* device,
     Conv2dConfig& conv_config,
     const DeviceComputeKernelConfig& compute_config,
     DataType input_dtype,
@@ -895,6 +943,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         groups,
         kernel_size,
         stride,
+        dilation,
+        padding_n4,
         device,
         conv_config,
         input_layout,
@@ -911,6 +961,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
 
+    const uint32_t input_channels_alignment =
+        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
@@ -925,6 +977,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             output_height,
             output_width,
             out_channels,
+            input_channels_alignment,
             device->compute_with_storage_grid_size(),
             shard_orientation,
             !mm_conv,
@@ -935,9 +988,6 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
-
-    const uint32_t input_channels_alignment =
-        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
 
     return Conv2dWeightsBiasPrepConfig(
         input_channels_alignment,
@@ -952,14 +1002,14 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         has_bias,
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
+        conv_config.full_inner_dim,
         kernel_size,
         orig_stride,
         padding_n4);
 }
 
-template <typename T>
 static ttnn::Tensor prepare_conv_weights_internal(
-    const ttnn::Tensor& weight_tensor, Conv2dWeightsBiasPrepConfig& params, T* device) {
+    const ttnn::Tensor& weight_tensor, Conv2dWeightsBiasPrepConfig& params, MeshDevice* device) {
     ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
     Shape weight_shape = weight_tensor.logical_shape();
     // In case of 1D convolution and 3D weight tensor, reinterpret it as 4D tensor
@@ -1025,7 +1075,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
             weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
     } else if (params.input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-            weight_tensor_, input_num_cores_channels, weight_tensor_.dtype());
+            weight_tensor_, input_num_cores_channels, params.full_inner_dim, weight_tensor_.dtype());
     } else {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
             weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
@@ -1047,13 +1097,12 @@ static ttnn::Tensor prepare_conv_weights_internal(
     return weight_tensor_;
 }
 
-template <typename T>
 std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     const std::optional<const ttnn::Tensor>& bias_tensor,
     uint32_t out_channels,
     const Conv2dWeightsBiasPrepConfig& params,
     DataType weight_dtype,
-    T* device) {
+    MeshDevice* device) {
     if (!bias_tensor.has_value()) {
         return std::optional<ttnn::Tensor>();
     }
@@ -1080,12 +1129,11 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     return bias_tensor_;
 }
 
-template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     Conv2dWeightsBiasPrepConfig& params,
-    T* device) {
+    MeshDevice* device) {
     // Prepare weights
     ttnn::Tensor weight_tensor_prepared = prepare_conv_weights_internal(weight_tensor, params, device);
 
@@ -1100,7 +1148,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     return {weight_tensor_prepared, bias_tensor_prepared};
 }
 
-template <typename T>
 ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
@@ -1117,7 +1164,7 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 2> dilation,
     const bool has_bias,
     uint32_t groups,
-    T* device,
+    MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
@@ -1169,7 +1216,6 @@ ttnn::Tensor prepare_conv_weights(
     return prepare_conv_weights_internal(weight_tensor, params, device);
 }
 
-template <typename T>
 ttnn::Tensor prepare_conv_bias(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
@@ -1184,7 +1230,7 @@ ttnn::Tensor prepare_conv_bias(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    T* device,
+    MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
@@ -1226,63 +1272,6 @@ ttnn::Tensor prepare_conv_bias(
 
     return prepared_bias.value();  // We know bias exists since we passed it
 }
-
-template ttnn::Tensor prepare_conv_weights<MeshDevice>(
-    const ttnn::Tensor& weight_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
-    Layout input_layout,
-    const std::string& weights_format,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    const bool has_bias,
-    uint32_t groups,
-    MeshDevice* device,
-    DataType input_dtype,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
-
-template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>>
-prepare_conv_weights_biases_and_move_to_device<MeshDevice>(
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    Conv2dWeightsBiasPrepConfig& params,
-    MeshDevice* device);
-
-template std::optional<ttnn::Tensor> prepare_conv_bias_internal<MeshDevice>(
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    uint32_t out_channels,
-    const Conv2dWeightsBiasPrepConfig& params,
-    DataType weight_dtype,
-    MeshDevice* device);
-
-template ttnn::Tensor prepare_conv_bias<MeshDevice>(
-    const ttnn::Tensor& bias_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
-    Layout input_layout,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    MeshDevice* device,
-    DataType input_dtype,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 }  // namespace conv2d
 }  // namespace operations::conv

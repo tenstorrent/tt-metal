@@ -4,7 +4,6 @@
 
 import ttnn
 import torch
-import gc
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
@@ -490,8 +489,6 @@ class TtTransformer(LightweightModule):
 
         else:
             if self.is_decode_setup:
-                del self.prefetcher_setup.global_circular_buffer
-                gc.collect()  # This will also release the traces (inside generator.py)
                 self.tt_ccl.close()
                 self.tt_ccl_decode = self.tt_ccl
                 self.is_decode_setup = False

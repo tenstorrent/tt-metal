@@ -13,14 +13,10 @@ void kernel_main() {
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
     const uint32_t input_grad_tile_bytes = get_tile_size(cb_input_grad);
-    const auto input_grad_data_format = get_dataformat(cb_input_grad);
 
-    constexpr bool input_grad_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto input_grad_args = TensorAccessorArgs<0>();
 
-    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {
-        .bank_base_address = input_grad_addr,
-        .page_size = input_grad_tile_bytes,
-        .data_format = input_grad_data_format};
+    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr, input_grad_tile_bytes);
 
     constexpr uint32_t onetile = 1;
 

@@ -20,7 +20,7 @@ def load_tokenizer(model_path: str):
     return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
 
-def load_model_uninitialized(model_path: str):
+def load_model_uninitialized(model_path: str = os.path.dirname(os.path.dirname(__file__)) + "/reference"):
     model_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 
     current_dtype = torch.get_default_dtype()

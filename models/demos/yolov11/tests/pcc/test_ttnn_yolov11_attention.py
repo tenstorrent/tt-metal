@@ -5,6 +5,7 @@
 import pytest
 
 import ttnn
+from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.reference.yolov11 import Attention as torch_attention
 from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
 from models.demos.yolov11.tt.ttnn_yolov11_attention import TtnnAttention as ttnn_attention
@@ -17,7 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([128, 128, 128], [256, 128, 128], [1, 1, 3], [1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 1, 128], [1, 128, 7, 7]),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
 def test_yolo_v11_attention(
     device,
     reset_seeds,

@@ -273,7 +273,7 @@ int main(int argc, char** argv) {
 
         uint32_t kernel_read_size = 64 * 1024;
 
-        auto pcie_reader = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/perf_microbenchmark/3_pcie_transfer/kernels/pull_from_pcie.cpp",
             logical_core,

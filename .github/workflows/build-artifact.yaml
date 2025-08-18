@@ -163,8 +163,8 @@ jobs:
   build-artifact:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
-    timeout-minutes: 45
-    runs-on: tt-beta-ubuntu-2204-large
+    timeout-minutes: 100
+    runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
@@ -264,7 +264,7 @@ jobs:
       - name: 🛠️ Compile
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
-          nice -19 cmake --build build --target install
+          cmake --build build --target install
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
@@ -308,7 +308,8 @@ jobs:
       - name: Set build artifact name
         id: set_build_artifact_name
         run: |
-          BUILD_ARTIFACT_NAME="TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -326,7 +327,7 @@ jobs:
     name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
     needs: build-docker-image
     timeout-minutes: 30
-    runs-on: tt-beta-ubuntu-2204-large
+    runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}

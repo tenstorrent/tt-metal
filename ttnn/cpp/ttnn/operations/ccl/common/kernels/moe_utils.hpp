@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <tuple>
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
@@ -18,6 +19,30 @@ inline void open_direction_connections(
             connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
             connections[i].open();
+        }
+    }
+}
+
+template <size_t Size>
+inline void open_direction_connections_async(
+    const std::array<bool, Size>& directions,
+    std::array<WorkerToFabricEdmSender, Size>& connections,
+    size_t& rt_args_idx) {
+    for (uint32_t i = 0; i < Size; i++) {
+        if (directions[i]) {
+            connections[i] =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+            connections[i].open_start();
+        }
+    }
+}
+
+template <size_t Size>
+inline void open_direction_connections_barrier(
+    const std::array<bool, Size>& directions, std::array<WorkerToFabricEdmSender, Size>& connections) {
+    for (uint32_t i = 0; i < Size; i++) {
+        if (directions[i]) {
+            connections[i].open_finish();
         }
     }
 }
@@ -388,6 +413,59 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     fabric_connections[route].wait_for_empty_write_slot();
     fabric_connections[route].send_payload_flush_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+}
+
+template <typename T, uint32_t Size, bool ReturnIdx>
+inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
+    for (uint32_t i = 0; i < Size; ++i) {
+        if (ptr[i] == val) {
+            if constexpr (ReturnIdx) {
+                return std::make_tuple(true, i);
+            } else {
+                return true;
+            }
+        }
+    }
+    if constexpr (ReturnIdx) {
+        return std::make_tuple(false, 0ul);
+    } else {
+        return false;
+    }
+}
+
+// Send initialization semaphore to configured target devices for synchronization
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t SrcChipId,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReplicateGroup Axis,
+    uint32_t NumDevices>
+inline void send_init_semaphore_to_configured_targets(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    const uint8_t dest_chip_ids[NumDevices],
+    const uint8_t dest_mesh_ids[NumDevices],
+    uint64_t init_noc_semaphore_addr) {
+    for (uint32_t device_idx = 0; device_idx < NumDevices; ++device_idx) {
+        if (device_idx == LinearizedSrcMeshCoord) {
+            continue;
+        } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(device_idx)) {
+            if constexpr (is_1d_topology<Topology>()) {
+                fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                    LinearizedSrcMeshCoord,
+                    Topology,
+                    MeshRows,
+                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
+            } else {
+                const auto& dest_chip_id = dest_chip_ids[device_idx];
+                const auto& dest_mesh_id = dest_mesh_ids[device_idx];
+                fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
+                    fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, false);
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::operations::ccl::common

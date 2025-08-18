@@ -14,7 +14,7 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
-    standardize_hf_keys,
+    standardize_hf_keys_multimodal,
 )
 from models.utility_functions import comp_allclose, comp_pcc
 
@@ -34,9 +34,9 @@ from models.utility_functions import comp_allclose, comp_pcc
     [None, 1, 2],  # None means all layers, specific numbers will run fewer layers
     ids=["all_layers", "single_layer", "two_layers"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_model_inference(
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     num_layers,
@@ -73,7 +73,7 @@ def test_vision_model_inference(
     # reference_model = Qwen2_5_VisionTransformerPretrainedModel(model_args.hf_config.vision_config)
     # reference_model.load_state_dict(model_args.reference_vision_model().state_dict(), strict=False)
     # FIXME: state_dict = model_args.load_state_dict()
-    state_dict = standardize_hf_keys(reference_model.state_dict())
+    state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
@@ -147,7 +147,7 @@ def test_vision_model_inference(
 
     tt_out = ttnn.to_torch(
         tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
     )
     tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
 

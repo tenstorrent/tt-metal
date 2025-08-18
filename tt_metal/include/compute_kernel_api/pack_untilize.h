@@ -183,6 +183,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
  * | Function   | block_c_index  | Block column index (used when full_ct_dim > block_ct_dim)     | uint32_t  | >= 0            | False (default=0) |
  * | Function   | face_r_dim     | Face height in rows                                           | uint32_t  | 1, 8 or 16      | False (default=16) |
  * | Function   | num_faces      | Number of faces                                               | uint32_t  | 1, 2 or 4       | False (default=4) |
+ * | Function   | tile_dst_offset | Index of the tile in the dest from which to pack             | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0) |
  */
 // clang-format on
 template <
@@ -196,9 +197,10 @@ ALWI void pack_untilize_dest(
     uint32_t block_rt_dim = 1,
     uint32_t block_c_index = 0 /* used when full_ct_dim > block_ct_dim*/,
     uint32_t face_r_dim = 16,
-    uint32_t num_faces = 4) {
+    uint32_t num_faces = 4,
+    uint32_t tile_dst_offset = 0) {
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-        block_rt_dim, ocb, face_r_dim, num_faces, block_c_index)));
+        block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_offset)));
 }
 
 // clang-format off

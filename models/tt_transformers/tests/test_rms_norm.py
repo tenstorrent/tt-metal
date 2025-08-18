@@ -9,6 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -34,6 +35,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_rms_norm_inference(
     max_seq_len,
     batch_size,
@@ -52,6 +54,7 @@ def test_rms_norm_inference(
     first_layer_prefix = state_dict_prefix + "attention_norm."
 
     # Create the inner RMSNormxw
+    tt_ccl = TT_CCL(mesh_device)
     tt_inner_norm = RMSNorm(
         device=mesh_device,
         dim=model_args.dim,
@@ -63,10 +66,11 @@ def test_rms_norm_inference(
         is_distributed=model_args.is_distributed_norm,
         sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+        tt_ccl=tt_ccl,
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, TG=model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl, TG=model_args.is_galaxy)
 
     # Create reference model (unchanged)
     partial_state_dict = {

@@ -148,6 +148,10 @@
 #include "compute_kernel_api/eltwise_unary/where.h"
 #endif
 
+#if SFPU_OP_HARDTANH_INCLUDE
+#include "compute_kernel_api/eltwise_unary/hardtanh.h"
+#endif
+
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "compute_kernel_api.h"
 #endif

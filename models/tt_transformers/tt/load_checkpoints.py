@@ -13,17 +13,6 @@ from safetensors.torch import load_file as safetensors_load_file
 from tqdm import tqdm
 
 
-def _get_known_prefixes_mapping():
-    return {
-        # Llama Vision
-        "text_model.": "",
-        "vision_model.": "",
-        # Gemma3
-        "model.language_model.": "model.",
-        "model.vision_tower.": "model.",
-    }
-
-
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
 def load_hf_state_dict(ckpt_dir):
     # First check if index file exists
@@ -57,23 +46,21 @@ def standardize_hf_keys(state_dict):
     key_meta = "lm_head.weight"
     key_hf = "model.embed_tokens.weight"
 
-    # Check if the key_meta exists with any known prefix
-    if not any(f"{prefix}{key_meta}" in state_dict for prefix in _get_known_prefixes_mapping().keys()):
-        # Assume tied to the embeddings if not present
-        for prefix in _get_known_prefixes_mapping().keys():
-            if f"{prefix}{key_hf}" in state_dict:
-                state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
-                break
+    if not key_meta in state_dict and key_hf in state_dict:
+        state_dict[key_meta] = state_dict[key_hf]
+        del state_dict[key_hf]
 
     return state_dict
 
 
-def standardize_hf_keys_qwen25_vl(state_dict):
+def standardize_hf_keys_multimodal(state_dict):
     all_keys = tuple(state_dict.keys())
     new_state_dict = {}
     for k in all_keys:
         if "model.visual." in k:
             new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
+        elif "model.vision_tower.vision_model." in k:
+            new_state_dict[k.replace("model.vision_tower.vision_model.", "visual.")] = state_dict[k]
         elif "model.language_model." in k:
             new_state_dict[k.replace("model.language_model.", "model.")] = state_dict[k]
         else:
@@ -96,100 +83,6 @@ def convert_hf_to_meta(state_dict, head_dim):
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
     return state_dict
-
-
-def map_hf_to_meta_keys(loaded_weights):
-    hf_to_meta = {
-        # Top level mappings
-        "model.embed_tokens.weight": "tok_embeddings.weight",
-        "model.norm.weight": "norm.weight",
-        "lm_head.weight": "output.weight",
-        # Layer level mappings
-        "input_layernorm.weight": "attention_norm.weight",
-        "post_attention_layernorm.weight": "ffn_norm.weight",
-        # Attention module mappings
-        "self_attn.q_proj.weight": "attention.wq.weight",
-        "self_attn.k_proj.weight": "attention.wk.weight",
-        "self_attn.v_proj.weight": "attention.wv.weight",
-        "self_attn.o_proj.weight": "attention.wo.weight",
-        "self_attn.q_proj.bias": "attention.wq.bias",
-        "self_attn.k_proj.bias": "attention.wk.bias",
-        "self_attn.v_proj.bias": "attention.wv.bias",
-        "self_attn.q_norm.weight": "attention.q_norm.weight",
-        "self_attn.k_norm.weight": "attention.k_norm.weight",
-        "self_attn.o_proj.bias": "attention.wo.bias",
-        # Feed forward module mappings
-        "mlp.gate_proj.weight": "feed_forward.w1.weight",
-        "mlp.up_proj.weight": "feed_forward.w3.weight",
-        "mlp.down_proj.weight": "feed_forward.w2.weight",
-        # MLP bias mappings
-        "mlp.gate_proj.bias": "feed_forward.w1.bias",
-        "mlp.up_proj.bias": "feed_forward.w3.bias",
-        "mlp.down_proj.bias": "feed_forward.w2.bias",
-        # Direct module mappings
-        "gate_proj.weight": "w1.weight",
-        "down_proj.weight": "w2.weight",
-        "up_proj.weight": "w3.weight",
-        "q_proj.weight": "wq.weight",
-        "k_proj.weight": "wk.weight",
-        "v_proj.weight": "wv.weight",
-        "o_proj.weight": "wo.weight",
-        "q_proj.bias": "wq.bias",
-        "k_proj.bias": "wk.bias",
-        "v_proj.bias": "wv.bias",
-        "q_norm.weight": "q_norm.weight",
-        "k_norm.weight": "k_norm.weight",
-        "o_proj.bias": "wo.bias",
-        # Direct MLP bias mappings
-        "gate_proj.bias": "w1.bias",
-        "up_proj.bias": "w3.bias",
-        "down_proj.bias": "w2.bias",
-        "weight": "emb.weight",  # For host embeddings
-        # Full path layer mappings
-        "model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
-        "model.layers.{layer}.post_attention_layernorm.weight": "layers.{layer}.ffn_norm.weight",
-        "model.layers.{layer}.self_attn.q_proj.weight": "layers.{layer}.attention.wq.weight",
-        "model.layers.{layer}.self_attn.k_proj.weight": "layers.{layer}.attention.wk.weight",
-        "model.layers.{layer}.self_attn.v_proj.weight": "layers.{layer}.attention.wv.weight",
-        "model.layers.{layer}.self_attn.o_proj.weight": "layers.{layer}.attention.wo.weight",
-        "model.layers.{layer}.self_attn.q_proj.bias": "layers.{layer}.attention.wq.bias",
-        "model.layers.{layer}.self_attn.k_proj.bias": "layers.{layer}.attention.wk.bias",
-        "model.layers.{layer}.self_attn.v_proj.bias": "layers.{layer}.attention.wv.bias",
-        "model.layers.{layer}.self_attn.q_norm.weight": "layers.{layer}.attention.q_norm.weight",
-        "model.layers.{layer}.self_attn.k_norm.weight": "layers.{layer}.attention.k_norm.weight",
-        "model.layers.{layer}.self_attn.o_proj.bias": "layers.{layer}.attention.wo.bias",
-        "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
-        "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
-        "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
-        # Full path MLP bias mappings
-        "model.layers.{layer}.mlp.gate_proj.bias": "layers.{layer}.feed_forward.w1.bias",
-        "model.layers.{layer}.mlp.up_proj.bias": "layers.{layer}.feed_forward.w3.bias",
-        "model.layers.{layer}.mlp.down_proj.bias": "layers.{layer}.feed_forward.w2.bias",
-    }
-
-    meta_state_dict = {}
-    for key, tensor in loaded_weights.items():
-        # Remove known prefix if present
-        prefix = next((p for p in _get_known_prefixes_mapping().keys() if key.startswith(p)), "")
-        key = key.replace(prefix, _get_known_prefixes_mapping().get(prefix, ""), 1)
-
-        new_key = key
-        if key in hf_to_meta:
-            # Direct match for top-level keys
-            new_key = hf_to_meta[key]
-        elif key.startswith("model.layers."):
-            # Extract layer number and form a template key
-            parts = key.split(".")
-            layer_num = parts[2]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
-            template_key = "model.layers.{layer}." + ".".join(parts[3:])
-            if template_key in hf_to_meta:
-                new_key = hf_to_meta[template_key].format(layer=layer_num)
-            else:
-                new_key = key[len("model.") :]  # Remove "model." prefix
-
-        meta_state_dict[new_key] = tensor
-
-    return meta_state_dict
 
 
 def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):

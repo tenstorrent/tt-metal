@@ -36,7 +36,7 @@ target_link_libraries(
     tt_stl
     INTERFACE
         Reflect::Reflect
-        magic_enum::magic_enum
+        enchantum::enchantum
         nlohmann_json::nlohmann_json
         small_vector
         fmt::fmt-header-only

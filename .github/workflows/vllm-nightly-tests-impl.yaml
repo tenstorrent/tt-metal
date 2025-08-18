@@ -32,9 +32,42 @@ jobs:
             runner-label: config-t3000,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
-            wh-arch-yaml: wormhole_b0_80_arch_eth_dispatch.yaml,
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          },
+          {
+            name: "[DB] Llama-3.1-8B-Instruct",
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server-timeout: 5,
+            benchmark-timeout: 5,
+            runner-label: bh-deskbox,
+            mesh-device: P150x2,
+            tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"data_parallel\": 2}",
+            owner_id: U08GELBB1AP, # Ambrose Ling
+          },
+          {
+            name: "[QB] Llama-3.1-8B-Instruct",
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server-timeout: 5,
+            benchmark-timeout: 5,
+            runner-label: bh-LLMBox,
+            mesh-device: P150x4,
+            tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"data_parallel\": 4}",
+            owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          },
+          {
+            name: "[RB] Llama-3.1-8B-Instruct",
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: bh-rackbox,
+            mesh-device: P150x8,
+            tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"data_parallel\": 8}",
+            owner_id: U08GELBB1AP, # Ambrose Ling
           },
           {
             name: "[TG] Llama-3.3-70B-Instruct",
@@ -55,7 +88,7 @@ jobs:
             benchmark-timeout: 5,
             runner-label: config-tg,
             mesh-device: TG,
-            override-tt-config: "{\"data_parallel\": 16}",
+            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D\"}",
             tt-llama-text-ver: tt_transformers,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
@@ -115,10 +148,6 @@ jobs:
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
-          if [ -n "${{ matrix.test-group.wh-arch-yaml }}" ]; then
-            export WH_ARCH_YAML=${{ matrix.test-group.wh-arch-yaml }}
-          fi
-
           if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
             export OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
           else

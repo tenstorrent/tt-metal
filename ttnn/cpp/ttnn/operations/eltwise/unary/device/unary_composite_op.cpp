@@ -7,7 +7,6 @@
 #include <functional>
 #include <optional>
 
-#include <magic_enum/magic_enum.hpp>
 #include <utility>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -223,18 +222,6 @@ Tensor _sinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_me
     return ttnn::multiply(nr_term, 0.5f, std::nullopt, output_mem_config);
 }
 
-// Function: softsign
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
-Tensor _softsign(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::multiply(
-        a,
-        ttnn::reciprocal(
-            ttnn::add(ttnn::abs(a, output_mem_config), 1.0f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    return result;
-}
-
 Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
     // x / (1.0f + exp(-x))
     return ttnn::silu(a);
@@ -372,16 +359,6 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
         max.value(),
         temp,
         output_memory_config);
-}
-
-// hardtanh
-Tensor _hardtanh(
-    const Tensor& a,
-    float low /* = -1.0f */,
-    float high /* = +1.0f */,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    return ExecuteUnaryCompositeClamp::invoke(a, low, high, output_memory_config);
 }
 
 // Theano defines this differently...
@@ -574,21 +551,6 @@ Tensor ExecuteRdiv::invoke(
         ttnn::eqz(queue_id, input_tensor, memory_config), t_inf, result, memory_config, optional_output_tensor);
 }
 
-// Function: softshrink
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
-Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(param >= 0);
-    Tensor t_a_plus_param = ttnn::add(a, param, std::nullopt, output_mem_config);
-    Tensor t1 =
-        ttnn::multiply(ttnn::ltz(t_a_plus_param, output_mem_config), t_a_plus_param, std::nullopt, output_mem_config);
-    t_a_plus_param.deallocate();
-    Tensor t_a_minus_param = ttnn::subtract(a, param, std::nullopt, output_mem_config);
-    Tensor t2 =
-        ttnn::multiply(ttnn::gtz(t_a_minus_param, output_mem_config), t_a_minus_param, std::nullopt, output_mem_config);
-    t_a_minus_param.deallocate();
-    return ttnn::add(t1, t2, std::nullopt, output_mem_config);
-}
-
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
     float t1m_eps = 1 - eps;
@@ -621,23 +583,6 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
                 ttnn::log(log_input, output_mem_config)));
     }
     return logit_result;
-}
-
-// Celu
-// torch.where(x > 0, x, alpha * (torch.exp(x / alpha) - 1))
-Tensor _celu(const Tensor& input_a, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    float recip_val = 1.0f / alpha;
-    using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {
-        UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, recip_val},
-        UnaryWithParam{UnaryOpType::EXP, 1.0f},
-        UnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha}};
-
-    Tensor result = ttnn::unary_chain(input_a, ops_chain, output_mem_config);
-    result = ttnn::where(ttnn::gtz(input_a, output_mem_config), input_a, result);
-    return result;
 }
 
 // // tanhshrink(x) = x - tanh(x)
