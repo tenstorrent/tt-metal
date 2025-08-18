@@ -119,6 +119,8 @@ auto create_pybind_from_buffer_overload() {
                     TT_THROW("Unreachable");
                 }
             }
+            // This is a fallback to make the compiler happy.
+            TT_THROW("Unreachable");
         },
         py::arg("buffer"),
         py::arg("shape"),
