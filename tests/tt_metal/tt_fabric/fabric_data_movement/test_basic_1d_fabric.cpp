@@ -2151,6 +2151,7 @@ void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, 
         fixture->RunProgramNonblocking(receiver_device, receiver_program);
     }
     fixture->RunProgramNonblocking(sender_device, sender_program);
+
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
     for (auto& receiver_device : receiver_devices) {
         fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
@@ -2504,6 +2505,23 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) {
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1DMultiDir) {
     FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, 2);
+}
+
+// Test cases using the new Fabric1DTensixFixture to test tensix config with mux
+TEST_F(Fabric1DTensixFixture, TestLinearFabricUnicastNocUnicastWrite1DMux) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE);
+}
+
+TEST_F(Fabric1DTensixFixture, TestLinearFabricUnicastNocAtomicInc1DMux) {
+    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC);
+}
+
+TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocUnicastWrite1DMux) {
+    FabricMulticastCommon(this, NOC_UNICAST_WRITE);
+}
+
+TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocAtomicInc1DMux) {
+    FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC);
 }
 
 }  // namespace fabric_router_tests

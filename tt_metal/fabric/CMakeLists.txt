@@ -40,6 +40,7 @@ target_sources(
         fabric_host_utils.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
+        fabric_tensix_builder.cpp
         compressed_routing_table.cpp
         serialization/intermesh_link_table.cpp
         erisc_datamover_builder_helper.cpp
