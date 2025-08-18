@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from typing import cast
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -20,7 +21,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import even_int_div
 from models.demos.deepseek_v3.utils.run_config import (
-    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
     ModelState,
@@ -28,9 +28,10 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 
 
-class MoE(AbstractModule):
+class MoE(SharedStateAddOn, AbstractModule):
     """MoE module from DeepSeek-R1.
     See the `AbstractModule` docstring for usage info.
     """
@@ -39,20 +40,19 @@ class MoE(AbstractModule):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dict: dict[str, torch.Tensor],
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        weight_config = {}
+        assert (
+            len(state_dicts) == 1 and state_dicts[0] is not None
+        ), f"MoE expects exactly one non-padding state dict, got {len(state_dicts)}"
+        (state_dict,) = cast(tuple[dict[str, torch.Tensor]], state_dicts)
 
-        # Create subdirectories for each submodule
-        moe_gate_path = output_path / "moe_gate"
-        moe_experts_path = output_path / "moe_experts"
-
-        weight_config["moe_gate"] = MoEGate.convert_weights(hf_config, state_dict, moe_gate_path, mesh_device, "gate.")
-        weight_config["moe_experts"] = MoEExperts.convert_weights(hf_config, state_dict, moe_experts_path, mesh_device)
-
-        return weight_config
+        return {
+            "moe_gate": MoEGate.convert_weights(hf_config, state_dict, output_path / "moe_gate", mesh_device, "gate."),
+            "moe_experts": MoEExperts.convert_weights(hf_config, state_dict, output_path / "moe_experts", mesh_device),
+        }
 
     @classmethod
     def create_state(
@@ -91,10 +91,12 @@ class MoE(AbstractModule):
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
                 "global_semaphore": ccl.get_semaphore(0),
+                "init_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "all_to_all_combine": {
                 "global_semaphore": ccl.get_semaphore(0),
+                "init_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "final_output_reduce_scatter": {
@@ -102,7 +104,6 @@ class MoE(AbstractModule):
                 "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
                 "num_links": ccl.get_max_links(1),
             },
-            MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
 
     @classmethod

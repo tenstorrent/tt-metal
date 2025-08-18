@@ -10,6 +10,7 @@ from llama_models.llama3.reference_impl.multimodal import encoder_utils
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_image_block import TtLlamaImageTransformerBlock
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
@@ -34,6 +35,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_block_inference(batch, num_chunks, mesh_device, gated, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
@@ -58,8 +60,10 @@ def test_block_inference(batch, num_chunks, mesh_device, gated, reset_seeds, ens
     )
     reference_model.load_state_dict(partial_state_dict)
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageTransformerBlock(
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),

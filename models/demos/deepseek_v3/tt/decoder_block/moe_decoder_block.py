@@ -41,7 +41,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             ),
             "moe": [
                 (
-                    MoE.convert_weights(hf_config, state_dict, output_path / "moe", mesh_device)
+                    MoE.convert_weights(hf_config, [state_dict], output_path / "moe", mesh_device)
                     if state_dict is not None
                     else None
                 )
@@ -90,6 +90,18 @@ class MoEDecoderBlock(DecoderBlockBase):
     ) -> ModelState:
         return [
             None if is_padding else MoE.create_state(hf_config, mesh_device, ccl) for is_padding in is_padding_layer
+        ]
+
+    @classmethod
+    @abstractmethod
+    def create_mlp_shared_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...],
+    ) -> ModelState:
+        return [
+            None if is_padding else MoE.create_shared_state(hf_config, mesh_device) for is_padding in is_padding_layer
         ]
 
     @classmethod

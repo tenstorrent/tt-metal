@@ -99,5 +99,5 @@ def test_crossattnmid(
     del unet, tt_crosattn
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.988)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.989)
     logger.info(f"PCC is: {pcc_message}")

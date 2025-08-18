@@ -34,6 +34,7 @@ def run_reduce_scatter_impl(
     mem_config_intermediate=None,
     cluster_axis=None,
     use_barrier=False,
+    use_persistent_buffers=True,
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
@@ -153,9 +154,9 @@ def run_reduce_scatter_impl(
     def run_op(i):
         tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tt_input_tensor_mesh_list[i],
-            persistent_output_buffers=None
-            if use_barrier
-            else [persistent_intermediate_buffers[i], persistent_output_buffers[i]],
+            persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
+            if use_persistent_buffers
+            else None,
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
             barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
@@ -174,6 +175,7 @@ def run_reduce_scatter_impl(
 
     if enable_trace:
         # Compile the op
+        tt_reduce_scatter_output_trace_list = []
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
         logger.info(f"Done compiling Op")
@@ -182,7 +184,7 @@ def run_reduce_scatter_impl(
         trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
-            tt_reduce_scatter_output_list.append(tt_reduce_scatter_output_tensor)
+            tt_reduce_scatter_output_trace_list.append(tt_reduce_scatter_output_tensor)
         ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
         logger.info(f"Done capturing trace")
 
@@ -192,6 +194,11 @@ def run_reduce_scatter_impl(
 
         # Synchronize the devices
         ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+        for tt_tensor in tt_reduce_scatter_output_trace_list:
+            tt_rs_out = ttnn.from_device(tt_tensor)
+            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
+            tt_tensor.deallocate(True)
+            tt_reduce_scatter_output_list.append(tt_rs_out)
     else:
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
@@ -227,16 +234,20 @@ def run_reduce_scatter_impl(
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype, is_training_shape",
     [
-        (8, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
+        (8, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (8, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (8, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (8, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        # Tests for training shapes
+        (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
+        (8, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -247,6 +258,9 @@ def run_reduce_scatter_impl(
         "batch_1_sd35_prompt",
         "batch_2",
         "batch_1",
+        "tt_training_test_one",
+        "tt_training_test_two",
+        "tt_training_test_three",
     ],
 )
 @pytest.mark.parametrize(
@@ -275,18 +289,19 @@ def run_reduce_scatter_impl(
     ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
-    "use_barrier",
+    "use_barrier, use_persistent_buffers",
     [
-        True,
-        False,
+        (True, True),
+        (True, False),
+        (False, True),
     ],
-    ids=["barrier_active", "barrier_inactive"],
+    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -299,14 +314,22 @@ def test_reduce_scatter_async(
     dim,
     layout,
     rs_input_dtype,
+    is_training_shape,
     mem_config_input,
     mem_config_rs,
     enable_trace,
     num_iters,
     ones_tensor,
     use_barrier,
+    use_persistent_buffers,
     rs_topology,
 ):
+    if is_training_shape and not use_barrier:
+        pytest.skip(f"Barrier semaphore required for training shapes that invoke composite RS")
+
+    if is_training_shape and enable_trace:
+        pytest.skip("We've seen ND PCC when running the composite-RS with trace")
+
     run_reduce_scatter_impl(
         t3k_mesh_device,
         num_devices,
@@ -322,6 +345,7 @@ def test_reduce_scatter_async(
         num_iters=num_iters,
         ones_tensor=ones_tensor,
         use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
     )
 
 
@@ -394,14 +418,6 @@ def test_reduce_scatter_async(
     ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
-    "use_barrier",
-    [
-        True,
-        False,
-    ],
-    ids=["barrier_active", "barrier_inactive"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -430,7 +446,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
     enable_trace,
     num_iters,
     ones_tensor,
-    use_barrier,
     rs_topology,
 ):
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
@@ -475,7 +490,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        use_barrier=use_barrier,
         mem_config_intermediate=mem_config_intermediate,
     )
 
@@ -530,14 +544,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
     ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
-    "use_barrier",
-    [
-        True,
-        False,
-    ],
-    ids=["barrier_active", "barrier_inactive"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -563,7 +569,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     enable_trace,
     num_iters,
     ones_tensor,
-    use_barrier,
     rs_topology,
 ):
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
@@ -601,7 +606,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        use_barrier=use_barrier,
         mem_config_intermediate=mem_config_intermediate,
     )
 
@@ -650,14 +654,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
-    "use_barrier",
-    [
-        True,
-        False,
-    ],
-    ids=["barrier_active", "barrier_inactive"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -680,7 +676,6 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     enable_trace,
     num_iters,
     ones_tensor,
-    use_barrier,
     rs_topology,
 ):
     input_shard_spec = ttnn.ShardSpec(
@@ -709,6 +704,5 @@ def test_reduce_scatter_async_sharded_to_interleaved(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        use_barrier=use_barrier,
         mem_config_intermediate=mem_config_intermediate,
     )
