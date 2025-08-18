@@ -223,5 +223,11 @@ void RunEDMConnectionStressTest(
     const std::vector<size_t>& workers_count,
     const std::vector<size_t>& test_rows);
 
+void RunTestUnicastSmoke(
+    BaseFabricFixture* fixture,
+    uint32_t num_hops = 1,
+    RoutingDirection direction = RoutingDirection::E,
+    bool enable_fabric_tracing = false);
+
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
