@@ -396,10 +396,6 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
     from rich.panel import Panel
     from loguru import logger
 
-    if tensor.storage_type() == ttnn.StorageType.HOST:
-        _visualize_tensor_host(tensor)
-        return
-
     console = Console()
 
     try:
@@ -408,17 +404,56 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
         placement_panel = Panel(str(sharding_info.placements), title="Placement Configuration", border_style="blue")
         device_to_style = _create_replication_color_mapping(sharding_info)
 
-        def annotate_with_shard_info(device_id, device_coord=None):
-            return _create_shard_annotation_text(device_id, device_coord, sharding_info)
+        if tensor.storage_type() == ttnn.StorageType.HOST:
+            try:
+                host_buffer = tensor.host_buffer()
+                rows, cols = host_buffer.shape()
+            except Exception:
+                rows, cols = sharding_info.mesh_shape
 
-        def style_device_cell(device_id):
-            return device_to_style.get(device_id)
+            coord_to_device_id = {
+                (int(mc[0]), int(mc[1])): host_idx for host_idx, mc in enumerate(sharding_info.mesh_coords)
+            }
+
+            def style_host_cell(host_linear_id, unused_coord=None):
+                try:
+                    r = int(host_linear_id // cols)
+                    c = int(host_linear_id % cols)
+                    device_id = coord_to_device_id.get((r, c))
+                    return device_to_style.get(device_id) if device_id is not None else None
+                except Exception:
+                    return None
+
+            def annotate_host_cell(host_linear_id, host_coord):
+                try:
+                    r, c = int(host_coord[0]), int(host_coord[1])
+                    device_id = coord_to_device_id.get((r, c))
+                    if device_id is None:
+                        return ""
+
+                    logical_coord = ttnn.MeshCoordinate(r, c)
+                    return _create_shard_annotation_text(device_id, logical_coord, sharding_info)
+                except Exception:
+                    return ""
+
+            annotate_func = annotate_host_cell
+            style_func = style_host_cell
+        else:
+
+            def annotate_with_shard_info(device_id, device_coord=None):
+                return _create_shard_annotation_text(device_id, device_coord, sharding_info)
+
+            def style_device_cell(device_id):
+                return device_to_style.get(device_id)
+
+            annotate_func = annotate_with_shard_info
+            style_func = style_device_cell
 
         mesh_table = _get_rich_table(
             tensor.device(),
             tensor,
-            annotate_cell=annotate_with_shard_info,
-            style_cell=style_device_cell,
+            annotate_cell=annotate_func,
+            style_cell=style_func,
             storage_type=tensor.storage_type(),
         )
 
@@ -427,70 +462,6 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
 
     except Exception as e:
         logger.error(f"Error visualizing tensor: {e}")
-
-
-def _visualize_tensor_host(tensor: "ttnn.Tensor"):
-    """
-    Visualize tensor distribution when tensor is on HOST storage.
-
-    Args:
-        tensor: The host tensor to visualize
-    """
-    from rich.console import Console
-    from rich.panel import Panel
-    from loguru import logger
-
-    console = Console()
-    try:
-        shards = ttnn.get_device_tensors(tensor)
-        sharding_info = TensorShardingInfo(tensor, shards)
-        placement_panel = Panel(str(sharding_info.placements), title="Placement Configuration", border_style="blue")
-
-        try:
-            host_buffer = tensor.host_buffer()
-            rows, cols = host_buffer.shape()
-        except Exception:
-            rows, cols = sharding_info.mesh_shape
-
-        coord_to_device_id = {
-            (int(mc[0]), int(mc[1])): host_idx for host_idx, mc in enumerate(sharding_info.mesh_coords)
-        }
-        device_to_style = _create_replication_color_mapping(sharding_info)
-
-        def style_host_cell(host_linear_id, unused_coord=None):
-            try:
-                r = int(host_linear_id // cols)
-                c = int(host_linear_id % cols)
-                device_id = coord_to_device_id.get((r, c))
-                return device_to_style.get(device_id) if device_id is not None else None
-            except Exception:
-                return None
-
-        def annotate_host_cell(host_linear_id, host_coord):
-            try:
-                r, c = int(host_coord[0]), int(host_coord[1])
-                device_id = coord_to_device_id.get((r, c))
-                if device_id is None:
-                    return ""
-
-                logical_coord = ttnn.MeshCoordinate(r, c)
-                return _create_shard_annotation_text(device_id, logical_coord, sharding_info)
-            except Exception:
-                return ""
-
-        mesh_table = _get_rich_table(
-            tensor.device(),
-            tensor,
-            annotate_cell=annotate_host_cell,
-            style_cell=style_host_cell,
-            storage_type=tensor.storage_type(),
-        )
-
-        console.print(placement_panel)
-        console.print(mesh_table)
-
-    except Exception as e:
-        logger.error(f"Error visualizing host tensor: {e}")
 
 
 def visualize_system_mesh():
