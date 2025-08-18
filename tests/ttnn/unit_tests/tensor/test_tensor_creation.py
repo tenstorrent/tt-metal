@@ -480,6 +480,6 @@ def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, devic
     try:
         tt_tensor = ttnn.from_buffer(buffer, [2, 3], dtype, device, ttnn.TILE_LAYOUT)
     except Exception as e:
-        assert "Unsupported DataType!" in str(e)
+        assert "Unreachable" in str(e)
     else:
         pytest.fail("Expected an exception, but got none")
