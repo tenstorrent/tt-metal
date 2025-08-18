@@ -20,7 +20,7 @@ class TransformerBlock(LightweightModule):
         state_dict,
         layer_num,
         weight_cache_path,
-        transformation_mats_global,
+        transformation_mats,
         transformation_mats_local=None,
         paged_attention_config=None,
         use_paged_kv_cache=False,
@@ -55,7 +55,7 @@ class TransformerBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
             dtype=dtype,
-            transformation_mats=transformation_mats_local if self.is_attention_sliding else transformation_mats_global,
+            transformation_mats=transformation_mats_local if self.is_attention_sliding else transformation_mats,
             configuration=args,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
@@ -117,7 +117,7 @@ class TransformerBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mats_global=None,
+        rot_mats=None,
         rot_mats_local=None,
         user_id=0,
         mode="decode",
@@ -134,7 +134,8 @@ class TransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
         # Choose the correct rotation matrices based on the mode
-        rot_mats = rot_mats_local if self.is_attention_sliding else rot_mats_global
+        if self.is_attention_sliding and rot_mats_local is not None:
+            rot_mats = rot_mats_local
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)

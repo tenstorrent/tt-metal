@@ -67,7 +67,7 @@ class Transformer(LightweightModule):
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
         )
-        self.trans_mats_global_dict = self.rope_setup.get_both_trans_mats()
+        self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         if args.rope_theta_local:
             self.rope_local_setup = ActualRopeSetupClass(
@@ -92,7 +92,7 @@ class Transformer(LightweightModule):
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
                 layer_num=i,
-                transformation_mats_global=self.trans_mats_global_dict,
+                transformation_mats=self.trans_mats_dict,
                 transformation_mats_local=self.trans_mats_local_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
@@ -158,7 +158,7 @@ class Transformer(LightweightModule):
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
-        tt_rot_mats_prefill_global = [
+        tt_rot_mats_prefill = [
             self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
@@ -193,7 +193,7 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+        return tokens_embd, tt_rot_mats_prefill, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -228,7 +228,7 @@ class Transformer(LightweightModule):
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
-        rope_idxs_global = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
+        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
         if self.rope_local_setup is not None:
             rope_idxs_local = self.rope_local_setup.get_rot_idxs(rot_current_pos, on_host=True)
         else:
@@ -256,7 +256,7 @@ class Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
-        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table
+        return tokens, current_pos_tt, rope_idxs, rope_idxs_local, page_table
 
     def _transform_decode_inputs_device(self, tokens):
         """
@@ -314,7 +314,7 @@ class Transformer(LightweightModule):
     def ttnn_prefill_forward(
         self,
         x,
-        rot_mats_global=None,
+        rot_mats=None,
         rot_mats_local=None,
         user_id=0,
         page_table=None,
@@ -330,7 +330,7 @@ class Transformer(LightweightModule):
         return self.forward(
             x,
             current_pos=None,
-            rot_mats_global=rot_mats_global,
+            rot_mats=rot_mats,
             rot_mats_local=rot_mats_local,
             user_id=user_id,
             mode="prefill",
@@ -341,7 +341,7 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
-    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs_global, rot_mat_idxs_local):
+    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs, rot_mat_idxs_local):
         # ttnn.ne currently requires the input to be in TILE_LAYOUT
         current_pos_tiled = ttnn.to_layout(current_pos, layout=ttnn.TILE_LAYOUT)
         # Update only active positions (current_pos != -1)
@@ -353,7 +353,7 @@ class Transformer(LightweightModule):
         )
         ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), current_pos)
 
-        ttnn.plus_one(rot_mat_idxs_global)
+        ttnn.plus_one(rot_mat_idxs)
         if rot_mat_idxs_local is not None:
             ttnn.plus_one(rot_mat_idxs_local)
 
@@ -361,7 +361,7 @@ class Transformer(LightweightModule):
         self,
         x,
         current_pos,
-        rot_mat_idxs_global=None,
+        rot_mat_idxs=None,
         rot_mat_idxs_local=None,
         page_table=None,
         kv_cache=None,
@@ -371,7 +371,7 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs_global)
+        rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = (
             self.rope_local_setup.get_rot_mats(rot_mat_idxs_local) if rot_mat_idxs_local is not None else None
         )
@@ -380,7 +380,7 @@ class Transformer(LightweightModule):
         tt_logits = self.forward(
             x_embed,
             current_pos,
-            rot_mats_global=rot_mats_global,
+            rot_mats=rot_mats,
             rot_mats_local=rot_mats_local,
             mode="decode",
             page_table=page_table,
@@ -403,7 +403,7 @@ class Transformer(LightweightModule):
             tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
 
             # Update device tensors for the next iteration
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs_global, rot_mat_idxs_local)
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs, rot_mat_idxs_local)
 
             # Update input tokens with sampled tokens for the next iteration
             ttnn.copy(tt_logits.reshape(x.shape), x)
@@ -417,7 +417,7 @@ class Transformer(LightweightModule):
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mats_global=None,
+        rot_mats=None,
         rot_mats_local=None,
         user_id=0,
         mode="decode",
@@ -440,7 +440,7 @@ class Transformer(LightweightModule):
             x = layer(
                 x,
                 current_pos,
-                rot_mats_global=rot_mats_global,
+                rot_mats=rot_mats,
                 rot_mats_local=rot_mats_local,
                 user_id=user_id,
                 mode=mode,

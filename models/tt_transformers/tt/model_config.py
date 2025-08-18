@@ -2415,18 +2415,18 @@ class HfAttentionWrapper:
 
 
 class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb_global, rotary_emb_local=None):
+    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local=None):
         from transformers import DynamicCache
 
         self.decoder = decoder
         self.head_dim = head_dim
-        self.rotary_emb_global = rotary_emb_global
+        self.rotary_emb = rotary_emb
         self.rotary_emb_local = rotary_emb_local
         self.past_key_values = DynamicCache()
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        position_embeddings_global = self.rotary_emb_global(x, position_ids)
+        position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
@@ -2436,7 +2436,7 @@ class HfDecoderWrapper:
             position_embeddings_local = self.rotary_emb_local(x, position_ids)
             result = self.decoder.forward(
                 x,
-                position_embeddings_global=position_embeddings_global,
+                position_embeddings_global=position_embeddings,
                 position_embeddings_local=position_embeddings_local,
                 past_key_value=self.past_key_values,
                 use_cache=True,
@@ -2446,7 +2446,7 @@ class HfDecoderWrapper:
         else:
             result = self.decoder.forward(
                 x,
-                position_embeddings=position_embeddings_global,
+                position_embeddings=position_embeddings,
                 past_key_value=self.past_key_values,
                 use_cache=True,
                 position_ids=position_ids,
