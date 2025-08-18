@@ -339,10 +339,10 @@ def run_sdpa_decode_impl(
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, dim",
     [
-        # (1, 256, 32, 4, 64),  # GPT-OSS 20B TP=2
-        (64, 256, 32, 1, 64),
+        (1, 256, 32, 4, 64),  # GPT-OSS 20B TP=2
+        (64, 4 * 1024, 32, 8, 64),
         (16, 1024, 32, 1, 64),
-        # (32, 256, 32, 1, 64),
+        (32, 256, 32, 1, 128),
         # (1, 256, 64, 8, 64),  # GPT-OSS 20B TP=1 (FIXME: Fails)
     ],
 )
