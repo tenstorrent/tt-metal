@@ -8,7 +8,7 @@ python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
 fail=0
 start_time=$(date +%s)
 
-echo "LOG_METAL: Running run_t3000_llama3_perplexity_tests_t3000"
+echo "LOG_METAL: Running run_llama3_tests"
 
 llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
 llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
