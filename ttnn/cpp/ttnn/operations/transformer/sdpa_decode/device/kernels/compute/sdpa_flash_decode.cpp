@@ -502,7 +502,7 @@ void MAIN {
 
                 // exp(sink - m_new)
                 sub_exp_block<scale_fp32, vector_mode>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
-                cb_wait_front(cb_exp_max_diff_2, Sq_chunk_t);
+                cb_pop_front(cb_cur_max, Sq_chunk_t);
 
                 // l -> l + exp(sink - m_new)
                 add_block_inplace<true>(cb_cur_sum, cb_exp_max_diff_2, Sq_chunk_t);
