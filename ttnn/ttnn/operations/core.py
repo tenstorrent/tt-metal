@@ -702,7 +702,8 @@ def as_tensor(
         cache_path = pathlib.Path(cache_file_name)
 
         if enable_multihost_format:
-            cache_path = cache_path.parent / cache_path.name
+            # TODO: REMOVE BEFORE MERGING
+            cache_path = cache_path.parent / "tt-multi-host" / cache_path.name
         else:
             # TODO: #16067 - Remove `tt-mesh` prefix when we remove the legacy format.
             cache_path = cache_path.parent / "tt-mesh" / cache_path.name
