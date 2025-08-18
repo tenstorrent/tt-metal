@@ -73,7 +73,7 @@ static Tensor pool2d_invoke(
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto output_shape = sliding_window_config.get_output_shape();
-
+    const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor.memory_config();
     uint32_t num_cores_nhw = 0;
@@ -207,11 +207,11 @@ static Tensor pool2d_invoke(
         is_out_tiled,
         in_place_halo);
 
-    if (deallocate_input) {
+    if (deallocate_input || is_input_tensor_in_dram) {
         input_tensor_sharded.deallocate(/*force*/ true);
     }
 
-    if (reallocate_halo_output) {
+    if (reallocate_halo_output || is_input_tensor_in_dram) {
         haloed_tensor = ttnn::move(haloed_tensor);
     }
 
