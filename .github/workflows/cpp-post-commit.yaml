@@ -63,6 +63,8 @@ jobs:
               ./build/test/tt_metal/unit_tests_debug_tools
           - name: ttnn tensor accessor
             cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
+          - name: data movement
+            cmd: ./build/test/tt_metal/unit_tests_data_movement
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
