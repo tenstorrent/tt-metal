@@ -10,6 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parents[5]))
 import torch
 import pytest
 import ttnn
+import time
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer
 
@@ -50,9 +51,14 @@ def test_clip_encoder(
     expected_pcc: float,
     topology: ttnn.Topology,
 ) -> None:
+    test_start_time = time.time()
+
     parent_mesh_shape = tuple(mesh_device.shape)
     if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
         pytest.skip("submesh shape is larger than parent mesh shape, skipping")
+
+    # Setup timing
+    setup_start_time = time.time()
     encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
 
@@ -64,7 +70,11 @@ def test_clip_encoder(
         num_links=1,
         topology=ttnn.Topology.Linear,
     )
+    setup_time = time.time() - setup_start_time
+    logger.info(f"Setup time: {setup_time:.3f}s")
 
+    # Model loading timing
+    model_loading_start_time = time.time()
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
     hf_model = CLIPTextModelWithProjection.from_pretrained(
@@ -73,6 +83,8 @@ def test_clip_encoder(
     tokenizer = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder=tokenizer_path, local_files_only=True)
 
     hf_model.eval()
+    model_loading_time = time.time() - model_loading_start_time
+    logger.info(f"Model loading time: {model_loading_time:.3f}s")
 
     logger.info("=== HuggingFace CLIP Config ===")
     logger.info(f"vocab_size: {hf_model.config.vocab_size}")
@@ -88,6 +100,8 @@ def test_clip_encoder(
     #     logger.info(f"  {key}")
     # logger.info(f"Total number of weight keys: {len(weights_dict)}")
 
+    # Input preparation timing
+    input_prep_start_time = time.time()
     # test text
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
@@ -102,7 +116,11 @@ def test_clip_encoder(
     )
 
     eos_token_id = hf_model.config.eos_token_id
+    input_prep_time = time.time() - input_prep_start_time
+    logger.info(f"Input preparation time: {input_prep_time:.3f}s")
 
+    # TT model setup timing
+    tt_setup_start_time = time.time()
     # === USING tt-dit CLIP: ====
     config = CLIPConfig(
         vocab_size=hf_model.config.vocab_size,
@@ -118,6 +136,11 @@ def test_clip_encoder(
 
     tt_clip = CLIPEncoder(config, encoder_submesh, ccl_manager, parallel_config, eos_token_id)
     tt_clip.load_state_dict(hf_model.state_dict())  # load weights
+    tt_setup_time = time.time() - tt_setup_start_time
+    logger.info(f"TT model setup time: {tt_setup_time:.3f}s")
+
+    # Inference timing
+    inference_start_time = time.time()
     tt_clip_output = tt_clip(tt_prompt, encoder_submesh, with_projection=True)
 
     # =====
@@ -125,10 +148,17 @@ def test_clip_encoder(
     with torch.no_grad():
         # Run HF model to capture self-attention output
         hf_output = hf_model.text_model(hf_inputs.input_ids)
+    inference_time = time.time() - inference_start_time
+    logger.info(f"Inference time: {inference_time:.3f}s")
 
-    # Extract final hidden states from TT encoder output
-    # tt_clip_output is a tuple: (final_hidden_states, all_hidden_states)
-    tt_final_hidden_states, tt_all_hidden_states = tt_clip_output
+    # Output processing and comparison timing
+    comparison_start_time = time.time()
+    # Extract outputs from TT encoder
+    # tt_clip_output is a tuple: (all_hidden_states, projected_output)
+    tt_all_hidden_states, tt_projected_output = tt_clip_output
+
+    # Get the final hidden states (last layer) from the list of all hidden states
+    tt_final_hidden_states = tt_all_hidden_states[-1]
 
     # Convert mesh tensor to torch tensor for pcc
     # Since weights are replicated, we can get the tensor from any single device
@@ -142,6 +172,19 @@ def test_clip_encoder(
 
     assert tt_output.shape == hf_final_hidden_states.shape
     assert_quality(tt_output, hf_final_hidden_states, pcc=expected_pcc)
+    comparison_time = time.time() - comparison_start_time
+    logger.info(f"Output comparison time: {comparison_time:.3f}s")
+
+    # Total test time
+    total_test_time = time.time() - test_start_time
+    logger.info(f"=== TIMING SUMMARY ===")
+    logger.info(f"Setup: {setup_time:.3f}s")
+    logger.info(f"Model loading: {model_loading_time:.3f}s")
+    logger.info(f"Input preparation: {input_prep_time:.3f}s")
+    logger.info(f"TT model setup: {tt_setup_time:.3f}s")
+    logger.info(f"Inference: {inference_time:.3f}s")
+    logger.info(f"Output comparison: {comparison_time:.3f}s")
+    logger.info(f"Total test time: {total_test_time:.3f}s")
 
 
 if __name__ == "__main__":

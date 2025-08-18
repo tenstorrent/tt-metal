@@ -231,6 +231,15 @@ class RowParallelLinear:
             print(f"  output.shape after linear: {output.shape}")
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+            # reduce_scatter_minimal_async requires 4D tensors and dim=3
+            # reshape 3D tensors to 4D for the operation
+            original_shape = output.shape  # [1, 19, 768]
+            needs_reshape = len(output.shape) == 3
+            # breakpoint()
+            if needs_reshape:
+                # reshape [B, S, E] -> [1, B, S, E] to make it 4D
+                output = ttnn.unsqueeze(output, 0)  # [1, 1, 19, 768]
+
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
                 persistent_output_buffers=self.ccl_manager.get_rs_ping_pong_buffer(
@@ -244,6 +253,13 @@ class RowParallelLinear:
                 cluster_axis=self.mesh_axis,
                 **self.ccl_manager.get_rs_hyperparams(output.shape),
             )
+
+            # reshape back to original dimensions if we reshaped earlier
+            if needs_reshape:
+                # remove the extra dimension we added: [1, B, S, E/devices] -> [B, S, E/devices]
+                # use squeeze to remove the size-1 dimension (more efficient than manual reshape)
+                output = ttnn.squeeze(output, 0)
+                print(f"  output.shape after squeeze: {output.shape}")  # [1, 19, 192]
 
         if self.activation is not None:
             assert self.activation == "gelu"

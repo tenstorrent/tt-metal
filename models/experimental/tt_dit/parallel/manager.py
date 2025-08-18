@@ -89,17 +89,18 @@ class CCLManager:
             print(f"  mesh_axis: {mesh_axis}")
             print(f"  mesh_device.shape: {self.mesh_device.shape}")
             print(f"  len(shape): {len(shape)}")
-            breakpoint()  # ADD BREAKPOINT HERE
+            # breakpoint()  # ADD BREAKPOINT HERE
 
-            # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
-            output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
 
             print(f"output_buffer_shape: {output_buffer_shape}")
             print(f"self.mesh_device.shape: {self.mesh_device.shape}")
             print(f"self.mesh_device.shape[mesh_axis]: {self.mesh_device.shape[mesh_axis]}")
-            breakpoint()
+            # breakpoint()
+
+            # Create two buffers for ping pong
+            output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
 
             intermediate_buffer_shape = list(shape)
             intermediate_buffer_shape = [2] + intermediate_buffer_shape

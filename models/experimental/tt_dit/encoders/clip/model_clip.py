@@ -4,12 +4,14 @@
 
 import torch
 import ttnn
+from loguru import logger
 
 from ...utils.tensor import bf16_tensor
 from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
 from ...layers.feedforward import ColParallelLinear, ParallelFeedForward
+from ...utils.padding import PaddingConfig
 
 
 class CLIPConfig:
@@ -76,14 +78,14 @@ class CLIPEncoder:
             prompt_tokenized.shape, mesh_device, dtype=hidden_states.get_dtype()
         )
 
-        encoder_output, _ = self.encoder(
+        encoder_output = self.encoder(
             hidden_states,
             causal_attention_mask,
             ccl_manager=self.ccl_manager,
             parallel_config=self.parallel_config,
         )
 
-        breakpoint()
+        # breakpoint()
         # final layer norm
         final_hidden_layer = encoder_output[-1]  # final hidden layer
         normalized_final_state = ttnn.layer_norm(
@@ -93,11 +95,13 @@ class CLIPEncoder:
             epsilon=self.config.layer_norm_eps,
         )
 
+        encoder_output[-1] = normalized_final_state
+
         # gather eos
         if self.eos_token_id is None:
             self.eos_token_id = 2
 
-        pooled_output = self._gather_eos(normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device)
+        pooled_output = _gather_eos(self, normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device)
         text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
         projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
 
@@ -184,8 +188,26 @@ class CLIPEncoderLayer:
         self.layer_norm1 = None
         self.layer_norm2 = None
         self.layer_norm_eps = config.layer_norm_eps
+        self.padding_config = None
         self.self_attn = EncoderLayerSelfAttention(config, mesh_device, ccl_manager, parallel_config)
         # breakpoint()
+        # Configure MLP with padded dimensions for tensor parallelism compatibility
+        # TODO: make 16 modular
+        target_embed_dim = 16 * (config.embed_dim // config.num_heads)  # 16 * 64 = 1024
+        # Calculate padding to get to tiling-compatible dimensions
+        # 768 -> 1024 (32 tiles, divisible by 4 devices)
+        original_head_dim = config.embed_dim // config.num_heads  # 64
+        # TODO: make 16 modular
+        target_heads = 16  # 16 * 64 = 1024 (vs original 12 * 64 = 768)
+
+        self.padding_config = PaddingConfig(
+            original_heads=config.num_heads,  # 12
+            target_heads=target_heads,  # 16
+            head_dim=original_head_dim,  # 64
+            tensor_parallel_factor=parallel_config.tensor_parallel.factor,  # 4
+        )
+        logger.info(f"Padding config: {config.embed_dim} -> {self.padding_config.target_dim} for tensor parallelism")
+
         self.mlp = ParallelFeedForward(
             dim=config.embed_dim,
             dim_out=config.embed_dim,
@@ -193,6 +215,7 @@ class CLIPEncoderLayer:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            padding_config=self.padding_config,
         )
 
     def load_state_dict(self, state_dict):
@@ -212,6 +235,28 @@ class CLIPEncoderLayer:
             state_dict["layer_norm2.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
         )
 
+        # Pad the layer norm weights and biases using padding utility
+        # if self.padding_config.is_padding_needed():
+        #     logger.info(f"Padding layer norm weights from {self.layer_norm1.shape} to {self.padding_config.target_dim}")
+
+        #     # Convert to torch tensors for padding, then back to ttnn
+        #     ln1_torch = ttnn.to_torch(ttnn.get_device_tensors(self.layer_norm1)[0])
+        #     ln1_bias_torch = ttnn.to_torch(ttnn.get_device_tensors(self.layer_norm1_bias)[0])
+        #     ln2_torch = ttnn.to_torch(ttnn.get_device_tensors(self.layer_norm2)[0])
+        #     ln2_bias_torch = ttnn.to_torch(ttnn.get_device_tensors(self.layer_norm2_bias)[0])
+
+        #     # Apply padding
+        #     ln1_padded = pad_bias_tensor(ln1_torch, self.padding_config)
+        #     ln1_bias_padded = pad_bias_tensor(ln1_bias_torch, self.padding_config)
+        #     ln2_padded = pad_bias_tensor(ln2_torch, self.padding_config)
+        #     ln2_bias_padded = pad_bias_tensor(ln2_bias_torch, self.padding_config)
+
+        #     # Convert back to ttnn tensors
+        #     self.layer_norm1 = bf16_tensor(ln1_padded, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
+        #     self.layer_norm1_bias = bf16_tensor(ln1_bias_padded, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
+        #     self.layer_norm2 = bf16_tensor(ln2_padded, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
+        #     self.layer_norm2_bias = bf16_tensor(ln2_bias_padded, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
+
         self.self_attn.load_state_dict(substate(state_dict, "self_attn"))
         # TODO: Implement MLP loading when self.mlp is not None
         self.mlp.load_state_dict(substate(state_dict, "mlp"))
@@ -223,9 +268,18 @@ class CLIPEncoderLayer:
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
     ) -> ttnn.Tensor:
+        # layer_norm1 weights shape: [768]
+        # layer_norm1 bias shape: [768]
+
+        # layer_norm2 weights shape: [768]
+        # layer_norm2 bias shape: [768]
+
+        # breakpoint()
+
         # self attention block
-        residual = hidden_states
-        hidden_states = ttnn.layer_norm(  # Shape([1, 19, 768])
+        residual = hidden_states  # Shape([1, 19, 768])
+
+        hidden_states = ttnn.layer_norm(  # Now: [1, 19, 1024]
             hidden_states, weight=self.layer_norm1, bias=self.layer_norm1_bias, epsilon=self.layer_norm_eps
         )
         attn_output = self.self_attn(hidden_states, causal_attention_mask, ccl_manager, parallel_config)
@@ -236,25 +290,65 @@ class CLIPEncoderLayer:
         hidden_states = ttnn.layer_norm(
             hidden_states, weight=self.layer_norm2, bias=self.layer_norm2_bias, epsilon=self.layer_norm_eps
         )
+
         # breakpoint()
+        # target: [1, 19, 1024]
+        # Pad hidden_states to match padded layer norm weights
+        if self.padding_config.is_padding_needed():
+            target_dim = self.padding_config.target_dim  # 1024
+            current_dim = hidden_states.shape[-1]  # 768
+            padding_needed = target_dim - current_dim  # 256
+
+            logger.debug(f"Padding hidden_states from {current_dim} to {target_dim}")
+
+            # Pad last dimension: [1, 19, 768] -> [1, 19, 1024]
+            padding = [(0, 0)] * len(hidden_states.shape)
+            padding[-1] = (0, padding_needed)
+            hidden_states = ttnn.pad(hidden_states, padding, 0.0)
+            residual = ttnn.pad(residual, padding, 0.0)  # Pad residual for later addition
+
+        # breakpoint()
+        # might have to pad mlp weights.
+        # TODO: convert ff1 and ff2 weights to shape [1024, 1024]
+        print(f"Before MLP: hidden_states.shape = {hidden_states.shape}")
+        original_shape = hidden_states.shape
         mlp_output_fractured = self.mlp(hidden_states)  # fractured on columns
+        print(f"After MLP: mlp_output_fractured.shape = {mlp_output_fractured.shape}")
         hidden_states_shape = list(mlp_output_fractured.shape)
 
+        # Handle 3D tensors for operations that require 4D tensors and dim=3
+
+        needs_reshape = len(original_shape) == 3
+
+        if needs_reshape:
+            # Reshape [B, S, E] -> [1, B, S, E] to make it 4D
+            mlp_output_fractured = ttnn.unsqueeze(mlp_output_fractured, 0)  # [1, 1, 19, 1024]
+            # [1,1,19,192]
+
+        # target: [1, 1, 19, 1024]
+
         # reduce scatter
-        mlp_output_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-            mlp_output_fractured,
-            dim=3,
-            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ccl_manager.topology,
-            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
-        )
-        logger.debug(f"reduce_scatter completed, shape: {mlp_output_scattered.shape}")
+        # TODO: "Always | Error, The number of tiles at input tensor dimension 3 should be divisible by ring_size but the number of tiles is 6 and the ring_size is 4 (assert.hpp:107)"
+        # each tile contains 32 elements, so we need to pad the tensor to make it divisible by 4
+        # ring size is 4 = num_devices
+        # dimension 3 is 192, tile size is 32, num_devices is 4
+        # 192 / 32 = 6 != 4
+        # need 8 times or 4 tiles (divisible by 4)
+
+        # mlp_output_fractured = ttnn.experimental.reduce_scatter_minimal_async(
+        #     mlp_output_fractured,
+        #     dim=3,
+        #     multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+        #     num_links=1,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     topology=ccl_manager.topology,
+        #     cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+        # )
+        print(f"After reduce_scatter: mlp_output_fractured.shape = {mlp_output_fractured.shape}")
 
         # all gather
         mlp_output = ttnn.experimental.all_gather_async(
-            mlp_output_scattered,
+            mlp_output_fractured,
             dim=3,
             cluster_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=ccl_manager.mesh_device,
@@ -264,12 +358,24 @@ class CLIPEncoderLayer:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        logger.debug(f"all_gather completed, shape: {mlp_output.shape}")
+        print(f"After all_gather: mlp_output.shape = {mlp_output.shape}")
 
-        mlp_output = ttnn.reshape(mlp_output, hidden_states_shape)  # [1, 19, 768]
-        logger.debug(f"Target shape: {hidden_states_shape}, current shape: {mlp_output.shape}")
+        # Reshape back to original dimensions if we reshaped earlier
+        if needs_reshape:
+            # Remove the extra dimension we added: [1, B, S, E] -> [B, S, E]
+            mlp_output = ttnn.squeeze(mlp_output, 0)
+        else:
+            mlp_output = ttnn.reshape(mlp_output, hidden_states_shape)  # [1, 19, 768]
+        print(f"Final: mlp_output.shape = {mlp_output.shape}, residual.shape = {residual.shape}")
 
         hidden_states = residual + mlp_output
+
+        # Unpad back to original dimensions if padding was applied
+        if self.padding_config.is_padding_needed():
+            original_dim = self.padding_config.original_dim  # 768
+            # Slice to remove padding: [1, 19, 1024] -> [1, 19, 768]
+            hidden_states = hidden_states[..., :original_dim]
+            logger.debug(f"Unpadded hidden_states from {mlp_output.shape} to {hidden_states.shape}")
 
         logger.info(f"CLIPEncoderLayer completed, final shape: {hidden_states.shape}")
 
