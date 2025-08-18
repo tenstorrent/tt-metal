@@ -105,6 +105,7 @@ def run(
 
     for i in range(num_iters):
         # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # Note: Early return here bypasses multi-iteration result checks. his must be restored when the new implementation is added.
         return [("skipped", LEGACY_CCL_SKIP), None]
         # start_time = start_measuring_time()
         # tt_out_tensor = ttnn.all_gather(
