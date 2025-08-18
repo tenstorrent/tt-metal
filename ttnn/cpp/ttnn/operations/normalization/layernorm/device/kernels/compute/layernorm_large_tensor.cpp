@@ -18,7 +18,10 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "layernorm_compute_utils.hpp"
 #include "compute_kernel_api/transpose_wh.h"
+#include "dprint_pages.h"
+#include "dprint_tensix.h"
 
 namespace NAMESPACE {
 
@@ -45,18 +48,24 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_16;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
-    uint32_t cb_xmm = tt::CBIndex::c_24;           // x minus mean (or x^2 for RMS norm)
-    constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_19;     // Var[x] = E[(x-E[x])^2] (or (∑x^2)/n for RMS norm)
-    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+ε (or (∑x^2)/n+ε for RMS norm)
-    constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
+    uint32_t cb_xmm = tt::CBIndex::c_24;                   // x minus mean (or x^2 for RMS norm)
+    constexpr auto cb_ex = tt::CBIndex::c_18;              // E[x]
+    constexpr auto cb_ex2 = tt::CBIndex::c_19;             // Var[x] = E[(x-E[x])^2] (or (∑x^2)/n for RMS norm)
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;           // E[(x-E[x])^2]+ε (or (∑x^2)/n+ε for RMS norm)
+    constexpr auto cb_fusion = tt::CBIndex::c_22;          // stream gamma/beta
+    constexpr auto cb_interm_pre_add = tt::CBIndex::c_23;  // intermediate for layernorm fused pre-add
     constexpr auto scaler0 = 0;
     constexpr auto layernorm = !rms_norm;
     constexpr uint32_t onetile = 1;
 
+    // Initialize the hardware based on the first op
+    // that will be done
     if constexpr (fuse_pre_add) {
+        // Init for x = in + b
         binary_op_init_common(cb_in, cb_inb, rms_norm ? cb_xmm : tt::CBIndex::c_23);
+        pack_reconfig_data_format(cb_interm_pre_add);
     } else {
+        // Init for transpose (layernorm) or square (rms)
         constexpr auto first_out_cb = layernorm ? cb_ex : cb_ex2;
         unary_op_init_common(cb_in, first_out_cb);
         pack_reconfig_data_format(cb_ex);
@@ -89,18 +98,42 @@ void MAIN {
                 for (uint32_t j = 0; j < blk; j++) {
                     if constexpr (fuse_pre_add) {
                         // Fuse in = in + b in dst0
+                        copy_tile_to_dst_init_short(cb_in, dst0);
+                        copy_tile(cb_in, j, dst0);
+                        if (wt == Wt - blk && j == blk - 1) {
+                            dprint_tensix_dest_reg(dst0);
+                        }
+
                         cb_wait_front(cb_inb, 1);
                         reconfig_data_format_srca(cb_in, cb_inb);
                         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
                         binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, dst0, dst0);
+                        if (wt == Wt - 1 && j == blk - 1) {
+                            dprint_tensix_dest_reg(dst0);
+                        }
                         cb_pop_front(cb_inb, 1);
+
+                        // Welford's needs transposed input tile,
+                        // and transpose_wh_dest is currently buggy,
+                        // so we need to use the interm CB
+                        tile_regs_commit();
+                        cb_reserve_back(cb_interm_pre_add, onetile);
+                        pack_tile(dst0, cb_interm_pre_add);
+                        cb_push_back(cb_interm_pre_add, onetile);
+                        cb_wait_front(cb_interm_pre_add, onetile);
+                        tile_regs_release();
+                        tile_regs_acquire();
+                        tile_regs_wait();
                     }
 
-                    // Copy input tile to dst0
-                    // Welford's requires a transposed input tile
-                    reconfig_data_format(cb_in, cb_in);
-                    transpose_wh_init_short(cb_in);
-                    transpose_wh_tile(cb_in, j, dst0);
+                    // Transpose
+                    constexpr auto cb_result_or_input = fuse_pre_add ? cb_interm_pre_add : cb_in;
+                    reconfig_data_format(cb_result_or_input, cb_result_or_input);
+                    transpose_wh_init_short(cb_result_or_input);
+                    transpose_wh_tile(cb_result_or_input, fuse_pre_add ? 0 : j, dst0);
+                    if constexpr (fuse_pre_add) {
+                        cb_pop_front(cb_interm_pre_add, onetile);
+                    }
 
                     // Accumulate mean and variance
                     welford_init();
@@ -110,7 +143,7 @@ void MAIN {
             } else {
                 // RMS: Calculate (∑x^2)/n
                 // Copy tiles in block to dst regs
-                copy_tile_init(cb_in);  // TODO RM: Is this needed every iteration?
+                copy_tile_init(cb_in);
                 for (uint32_t j = 0; j < blk; j++) {
                     copy_tile(cb_in, j, j);
                 }
@@ -156,47 +189,38 @@ void MAIN {
                     add_binary_tile(dst0, dst1);
                     cb_pop_front(cb_ex2, onetile);
                 }
+                tile_regs_commit();
 
                 // Push to CB
                 pack_tile(dst0, cb_ex2);
                 cb_push_back(cb_ex2, onetile);
+                tile_regs_release();
             }
+
             cb_pop_front(cb_in, blk);
         }
 
         if constexpr (layernorm) {
-            // Transpose dst1 and dst2 back to columns
+            // Pack mean and variance to CBs
+            // and transpose back to columns
+            // transpose_wh_dest is currently buggy,
+            // so we transpose through the CB interface
             tile_regs_commit();
             cb_reserve_back(cb_ex, onetile);
             pack_reconfig_data_format(cb_ex);
             pack_tile(dst1, cb_ex);
-            pack_reconfig_data_format(cb_ex2);
-            pack_tile(dst2, cb_ex2);
             cb_push_back(cb_ex, onetile);
-            cb_push_back(cb_ex2, onetile);
             tile_regs_release();
-            cb_wait_front(cb_ex, onetile);
-            cb_wait_front(cb_ex2, onetile);
+            layernorm::compute::utils::transpose_single_tile_cb(cb_ex);
+
             tile_regs_acquire();
             tile_regs_wait();
-            transpose_wh_init_short(cb_ex);
-            reconfig_data_format(cb_ex, cb_ex);
-            transpose_wh_tile(cb_ex, 0, dst1);
-            transpose_wh_init_short(cb_ex2);
-            reconfig_data_format(cb_ex2, cb_ex2);
-            transpose_wh_tile(cb_ex2, 0, dst2);
-            tile_regs_commit();
-            cb_pop_front(cb_ex, onetile);
-            cb_pop_front(cb_ex2, onetile);
-            cb_reserve_back(cb_ex, onetile);
-            cb_reserve_back(cb_ex2, onetile);
-            pack_reconfig_data_format(cb_ex);
-            pack_tile(dst1, cb_ex);
             pack_reconfig_data_format(cb_ex2);
+            tile_regs_commit();
             pack_tile(dst2, cb_ex2);
-            cb_push_back(cb_ex, onetile);
             cb_push_back(cb_ex2, onetile);
             tile_regs_release();
+            layernorm::compute::utils::transpose_single_tile_cb(cb_ex2);
         }
 
         // =====================================
