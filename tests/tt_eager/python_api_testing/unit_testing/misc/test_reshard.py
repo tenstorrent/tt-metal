@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import tracy
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -80,7 +81,13 @@ def run_reshard_test(
         output_dtype=tt_dtype,
     )
 
-    tt_tensor_reshard = ttnn.reshard(tt_tensor_sharded, output_mem_config)
+    from tracy import signpost
+
+    signpost("S2I")
+    tt_tensor_reshard = ttnn.sharded_to_interleaved(tt_tensor_sharded)
+    signpost("I2S")
+    tt_tensor_reshard = ttnn.interleaved_to_sharded(tt_tensor_reshard, output_mem_config)
+    signpost("end")
 
     tt_tensor_interleaved = ttnn.sharded_to_interleaved(
         tt_tensor_reshard,
