@@ -62,8 +62,8 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         help="List of layer groups to log IO for. Can either be a torch module name or a state-dict-style layer path. The path can contain a range of indices, out of which only one will be logged. Only one layer for each torch module name will be logged. Defaults to a hardcoded layers.",
         default=[
-            # "model",  # TODO: uncomment this once memory issues are resolved
-            # "model.norm", # TODO: uncomment this once memory issues are resolved
+            "model",
+            "model.norm",
             "model.embed_tokens",
             "model.layers.0",
             "model.layers.0.input_layernorm",
@@ -77,6 +77,7 @@ def create_parser() -> argparse.ArgumentParser:
             "model.layers.3.mlp.gate",
             "model.layers.3.mlp.experts.0-255",
             "model.layers.3.mlp.shared_experts",
+            "lm_head",
         ],
     )
     parser.add_argument(
