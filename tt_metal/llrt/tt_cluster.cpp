@@ -1012,7 +1012,6 @@ void Cluster::disable_ethernet_cores_with_retrain() {
 }
 
 void Cluster::initialize_ethernet_cores_router_mode() {
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     for (const auto& [assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
@@ -1039,7 +1038,7 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
     std::unordered_set<chip_id_t> device_ids;
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
-        for (const auto &eth_core : eth_cores) {
+        for ([[maybe_unused]] const auto& eth_core : eth_cores) {
             device_ids.insert(other_chip_id);
         }
     }
