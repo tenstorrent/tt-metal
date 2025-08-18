@@ -399,7 +399,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {q_output_tensor, k_output_tensor, v_output_tensor};
 
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
+    [[maybe_unused]] const auto& op_config =
+        ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
 
     // need to drop unused cores in shard spec
     auto input_grid = input_shard_spec.grid;

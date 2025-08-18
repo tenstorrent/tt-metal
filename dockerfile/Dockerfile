@@ -94,12 +94,11 @@ COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 
+# TODO: Why do we need the chmod?
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
     python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
-
-# Adjust permissions to allow any user to use and modify the venv
-RUN chmod -R 777 $VIRTUAL_ENV
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    chmod -R 777 $VIRTUAL_ENV
 
 #############################################################
 
@@ -119,6 +118,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     vim \
     libgl1 \
+    ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # IWYU could be useful to developers

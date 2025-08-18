@@ -325,7 +325,7 @@ int main(int argc, char** argv) {
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(page_size_g * page_count_g, {{0, tt::DataFormat::Float32}})
                 .set_page_size(0, page_size_g);
-        auto cb = tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
+        tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
 
         auto dm0 = tt_metal::CreateKernel(
             program,
