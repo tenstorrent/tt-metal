@@ -162,7 +162,7 @@ std::vector<WorkerAttributes> build_worker_attributes(
 
     // Log worker attributes
     log_trace(tt::LogOp, "Worker Attributes:");
-    for (const auto& wa : worker_attributes) {
+    for ([[maybe_unused]] const auto& wa : worker_attributes) {
         log_trace(
             tt::LogOp,
             "\tAttributes: link={}, chan_index={}, slice_index: {}, core_logical=(x={},y={}), direction={}, "
