@@ -4,14 +4,13 @@
 
 import torch
 from loguru import logger
+
 import ttnn
-from models.experimental.yolov5x.tt.model_preprocessing import (
-    create_yolov5x_model_parameters,
-)
-from models.experimental.yolov5x.tt.yolov5x import Yolov5x
+from models.demos.yolov5x.common import load_torch_model
+from models.demos.yolov5x.tt.model_preprocessing import create_yolov5x_model_parameters
+from models.demos.yolov5x.tt.yolov5x import Yolov5x
 from models.common.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov5x.common import load_torch_model
 
 
 class YOLOv5xPerformanceRunnerInfra:

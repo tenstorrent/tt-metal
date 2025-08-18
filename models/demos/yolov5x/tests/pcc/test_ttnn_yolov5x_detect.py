@@ -2,15 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov5x.tt.detect import TtnnDetect
-from models.experimental.yolov5x.tt.model_preprocessing import (
+
+import ttnn
+from models.demos.yolov5x.common import YOLOV5X_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov5x.tt.detect import TtnnDetect
+from models.demos.yolov5x.tt.model_preprocessing import (
     create_yolov5x_input_tensors,
     create_yolov5x_model_parameters_detect,
 )
-from models.experimental.yolov5x.common import load_torch_model, YOLOV5X_L1_SMALL_SIZE
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(

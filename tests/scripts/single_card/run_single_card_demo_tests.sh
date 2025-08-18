@@ -383,6 +383,12 @@ run_vovnet_demo(){
 
 }
 
+run_yolov5x_demo(){
+
+  pytest models/demos/yolov5x/demo/demo.py
+
+}
+
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
   if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
