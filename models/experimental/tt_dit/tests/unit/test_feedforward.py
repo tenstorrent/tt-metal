@@ -96,12 +96,13 @@ def test_feedforward(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("mesh_axis"),
+    ("tp_mesh_axis"),
     [
         0,
         1,
     ],
 )
+@pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
 @pytest.mark.parametrize(
     ("B, seq, dim, inner_dim, dim_out"),
     [
@@ -129,13 +130,16 @@ def test_parallel_feedforward(
     dim_out: int,
     bias: bool,
     activation_fn: str,
-    mesh_axis: int,
+    tp_mesh_axis: int,
+    is_fsdp: bool,
 ) -> None:
     torch_dtype = torch.bfloat16
     torch_model = TorchFeedForward(dim, dim_out, bias=bias, activation_fn=activation_fn, inner_dim=inner_dim).to(
         dtype=torch_dtype
     )
     torch_model.eval()
+
+    fsdp_mesh_axis = 1 - tp_mesh_axis if is_fsdp else None
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     tt_model = ParallelFeedForward(
@@ -145,7 +149,8 @@ def test_parallel_feedforward(
         bias=bias,
         activation_fn=activation_fn,
         mesh_device=mesh_device,
-        mesh_axis=mesh_axis,
+        mesh_axis=tp_mesh_axis,
+        fsdp_mesh_axis=fsdp_mesh_axis,
         ccl_manager=ccl_manager,
     )
     tt_model.load_state_dict(torch_model.state_dict())
@@ -163,8 +168,8 @@ def test_parallel_feedforward(
     tt_output = tt_model(tt_input_tensor, core_grid=core_grid)
 
     shard_dims = [None, None]
-    shard_dims[mesh_axis] = -1
-    shard_dims[1 - mesh_axis] = 0
+    shard_dims[tp_mesh_axis] = -1
+    shard_dims[1 - tp_mesh_axis] = 0
     tt_output = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),

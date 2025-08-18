@@ -61,6 +61,7 @@ class ParallelFeedForward:
         bias: bool = True,
         mesh_device=None,
         mesh_axis=0,
+        fsdp_mesh_axis=None,
         ccl_manager=None,
         init=False,
     ):
@@ -73,6 +74,12 @@ class ParallelFeedForward:
         self.inner_dim = inner_dim
         self.activation_fn = activation_fn
         self.bias = bias
+        self.mesh_axis = mesh_axis
+        self.fsdp_mesh_axis = fsdp_mesh_axis
+
+        if self.fsdp_mesh_axis is not None:
+            assert self.mesh_axis != self.fsdp_mesh_axis
+
         self.ff1 = ColParallelLinear(
             dim,
             inner_dim,
@@ -80,6 +87,8 @@ class ParallelFeedForward:
             mesh_device=mesh_device,
             activation_fn=activation_fn,
             mesh_axis=mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
             init=init,
         )
         self.ff2 = RowParallelLinear(
@@ -88,6 +97,7 @@ class ParallelFeedForward:
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
             init=init,
         )
