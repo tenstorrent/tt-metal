@@ -4,6 +4,7 @@
 
 import sys
 from pathlib import Path
+import time
 
 sys.path.append(str(Path(__file__).resolve().parents[5]))
 
@@ -118,30 +119,51 @@ def test_clip_encoder(
 
     tt_clip = CLIPEncoder(config, encoder_submesh, ccl_manager, parallel_config, eos_token_id)
     tt_clip.load_state_dict(hf_model.state_dict())  # load weights
-    tt_clip_output = tt_clip(tt_prompt, encoder_submesh, with_projection=True)
+
+    # time TT model inference only
+    tt_start_time = time.time()
+    tt_sequence_output, tt_projected_output = tt_clip(tt_prompt, encoder_submesh, with_projection=True)
+    tt_end_time = time.time()
+    tt_execution_time = tt_end_time - tt_start_time
 
     # =====
 
     with torch.no_grad():
-        # Run HF model to capture self-attention output
-        hf_output = hf_model.text_model(hf_inputs.input_ids)
+        # time HF model execution
+        hf_start_time = time.time()
 
-    # Extract final hidden states from TT encoder output
-    # tt_clip_output is a tuple: (final_hidden_states, all_hidden_states)
-    tt_final_hidden_states, tt_all_hidden_states = tt_clip_output
+        hf_output = hf_model(hf_inputs.input_ids)
+        hf_end_time = time.time()
+        hf_execution_time = hf_end_time - hf_start_time
 
-    # Convert mesh tensor to torch tensor for pcc
-    # Since weights are replicated, we can get the tensor from any single device
-    tt_output_single_device = ttnn.get_device_tensors(tt_final_hidden_states)[0]
-    tt_output = ttnn.to_torch(tt_output_single_device)
+    hf_sequence_output = hf_output.last_hidden_state  # sequence output
+    hf_pooled_output = hf_output.text_embeds  # projected/pooled output
 
-    hf_final_hidden_states = hf_output.last_hidden_state
+    # convert mesh tensor to torch tensor for pcc
+    # since weights are replicated, can get the tensor from any single device
+    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output.hidden_states[-2])[0])
+    tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
 
-    logger.info(f"TT text encoder final hidden states shape: {tt_output.shape}")
-    logger.info(f"HF text encoder final hidden states shape: {hf_final_hidden_states.shape}")
+    logger.info(f"TT model execution time: {tt_execution_time:.4f} seconds")
+    logger.info(f"HF model execution time: {hf_execution_time:.4f} seconds")
+    logger.info(f"Speed ratio (HF/TT): {hf_execution_time/tt_execution_time:.2f}x")
 
-    assert tt_output.shape == hf_final_hidden_states.shape
-    assert_quality(tt_output, hf_final_hidden_states, pcc=expected_pcc)
+    logger.info(f"TT text encoder sequence output shape: {tt_sequence_output_torch.shape}")
+    logger.info(f"TT text encoder pooled output shape: {tt_projected_output_torch.shape}")
+    logger.info(f"HF text encoder sequence output shape: {hf_sequence_output.shape}")
+    logger.info(f"HF text encoder pooled output shape: {hf_pooled_output.shape}")
+    logger.info(
+        f"TT text encoder sequence output mean: {tt_sequence_output_torch.mean():.6f}, std: {tt_sequence_output_torch.std():.6f}"
+    )
+    logger.info(
+        f"TT text encoder pooled output mean: {tt_projected_output_torch.mean():.6f}, std: {tt_projected_output_torch.std():.6f}"
+    )
+
+    assert hf_sequence_output.shape == tt_sequence_output_torch.shape
+    assert hf_pooled_output.shape == tt_projected_output_torch.shape
+
+    assert_quality(hf_sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
+    assert_quality(hf_pooled_output, tt_projected_output_torch, pcc=expected_pcc)
 
 
 if __name__ == "__main__":

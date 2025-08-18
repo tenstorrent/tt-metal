@@ -82,15 +82,6 @@ class CCLManager:
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
-            # DEBUG: Add detailed logging when ff2 is involved
-            print(f"DEBUG get_rs_ping_pong_buffer:")
-            print(f"  shape: {shape}")
-            print(f"  dim: {dim}")
-            print(f"  mesh_axis: {mesh_axis}")
-            print(f"  mesh_device.shape: {self.mesh_device.shape}")
-            print(f"  len(shape): {len(shape)}")
-            breakpoint()  # ADD BREAKPOINT HERE
-
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
@@ -99,7 +90,7 @@ class CCLManager:
             print(f"output_buffer_shape: {output_buffer_shape}")
             print(f"self.mesh_device.shape: {self.mesh_device.shape}")
             print(f"self.mesh_device.shape[mesh_axis]: {self.mesh_device.shape[mesh_axis]}")
-            breakpoint()
+            # breakpoint()
 
             intermediate_buffer_shape = list(shape)
             intermediate_buffer_shape = [2] + intermediate_buffer_shape

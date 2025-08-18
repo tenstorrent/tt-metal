@@ -10,6 +10,7 @@ from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
 from ...layers.feedforward import ColParallelLinear, ParallelFeedForward
+from loguru import logger
 
 
 class CLIPConfig:
@@ -46,10 +47,11 @@ class CLIPEncoder:
         eos_token_id: int,
     ) -> None:
         self.config = config
-        self.embeddings = TextEmbeddings(config, mesh_device)
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+
+        self.embeddings = TextEmbeddings(config, mesh_device)
         self.eos_token_id = eos_token_id
         self.encoder = CLIPStack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
 
@@ -76,14 +78,14 @@ class CLIPEncoder:
             prompt_tokenized.shape, mesh_device, dtype=hidden_states.get_dtype()
         )
 
-        encoder_output, _ = self.encoder(
+        encoder_output = self.encoder(
             hidden_states,
             causal_attention_mask,
             ccl_manager=self.ccl_manager,
             parallel_config=self.parallel_config,
         )
 
-        breakpoint()
+        # breakpoint()
         # final layer norm
         final_hidden_layer = encoder_output[-1]  # final hidden layer
         normalized_final_state = ttnn.layer_norm(
@@ -97,7 +99,7 @@ class CLIPEncoder:
         if self.eos_token_id is None:
             self.eos_token_id = 2
 
-        pooled_output = self._gather_eos(normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device)
+        pooled_output = _gather_eos(normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device)
         text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
         projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
 
@@ -240,21 +242,27 @@ class CLIPEncoderLayer:
         mlp_output_fractured = self.mlp(hidden_states)  # fractured on columns
         hidden_states_shape = list(mlp_output_fractured.shape)
 
+        # if len(mlp_output_fractured.shape) == 3:
+        #     mlp_output_fractured = ttnn.unsqueeze(mlp_output_fractured, 0)
+        # breakpoint()
         # reduce scatter
-        mlp_output_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-            mlp_output_fractured,
-            dim=3,
-            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ccl_manager.topology,
-            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
-        )
-        logger.debug(f"reduce_scatter completed, shape: {mlp_output_scattered.shape}")
+        # mlp_output_fractured = ttnn.experimental.reduce_scatter_minimal_async(
+        #     mlp_output_fractured,
+        #     dim=3,
+        #     multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+        #     num_links=1,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     topology=ccl_manager.topology,
+        #     cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+        # )
+        # if len(mlp_output_fractured.shape) == 3:
+        #     mlp_output_fractured = ttnn.squeeze(mlp_output_fractured, 0)
+        # logger.debug(f"reduce_scatter completed, shape: {mlp_output_fractured.shape}")
 
+        mlp_output_fractured = ttnn.unsqueeze(mlp_output_fractured, 0)
         # all gather
         mlp_output = ttnn.experimental.all_gather_async(
-            mlp_output_scattered,
+            mlp_output_fractured,
             dim=3,
             cluster_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=ccl_manager.mesh_device,
@@ -263,11 +271,8 @@ class CLIPEncoderLayer:
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
+        mlp_output = ttnn.squeeze(mlp_output, 0)
         logger.debug(f"all_gather completed, shape: {mlp_output.shape}")
-
-        mlp_output = ttnn.reshape(mlp_output, hidden_states_shape)  # [1, 19, 768]
-        logger.debug(f"Target shape: {hidden_states_shape}, current shape: {mlp_output.shape}")
 
         hidden_states = residual + mlp_output
 

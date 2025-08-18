@@ -231,6 +231,10 @@ class RowParallelLinear:
             print(f"  output.shape after linear: {output.shape}")
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+            needs_reshape = len(output.shape) <= 3
+            if needs_reshape:
+                output = ttnn.unsqueeze(output, 0)
+
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
                 persistent_output_buffers=self.ccl_manager.get_rs_ping_pong_buffer(
@@ -244,6 +248,9 @@ class RowParallelLinear:
                 cluster_axis=self.mesh_axis,
                 **self.ccl_manager.get_rs_hyperparams(output.shape),
             )
+
+            if needs_reshape:
+                output = ttnn.squeeze(output, 0)
 
         if self.activation is not None:
             assert self.activation == "gelu"
