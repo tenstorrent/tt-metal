@@ -126,7 +126,9 @@ class TtResnetBlock2D(nn.Module):
                 negative_mask=None,
                 inplace=False,  # We are working with tiled sharded GN
             )
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+
+            if self.conv1_slice_config is not None:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         else:
             hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states = ttnn.group_norm(
@@ -192,7 +194,8 @@ class TtResnetBlock2D(nn.Module):
                 negative_mask=None,
                 inplace=False,  # We are working with tiled sharded GN
             )
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            if self.conv2_slice_config is not None:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         else:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states = ttnn.group_norm(
