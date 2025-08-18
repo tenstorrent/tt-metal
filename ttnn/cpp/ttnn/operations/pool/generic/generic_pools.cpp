@@ -192,12 +192,13 @@ static Tensor pool2d_invoke(
     const uint32_t pre_allocate_size =
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
+    log_info(tt::LogOp, "input dtype: {}", input_tensor_sharded.dtype());
     auto output_tensor = ttnn::prim::pool2d(
         queue_id,
         haloed_tensor,
         sliding_window_config,
         pool_type,
-        DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
+        input_tensor.dtype(),  // input_tensor.dtype(), // currently only bfp16 output is supported
         out_memory_config,
         count_include_pad,
         divisor_override,

@@ -74,11 +74,11 @@ def run_max_pool(
 
     # skips to speed up nightly test
     if nightly_skips:
-        if dtype == ttnn.bfloat8_b:
-            if stride == (2, 2) or padding == (1, 1):
-                pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
-            if kernel_size == (9, 9):
-                pytest.skip("Skip for kernel size (9, 9) for BF8!")
+        # if dtype == ttnn.bfloat8_b:
+        #     if stride == (2, 2) or padding == (1, 1):
+        #         pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
+        #     if kernel_size == (9, 9):
+        #         pytest.skip("Skip for kernel size (9, 9) for BF8!")
         if ceil_mode:
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
@@ -141,6 +141,7 @@ def run_max_pool(
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
+    print("dtype is ", dtype)
     if dtype == ttnn.bfloat8_b or True:
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.TILE_LAYOUT, device=device)
     else:
@@ -170,6 +171,8 @@ def run_max_pool(
         ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
 
     # run ttnn maxpool2d
+    print("ttnn_input dataformat is ")
+    print(ttnn_input.dtype)
     ttnn_output = ttnn.max_pool2d(
         input_tensor=ttnn_input,
         batch_size=in_n,
@@ -246,7 +249,7 @@ def run_max_pool(
     "input_shape",  ## NCHW
     (
         (  # resnet shapes
-            [1, 32 * 9, 64, 64],
+            [1, 32, 16, 16],
             # [16, 64, 112, 112],
             # # hpr shapes
             # [8, 32, 132, 20],
@@ -301,8 +304,8 @@ def run_max_pool(
 @pytest.mark.parametrize(
     "dtype",
     [
-        ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        # ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
