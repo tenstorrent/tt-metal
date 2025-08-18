@@ -104,6 +104,32 @@ def test_linear(
         (1, 333, 9728, 2432),  # SD3.5 text FF
         (1, 1, 2432, 14592),  # SD3.5 context
         (1, 1, 2432, 4864),  # SD3.5 final context
+        (1, 1, 3072, 12288),  # Mochi timestep norm1 linear
+        (1, 1, 3072, 6144),  # Mochi timestep norm1_context linear
+        (1, 44520, 3072, 3072),  # Mochi spatial Q, K, V and out_proj
+        (1, 118, 1536, 3072),  # Mochi text Q, K, V
+        (1, 118, 3072, 1536),  # Mochi text out_proj
+    ],
+    ids=[
+        "sd35_timestep_embedder",
+        "sd35_timestep_embedder_2",
+        "sd35_text_embedder",
+        "sd35_text_embedder_2",
+        "sd35_spatial_qkv",
+        "sd35_text_qkv",
+        "sd35_spatial_out_proj",
+        "sd35_text_out_proj",
+        "sd35_spatial_FF",
+        "sd35_spatial_FF_2",
+        "sd35_text_FF",
+        "sd35_text_FF_2",
+        "sd35_context",
+        "sd35_final_context",
+        "mochi_timestep_norm1_linear",
+        "mochi_timestep_norm1_context_linear",
+        "mochi_spatial_qkv_and_out_proj",
+        "mochi_text_qkv",
+        "mochi_text_out_proj",
     ],
 )
 @pytest.mark.parametrize(
@@ -136,12 +162,12 @@ def test_col_parallel_linear(
             N,
             bias=bias,
             mesh_device=mesh_device,
-            tp_mesh_axis=tp_mesh_axis,
+            mesh_axis=tp_mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
     else:
-        tt_model = ColParallelLinear(K, N, bias=bias, mesh_device=mesh_device, tp_mesh_axis=tp_mesh_axis)
+        tt_model = ColParallelLinear(K, N, bias=bias, mesh_device=mesh_device, mesh_axis=tp_mesh_axis)
     tt_model.load_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn((1, B, M, K), dtype=torch_dtype)
@@ -225,7 +251,7 @@ def test_row_parallel_linear(
         N,
         bias=bias,
         mesh_device=mesh_device,
-        tp_mesh_axis=tp_mesh_axis,
+        mesh_axis=tp_mesh_axis,
         fsdp_mesh_axis=fsdp_mesh_axis,
         ccl_manager=ccl_manager,
     )

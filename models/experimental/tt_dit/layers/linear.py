@@ -79,7 +79,7 @@ class ColParallelLinear:
         bias=True,
         activation=None,
         mesh_device=None,
-        tp_mesh_axis=0,
+        mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
         init=False,
@@ -88,30 +88,31 @@ class ColParallelLinear:
         self.out_features = out_features
         self.activation = activation
         self.mesh_device = mesh_device
-        self.tp_mesh_axis = tp_mesh_axis
+        self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
 
         if self.fsdp_mesh_axis is not None:
-            assert self.tp_mesh_axis != self.fsdp_mesh_axis
+            assert self.mesh_axis != self.fsdp_mesh_axis
+            assert self.ccl_manager is not None
 
         if init:
             if fsdp_mesh_axis is not None:
                 self.weight = bf16_tensor_2dshard(
                     torch.randn(in_features, out_features),
                     device=self.mesh_device,
-                    shard_mapping={tp_mesh_axis: 1, fsdp_mesh_axis: 0},
+                    shard_mapping={mesh_axis: 1, fsdp_mesh_axis: 0},
                 )
             else:
                 self.weight = bf16_tensor(
                     torch.randn(in_features, out_features),
                     device=self.mesh_device,
-                    mesh_axis=self.tp_mesh_axis,
+                    mesh_axis=self.mesh_axis,
                     shard_dim=-1,
                 )
             if bias:
                 self.bias = bf16_tensor(
-                    torch.randn(1, out_features), device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-1
+                    torch.randn(1, out_features), device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1
                 )
             else:
                 self.bias = None
@@ -136,13 +137,13 @@ class ColParallelLinear:
             weight, bias = transform(weight, bias)
         if self.fsdp_mesh_axis is not None:
             self.weight = bf16_tensor_2dshard(
-                weight, device=self.mesh_device, shard_mapping={self.tp_mesh_axis: 1, self.fsdp_mesh_axis: 0}
+                weight, device=self.mesh_device, shard_mapping={self.mesh_axis: 1, self.fsdp_mesh_axis: 0}
             )
         else:
-            self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-1)
+            self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
         if bias is not None:
             bias = bias.reshape(1, -1)
-            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-1)
+            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
         else:
             self.bias = None
 
@@ -194,7 +195,7 @@ class RowParallelLinear:
         bias=True,
         activation=None,
         mesh_device=None,
-        tp_mesh_axis=0,
+        mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
         init=False,
@@ -203,25 +204,25 @@ class RowParallelLinear:
         self.out_features = out_features
         self.activation = activation
         self.mesh_device = mesh_device
-        self.tp_mesh_axis = tp_mesh_axis
+        self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
 
         if self.fsdp_mesh_axis is not None:
-            assert self.tp_mesh_axis != self.fsdp_mesh_axis
+            assert self.mesh_axis != self.fsdp_mesh_axis
 
         if init:
             if self.fsdp_mesh_axis is not None:
                 self.weight = bf16_tensor_2dshard(
                     torch.randn(in_features, out_features),
                     device=self.mesh_device,
-                    shard_mapping={self.tp_mesh_axis: 0, self.fsdp_mesh_axis: 1},
+                    shard_mapping={self.mesh_axis: 0, self.fsdp_mesh_axis: 1},
                 )
             else:
                 self.weight = bf16_tensor(
                     torch.randn(in_features, out_features),
                     device=self.mesh_device,
-                    mesh_axis=self.tp_mesh_axis,
+                    mesh_axis=self.mesh_axis,
                     shard_dim=-2,
                 )
             if bias:
@@ -254,16 +255,16 @@ class RowParallelLinear:
             weight, bias = transform(weight, bias)
         if self.fsdp_mesh_axis is not None:
             self.weight = bf16_tensor_2dshard(
-                weight, device=self.mesh_device, shard_mapping={self.tp_mesh_axis: 0, self.fsdp_mesh_axis: 1}
+                weight, device=self.mesh_device, shard_mapping={self.mesh_axis: 0, self.fsdp_mesh_axis: 1}
             )
         else:
-            self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-2)
+            self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-2)
         if bias is not None:
             bias = bias.reshape(1, -1)
-            if tuple(self.mesh_device.shape)[self.tp_mesh_axis] > 1:
-                zero_bias = torch.zeros(1, bias.shape[1] * (tuple(self.mesh_device.shape)[self.tp_mesh_axis] - 1))
+            if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+                zero_bias = torch.zeros(1, bias.shape[1] * (tuple(self.mesh_device.shape)[self.mesh_axis] - 1))
                 bias = torch.cat([bias, zero_bias], dim=-1)
-            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.tp_mesh_axis, shard_dim=-1)
+            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
         else:
             self.bias = None
 
@@ -298,18 +299,18 @@ class RowParallelLinear:
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
 
-        if tuple(self.mesh_device.shape)[self.tp_mesh_axis] > 1:
+        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
                 persistent_output_buffers=self.ccl_manager.get_rs_ping_pong_buffer(
-                    output.shape, dim=3, mesh_axis=self.tp_mesh_axis
+                    output.shape, dim=3, mesh_axis=self.mesh_axis
                 ),
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
                 num_links=self.ccl_manager.num_links,
                 memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
                 topology=self.ccl_manager.topology,
-                cluster_axis=self.tp_mesh_axis,
+                cluster_axis=self.mesh_axis,
                 **self.ccl_manager.get_rs_hyperparams(output.shape),
             )
 
