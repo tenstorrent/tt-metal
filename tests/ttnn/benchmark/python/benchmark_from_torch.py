@@ -66,26 +66,16 @@ def test_benchmark_from_torch_two_copy(benchmark):
     ],
 )
 @pytest.mark.parametrize(
-    "size_multiplier",
-    [
-        1,
-        2,
-        4,
-        8,
-        16,
-    ],
+    "size",
+    [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192],
 )
-def test_benchmark_from_torch(
-    benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size_multiplier, request
-):
+def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size, request):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
         pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
-    height = int(8096 / 16) * size_multiplier
-    width = int(8100 / 16) * size_multiplier
     if torch_dtype in [torch.int32, torch.uint8, torch.int64]:
-        torch_input_tensor = torch.randint(0, 100, (height, width), dtype=torch_dtype)
+        torch_input_tensor = torch.randint(0, 100, (size, size), dtype=torch_dtype)
     else:
-        torch_input_tensor = torch.rand((height, width), dtype=torch_dtype)
+        torch_input_tensor = torch.rand((size, size), dtype=torch_dtype)
 
     def from_torch():
         ttnn_tensor = ttnn.from_torch(
@@ -125,27 +115,19 @@ def test_benchmark_from_torch(
     ],
 )
 @pytest.mark.parametrize(
-    "size_multiplier",
-    [
-        1,
-        2,
-        4,
-        8,
-        16,
-    ],
+    "size",
+    [256, 512, 1024, 2048, 4096, 8192],
 )
-def test_benchmark_to_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, size_multiplier, ttnn_layout):
+def test_benchmark_to_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, size, ttnn_layout):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
         pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
 
-    height = int(8096 / 16) * size_multiplier
-    width = int(8100 / 16) * size_multiplier
     match ttnn_dtype:
         case ttnn.int32 | ttnn.uint8:
-            tmp_torch = torch.randint(0, 100, (height, width), dtype=torch.int32)
+            tmp_torch = torch.randint(0, 100, (size, size), dtype=torch.int32)
 
         case _:
-            tmp_torch = torch.rand(height, width, dtype=torch.float32)
+            tmp_torch = torch.rand(size, size, dtype=torch.float32)
 
     ttnn_input_tensor = ttnn.from_torch(tmp_torch, device=device, dtype=ttnn_dtype, layout=ttnn_layout)
 

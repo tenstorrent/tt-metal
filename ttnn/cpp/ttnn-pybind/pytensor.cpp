@@ -48,12 +48,11 @@
 using namespace tt::tt_metal;
 struct PyFromTorchConversionInput {
     std::string torch_dtype;
-    DataType optional_data_type;
-    Layout optional_layout;
+    DataType data_type;
+    Layout layout;
 
     bool operator==(const PyFromTorchConversionInput& other) const {
-        return torch_dtype == other.torch_dtype && optional_data_type == other.optional_data_type &&
-               optional_layout == other.optional_layout;
+        return torch_dtype == other.torch_dtype && data_type == other.data_type && layout == other.layout;
     }
 };
 
@@ -68,8 +67,8 @@ template <>
 struct std::hash<PyFromTorchConversionInput> {
     std::size_t operator()(const PyFromTorchConversionInput& input) const {
         std::size_t h1 = std::hash<std::string>{}(input.torch_dtype);
-        std::size_t h2 = std::hash<int>{}(static_cast<int>(input.optional_data_type));
-        std::size_t h3 = std::hash<int>{}(static_cast<int>(input.optional_layout));
+        std::size_t h2 = std::hash<int>{}(static_cast<int>(input.data_type));
+        std::size_t h3 = std::hash<int>{}(static_cast<int>(input.layout));
         return h1 ^ (h2 << 1) ^ (h3 << 2);
     }
 };
@@ -443,8 +442,8 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
     if (expected_dtype != DataType::INVALID) {
         PyFromTorchConversionInput input{
             .torch_dtype = tensor.attr("dtype").attr("__str__")().cast<std::string>().substr(sizeof("torch.") - 1),
-            .optional_data_type = expected_dtype,
-            .optional_layout = layout.value_or(Layout::ROW_MAJOR),
+            .data_type = expected_dtype,
+            .layout = layout.value_or(Layout::ROW_MAJOR),
         };
 
         auto it = conversion_map.find(input);
