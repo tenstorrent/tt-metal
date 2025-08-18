@@ -205,7 +205,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,              // output CB index
         (std::uint32_t)aligned_output_stick_nbytes,  // output stick size
-        (std::uint32_t)in_ntiles_c                   // number of tiles per channel (for ntiles_c pages per stick)
+        (std::uint32_t)out_ntiles_c                  // number of tiles per channel (for ntiles_c pages per stick)
     };
 
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
