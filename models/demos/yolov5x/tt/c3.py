@@ -4,12 +4,7 @@
 
 
 import ttnn
-from models.experimental.yolov5x.tt.common import (
-    TtYOLOv5xConv2D,
-    TtnnBottleneck,
-    deallocate_tensors,
-    interleaved_to_sharded,
-)
+from models.demos.yolov5x.tt.common import TtnnBottleneck, TtYOLOv5xConv2D, deallocate_tensors, interleaved_to_sharded
 from models.experimental.yolo_common.yolo_utils import concat
 
 
