@@ -30,6 +30,13 @@
 
 namespace tt {
 
+// Convert "x,y" to YAML::Node sequence [x, y]
+inline YAML::Node string_to_yaml_node(const std::string& input) {
+    // Format as YAML sequence: "[x, y]"
+    std::string yaml_seq = "[" + input + "]";
+    return YAML::Load(yaml_seq);
+}
+
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
@@ -158,6 +165,40 @@ const core_descriptor_t& get_core_descriptor_config(
     TT_ASSERT(compute_with_storage_start.IsSequence() and compute_with_storage_end.IsSequence());
     TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
     TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
+    // // Adjusts the core grid configuration based on the value of the environment variable
+    if (tt_metal::MetalContext::instance().rtoptions().is_core_grid_override_todeprecate()) {
+        auto compute_with_storage_end_override =
+            string_to_yaml_node(tt_metal::MetalContext::instance().rtoptions().get_core_grid_override_todeprecate());
+        TT_FATAL(
+            compute_with_storage_end_override.IsSequence(),
+            "compute_with_storage_end_override must be a YAML sequence");
+        TT_FATAL(
+            (compute_with_storage_end[0].as<int>() >= compute_with_storage_end_override[0].as<int>()),
+            "compute_with_storage_end[0]= {} should be >= compute_with_storage_end_override[0]= {}",
+            compute_with_storage_end[0].as<int>(),
+            compute_with_storage_end_override[0].as<int>());
+        TT_FATAL(
+            compute_with_storage_end[1].as<int>() >= compute_with_storage_end_override[1].as<int>(),
+            "compute_with_storage_end[1]= {} should be >= compute_with_storage_end_override[1]= {}",
+            compute_with_storage_end[1].as<int>(),
+            compute_with_storage_end_override[1].as<size_t>());
+        TT_FATAL(
+            compute_with_storage_end_override[0].as<int>() >= compute_with_storage_start[0].as<int>(),
+            "compute_with_storage_end_override[0]= {} should be >= compute_with_storage_start[0]= {}",
+            compute_with_storage_end_override[0].as<int>(),
+            compute_with_storage_start[0].as<int>());
+        TT_FATAL(
+            compute_with_storage_end_override[1].as<int>() >= compute_with_storage_start[1].as<int>(),
+            "compute_with_storage_end_override[1]= {} should be >= compute_with_storage_start[1]= {}",
+            compute_with_storage_end_override[1].as<int>(),
+            compute_with_storage_start[1].as<int>());
+        compute_with_storage_end = compute_with_storage_end_override;
+        log_warning(
+            tt::LogDevice,
+            "Overrided compute_with_storage_end [x, y]=[{}, {}]",
+            compute_with_storage_end[0].as<std::string>(),
+            compute_with_storage_end[1].as<std::string>());
+    }
     CoreCoord compute_grid_size(
         (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
         (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1);
