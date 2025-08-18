@@ -173,41 +173,16 @@ void MAIN {
                 cb_wait_front(cb_x, wt + blk);
                 for (uint32_t j = 0; j < blk; j++) {
                     // Welford's needs transposed input tile
-                    copy_tile_to_dst_init_short(cb_x, /*transpose*/ 1);
-                    copy_tile(cb_x, j, dst0);
+                    transpose_wh_init_short(cb_x);
+                    transpose_wh_tile(cb_x, wt + j, dst0);
                     welford_init();
                     welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
                     start_N += tile_width;
                 }
             }
             // Transpose dst1 and dst2 back to columns
-            pack_reconfig_data_format(cb_ex);
-            pack_tile(dst1, cb_ex);
-            pack_reconfig_data_format(cb_ex2);
-            pack_tile(dst2, cb_ex2);
+            layernorm::compute::utils::transpose_pack_mean_and_variance(cb_ex, cb_ex2, dst1, dst2);
             REL();
-            cb_push_back(cb_ex, onetile);
-            cb_push_back(cb_ex2, onetile);
-            ACQ();
-            cb_wait_front(cb_ex, onetile);
-            cb_wait_front(cb_ex2, onetile);
-            transpose_wh_init_short(cb_ex);
-            reconfig_data_format_srca(cb_ex);
-            transpose_wh_tile(cb_ex, 0, dst1);
-            transpose_wh_init_short(cb_ex2);
-            reconfig_data_format_srca(cb_ex2);
-            transpose_wh_tile(cb_ex2, 0, dst2);
-            cb_pop_front(cb_ex, onetile);
-            cb_pop_front(cb_ex2, onetile);
-            cb_reserve_back(cb_ex, onetile);
-            cb_reserve_back(cb_ex2, onetile);
-            pack_reconfig_data_format(cb_ex);
-            pack_tile(dst1, cb_ex);
-            pack_reconfig_data_format(cb_ex2);
-            pack_tile(dst2, cb_ex2);
-            REL();
-            cb_push_back(cb_ex, onetile);
-            cb_push_back(cb_ex2, onetile);
 
             // x - E[x]
             // Reuse cb_x since we didn't pop anything from it
