@@ -24,12 +24,10 @@ test_suite_bh_single_pcie_metal_unit_tests() {
 
 # Function test run BH UMD tests, should be any topology
 test_suite_bh_umd_unit_tests() {
-    pwd
-    ls -la ./tt_metal/third_party/umd/tests/soc_descs/
-    ls -la /work/tt_metal/third_party
-    ls -la /work/tt_metal/third_party/umd/tests/soc_descs/
-    ./build/test/umd/api/api_tests
     ./build/test/umd/blackhole/unit_tests
+    sudo mkdir -p /work/tt_metal/third_party/umd/tests/
+    sudo ln -s $(realpath ./tt_metal/third_party/umd/tests/soc_descs/) /work/tt_metal/third_party/umd/tests/soc_descs
+    ./build/test/umd/api/api_tests
 }
 
 # Function to run BH single PCIe small ML model tests
