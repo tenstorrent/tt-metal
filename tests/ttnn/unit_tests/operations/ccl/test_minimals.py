@@ -17,7 +17,6 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
     run_rms_trace,
@@ -293,7 +292,6 @@ def run_all_gather_impl(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.parametrize(
@@ -395,7 +393,6 @@ def test_all_gather_only(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @skip_for_wormhole_b0("This is a blackhole test")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
@@ -473,7 +470,6 @@ def test_bh_trace_ag(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.parametrize(
@@ -549,7 +545,6 @@ def test_tg_trace_rms_fuse(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.parametrize(
@@ -625,7 +620,6 @@ def test_6u_trace_rms_fuse(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.parametrize(
@@ -702,7 +696,6 @@ def test_rms_fuse(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.parametrize(
@@ -817,7 +810,6 @@ def test_concat_fuse(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(not is_6u(), reason="skip when not 6u")
 @pytest.mark.parametrize(
