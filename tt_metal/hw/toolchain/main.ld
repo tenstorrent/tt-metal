@@ -4,7 +4,7 @@
 
 #if (defined(COMPILE_FOR_BRISC) + defined(COMPILE_FOR_NCRISC) +         \
      defined(COMPILE_FOR_IERISC) + defined(COMPILE_FOR_SUBORDINATE_IERISC) +  \
-     defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_AERISC) + defined(COMPILE_FOR_LITE_FABRIC)) != 1
+     defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_AERISC)) != 1
 #error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
 #endif
 
@@ -85,14 +85,6 @@ OUTPUT_ARCH(riscv)
 #else
 #define TEXT_SIZE MEM_IERISC_KERNEL_SIZE
 #endif
-
-#elif defined(COMPILE_FOR_LITE_FABRIC)
-
-#define DATA_START MEM_LOCAL_BASE
-#define DATA_SIZE MEM_ERISC_LOCAL_SIZE
-#define STACK_MIN_SIZE MEM_LITE_FABRIC_STACK_MIN_SIZE
-#define TEXT_START MEM_LITE_FABRIC_FIRMWARE_BASE
-#define TEXT_SIZE MEM_LITE_FABRIC_FIRMWARE_SIZE
 
 #else
 #error "compiling for unknown"
