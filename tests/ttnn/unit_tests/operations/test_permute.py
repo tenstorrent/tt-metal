@@ -333,7 +333,7 @@ def test_nil_volume_permute(device, dtype):
     output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (0, 1, 3, 2))
-    assert_equal(torch_output, output_tensor)
+    assert torch_output.shape == output_tensor.shape
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
