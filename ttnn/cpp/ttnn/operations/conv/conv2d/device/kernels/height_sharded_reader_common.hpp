@@ -182,52 +182,54 @@ FORCE_INLINE void read_sticks_activation_reuse(
     end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
 
     if constexpr (!readers_process_full_image_widths) {
-        // The first image width might be split between two rows
-        uint16_t leftover_row_width = image_width_padded_to_tile - pixel_column;
-        uint16_t second_row_width = leftover_row_width, third_row_width = 0;
-        if constexpr (!output_image_width_full_tile) {
-            // If the output image width is not a multiple of the tile width, the first 'image width' might be split
-            // between three rows since we padd image width to tile size; otherwise, it is always split between maximum
-            // two rows
-            const uint16_t interval_width = end_ind - start_ind + 1;
-            if (leftover_row_width > interval_width) {
-                second_row_width = interval_width;
-                third_row_width = leftover_row_width - second_row_width;
-            }
-        }
-
-        for (uint16_t ind = start_ind; ind < start_ind + second_row_width; ind += stride_w) {
-            read_first_image_row_window<
-                coalesced_read_bytes,
-                stride_h_bytes,
-                window_outer,
-                cb_id_act,
-                act_cb_w_tiles,
-                conv_act_c_read_bytes,
-                act_block_w_extra_align_bytes>(l1_write_addr_act, reader_offset, ind, pixel_column);
-        }
-
-        start_ind = start_ind + second_row_width;
-
-        if constexpr (!output_image_width_full_tile) {
-            if (third_row_width > 0) {
-                num_elems--;
-                reader_idx++;
-                start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
-
-                for (uint16_t ind = start_ind; ind < start_ind + third_row_width; ind += stride_w) {
-                    read_first_image_row_window<
-                        coalesced_read_bytes,
-                        stride_h_bytes,
-                        window_outer,
-                        cb_id_act,
-                        act_cb_w_tiles,
-                        conv_act_c_read_bytes,
-                        act_block_w_extra_align_bytes>(l1_write_addr_act, reader_offset, ind, pixel_column);
+        if (num_elems) {
+            // The first image width might be split between two rows
+            uint16_t leftover_row_width = image_width_padded_to_tile - pixel_column;
+            uint16_t second_row_width = leftover_row_width, third_row_width = 0;
+            if constexpr (!output_image_width_full_tile) {
+                // If the output image width is not a multiple of the tile width, the first 'image width' might be split
+                // between three rows since we padd image width to tile size; otherwise, it is always split between
+                // maximum two rows
+                const uint16_t interval_width = end_ind - start_ind + 1;
+                if (leftover_row_width > interval_width) {
+                    second_row_width = interval_width;
+                    third_row_width = leftover_row_width - second_row_width;
                 }
+            }
 
-                start_ind = start_ind + third_row_width;
+            for (uint16_t ind = start_ind; ind < start_ind + second_row_width; ind += stride_w) {
+                read_first_image_row_window<
+                    coalesced_read_bytes,
+                    stride_h_bytes,
+                    window_outer,
+                    cb_id_act,
+                    act_cb_w_tiles,
+                    conv_act_c_read_bytes,
+                    act_block_w_extra_align_bytes>(l1_write_addr_act, reader_offset, ind, pixel_column);
+            }
+
+            start_ind = start_ind + second_row_width;
+
+            if constexpr (!output_image_width_full_tile) {
+                if (third_row_width > 0) {
+                    num_elems--;
+                    reader_idx++;
+                    start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+                    end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+
+                    for (uint16_t ind = start_ind; ind < start_ind + third_row_width; ind += stride_w) {
+                        read_first_image_row_window<
+                            coalesced_read_bytes,
+                            stride_h_bytes,
+                            window_outer,
+                            cb_id_act,
+                            act_cb_w_tiles,
+                            conv_act_c_read_bytes,
+                            act_block_w_extra_align_bytes>(l1_write_addr_act, reader_offset, ind, pixel_column);
+                    }
+
+                    start_ind = start_ind + third_row_width;
+                }
             }
         }
     }
@@ -287,7 +289,6 @@ FORCE_INLINE void read_sticks_activation_reuse(
         start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
         end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
     }
-    // reader_idx++;
 
     // Last core sometimes has less work to do, but we still need to push the same number of tiles
     // to avoid blocking compute kernels
