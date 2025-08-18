@@ -58,7 +58,6 @@
 <p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Programming Examples</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="dram_loopback.html">DRAM Loopback</a></li>
 <li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html">Eltwise binary</a></li>
@@ -78,6 +77,8 @@
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
@@ -341,7 +342,7 @@ changes to:</p>
 
 <span class="w">    </span><span class="c1">// Instead of processing all tiles, we process only the assigned amount of tiles.</span>
 <span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_output_tiles</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">acquire_dst</span><span class="p">();</span>
+<span class="w">        </span><span class="n">tile_regs_acquire</span><span class="p">();</span>
 <span class="w">        </span><span class="c1">// Same inner loop as in the single core example, only the outer loop is adjusted</span>
 <span class="w">        </span><span class="c1">// to produce the assigned number of tiles.</span>
 <span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">kt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">kt</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">Kt</span><span class="p">;</span><span class="w"> </span><span class="n">kt</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
@@ -354,11 +355,14 @@ changes to:</p>
 <span class="w">            </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">        </span><span class="p">}</span>
 
+<span class="w">        </span><span class="n">tile_regs_commit</span><span class="p">();</span>
+<span class="w">        </span><span class="n">tile_regs_wait</span><span class="p">();</span>
+
 <span class="w">        </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_out</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">        </span><span class="n">pack_tile</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out</span><span class="p">);</span>
 <span class="w">        </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_out</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 
-<span class="w">        </span><span class="n">release_dst</span><span class="p">();</span>
+<span class="w">        </span><span class="n">tile_regs_release</span><span class="p">();</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>

@@ -58,7 +58,6 @@
 <p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Programming Examples</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="dram_loopback.html">DRAM Loopback</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Eltwise binary</a><ul>
@@ -75,6 +74,8 @@
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
@@ -283,7 +284,7 @@ depending on the most up-to-date installation methods.</p>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>The compute kernel is a bit more complicated. It is responsible for performing the actual computation. After the initialization calls to configure the matrix engine to perform addition on the input tiles, it enters a loop then waits for the destination registers to be available. Please refer to the Programming Model section for more information on this. In short, the destination registers are a set of 16 registers that are used send data in and out of the computation engines. 8 of them can be used at a time. Once the destination registers are available, it waits for the reader kernel to make data available in the circular buffers. Once there is data, it adds the first tile from each buffer together and writes the result to destination register 0. Wait for space on the output circular buffer, and pushes the computed tile into it. Finally, it marks the input as consumed, output as produced and computation done.</p>
+<p>The compute kernel performs the actual elementwise addition. It initializes the matrix engine for addition, then enters a loop. Inside the loop, it waits for data to be available in the input circular buffers, and for the destination registers to be free. The destination registers (16 in total, with 8 usable at a time) are used to transfer data to and from the computation engines. The kernel adds the input tiles, writes the result to destination register 0, waits to be sure the result is ready, and waits for the output circular buffer to have space, and pushes the computed tile into it. Finally, it marks the input tiles as consumed, the output tile as produced, and releases the registers.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp</span>
 <span class="k">namespace</span><span class="w"> </span><span class="nn">NAMESPACE</span><span class="w"> </span><span class="p">{</span>
@@ -301,18 +302,23 @@ depending on the most up-to-date installation methods.</p>
 
 <span class="w">    </span><span class="c1">// Loop over all the tiles and perform the computation</span>
 <span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">acquire_dst</span><span class="p">();</span>
 <span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 
+<span class="w">        </span><span class="n">tile_regs_acquire</span><span class="p">();</span>
+
 <span class="w">        </span><span class="n">add_tiles</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="cm">/*offset_0*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*offset_1*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">dst_reg_id</span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">tile_regs_commit</span><span class="p">();</span>
+<span class="w">        </span><span class="n">tile_regs_wait</span><span class="p">();</span>
 
 <span class="w">        </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">        </span><span class="n">pack_tile</span><span class="p">(</span><span class="n">dst_reg</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0</span><span class="p">);</span><span class="w"> </span><span class="c1">// copy result to out0</span>
+<span class="w">        </span><span class="n">tile_regs_release</span><span class="p">();</span>
+
 <span class="w">        </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
-<span class="w">        </span><span class="n">release_dst</span><span class="p">();</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 <span class="p">}</span>

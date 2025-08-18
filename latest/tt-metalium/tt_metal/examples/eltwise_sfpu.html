@@ -58,7 +58,6 @@
 <p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Programming Examples</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="dram_loopback.html">DRAM Loopback</a></li>
 <li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html">Eltwise binary</a></li>
@@ -75,6 +74,8 @@
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
@@ -245,8 +246,8 @@
 <ul class="simple">
 <li><p>Initialize the SFPU with the <code class="docutils literal notranslate"><span class="pre">init_sfpu</span></code> function</p></li>
 <li><p>Call the specific SFPU operation initialization function, such as <code class="docutils literal notranslate"><span class="pre">exp_tile_init</span></code> for exponential</p></li>
-<li><p>Acquire tile registers using <code class="docutils literal notranslate"><span class="pre">tile_regs_acquire</span></code></p></li>
 <li><p>Wait for data to be available in the circular buffer using <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code> (same as the FPU)</p></li>
+<li><p>Acquire tile registers using <code class="docutils literal notranslate"><span class="pre">tile_regs_acquire</span></code></p></li>
 <li><p>Copy the tile from the circular buffer to the registers using <code class="docutils literal notranslate"><span class="pre">copy_tile</span></code></p></li>
 <li><p>Perform the SFPU operation using <code class="docutils literal notranslate"><span class="pre">exp_tile</span></code> (or other SFPU operations)</p></li>
 <li><p>Wait for the result to be written back using <code class="docutils literal notranslate"><span class="pre">tile_regs_commit</span></code> and <code class="docutils literal notranslate"><span class="pre">tile_regs_wait</span></code></p></li>
@@ -272,9 +273,9 @@
 <span class="w">    </span><span class="c1">// Setup the SFPU for exponential operation</span>
 <span class="w">    </span><span class="n">exp_tile_init</span><span class="p">();</span>
 <span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">        </span><span class="c1">// Make sure and acquire data before running the SFPU operation</span>
 <span class="w">        </span><span class="n">tile_regs_acquire</span><span class="p">();</span>
-<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">        </span><span class="c1">// Copy the tile from the circular buffer offset 0 to the tile registers 0</span>
 <span class="w">        </span><span class="n">copy_tile</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*offset*/</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*register_offset*/</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
 

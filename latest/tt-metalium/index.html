@@ -57,8 +57,9 @@
 <p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="tt_metal/programming_model/index.html">Programming Model</a></li>
-<li class="toctree-l1"><a class="reference internal" href="tt_metal/apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tools/index.html">Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
@@ -171,6 +172,136 @@
 <p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1">
+<a class="reference internal" href="tt_metal/examples/index.html">Programming Examples</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/dram_loopback.html">DRAM Loopback</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#device-initialization">Device initialization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#program-setup">Program setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#create-buffers-in-dram-and-l1-sram">Create buffers in DRAM and L1 (SRAM)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#sending-real-data-into-dram">Sending real data into DRAM</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#creating-a-data-movement-kernel">Creating a data movement kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#setting-runtime-arguments-for-the-data-movement-kernel">Setting runtime arguments for the data movement kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#running-the-program">Running the program</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#download-the-result-and-verify-output">Download the result and verify output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#validation-and-teardown">Validation and teardown</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/eltwise_binary.html">Eltwise binary</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#program-setup">Program setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#circular-buffers">Circular buffers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#data-movement-and-compute-kernels">Data movement and compute kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#download-the-result-and-verify-output">Download the result and verify output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#validation-and-teardown">Validation and teardown</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html">Eltwise SFPU</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#program-setup">Program setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#the-kernels">The kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#set-up-runtime-arguments">Set up runtime arguments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#program-execution-and-final-check">Program execution and final check</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/matmul_single_core.html">Matmul (Single Core)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#device-initialization-program-setup">Device Initialization &amp; Program Setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#data-preparation-and-golden-reference">Data Preparation and Golden Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#dram-buffer-allocation">DRAM Buffer Allocation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#circular-buffer-orchestration-for-pipelined-matmul">Circular Buffer Orchestration for Pipelined MatMul</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/examples/matmul_single_core.html#matmul-kernel-pipeline-breakdown">Matmul Kernel Pipeline Breakdown</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#the-reader-kernel">The reader kernel</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#the-compute-kernel">The compute kernel</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#the-writer-kernel">The writer kernel</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#kernel-execution-and-result-verification">Kernel execution and result verification</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/matmul_multi_core.html">Matmul (Multi Core)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#device-initialization-program-setup">Device Initialization &amp; Program Setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#calculating-work-distribution">Calculating Work Distribution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#buffer-and-circular-buffer-allocation">Buffer and Circular Buffer Allocation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#partitioning-work-in-kernels">Partitioning Work in Kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#kernel-creation-and-parameter-setup">Kernel Creation and Parameter Setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#program-execution-receiving-results-and-cleanup">Program Execution, Receiving Results and Cleanup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#conclusion">Conclusion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#references">References</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html">Data Reuse in <cite>matmul_multicore_reuse</cite></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#fine-grained-block-size-control">Fine-Grained Block Size Control</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#intermediate-circular-buffer-configuration">Intermediate Circular Buffer Configuration</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#stride-kernel-arguments">Stride Kernel Arguments</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#intermediate-results-handling">Intermediate Results Handling</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html">Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#additional-compile-time-argument">Additional Compile-Time Argument</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#configuring-core-ranges-for-tile-distribution">Configuring Core Ranges for Tile Distribution</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#circular-buffer-creation-for-coregrid">Circular Buffer Creation for CoreGrid</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#multicast-reader-writer-kernel-setup">Multicast Reader/Writer Kernel Setup</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#new-compute-kernel-fused-bias-addition-and-activation-functions">New Compute Kernel: Fused Bias Addition and Activation Functions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#semaphores">Semaphores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#kernel-runtime-arguments">Kernel Runtime Arguments</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tt_metal/advanced_topics/index.html">Advanced Topics</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/advanced_topics/index.html#hardware-implications-and-the-effects">Hardware implications and the effects</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/advanced_topics/tiles.html">Tiles</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/tiles.html#internal-structure-of-a-tile">Internal structure of a Tile</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/tiles.html#conversion-between-tiles-and-row-major-format">Conversion between tiles and row-major format</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html">Memory from a kernel developer’s perspective</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#data-addressing-on-tenstorrent-processors">Data addressing on Tenstorrent processors</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#risc-v-address-space">RISC-V Address Space</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#dram-tiles">DRAM tiles</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#memory-access-via-the-noc">Memory access via the NoC</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#tensor-layout">Tensor Layout</a></li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#memory-placement">Memory placement</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#lock-step-allocation">Lock step allocation</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#interleaved-memory">Interleaved memory</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#sram-buffers">SRAM buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#sharded-tensor">Sharded tensor</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html">Compute Engines and Data Flow within Tensix</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#component-introduction">Component introduction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#dst-register">Dst register</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#matrix-engine-fpu">Matrix engine/FPU</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#vector-engine-sfpu">Vector engine/SFPU</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
 <li class="toctree-l1">
 <a class="reference internal" href="tt_metal/apis/index.html">APIs</a><ul>
 <li class="toctree-l2">
@@ -439,94 +570,6 @@
 <li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/kernel_apis/pack_unpack/pack_tile.html">pack_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/kernel_apis/pack_unpack/pack_untilize.html">pack_untilize_block</a></li>
 <li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/kernel_apis/pack_unpack/reconfig_data_format.html">reconfig_data_format</a></li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-</li>
-<li class="toctree-l1">
-<a class="reference internal" href="tt_metal/examples/index.html">Programming Examples</a><ul>
-<li class="toctree-l2">
-<a class="reference internal" href="tt_metal/examples/dram_loopback.html">DRAM Loopback</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#device-initialization">Device initialization</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#program-setup">Program setup</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#create-buffers-in-dram-and-l1-sram">Create buffers in DRAM and L1 (SRAM)</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#sending-real-data-into-dram">Sending real data into DRAM</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#creating-a-data-movement-kernel">Creating a data movement kernel</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#setting-runtime-arguments-for-the-data-movement-kernel">Setting runtime arguments for the data movement kernel</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#running-the-program">Running the program</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#download-the-result-and-verify-output">Download the result and verify output</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#validation-and-teardown">Validation and teardown</a></li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="tt_metal/examples/eltwise_binary.html">Eltwise binary</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#program-setup">Program setup</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#circular-buffers">Circular buffers</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#data-movement-and-compute-kernels">Data movement and compute kernels</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#download-the-result-and-verify-output">Download the result and verify output</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#validation-and-teardown">Validation and teardown</a></li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html">Eltwise SFPU</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#program-setup">Program setup</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#the-kernels">The kernels</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#set-up-runtime-arguments">Set up runtime arguments</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#program-execution-and-final-check">Program execution and final check</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#conclusion">Conclusion</a></li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="tt_metal/examples/matmul_single_core.html">Matmul (Single Core)</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#device-initialization-program-setup">Device Initialization &amp; Program Setup</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#data-preparation-and-golden-reference">Data Preparation and Golden Reference</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#dram-buffer-allocation">DRAM Buffer Allocation</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#circular-buffer-orchestration-for-pipelined-matmul">Circular Buffer Orchestration for Pipelined MatMul</a></li>
-<li class="toctree-l3">
-<a class="reference internal" href="tt_metal/examples/matmul_single_core.html#matmul-kernel-pipeline-breakdown">Matmul Kernel Pipeline Breakdown</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#the-reader-kernel">The reader kernel</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#the-compute-kernel">The compute kernel</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#the-writer-kernel">The writer kernel</a></li>
-</ul>
-</li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#kernel-execution-and-result-verification">Kernel execution and result verification</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#conclusion">Conclusion</a></li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="tt_metal/examples/matmul_multi_core.html">Matmul (Multi Core)</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#device-initialization-program-setup">Device Initialization &amp; Program Setup</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#calculating-work-distribution">Calculating Work Distribution</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#buffer-and-circular-buffer-allocation">Buffer and Circular Buffer Allocation</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#partitioning-work-in-kernels">Partitioning Work in Kernels</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#kernel-creation-and-parameter-setup">Kernel Creation and Parameter Setup</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#program-execution-receiving-results-and-cleanup">Program Execution, Receiving Results and Cleanup</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#conclusion">Conclusion</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#references">References</a></li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a><ul>
-<li class="toctree-l3">
-<a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html">Data Reuse in <cite>matmul_multicore_reuse</cite></a><ul>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#fine-grained-block-size-control">Fine-Grained Block Size Control</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#intermediate-circular-buffer-configuration">Intermediate Circular Buffer Configuration</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#stride-kernel-arguments">Stride Kernel Arguments</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#intermediate-results-handling">Intermediate Results Handling</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#conclusion">Conclusion</a></li>
-</ul>
-</li>
-<li class="toctree-l3">
-<a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html">Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite></a><ul>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#additional-compile-time-argument">Additional Compile-Time Argument</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#configuring-core-ranges-for-tile-distribution">Configuring Core Ranges for Tile Distribution</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#circular-buffer-creation-for-coregrid">Circular Buffer Creation for CoreGrid</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#multicast-reader-writer-kernel-setup">Multicast Reader/Writer Kernel Setup</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#new-compute-kernel-fused-bias-addition-and-activation-functions">New Compute Kernel: Fused Bias Addition and Activation Functions</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#semaphores">Semaphores</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#kernel-runtime-arguments">Kernel Runtime Arguments</a></li>
 </ul>
 </li>
 </ul>
