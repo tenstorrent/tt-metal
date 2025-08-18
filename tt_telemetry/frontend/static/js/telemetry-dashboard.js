@@ -221,9 +221,6 @@ export class TelemetryDashboard extends LitElement {
             });
         }
 
-        // Sort by name
-        metrics.sort((metric1, metric2) => metric1.name.localeCompare(metric2.name));
-
         return metrics;
     }
 
