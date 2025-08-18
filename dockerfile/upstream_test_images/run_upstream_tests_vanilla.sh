@@ -25,8 +25,8 @@ test_suite_bh_single_pcie_metal_unit_tests() {
 # Function test run BH UMD tests, should be any topology
 test_suite_bh_umd_unit_tests() {
     ./build/test/umd/blackhole/unit_tests
-    sudo mkdir -p /work/tt_metal/third_party/umd/tests/
-    sudo ln -s $(realpath ./tt_metal/third_party/umd/tests/soc_descs/) /work/tt_metal/third_party/umd/tests/soc_descs
+    sudo mkdir -p /work/tt_metal/third_party/umd/
+    sudo ln -s $(realpath ./tt_metal/third_party/umd/tests/) /work/tt_metal/third_party/umd/tests
     ./build/test/umd/api/api_tests
 }
 
