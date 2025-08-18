@@ -531,8 +531,7 @@ inline void noc_async_read(
     } else {
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-        // ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
-        noc_fast_read_any_len<noc_mode, read_cmd_buf>(noc, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
+        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
         WAYPOINT("NARD");
     }
 }
@@ -765,10 +764,8 @@ inline void noc_async_write(
     } else {
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-        // ncrisc_noc_fast_write_any_len<noc_mode>(
-        //     noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, vc, false, false, 1, true);
-        noc_fast_write_any_len<noc_mode, write_cmd_buf>(
-            noc, src_local_l1_addr, dst_noc_addr, size, vc);
+        ncrisc_noc_fast_write_any_len<noc_mode>(
+            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, vc, false, false, 1, true);
         WAYPOINT("NAWD");
     }
 }
