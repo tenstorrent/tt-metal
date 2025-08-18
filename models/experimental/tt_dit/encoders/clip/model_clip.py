@@ -65,9 +65,10 @@ class CLIPEncoder:
         self.final_layer_norm_bias = bf16_tensor(
             state_dict["text_model.final_layer_norm.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
         )
-        self.text_projection = bf16_tensor(
-            state_dict["text_projection.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
+        if "text_projection.weight" in state_dict:
+            self.text_projection = bf16_tensor(
+                state_dict["text_projection.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
+            )
 
     def __call__(
         self, prompt_tokenized: ttnn.Tensor, mesh_device: ttnn.Device, with_projection: bool = True
@@ -100,11 +101,18 @@ class CLIPEncoder:
             self.eos_token_id = 2
 
         pooled_output = _gather_eos(normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device)
-        text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
-        projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
 
-        # sequence embedding, pooled embedding, normalized final state
-        return encoder_output, projected_output
+        # Conditionally apply text projection based on with_projection parameter
+        if with_projection:
+            if self.text_projection is None:
+                raise ValueError("projection weights are not loaded")
+            text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
+            projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
+            # sequence embedding, pooled embedding with projection
+            return encoder_output, projected_output
+        else:
+            # sequence embedding, pooled embedding without projection
+            return encoder_output, pooled_output
 
 
 def _gather_eos(seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device) -> ttnn.Tensor:
