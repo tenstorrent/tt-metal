@@ -59,32 +59,6 @@ class MochiAttention:
         self.norm_added_q = RMSNorm(**rms_kwargs)
         self.norm_added_k = RMSNorm(**rms_kwargs)
 
-        # QKV projection
-        # TODO: ADD FSDP axis if needed
-        # self.to_q = ColParallelLinear(
-        #     query_dim,
-        #     self.inner_dim,
-        #     bias=bias,
-        #     mesh_device=mesh_device,
-        #     mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        #     init=init,
-        # )
-        # self.to_k = ColParallelLinear(
-        #     query_dim,
-        #     self.inner_dim,
-        #     bias=bias,
-        #     mesh_device=mesh_device,
-        #     mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        #     init=init,
-        # )
-        # self.to_v = ColParallelLinear(
-        #     query_dim,
-        #     self.inner_dim,
-        #     bias=bias,
-        #     mesh_device=mesh_device,
-        #     mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        #     init=init,
-        # )
         self.to_qkv = ColParallelLinear(
             query_dim,
             3 * self.inner_dim,
@@ -94,32 +68,8 @@ class MochiAttention:
             init=init,
         )
 
-        # Implementing joint attention
         assert self.context_pre_only is not None, "context_pre_only should be a boolean"
-        # self.add_q_proj = ColParallelLinear(
-        #     self.added_kv_proj_dim,
-        #     self.inner_dim,
-        #     bias=added_proj_bias,
-        #     mesh_device=mesh_device,
-        #     mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        #     init=init,
-        # )
-        # self.add_k_proj = ColParallelLinear(
-        #     self.added_kv_proj_dim,
-        #     self.inner_dim,
-        #     bias=added_proj_bias,
-        #     mesh_device=mesh_device,
-        #     mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        #     init=init,
-        # )
-        # self.add_v_proj = ColParallelLinear(
-        #     self.added_kv_proj_dim,
-        #     self.inner_dim,
-        #     bias=added_proj_bias,
-        #     mesh_device=mesh_device,
-        #     mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        #     init=init,
-        # )
+
         self.add_qkv_proj = ColParallelLinear(
             self.added_kv_proj_dim,
             3 * self.inner_dim,
@@ -236,41 +186,13 @@ class MochiAttention:
 
     def __call__(self, spatial_1BND, prompt_1BLP, N, rope_cos, rope_sin, trans_mat):
         """
-        spatial_1BND: fractured N on SP, fractured D on TP
-        prompt_1BLP: replicated on SP, fractured D on TP
+        spatial_1BND: fractured N on SP, replicated D on TP
+        prompt_1BLP: replicated on SP, replicated D on TP
 
         Outputs:
-        spatial_1BND: fractured N on SP, fractured D on TP
-        prompt_1BLP: replicated on SP, fractured D on TP
+        spatial_1BND: fractured N on SP, replicated D on TP
+        prompt_1BLP: replicated on SP, replicated D on TP
         """
-
-        # First gather spatial and prompt on TP axis before attention
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_1BND = ttnn.experimental.all_gather_async(
-                spatial_1BND,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    spatial_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
-            )
-
-            prompt_1BLP = ttnn.experimental.all_gather_async(
-                prompt_1BLP,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    prompt_1BLP.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # **self.ccl_manager.get_ag_hyperparams(prompt_1BLP.shape),
-            )
 
         # Project spatial
         qkv_1BNF = self.to_qkv(
@@ -348,6 +270,7 @@ class MochiAttention:
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
         if self.parallel_config.tensor_parallel.factor > 1:
+            # Gather spatial on TP axis before projection
             spatial_1BND = ttnn.experimental.all_gather_async(
                 spatial_1BND,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
@@ -365,11 +288,27 @@ class MochiAttention:
             spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
         )
 
+        if self.parallel_config.tensor_parallel.factor > 1:
+            # Gather spatial on TP axis after projection
+            spatial_1BND = ttnn.experimental.all_gather_async(
+                spatial_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                # **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
+            )
+
         prompt_out = None
         if not self.context_pre_only:
             prompt_1BLD = ttnn.transformer.concatenate_heads(prompt_BHLE)
             prompt_1BLD = ttnn.unsqueeze(prompt_1BLD, 0)
             if self.parallel_config.tensor_parallel.factor > 1:
+                # Gather prompt on TP axis before projection
                 prompt_1BLD = ttnn.experimental.all_gather_async(
                     prompt_1BLD,
                     persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
@@ -385,6 +324,21 @@ class MochiAttention:
             prompt_1BLP = self.to_add_out(
                 prompt_1BLD, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
             )
+
+            if self.parallel_config.tensor_parallel.factor > 1:
+                # Gather prompt on TP axis after projection
+                prompt_1BLP = ttnn.experimental.all_gather_async(
+                    prompt_1BLP,
+                    persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                        prompt_1BLP.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                    ),
+                    dim=3,
+                    multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                    num_links=self.ccl_manager.num_links,
+                    topology=self.ccl_manager.topology,
+                    cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                    # **self.ccl_manager.get_ag_hyperparams(prompt_1BLP.shape),
+                )
             prompt_out = prompt_1BLP
 
         return spatial_1BND, prompt_out
