@@ -5,6 +5,7 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/constants.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "tt-metalium/host_buffer.hpp"
@@ -246,7 +247,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+    log_info(tt::LogOp, "input data format: {}", input.dtype());
     FactoryParameters params = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, pool_type);
+    log_info(tt::LogOp, "data format {}", params.data_format);
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
@@ -359,8 +362,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // output rows in RM
     // after reduction
     const uint32_t out_cb_pagesize =
-        tt::constants::TILE_HW * params.nbytes;  // there is just one row of channels after each reduction (or 1
-                                                 // block of c if its greater than 8 tiles)
+        tt::tile_size(params.data_format);  // there is just one row of channels after each reduction (or 1
+                                            // block of c if its greater than 8 tiles)
     const uint32_t out_cb_npages =
         output.shard_spec().value().shape[0] * output.shard_spec().value().shape[1] / tt::constants::TILE_HW;
 
@@ -371,7 +374,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, output.buffer());
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
+    log_info(tt::LogOp, "OUT CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 

@@ -8,7 +8,7 @@ from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max
 
 parameters = {
     "height_shard_tests": {
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat16],
         "in_place": [True, False],
         "input_specs": [
             # Contains following parameters

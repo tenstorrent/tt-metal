@@ -233,8 +233,8 @@ uint32_t calculate_L1_usage(
 
     // after reduction
     const uint32_t out_cb_pagesize =
-        tt::constants::TILE_HW * params.nbytes;  // there is just one row of channels after each reduction (or 1
-                                                 // block of c if its greater than 8 tiles)
+        tt::tile_size(params.data_format);  // there is just one row of channels after each reduction (or 1
+                                            // block of c if its greater than 8 tiles)
     const uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] *
                                    output_memory.shard_spec().value().shape[1] / tt::constants::TILE_HW;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;

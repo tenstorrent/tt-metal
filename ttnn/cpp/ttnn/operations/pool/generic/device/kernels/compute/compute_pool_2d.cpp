@@ -149,6 +149,7 @@ void MAIN {
             tile_regs_wait();
 
             if (tilize_stick_counter < TILE_HEIGHT) {
+                // PACK(pack_reconfig_data_format(tmp_cb_id));
                 if (last_c_block) {
                     pack_untilize_dest<1>(
                         tmp_cb_id, 1 /*out_subblock_h: one row*/, row, num_out_sticks, num_faces_in_output_tile);
@@ -166,15 +167,28 @@ void MAIN {
             DPRINT << "haloo" << ENDL();
             DPRINT << "tilize_stick_counter: " << tilize_stick_counter << "/" << in_nblocks_c * TILE_HEIGHT << ENDL();
             if (tilize_stick_counter == TILE_HEIGHT) {
-                // for (uint32_t i = 0; i < in_ntiles_c ; i++) {
-                //     PACK(tt::compute::common::print_full_tile(tmp_cb_id, i));
-                // }
-                PACK((pack_untilize_uninit(tmp_cb_id)));  // stop RM packer on tmp_cb_id
+                PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+
+                cb_push_back(tmp_cb_id, in_ntiles_c);
+                PACK((pack_untilize_uninit(tmp_cb_id)));
+
+                PACK(pack_reconfig_data_format(out_cb_id));
+
+                reconfig_data_format_srca(tmp_cb_id);
+
                 tilize_init(tmp_cb_id, in_ntiles_c, out_cb_id);
+
+                cb_wait_front(tmp_cb_id, in_ntiles_c);
+                cb_reserve_back(out_cb_id, in_ntiles_c);
+
                 tilize_block(tmp_cb_id, in_ntiles_c, out_cb_id);
 
+                PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
+
+                cb_pop_front(tmp_cb_id, in_ntiles_c);
                 cb_push_back(out_cb_id, in_ntiles_c);
                 tilize_uninit(tmp_cb_id, out_cb_id);
+
                 // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
                 UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
