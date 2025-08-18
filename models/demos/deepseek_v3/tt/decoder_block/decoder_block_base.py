@@ -22,11 +22,10 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
-class DecoderBlockBase(SharedStateAddOn, AbstractModule):
+class DecoderBlockBase(AbstractModule):
     @classmethod
     def convert_weights(
         cls,
@@ -83,11 +82,11 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         mla_config = MLA1D.decode_model_config(hf_config, mesh_device)
 
         return {
-            "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
+            "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config_decode"]),
             "mla_norm": mla_norm_config,
             "mla_reshard": ReshardConfig(memory_config=mla_config["input_memory_config"]),
             "mla": mla_config,
-            "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
+            "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config_decode"]),
             "mlp_norm": mlp_norm_config,
             "mlp_reshard": ReshardConfig(memory_config=ttnn.DRAM_MEMORY_CONFIG),
             "mlp": cls.decode_mlp_config(hf_config, mesh_device, is_padding_layer),
@@ -111,22 +110,6 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
                 mesh_device,
                 is_padding_layer,
                 ccl,
-            ),
-        }
-
-    @classmethod
-    def create_shared_state(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
-    ) -> ModelState:
-        return {
-            "mla": MLA1D.create_shared_state(hf_config, mesh_device),
-            "mlp": cls.create_mlp_shared_state(
-                hf_config,
-                mesh_device,
-                is_padding_layer,
             ),
         }
 
@@ -253,20 +236,6 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
     ) -> ModelState:
         """
         Create the state for the MLP component of the decoder layer.
-        This method should be implemented by subclasses to handle specific MLP configurations.
-        """
-        raise NotImplementedError("This method should be implemented in subclasses.")
-
-    @classmethod
-    @abstractmethod
-    def create_mlp_shared_state(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
-    ) -> ModelState:
-        """
-        Create the shared state for the MLP component of the decoder layer.
         This method should be implemented by subclasses to handle specific MLP configurations.
         """
         raise NotImplementedError("This method should be implemented in subclasses.")

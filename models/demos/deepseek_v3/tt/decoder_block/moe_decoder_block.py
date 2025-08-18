@@ -208,18 +208,6 @@ class MoEDecoderBlock(DecoderBlockBase):
 
     @classmethod
     @abstractmethod
-    def create_mlp_shared_state(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
-    ) -> ModelState:
-        return [
-            None if is_padding else MoE.create_shared_state(hf_config, mesh_device) for is_padding in is_padding_layer
-        ]
-
-    @classmethod
-    @abstractmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, row_idx: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
         num_tokens_to_route = x.shape[-3] * x.shape[-2]
         DP_FACTOR = cfg["moe"][row_idx]["num_dispatch_devices"]

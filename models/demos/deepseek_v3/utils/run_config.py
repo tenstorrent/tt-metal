@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import functools
 from collections.abc import Callable
 from dataclasses import fields, is_dataclass
 from enum import Enum
@@ -28,7 +27,7 @@ ModelDecodeConfig = (
     | OpConfigBase
 )
 
-ModelState = Any  # Type of the model state
+ModelState = Any  # Type of the persistent model state
 
 RunPrefillConfig = (
     dict[str, "RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
@@ -43,36 +42,24 @@ RunDecodeConfig = (
 
 
 @overload
-def create_run_config(
-    model_config: ModelPrefillConfig, weight_config: WeightConfig, *model_states: ModelState
+def run_config(
+    model_config: ModelPrefillConfig, weight_config: WeightConfig, model_state: ModelState
 ) -> RunPrefillConfig:
     ...
 
 
 @overload
-def create_run_config(  # type: ignore
-    model_config: ModelDecodeConfig, weight_config: WeightConfig, *model_states: ModelState
+def run_config(  # type: ignore
+    model_config: ModelDecodeConfig, weight_config: WeightConfig, model_state: ModelState
 ) -> RunDecodeConfig:
     ...
 
 
-def create_run_config(model_config, weight_config, *model_states):
-    # The states are merged to create a single unified model state.
-    unified_model_state = functools.reduce(
-        lambda cfg1, cfg2: _merge_config_containers(
-            cfg1,
-            cfg2,
-            merge_config_specific_items=_merge_model_states,
-            search_for_mesh_device=False,
-            mb_mesh_device=None,
-        ),
-        model_states,
-    )
-
+def create_run_config(model_config, weight_config, model_state):
     # The model config and state config are merged first to determine the mesh devices to load the configs on.
     model_state_config = _merge_config_containers(
         model_config,
-        unified_model_state,
+        model_state,
         merge_config_specific_items=_merge_model_config_state_items,
         search_for_mesh_device=True,
         mb_mesh_device=None,
@@ -128,14 +115,6 @@ def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: 
     raise ValueError(
         f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}"
     )
-
-
-def _merge_model_states(cfg1: Any, cfg2: Any, _: ttnn.Device | None) -> Any:
-    if cfg1 is None:
-        return cfg2
-    if cfg2 is None:
-        return cfg1
-    raise ValueError(f"Unsupported partial model state items to merge: {cfg1} and {cfg2}")
 
 
 def _merge_config_containers(

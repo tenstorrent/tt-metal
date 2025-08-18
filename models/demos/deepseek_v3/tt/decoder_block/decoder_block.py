@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+from abc import abstractmethod
 from pathlib import Path
 
 import torch
@@ -22,6 +23,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 
 class DecoderBlock(DecoderBlockBase):
     @classmethod
+    @abstractmethod
     def convert_mlp_weights(
         cls,
         hf_config: PretrainedConfig,
@@ -32,6 +34,7 @@ class DecoderBlock(DecoderBlockBase):
         return NonExpert.convert_weights(hf_config, state_dicts, output_path, mesh_device)
 
     @classmethod
+    @abstractmethod
     def prefill_mlp_config(
         cls,
         hf_config: PretrainedConfig,
@@ -41,6 +44,7 @@ class DecoderBlock(DecoderBlockBase):
         return NonExpert.prefill_model_config(hf_config, mesh_device)
 
     @classmethod
+    @abstractmethod
     def decode_mlp_config(
         cls,
         hf_config: PretrainedConfig,
@@ -50,6 +54,7 @@ class DecoderBlock(DecoderBlockBase):
         return NonExpert.decode_model_config(hf_config, mesh_device)
 
     @classmethod
+    @abstractmethod
     def create_mlp_state(
         cls,
         hf_config: PretrainedConfig,
@@ -60,18 +65,11 @@ class DecoderBlock(DecoderBlockBase):
         return NonExpert.create_state(hf_config, mesh_device, ccl)
 
     @classmethod
-    def create_mlp_shared_state(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
-    ) -> ModelState:
-        return {}
-
-    @classmethod
+    @abstractmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, row_idx: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
         return NonExpert.forward_prefill(x, cfg)
 
     @classmethod
+    @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, row_idx: int, cfg: RunDecodeConfig) -> ttnn.Tensor:
         return NonExpert.forward_decode(x, cfg)

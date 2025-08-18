@@ -88,10 +88,10 @@ def test_forward_pass(
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
-    if RMSNormClass is not DistributedRMSNorm:
+    if not (mode == "decode" and RMSNormClass is DistributedRMSNorm):
         memory_config = ttnn.DRAM_MEMORY_CONFIG
     else:
-        memory_config = run_config["input_memory_config"]
+        memory_config = run_config["input_memory_config_decode"]
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
