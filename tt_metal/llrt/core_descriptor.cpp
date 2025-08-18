@@ -166,8 +166,9 @@ const core_descriptor_t& get_core_descriptor_config(
     TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
     TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
     // // Adjusts the core grid configuration based on the value of the environment variable
-    if (getenv("CORE_GRID_OVERRIDE_TODEPRECATE")) {
-        auto compute_with_storage_end_override = string_to_yaml_node(getenv("CORE_GRID_OVERRIDE_TODEPRECATE"));
+    if (tt_metal::MetalContext::instance().rtoptions().is_core_grid_override_todeprecate()) {
+        auto compute_with_storage_end_override =
+            string_to_yaml_node(tt_metal::MetalContext::instance().rtoptions().get_core_grid_override_todeprecate());
         TT_FATAL(
             compute_with_storage_end_override.IsSequence(),
             "compute_with_storage_end_override must be a YAML sequence");
