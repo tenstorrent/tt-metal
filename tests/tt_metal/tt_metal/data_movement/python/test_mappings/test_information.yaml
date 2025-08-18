@@ -198,7 +198,7 @@ tests:
     name: "Multicast Schemes (Loopback Disabled)"
 
   102:
-    name: "1 Multicast Scheme"
+    name: "Multicast Single Scheme"
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
