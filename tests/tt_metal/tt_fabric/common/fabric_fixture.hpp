@@ -213,5 +213,15 @@ void RunTestChipMCast1D(
 
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
+void RunEDMConnectionStressTest(
+    BaseFabricFixture* fixture,
+    const std::vector<size_t>& stall_durations_cycles,
+    const std::vector<size_t>& message_counts,
+    const std::vector<size_t>& packet_sizes,
+    size_t num_iterations,
+    size_t num_times_to_connect,
+    const std::vector<size_t>& workers_count,
+    const std::vector<size_t>& test_rows);
+
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
