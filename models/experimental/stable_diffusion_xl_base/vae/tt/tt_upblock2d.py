@@ -42,9 +42,7 @@ class TtUpDecoderBlock2D(nn.Module):
 
         ttnn.deallocate(input_tensor)
         if self.upsamplers is not None:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
             hidden_states, [C, H, W] = self.upsamplers.forward(hidden_states)
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         return hidden_states, [C, H, W]

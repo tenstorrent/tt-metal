@@ -126,7 +126,6 @@ int main(int argc, char** argv) {
 
                 vector<uint32_t> shape = {2, 4, 2 * TILE_HEIGHT, 3 * TILE_WIDTH};
                 uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0], N = shape[0], C = shape[1];
-                uint32_t HW = H * W;
                 TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
                 TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
                 uint32_t Wt = W / TILE_WIDTH;
@@ -161,14 +160,14 @@ int main(int argc, char** argv) {
                     tt_metal::CircularBufferConfig(
                         num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
                         .set_page_size(src0_cb_index, single_tile_bytes);
-                auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+                tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
                 uint32_t src1_cb_index = 1;
                 tt_metal::CircularBufferConfig cb_src1_config =
                     tt_metal::CircularBufferConfig(
                         num_buffer_tiles * single_tile_bytes, {{src1_cb_index, tt::DataFormat::Float16_b}})
                         .set_page_size(src1_cb_index, single_tile_bytes);
-                auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+                tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
                 uint32_t ouput_cb_index = tt::CBIndex::c_16;
                 uint32_t num_output_buffer_tiles = 2;
@@ -177,7 +176,7 @@ int main(int argc, char** argv) {
                     tt_metal::CircularBufferConfig(
                         num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                         .set_page_size(ouput_cb_index, single_tile_bytes);
-                auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+                tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
                 vector<uint16_t> tiled_bcast_values;
                 vector<uint16_t> ref_bcast_values;
@@ -324,7 +323,6 @@ int main(int argc, char** argv) {
                 ////////////////////////////////////////////////////////////////////////////
                 //                      Execute Application
                 ////////////////////////////////////////////////////////////////////////////
-                auto seed = std::chrono::system_clock::now().time_since_epoch().count();
                 vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 10.0f, 0x1234);
                 tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 

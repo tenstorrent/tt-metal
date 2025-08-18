@@ -128,6 +128,7 @@ class RunTimeOptions {
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
     bool profiler_mid_run_tracy_push = false;
+    bool profiler_trace_profiler = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -195,6 +196,12 @@ class RunTimeOptions {
 
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
+
+    // Log kernels compilation commands
+    bool log_kernels_compilation_commands = false;
+
+    // Enable fabric performance telemetry
+    bool enable_fabric_telemetry = false;
 
 public:
     RunTimeOptions();
@@ -379,6 +386,7 @@ public:
     inline bool get_profiler_enabled() const { return profiler_enabled; }
     inline bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     inline bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
+    inline bool get_profiler_trace_only() const { return profiler_trace_profiler; }
     inline bool get_profiler_tracy_mid_run_push() const { return profiler_mid_run_tracy_push; }
     inline bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     inline bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
@@ -460,6 +468,16 @@ public:
         return is_custom_fabric_mesh_graph_desc_path_set;
     }
     inline std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    inline bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
+
+    // If true, the fabric (routers) will collect coarse grain telemetry data in software. This flag's state does not
+    // affect the ability to capture Ethernet Subsystem register-read-based telemetry data.
+    // This BW telemetry is coarse grain and records the total time that the reouter has unsent and inflight packets.
+    //
+    // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
+    inline bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
+    inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

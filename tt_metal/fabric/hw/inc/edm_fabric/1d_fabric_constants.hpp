@@ -8,6 +8,7 @@
 #include "dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 
 #include <array>
 #include <utility>
@@ -171,14 +172,17 @@ constexpr uint32_t SWITCH_INTERVAL =
 #endif
 constexpr bool enable_first_level_ack = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 1);
 constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 2);
-constexpr bool enable_ring_support = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);
+constexpr bool enable_deadlock_avoidance = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);
 constexpr bool dateline_connection = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 4);
-constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 5) != 0;
-constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6);
+constexpr bool is_intermesh_router = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 5);
+constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6) != 0;
+constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 
 static_assert(enable_first_level_ack == 0, "enable_first_level_ack must be 0");
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
-static_assert(!enable_ring_support || NUM_RECEIVER_CHANNELS > 1, "Ring support requires at least 2 receiver channels");
+static_assert(
+    !enable_deadlock_avoidance || NUM_RECEIVER_CHANNELS > 1,
+    "Deadlock avoidance requires at least 2 receiver channels");
 // TODO: Pipe from host
 constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_FORWARDING_PATHS;
 
@@ -195,9 +199,9 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 // the size of one of the buffers within a sender channel
 // For example if `channel_buffer_size` = 4k, with `SENDER_NUM_BUFFERS` = 2
 // then the total amount of buffering for that
-constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
+constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
 
-constexpr size_t SENDER_NUM_BUFFERS_IDX = MAIN_CT_ARGS_START_IDX + 8;
+constexpr size_t SENDER_NUM_BUFFERS_IDX = MAIN_CT_ARGS_START_IDX + 9;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
 
@@ -307,7 +311,12 @@ constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK = get_compile_time
 constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 11);
 
 // Context switch timeouts
-constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 12);
+constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT =
+#ifndef DEBUG_PRINT_ENABLED
+    get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 12);
+#else
+    128;
+#endif
 constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
 
 constexpr size_t MY_ETH_CHANNEL = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 14);
@@ -360,7 +369,23 @@ static_assert(
     "Special marker 1 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+///////////////////////////////////////////////
+// Telemetry
+constexpr size_t PERF_TELEMETRY_MODE_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr PerfTelemetryRecorderType perf_telemetry_mode =
+    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
+
+constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 1;
+constexpr size_t perf_telemetry_buffer_addr = get_compile_time_arg_val(PERF_TELEMETRY_BUFFER_ADDR_IDX);
+
+constexpr size_t SPECIAL_MARKER_2_IDX = PERF_TELEMETRY_BUFFER_ADDR_IDX + 1;
+constexpr size_t SPECIAL_MARKER_2 = 0x20c0ffee;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2_IDX) == SPECIAL_MARKER_2,
+    "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
+    "CT args.");
+
+constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_ack_counter_addrs =
     conditional_get_next_n_args<multi_txq_enabled, size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, NUM_SENDER_CHANNELS>();
@@ -407,15 +432,15 @@ static_assert(
     !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_completion_counter_ptrs),
     "local_receiver_completion_counter_ptrs must be valid");
 
-constexpr size_t SPECIAL_MARKER_2_IDX =
+constexpr size_t SPECIAL_MARKER_3_IDX =
     TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS) : 0);
-constexpr size_t SPECIAL_MARKER_2 = 0x20c0ffee;
+constexpr size_t SPECIAL_MARKER_3 = 0x30c0ffee;
 static_assert(
-    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2_IDX) == SPECIAL_MARKER_2,
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_3_IDX) == SPECIAL_MARKER_3,
     "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_3_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 // static_assert(HOST_SIGNAL_ARGS_START_IDX == 56, "HOST_SIGNAL_ARGS_START_IDX must be 56");
 // TODO: Add type safe getter
 constexpr bool is_local_handshake_master =
@@ -434,7 +459,7 @@ constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS
 // TODO: Pass this value from host
-constexpr uint8_t NUM_TRANSACTION_IDS = enable_ring_support ? 8 : 4;
+constexpr uint8_t NUM_TRANSACTION_IDS = enable_deadlock_avoidance ? 8 : 4;
 
 constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();
@@ -461,6 +486,8 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
 
 // TODO: move this to compile time args if we need to enable it
 constexpr bool enable_trid_flush_check_on_noc_txn = false;
+
+constexpr bool is_persistent_fabric = true;
 
 namespace tt::tt_fabric {
 static_assert(

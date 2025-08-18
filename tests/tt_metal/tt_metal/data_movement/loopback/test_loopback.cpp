@@ -176,4 +176,32 @@ TEST_F(DeviceFixture, TensixDataMovementLoopbackPacketSizes) {
     }
 }
 
+TEST_F(DeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
+    uint32_t test_id = 55;
+
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    uint32_t num_of_transactions = 128;
+    uint32_t transaction_size_pages =
+        max_transmittable_pages / (num_of_transactions * 2);  // Since we need to fit 2 buffers, we divide by 2
+
+    CoreCoord master_core_coord = {0, 0};
+    NOC noc_id = NOC::NOC_0;
+
+    unit_tests::dm::core_loopback::LoopbackConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = noc_id};
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
 }  // namespace tt::tt_metal

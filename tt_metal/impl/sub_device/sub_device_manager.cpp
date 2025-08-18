@@ -27,9 +27,13 @@
 #include "trace/trace.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/control_plane.hpp>
+#include "distributed/mesh_trace.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
 #include "vector_aligned.hpp"
+
+using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
+using MeshTraceBuffer = tt::tt_metal::distributed::MeshTraceBuffer;
 
 namespace tt {
 namespace tt_metal {
@@ -77,14 +81,13 @@ SubDeviceManager::SubDeviceManager(
 SubDeviceManager::~SubDeviceManager() {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator) {
-            // Clear the bank managers, this makes subsequent buffer deallocations fast
+            // Deallocate all buffers at the bank level first
+            // This frees the memory without accessing individual Buffer objects
+            allocator->deallocate_buffers();
+
+            // Now clear the allocator's tracking structures and bank managers
+            // This ensures allocated_buffers_ set is cleared to prevent dangling pointers
             allocator->clear();
-            // Deallocate all buffers
-            // This is done to set buffer object status to Deallocated
-            const auto allocated_buffers = allocator->get_allocated_buffers();
-            for (auto buf = allocated_buffers.begin(); buf != allocated_buffers.end();) {
-                tt::tt_metal::DeallocateBuffer(*(*(buf++)));
-            }
         }
     }
 }
@@ -102,9 +105,9 @@ const SubDevice& SubDeviceManager::sub_device(SubDeviceId sub_device_id) const {
 
 const vector_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data() const { return noc_mcast_unicast_data_; }
 
-uint8_t SubDeviceManager::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
+bool SubDeviceManager::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return num_noc_mcast_txns_[sub_device_index];
+    return has_noc_mcast_txns_[sub_device_index];
 }
 
 uint8_t SubDeviceManager::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
@@ -112,14 +115,13 @@ uint8_t SubDeviceManager::num_noc_unicast_txns(SubDeviceId sub_device_id) const 
     return num_noc_unicast_txns_[sub_device_index];
 }
 
-uint8_t SubDeviceManager::noc_mcast_data_start_index(SubDeviceId sub_device_id) const {
-    auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return noc_mcast_data_start_index_[sub_device_index];
-}
-
 uint8_t SubDeviceManager::noc_unicast_data_start_index(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return noc_unicast_data_start_index_[sub_device_index];
+}
+
+const std::vector<std::pair<CoreRangeSet, uint32_t>>& SubDeviceManager::get_core_go_message_mapping() const {
+    return core_go_message_mapping_;
 }
 
 const std::unique_ptr<Allocator>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
@@ -133,16 +135,17 @@ std::unique_ptr<Allocator>& SubDeviceManager::sub_device_allocator(SubDeviceId s
     return sub_device_allocators_[sub_device_index];
 }
 
-std::shared_ptr<TraceBuffer>& SubDeviceManager::create_trace(uint32_t tid) {
-    auto [trace, emplaced] = trace_buffer_pool_.emplace(tid, Trace::create_empty_trace_buffer());
-    TT_ASSERT(emplaced, "Trace buffer with tid {} already exists", tid);
+std::shared_ptr<MeshTraceBuffer>& SubDeviceManager::create_trace(const MeshTraceId& trace_id) {
+    auto [trace, emplaced] =
+        trace_buffer_pool_.emplace(trace_id, distributed::MeshTrace::create_empty_mesh_trace_buffer());
+    TT_ASSERT(emplaced, "Trace buffer with trace id {} already exists", trace_id);
     return trace->second;
 }
 
-void SubDeviceManager::release_trace(uint32_t tid) { trace_buffer_pool_.erase(tid); }
+void SubDeviceManager::release_trace(const MeshTraceId& trace_id) { trace_buffer_pool_.erase(trace_id); }
 
-std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
-    auto trace = trace_buffer_pool_.find(tid);
+std::shared_ptr<MeshTraceBuffer> SubDeviceManager::get_trace(const MeshTraceId& trace_id) {
+    auto trace = trace_buffer_pool_.find(trace_id);
     if (trace != trace_buffer_pool_.end()) {
         return trace->second;
     }
@@ -320,27 +323,17 @@ void SubDeviceManager::populate_sub_allocators() {
 
 void SubDeviceManager::populate_noc_data() {
     uint32_t num_sub_devices = this->num_sub_devices();
-    num_noc_mcast_txns_.resize(num_sub_devices);
+    has_noc_mcast_txns_.resize(num_sub_devices);
     num_noc_unicast_txns_.resize(num_sub_devices);
-    noc_mcast_data_start_index_.resize(num_sub_devices);
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
     NOC noc_index = MetalContext::instance().get_dispatch_query_manager().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX).merge_ranges();
         const auto& eth_cores = sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);
 
-        noc_mcast_data_start_index_[i] = idx;
-        num_noc_mcast_txns_[i] = tensix_cores.size();
-        noc_mcast_unicast_data_.resize(idx + num_noc_mcast_txns_[i] * 2);
-        for (const auto& core_range : tensix_cores.ranges()) {
-            auto virtual_start = device_->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
-            auto virtual_end = device_->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
-            auto virtual_core_range = CoreRange(virtual_start, virtual_end);
-            noc_mcast_unicast_data_[idx++] = device_->get_noc_multicast_encoding(noc_index, virtual_core_range);
-            noc_mcast_unicast_data_[idx++] = core_range.size();
-        }
+        has_noc_mcast_txns_[i] = sub_devices_[i].has_core_type(HalProgrammableCoreType::TENSIX);
+
         noc_unicast_data_start_index_[i] = idx;
 
         // TODO: Precompute number of eth cores and resize once
@@ -358,6 +351,24 @@ void SubDeviceManager::populate_noc_data() {
             "NOC data entries {} exceeds maximum supported size {}",
             idx,
             DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+    }
+
+    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
+    CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
+
+    std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping;
+    CoreRangeSet used_cores;
+    for (size_t i = 0; i < num_sub_devices; ++i) {
+        const auto& sub_device = sub_devices_[i];
+        const auto& tensix_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
+        used_cores = used_cores.merge(tensix_cores);
+        core_go_message_mapping_.emplace_back(tensix_cores, i);
+    }
+    CoreRangeSet all_core_set{device_worker_cores};
+    CoreRangeSet unused_cores = all_core_set.subtract(used_cores);
+    if (!unused_cores.empty()) {
+        constexpr uint32_t unused_go_message_index = go_message_num_entries - 1;
+        core_go_message_mapping_.emplace_back(unused_cores, unused_go_message_index);
     }
 }
 

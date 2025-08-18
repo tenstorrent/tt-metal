@@ -171,8 +171,8 @@ void run(
         tt_metal::Finish(device0->command_queue());
         tt_metal::Finish(device1->command_queue());
     }
-    tt::tt_metal::detail::DumpDeviceProfileResults(device0);
-    tt::tt_metal::detail::DumpDeviceProfileResults(device1);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(device0);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(device1);
 }
 
 int main(int argc, char** argv) {
@@ -227,7 +227,6 @@ int main(int argc, char** argv) {
     auto eth_sender_core_iter_end = active_eth_cores.end();
     chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
     tt_xy_pair eth_receiver_core;
-    bool initialized = false;
     tt_xy_pair eth_sender_core;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     do {

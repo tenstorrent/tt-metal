@@ -32,12 +32,11 @@ using ResultWithOptions = std::variant<
         std::tuple<OutputHeight, OutputWidth>,
         std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
 
-template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -54,12 +53,11 @@ Result conv2d_L1(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
-template <typename T>
 Result conv2d_DRAM(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -75,15 +73,14 @@ Result conv2d_DRAM(
     const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
-    const Conv2dSliceConfig& dram_slice_config_ = Conv2dSliceConfig{
+    Conv2dSliceConfig dram_slice_config_ = Conv2dSliceConfig{
         .slice_type = Conv2dSliceConfig::SliceType::WIDTH, .num_slices = 0});
 
-template <typename T>
 ResultWithOptions conv2d(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,

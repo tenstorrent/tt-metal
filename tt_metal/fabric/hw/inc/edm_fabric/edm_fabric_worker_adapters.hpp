@@ -12,7 +12,7 @@
 #include "fabric_edm_packet_header_validate.hpp"
 #include "fabric_stream_regs.hpp"
 #include "fabric_edm_types.hpp"
-#include "fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/hw/inc/utils/utils.h"
@@ -317,12 +317,12 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
-    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api, bool increment_poiners>
+    template <bool enable_deadlock_avoidance, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api, bool increment_poiners>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
             EDM_IO_BLOCKING_MODE::NON_BLOCKING,
-            enable_ring_support,
+            enable_deadlock_avoidance,
             EDM_TO_DOWNSTREAM_NOC,
             stateful_api,
             increment_poiners>(source_address, size_bytes, trid);
@@ -390,13 +390,13 @@ struct WorkerToFabricEdmSenderImpl {
                 offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
         // write the address of our local copy of read counter (that EDM is supposed to update)
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
-            noc_inline_dw_write<false, posted>(
+            noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(from_remote_buffer_free_slots_ptr),
                 0xf,
                 WORKER_HANDSHAKE_NOC);
         } else {
-            noc_inline_dw_write<false, posted>(
+            noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
                 0xf,
@@ -406,7 +406,7 @@ struct WorkerToFabricEdmSenderImpl {
             dest_noc_addr_coord_only |
             reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
         // Write our local teardown ack address to EDM
-        noc_inline_dw_write<false, posted>(
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
             edm_teardown_semaphore_address_address,
             reinterpret_cast<size_t>(worker_teardown_addr),
             0xf,
@@ -414,7 +414,7 @@ struct WorkerToFabricEdmSenderImpl {
         // Write out core noc-xy coord to EDM
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
-        noc_inline_dw_write<false, posted>(
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
     }
 
@@ -443,7 +443,7 @@ struct WorkerToFabricEdmSenderImpl {
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
 
-        noc_inline_dw_write<false, posted>(
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
             edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
         *this->worker_teardown_addr = 0;
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
@@ -544,10 +544,10 @@ struct WorkerToFabricEdmSenderImpl {
     uint8_t direction;
 
 private:
-    template <bool stateful_api = false, bool enable_ring_support = false>
+    template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
-            if constexpr (enable_ring_support) {
+            if constexpr (enable_deadlock_avoidance) {
                 noc_inline_dw_write_with_state<true, false, true>(
                     0,  // val unused
                     this->edm_buffer_remote_free_slots_update_addr,
@@ -563,7 +563,7 @@ private:
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write<true>(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)
@@ -605,10 +605,10 @@ private:
         }
     }
 
-    template <bool stateful_api = false, bool enable_ring_support = false>
+    template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = noc_index) {
         this->advance_buffer_slot_write_index();
-        this->update_edm_buffer_free_slots<stateful_api, enable_ring_support>(noc);
+        this->update_edm_buffer_free_slots<stateful_api, enable_deadlock_avoidance>(noc);
     }
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
@@ -637,7 +637,7 @@ private:
     }
     template <
         EDM_IO_BLOCKING_MODE blocking_mode,
-        bool enable_ring_support,
+        bool enable_deadlock_avoidance,
         uint8_t EDM_TO_DOWNSTREAM_NOC,
         bool stateful_api,
         bool increment_pointers>
@@ -668,7 +668,7 @@ private:
                 this->data_noc_cmd_buf);
         }
         if constexpr (increment_pointers) {
-            post_send_payload_increment_pointers<stateful_api, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
+            post_send_payload_increment_pointers<stateful_api, enable_deadlock_avoidance>(EDM_TO_DOWNSTREAM_NOC);
         }
     }
 

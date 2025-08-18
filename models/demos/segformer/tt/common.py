@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 
 
@@ -106,3 +108,48 @@ class Conv:
         )
 
         return output_tensor, _out_height, _out_width
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = None
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
+def preprocess_layernorm_parameter(parameter, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    parameter = parameter.reshape((1, -1))
+    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return parameter
+
+
+def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    weight = weight.T.contiguous()
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return weight
+
+
+def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    bias = bias.reshape((1, -1))
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return bias
+
+
+def fold_batch_norm2d_into_conv2d(conv, bn):
+    if not bn.track_running_stats:
+        raise RuntimeError("BatchNorm2d must have track_running_stats=True to be folded into Conv2d")
+    weight = conv.weight.data
+    running_mean = bn.running_mean
+    running_var = bn.running_var.data
+    eps = bn.eps
+    scale = bn.weight.data
+    shift = bn.bias.data
+    weight = weight * (scale / torch.sqrt(running_var + eps))[:, None, None, None]
+    bias = shift - running_mean * (scale / torch.sqrt(running_var + eps))
+    bias = torch.reshape(bias, (1, 1, 1, -1))
+    return weight, bias

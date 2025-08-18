@@ -51,6 +51,9 @@ struct pair_hash {
     }
 };
 
+constexpr uint32_t TRACE_RISC_ID = 6;
+constexpr uint32_t ERISC_RISC_ID = 5;
+
 // defined locally in profiler.cpp
 class FabricRoutingLookup;
 
@@ -69,6 +72,12 @@ struct ZoneDetails {
     enum class ZoneNameKeyword : uint16_t {
         BRISC_FW,
         ERISC_FW,
+        NCRISC_FW,
+        TRISC_FW,
+        BRISC_KERNEL,
+        ERISC_KERNEL,
+        NCRISC_KERNEL,
+        TRISC_KERNEL,
         SYNC_ZONE,
         PROFILER,
         DISPATCH,
@@ -82,6 +91,12 @@ struct ZoneDetails {
     static inline std::unordered_map<std::string, ZoneNameKeyword> zone_name_keywords_map = {
         {"BRISC-FW", ZoneNameKeyword::BRISC_FW},
         {"ERISC-FW", ZoneNameKeyword::ERISC_FW},
+        {"NCRISC-FW", ZoneNameKeyword::NCRISC_FW},
+        {"TRISC-FW", ZoneNameKeyword::TRISC_FW},
+        {"BRISC-KERNEL", ZoneNameKeyword::BRISC_KERNEL},
+        {"ERISC-KERNEL", ZoneNameKeyword::ERISC_KERNEL},
+        {"NCRISC-KERNEL", ZoneNameKeyword::NCRISC_KERNEL},
+        {"TRISC-KERNEL", ZoneNameKeyword::TRISC_KERNEL},
         {"SYNC-ZONE", ZoneNameKeyword::SYNC_ZONE},
         {"PROFILER", ZoneNameKeyword::PROFILER},
         {"DISPATCH", ZoneNameKeyword::DISPATCH},
@@ -134,6 +149,13 @@ struct DeviceProfilerDataPoint {
     nlohmann::json meta_data;
 };
 
+struct FabricEventDataPoints {
+    std::vector<DeviceProfilerDataPoint> fabric_write_datapoints;
+    DeviceProfilerDataPoint fabric_routing_fields_datapoint;
+    DeviceProfilerDataPoint local_noc_write_datapoint;
+    std::optional<DeviceProfilerDataPoint> fabric_mux_datapoint;
+};
+
 class DeviceProfiler {
 private:
     // Device architecture
@@ -145,13 +167,13 @@ private:
     // Device frequency
     int device_core_frequency;
 
-    // Last fast dispatch dump performed flag
-    bool is_last_fd_dump_done;
+    // Last fast dispatch read performed flag
+    bool is_last_fd_read_done;
 
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
 
-    // Output dir for device Profile Logs
+    // Output directory for device profiler logs
     std::filesystem::path output_dir;
 
     // Hash to zone source locations
@@ -184,6 +206,9 @@ private:
 
     // Storage for all noc trace data
     std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
+
+    // Output directory for noc trace data
+    std::filesystem::path noc_trace_data_output_dir;
 
     // Read all control buffers
     void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
@@ -236,7 +261,7 @@ private:
         uint32_t timer_id,
         uint64_t timestamp);
 
-    // Track the smallest timestamp dumped to file
+    // Track the smallest timestamp read
     void firstTimestamp(uint64_t timestamp);
 
     // Get tracy context for the core
@@ -287,7 +312,7 @@ public:
     void readResults(
         IDevice* device,
         const std::vector<CoreCoord>& virtual_cores,
-        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        ProfilerReadState state = ProfilerReadState::NORMAL,
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
@@ -295,7 +320,7 @@ public:
     void processResults(
         IDevice* device,
         const std::vector<CoreCoord>& virtual_cores,
-        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        ProfilerReadState state = ProfilerReadState::NORMAL,
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
@@ -312,12 +337,12 @@ public:
     // Get zone details for the zone corresponding to the given timer id
     ZoneDetails getZoneDetails(uint16_t timer_id) const;
 
-    // setter and getter on last fast dispatch dump
-    void setLastFDDumpAsDone();
+    // setter and getter on last fast dispatch read
+    void setLastFDReadAsDone();
 
-    void setLastFDDumpAsNotDone();
+    void setLastFDReadAsNotDone();
 
-    bool isLastFDDumpDone() const;
+    bool isLastFDReadDone() const;
 };
 
 bool useFastDispatch(IDevice* device);

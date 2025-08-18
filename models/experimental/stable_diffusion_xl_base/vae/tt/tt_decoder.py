@@ -65,34 +65,28 @@ class TtDecoder(nn.Module):
             self.device, norm_out_weights.shape[0], self.norm_groups, self.norm_core_grid.y
         )
 
+        self.compute_in_config = model_config.get_conv_compute_config(module_path="decoder.conv_in")
         (
-            self.compute_in_config,
             self.tt_conv_in_weights,
             self.tt_conv_in_bias,
             self.conv_in_params,
         ) = prepare_conv_params(
-            device,
             conv_in_weights,
             conv_in_bias,
             model_config.conv_w_dtype,
-            fp32_dest_acc_en=True,
-            math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
         self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
 
+        self.compute_out_config = model_config.get_conv_compute_config(module_path="decoder.conv_out")
         (
-            self.compute_out_config,
             self.tt_conv_out_weights,
             self.tt_conv_out_bias,
             self.conv_out_params,
         ) = prepare_conv_params(
-            device,
             conv_out_weights,
             conv_out_bias,
             model_config.conv_w_dtype,
-            fp32_dest_acc_en=True,
-            math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
         self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")

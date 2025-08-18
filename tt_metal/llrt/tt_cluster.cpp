@@ -27,7 +27,7 @@
 
 #include "control_plane.hpp"
 #include "device_pool.hpp"
-#include "fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 #include "fabric_types.hpp"
 #include "fmt/base.h"
 #include "fmt/ranges.h"
@@ -171,6 +171,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
                 cluster_type = tt::tt_metal::ClusterType::P150_X2;
             } else if (cluster_desc->get_all_chips().size() == 4) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X4;
+            } else if (cluster_desc->get_all_chips().size() == 8) {
+                cluster_type = tt::tt_metal::ClusterType::P150_X8;
             }
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
@@ -242,29 +244,6 @@ void Cluster::generate_cluster_descriptor() {
         TT_FATAL(
             this->cluster_desc_->get_noc_translation_table_en().at(0),
             "Running Metal on Blackhole requires FW >= 80.18.0.0");
-    }
-
-    uint32_t total_num_hugepages = tt::umd::get_num_hugepages();
-    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
-        // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
-        TT_FATAL(
-            this->arch_ == tt::ARCH::BLACKHOLE or
-                total_num_hugepages >= this->driver_->get_target_device_ids().size() / 4,
-            "Machine setup error: Insufficient number of hugepages available, expected >= {} for {} devices but have "
-            "{}. "
-            "Increase number of hugepages!",
-            this->driver_->get_target_device_ids().size() / 4,
-            this->driver_->get_target_device_ids().size(),
-            total_num_hugepages);
-    } else {
-        // TODO (abhullar): ignore hugepage set up for BH bringup
-        TT_FATAL(
-            this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->driver_->get_target_device_ids().size(),
-            "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have "
-            "{}. "
-            "Increase number of hugepages!",
-            this->driver_->get_target_device_ids().size(),
-            total_num_hugepages);
     }
 }
 

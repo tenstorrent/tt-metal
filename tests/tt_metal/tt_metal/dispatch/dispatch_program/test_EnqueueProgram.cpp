@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdlib.h>
 #include <string.h>
 #include <tt-metalium/allocator.hpp>
@@ -143,24 +143,24 @@ KernelHandle create_kernel(
                     .noc = NOC::NOC_0,
                     .compile_args = compile_args,
                 });
-        default: TT_THROW("Unsupported {} processor in test.", magic_enum::enum_name(processor_class));
+        default: TT_THROW("Unsupported {} processor in test.", enchantum::to_string(processor_class));
     }
 }
 
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
-    auto dummy_reader_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    auto dummy_writer_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
 void initialize_dummy_semaphores(
@@ -562,7 +562,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     vector<uint32_t> dummy_cr0_args;
     vector<uint32_t> dummy_cr1_args;
     vector<uint32_t> dummy_common_args;
-    bool terminate = false;
 
     auto it = program_config.cr_set.ranges().begin();
     CoreRange core_range_0 = *it;
@@ -1011,8 +1010,6 @@ void test_my_coordinates(
     // All logical cores
     CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
 
-    auto device = mesh_device->get_devices()[0];
-
     uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{
         cb_addr,
@@ -1022,14 +1019,14 @@ void test_my_coordinates(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt::tt_metal::CreateProgram();
-    KernelHandle kernel =
-        create_kernel(processor_class, program, CoreRangeSet{cr}, compile_args, k_kernel_path, idle_eth);
+    create_kernel(processor_class, program, CoreRangeSet{cr}, compile_args, k_kernel_path, idle_eth);
 
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(cq_id), workload, false);
     Finish(mesh_device->mesh_command_queue(cq_id));
 
-    tt::tt_metal::verify_kernel_coordinates(processor_class, cr, device, tt::tt_metal::SubDeviceId{0}, cb_addr);
+    tt::tt_metal::verify_kernel_coordinates(
+        processor_class, cr, mesh_device.get(), tt::tt_metal::SubDeviceId{0}, cb_addr);
 }
 
 void test_basic_dispatch_functions(std::shared_ptr<distributed::MeshDevice> mesh_device, int cq_id) {
@@ -1113,7 +1110,7 @@ TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
         CoreRangeSet cr_set({cr});
         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
         // added separately
-        auto dummy_reader_kernel = CreateKernel(
+        CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
             cr_set,
@@ -1204,7 +1201,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
                                              .set_page_size(intermediate_cb, single_tile_size)
                                              .set_page_size(out_cb, single_tile_size);
-        auto cb = CreateCircularBuffer(program_, cr_set, cb_config);
+        CreateCircularBuffer(program_, cr_set, cb_config);
 
         local_test_functions::initialize_dummy_kernels(program_, cr_set);
 
@@ -1274,7 +1271,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatch
         CoreRangeSet cr_set({cr});
         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
         // added separately
-        auto dummy_reader_kernel = CreateKernel(
+        CreateKernel(
             program_,
             "tt_metal/kernels/dataflow/blank.cpp",
             cr_set,
@@ -1393,7 +1390,7 @@ auto CQFabricConfigsToTest = ::testing::Values(
 INSTANTIATE_TEST_SUITE_P(CommandQueueMultiDevice, DISABLED_CQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
 
 INSTANTIATE_TEST_SUITE_P(
-    MultiCommandQueueMultiDevice, DISABLED_MultiCQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
+    MultiCommandQueueMultiDevice, DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
 
 TEST_P(DISABLED_CQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (const auto& device : devices_) {
@@ -1401,7 +1398,7 @@ TEST_P(DISABLED_CQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) 
     }
 }
 
-TEST_P(DISABLED_MultiCQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
+TEST_P(DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (const auto& device : devices_) {
         for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             local_test_functions::test_basic_dispatch_functions(device, cq_id);
@@ -1747,20 +1744,16 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
 
 // Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
-    for (const auto& device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
-    }
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::BRISC);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::BRISC, 1);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::NCRISC);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::NCRISC, 1);
 }
 
 // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
-    for (const auto& device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
-    }
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::COMPUTE);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::COMPUTE, 1);
 }
 
 }  // end namespace multicore_tests
@@ -1783,9 +1776,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    auto device = this->devices_.at(0);
-
-    CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+    CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
@@ -1841,7 +1832,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         for (uint32_t j = 0; j < NUM_CBS; j++) {
             CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
                                                  .set_page_size(j, page_size * (j + 1));
-            auto cb = CreateCircularBuffer(program_, cr_set, cb_config);
+            CreateCircularBuffer(program_, cr_set, cb_config);
         }
 
         for (uint32_t j = 0; j < NUM_SEMS; j++) {
@@ -1995,11 +1986,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         }
     }
 
-    for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+    for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
         log_info(tt::LogTest, "Running {} MeshWorkloads on cq {} for cache warmup.", workloads.size(), (uint32_t)cq_id);
         // This loop caches program and runs
         for (distributed::MeshWorkload& wl : workloads) {
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+            distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), wl, false);
         }
 
         // This loops assumes already cached
@@ -2025,12 +2016,12 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
                     NUM_ITERATIONS);
             }
             for (distributed::MeshWorkload& wl : workloads) {
-                EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+                EnqueueMeshWorkload(device_->mesh_command_queue(), wl, false);
             }
         }
 
         log_info(tt::LogTest, "Calling Finish.");
-        Finish(device->mesh_command_queue(cq_id));
+        Finish(device_->mesh_command_queue(cq_id));
     }
 }
 
@@ -2122,7 +2113,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
         for (uint32_t j = 0; j < NUM_CBS; j++) {
             CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
                                                  .set_page_size(j, page_size * (j + 1));
-            auto cb = CreateCircularBuffer(program_, cr_set, cb_config);
+            CreateCircularBuffer(program_, cr_set, cb_config);
         }
 
         for (uint32_t j = 0; j < NUM_SEMS; j++) {

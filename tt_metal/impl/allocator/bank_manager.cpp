@@ -4,7 +4,7 @@
 
 #include "bank_manager.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <util.hpp>
 #include <limits>
 #include <string_view>
@@ -41,7 +41,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool 
         TT_THROW(
             "Invalid number of memory banks for {}. Num banks must be power of 2 or have a dedicated modulo "
             "implementation",
-            magic_enum::enum_name(buffer_type),
+            enchantum::to_string(buffer_type),
             num_banks);
     }
 }
@@ -136,7 +136,7 @@ uint64_t BankManager::allocate_buffer(
             "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
             "store {} B",
             size,
-            magic_enum::enum_name(buffer_type_),
+            enchantum::to_string(buffer_type_),
             num_banks,
             size_per_bank);
     }

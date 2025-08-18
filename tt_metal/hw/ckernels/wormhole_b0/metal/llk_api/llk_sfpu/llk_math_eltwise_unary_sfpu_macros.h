@@ -84,16 +84,26 @@
 
 // For ops where compute takes extra args
 #define SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(FN, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                  \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                      \
         ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1);
 
 // For ops with multiple template parameters and one runtime parameter (e.g., scale)
-#define SFPU_TEMPLATE_PARAMS_KERNEL(                                                                        \
-    OP, APPROXIMATE, FAST_APPROX, SCALE_EN, SKIP_POSITIVE_CHECK, ITERATIONS, DST_IDX, VECTOR_MODE, SCALE)   \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                      \
-        ckernel::sfpu::calculate_##OP<APPROXIMATE, FAST_APPROX, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>, \
-        DST_IDX,                                                                                            \
-        VECTOR_MODE,                                                                                        \
+#define SFPU_TEMPLATE_PARAMS_KERNEL(                                                                                  \
+    OP,                                                                                                               \
+    APPROXIMATE,                                                                                                      \
+    FAST_APPROX,                                                                                                      \
+    SCALE_EN,                                                                                                         \
+    SKIP_POSITIVE_CHECK,                                                                                              \
+    ITERATIONS,                                                                                                       \
+    IS_FP32_DEST_ACC_EN,                                                                                              \
+    DST_IDX,                                                                                                          \
+    VECTOR_MODE,                                                                                                      \
+    SCALE)                                                                                                            \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                                \
+        ckernel::sfpu::                                                                                               \
+            calculate_##OP<APPROXIMATE, FAST_APPROX, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK, IS_FP32_DEST_ACC_EN>, \
+        DST_IDX,                                                                                                      \
+        VECTOR_MODE,                                                                                                  \
         SCALE)
 
 // For kernels with one template parameter and one extra runtime argument.
@@ -133,7 +143,7 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(   \
         ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::OP>, DST_IDX, (int)VectorMode::MODE, 8);
 
-// For the compare with int32 zero ops (eqz, nez, ltz, gtz, lez, gez)
-#define SFPU_ZERO_KERNEL_INT32(OP, MODE, APPROXIMATE, DST_IDX) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(         \
-        ckernel::sfpu::calculate_comp_int<APPROXIMATE, SfpuType::OP>, DST_IDX, (int)VectorMode::MODE);
+// Generalized macro for compare-with-zero ops for any type (e.g., int, uint16)
+#define SFPU_ZERO_KERNEL_TYPE(TYPE_SUFFIX, OP, MODE, APPROXIMATE, DST_IDX) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                     \
+        ckernel::sfpu::calculate_comp_##TYPE_SUFFIX<APPROXIMATE, SfpuType::OP>, DST_IDX, (int)VectorMode::MODE);

@@ -29,34 +29,26 @@ void kernel_main() {
     constexpr uint32_t number_of_available_cores = get_compile_time_arg_val(4);
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(5);
     constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(6);
-    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(7) == 1;
-    constexpr bool output_tensor_is_dram = get_compile_time_arg_val(8) == 1;
-    constexpr bool output_index_tensor_is_dram = get_compile_time_arg_val(9) == 1;
-    constexpr bool is_32_bit_data = get_compile_time_arg_val(10) == 1;
+    constexpr bool is_32_bit_data = get_compile_time_arg_val(7) == 1;
+    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
+    constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
+    constexpr auto output_index_tensor_args = TensorAccessorArgs<output_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    constexpr DataFormat input_tensor_data_format = get_dataformat(input_tensor_cb_index);
-    const InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_addr_ger = {
-        .bank_base_address = input_tensor_buffer_addr,
-        .page_size = input_tensor_tile_size_bytes,
-        .data_format = input_tensor_data_format};
+    const auto input_tensor_addr_ger =
+        TensorAccessor(input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
 
     // Output tensor config
-    const InterleavedAddrGenFast<output_tensor_is_dram> output_tensor_addr_gen = {
-        .bank_base_address = output_tensor_buffer_addr,
-        .page_size = input_tensor_tile_size_bytes,
-        .data_format = input_tensor_data_format};
+    const auto output_tensor_addr_gen =
+        TensorAccessor(output_tensor_args, output_tensor_buffer_addr, input_tensor_tile_size_bytes);
 
     // Output index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_cb_index);
-    const DataFormat index_tensor_output_data_format = get_dataformat(index_tensor_cb_index);
-    const InterleavedAddrGenFast<output_index_tensor_is_dram> output_index_tensor_addr_gen = {
-        .bank_base_address = output_index_tensor_buffer_addr,
-        .page_size = index_tensor_output_tile_size_bytes,
-        .data_format = index_tensor_output_data_format};
+    const auto output_index_tensor_addr_gen =
+        TensorAccessor(output_index_tensor_args, output_index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
 
     // Semaphore setup
     volatile tt_l1_ptr uint32_t* semaphore_ptr =

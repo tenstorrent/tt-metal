@@ -9,7 +9,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.experimental.stable_diffusion_xl_base.tests.pcc.test_module_tt_unet import run_unet_model
 
-UNET_DEVICE_TEST_TOTAL_ITERATIONS = 3
+UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
 
 
 @pytest.mark.parametrize(
@@ -49,7 +49,7 @@ def test_unet(
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 245_115_735
+    expected_device_perf_cycles_per_iteration = 213_265_693
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

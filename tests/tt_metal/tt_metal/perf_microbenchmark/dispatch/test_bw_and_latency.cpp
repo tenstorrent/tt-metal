@@ -81,7 +81,7 @@ bool hammer_pcie_g = false;
 bool hammer_pcie_type_g = false;
 bool test_write = false;
 bool linked = false;
-bool dump_profiler_results = false;
+bool read_profiler_results = false;
 uint32_t nop_count_g = 0;
 
 void init(int argc, char** argv) {
@@ -123,7 +123,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
         log_info(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
         log_info(LogTest, " -nop: time loop of <n> nops");
-        log_info(LogTest, "-profdump: dump profiler results before closing device");
+        log_info(LogTest, "-profread: read profiler results before closing device");
         exit(0);
     }
 
@@ -162,7 +162,7 @@ void init(int argc, char** argv) {
 
     linked = test_args::has_command_option(input_args, "-link");
 
-    dump_profiler_results = test_args::has_command_option(input_args, "-profdump");
+    read_profiler_results = test_args::has_command_option(input_args, "-profread");
 
     worker_g = CoreRange({core_x, core_y}, {core_x, core_y});
     src_worker_g = {src_core_x, src_core_y};
@@ -325,7 +325,7 @@ int main(int argc, char** argv) {
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(page_size_g * page_count_g, {{0, tt::DataFormat::Float32}})
                 .set_page_size(0, page_size_g);
-        auto cb = tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
+        tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
 
         auto dm0 = tt_metal::CreateKernel(
             program,
@@ -492,8 +492,8 @@ int main(int argc, char** argv) {
             log_info(LogTest, "BW: {} GB/s", ss.str());
         }
 
-        if (dump_profiler_results) {
-            tt_metal::detail::DumpDeviceProfileResults(device);
+        if (read_profiler_results) {
+            tt_metal::detail::ReadDeviceProfilerResults(device);
         }
 
         pass &= tt_metal::CloseDevice(device);

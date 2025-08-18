@@ -4,7 +4,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.attention import Attention
+from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
@@ -15,6 +15,7 @@ class TransformerBlock(LightweightModule):
         self,
         args,
         mesh_device,
+        tt_ccl,
         dtype,
         state_dict,
         layer_num,
@@ -22,11 +23,13 @@ class TransformerBlock(LightweightModule):
         transformation_mats,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
     ):
         super().__init__()
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         self.args = args
         self.hidden_size = args.dim
@@ -41,8 +44,11 @@ class TransformerBlock(LightweightModule):
 
         self.layer_num = layer_num
 
-        self.attention = Attention(
+        ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
+
+        self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
@@ -54,6 +60,7 @@ class TransformerBlock(LightweightModule):
         )
         self.feed_forward = MLP(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -76,8 +83,10 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
+            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
         self.ff_norm = DistributedNorm(
@@ -95,8 +104,10 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
+            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
 
@@ -104,7 +115,8 @@ class TransformerBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mats=None,
+        rot_mats_global=None,
+        rot_mats_local=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -118,6 +130,12 @@ class TransformerBlock(LightweightModule):
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+
+        # Choose the correct rotation matrices based on the mode
+        rot_mats = (
+            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
+        )
+
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
         # Attention takes replicated inputs and produces fractured outputs

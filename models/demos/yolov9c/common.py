@@ -9,6 +9,8 @@ from ultralytics import YOLO
 
 from models.demos.yolov9c.reference.yolov9c import YoloV9
 
+YOLOV9C_L1_SMALL_SIZE = 24576
+
 
 def load_torch_model(model_task="segment", model_location_generator=None):
     weights = "yolov9c-seg.pt" if model_task == "segment" else "yolov9c.pt"
