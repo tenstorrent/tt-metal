@@ -130,7 +130,6 @@ private:
         {
             std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
             snapshot->clear();
-            snapshot->is_absolute = true;
             for (size_t i = 0; i < bool_metric_names_.size(); i++) {
                 size_t id = bool_metric_ids_[i];
                 snapshot->bool_metric_ids.push_back(id);
@@ -154,7 +153,6 @@ private:
             // We will now produce a delta snapshot
             std::shared_ptr<TelemetrySnapshot> delta = get_writeable_buffer();
             delta->clear();
-            delta->is_absolute = false;
 
             // Fill it with updates
             create_random_updates(delta);
