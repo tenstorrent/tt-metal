@@ -324,9 +324,6 @@ def test_reduce_scatter_async(
     use_persistent_buffers,
     rs_topology,
 ):
-    if is_training_shape and not use_barrier:
-        pytest.skip(f"Barrier semaphore required for training shapes that invoke composite RS")
-
     if is_training_shape and enable_trace:
         pytest.skip("We've seen ND PCC when running the composite-RS with trace")
 
