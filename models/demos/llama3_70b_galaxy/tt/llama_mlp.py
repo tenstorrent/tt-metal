@@ -78,7 +78,7 @@ class TtLlamaMLP(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=w2_mem_config if "w4" in name else w1_w3_mem_config,
-            # cache_file_name=cache_name(name),
+            cache_file_name=cache_name(name),
         )
 
         as_interleaved_tensor = lambda name, type, dim: ttnn.as_tensor(
@@ -171,8 +171,10 @@ class TtLlamaMLP(LightweightModule):
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
-
+        print(f"w2: {self.w2.shape}")
+        print(f"ff1ff3: {ff1ff3.shape}")
         # Use all gather + matmul op that will be defined in tt_ccl.py
+        # ttnn.synchronize_device(self.mesh_device)
         w2_out = self.tt_ccl.all_gather_matmul(
             ff1ff3,
             self.w2,
@@ -187,7 +189,7 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             buffer_key="AG_MM",
         )
-
+        print(f"w2_out: {w2_out.shape}")
         ttnn.deallocate(ff1ff3)
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
@@ -197,7 +199,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-
+        print(f"w2_out_reduced: {w2_out_reduced.shape}")
         ttnn.deallocate(w2_out)
 
         return w2_out_reduced

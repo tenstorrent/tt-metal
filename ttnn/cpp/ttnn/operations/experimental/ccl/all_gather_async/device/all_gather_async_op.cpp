@@ -134,7 +134,7 @@ void AllGatherAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.logical_shape();  // TODO: Replace with logical_shape()
+    auto shape = input_tensor.padded_shape();  // TODO: Replace with logical_shape()
     shape[this->dim] *= this->ring_size;
     return {TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};

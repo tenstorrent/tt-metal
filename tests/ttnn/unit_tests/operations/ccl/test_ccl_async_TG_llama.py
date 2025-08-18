@@ -598,7 +598,7 @@ def test_all_reduce_6U_llama(
         (
             1,
             32,
-            3584,
+            3840,
             2048,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,

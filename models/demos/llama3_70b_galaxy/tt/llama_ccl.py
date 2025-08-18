@@ -245,6 +245,7 @@ class TT_CCL:
             memory_config=self.model_config["AG_MM_RECV_MEMCFG"],
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        breakpoint()
         persistent_buffers["AG_MM"] = tt_buffer
 
         return persistent_buffers
@@ -1060,19 +1061,6 @@ class TT_CCL:
         N_per_shard = round_up(math.ceil(N / output_num_cores), ttnn.TILE_SIZE)
         N_padded = N_per_shard * output_num_cores  #
 
-        # output_core_range_set = self.model_args["RING_CORE_RANGE_SET"]
-
-        # # Matmul memory config
-        # mm_memory_config = ttnn.MemoryConfig(
-        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        #     ttnn.BufferType.L1,
-        #     ttnn.ShardSpec(
-        #         output_core_range_set,
-        #         [M, N_per_shard],
-        #         ttnn.ShardOrientation.ROW_MAJOR,
-        #     ),
-        # )
-
         # Program config
         storage_grid = num_cores_to_rectangle_grid(output_num_cores, self.mesh_device)
 
@@ -1117,17 +1105,6 @@ class TT_CCL:
             untilize_out=False,
         )
 
-        # Compute kernel config
-        # self.args.compute_kernel_config_hifi2
-
-        # compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        #     math_fidelity=ttnn.MathFidelity.HiFi2,
-        #     math_approx_mode=True,
-        #     fp32_dest_acc_en=True,
-        #     packer_l1_acc=True,
-        #     dst_full_sync_en=True,
-        # )
-        # breakpoint()
         ttnn_tensor_out = ttnn.experimental.llama_all_gather_matmul_async(
             input_tensor_mesh,
             weight_tensor,

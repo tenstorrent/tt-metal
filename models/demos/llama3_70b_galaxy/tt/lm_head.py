@@ -191,6 +191,7 @@ class LMHead(LightweightModule):
             num_links = self.args.model_config["GALAXY_NUM_LINKS"]
             for weight, pc in zip(self.output_weights_decode, self.program_configs):
                 x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
+
                 output = ttnn.linear(
                     x,
                     weight,
