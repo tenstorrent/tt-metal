@@ -47,6 +47,19 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         "Unsupported input tensor memory layout {}.",
         input_tensor.memory_config().memory_layout());
 
+    if (!this->do_sync) {
+        TT_FATAL(output_tensors.size() > 0, "Persistent buffers are required when not synchronizing");
+        TT_FATAL(this->semaphore.has_value(), "Persistent semaphores are required when not synchronizing");
+
+        // Each direction has a ready semaphore and there's a global sync semaphore, per link.
+        const auto num_expected_semaphores = 3;
+        TT_FATAL(
+            this->semaphore.value().size() == num_expected_semaphores,
+            "Error, semaphore size should be {} but has {}",
+            num_expected_semaphores,
+            this->semaphore.value().size());
+    }
+
     if (output_tensors.size() > 0) {
         TT_FATAL(
             output_tensors.size() == 2,
@@ -164,14 +177,6 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         TT_FATAL(
             input_tensor.memory_config().buffer_type() == BufferType::L1, "We don't support input DRAM block sharding");
     }
-
-    // Each direction has a ready semaphore and there's a global sync semaphore, per link.
-    const auto num_expected_semaphores = 3;
-    TT_FATAL(
-        semaphore.size() == num_expected_semaphores,
-        "Error, semaphore size should be {} but has {}",
-        num_expected_semaphores,
-        semaphore.size());
 }
 
 std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
@@ -257,6 +262,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
         }
     }
 
+    // TODO: (GR)
+    auto barrier_semaphore = std::nullopt;
+    std::vector<GlobalSemaphore> semaphore = {};
+
     return reduce_scatter_minimal_async(
         input_tensors[0],
         output_tensors[0],
@@ -269,9 +278,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
         target_ring_size,
         device_index,
         this->topology,
-        this->semaphore,
-        this->barrier_semaphore,
-        this->using_persistent_buffers,
+        semaphore,
+        barrier_semaphore,
         this->sub_device_id,
         this->chunks_per_sync,
         this->num_workers_per_link,
@@ -287,13 +295,13 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->output_mem_config,
         this->intermediate_mem_config,
         this->topology,
-        this->barrier_semaphore.has_value(),
-        this->using_persistent_buffers,
         this->sub_device_id.has_value(),
         this->sub_device_id.has_value()
             ? input_tensors[0].device()->worker_cores(
                   tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        this->do_sync,
+        this->sub_device_id,
         this->cluster_axis,
         this->chunks_per_sync,
         this->num_workers_per_link,
@@ -310,8 +318,8 @@ Tensor reduce_scatter_minimal_async_impl(
     const Tensor& input_tensor,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    bool do_sync,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<MemoryConfig>& intermeidate_memory_config,
@@ -357,10 +365,8 @@ Tensor reduce_scatter_minimal_async_impl(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
-    bool using_persistent_buffers = persistent_output_buffers.has_value();
-
     std::vector<std::optional<Tensor>> optional_output_tensors =
-        using_persistent_buffers
+        persistent_output_buffers.has_value()
             ? std::vector<std::optional<Tensor>>(persistent_output_buffers->begin(), persistent_output_buffers->end())
             : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt};
 
@@ -374,8 +380,7 @@ Tensor reduce_scatter_minimal_async_impl(
                    intermeidate_memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
                    multi_device_global_semaphore,
-                   barrier_semaphore,
-                   using_persistent_buffers,
+                   do_sync,
                    sub_device_id,
                    cluster_axis,
                    chunks_per_sync,
@@ -392,8 +397,8 @@ Tensor reduce_scatter_minimal_async(
     const Tensor& input_tensor,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    bool do_sync,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<MemoryConfig>& intermeidate_memory_config,
@@ -409,7 +414,7 @@ Tensor reduce_scatter_minimal_async(
         persistent_output_buffers,
         dim,
         multi_device_global_semaphore,
-        barrier_semaphore,
+        do_sync,
         num_links,
         memory_config,
         intermeidate_memory_config,

@@ -94,7 +94,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<uint32_t> chunks_per_sync,
     const std::optional<uint32_t> num_workers_per_link,
@@ -117,7 +116,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
         topology,
         semaphore,
         barrier_semaphore,
-        using_persistent_buffers,
         sub_device_id,
         empty_fused_op_signaler,
         chunks_per_sync,
@@ -140,7 +138,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -163,7 +160,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             topology,
             semaphore,
             barrier_semaphore,
-            using_persistent_buffers,
             sub_device_id,
             fused_op_signaler,
             chunks_per_sync,
@@ -186,7 +182,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             topology,
             semaphore,
             barrier_semaphore,
-            using_persistent_buffers,
             sub_device_id,
             fused_op_signaler,
             chunks_per_sync,
@@ -211,7 +206,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -570,11 +564,11 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     (worker_id * batch_slice_num_pages / num_workers) %
                         (input_tensor_Wt / ring_size),  // pages_read_in_row
                     (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) *
-                        input_tensor_Wt,                                         // row_offset
-                    (worker_id * batch_slice_num_pages / num_workers),           // tiles_read
-                    (worker_id + 1) * batch_slice_num_pages / num_workers,       // tiles_to_read
-                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
-                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
+                        input_tensor_Wt,                                    // row_offset
+                    (worker_id * batch_slice_num_pages / num_workers),      // tiles_read
+                    (worker_id + 1) * batch_slice_num_pages / num_workers,  // tiles_to_read
+                    barrier_semaphore.has_value(),                          // use synchronize barrier semaphore
+                    barrier_semaphore.has_value()                           // synchronize barrier semaphore
                         ? barrier_semaphore.value().address()
                         : 0};
                 append_fabric_mux_connection_rt_args(
@@ -624,7 +618,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
          num_directions_per_link,
          num_workers_per_direction,
          num_mux_cores_per_direction_per_link,
-         num_cores_per_link](
+         num_cores_per_link,
+         semaphore,
+         barrier_semaphore](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -633,8 +629,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
-            auto barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
-            auto semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
 
             // update senders
             uint32_t core_idx = 0;
@@ -691,7 +685,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -1178,7 +1171,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
          num_directions_per_link,
          num_workers_per_direction,
          num_mux_cores_per_direction_per_link,
-         num_cores_per_link](
+         num_cores_per_link,
+         semaphore,
+         barrier_semaphore](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1188,8 +1183,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
 
-            const auto& barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
-            const auto& semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
             // update senders
             uint32_t core_idx = 0;
             for (uint32_t link = 0; link < num_links; link++) {

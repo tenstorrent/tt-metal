@@ -130,6 +130,9 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
         }
     }
 
+    auto barrier_semaphore = std::nullopt;  // TODO: (GR)
+    std::vector<GlobalSemaphore> semaphore = {};
+
     // Return the MatmulReduceScatterAsync program with callbacks
     return matmul_reduce_scatter_async_multi_core_with_workers(
         input_tensors[0],   // input_tensor
@@ -147,9 +150,8 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
         this->reduce_scatter_minimal_async_struct.ring_size,
         device_index,
         this->reduce_scatter_minimal_async_struct.topology,
-        this->reduce_scatter_minimal_async_struct.semaphore,
-        this->reduce_scatter_minimal_async_struct.barrier_semaphore,
-        this->reduce_scatter_minimal_async_struct.using_persistent_buffers,
+        semaphore,
+        barrier_semaphore,
         this->reduce_scatter_minimal_async_struct.sub_device_id,
         this->reduce_scatter_core_grid_offset,
 
@@ -184,8 +186,7 @@ tt::tt_metal::operation::Hash MatmulReduceScatterAsync::compute_program_hash(
                   this->reduce_scatter_minimal_async_struct.sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->reduce_scatter_minimal_async_struct.cluster_axis,
-        this->reduce_scatter_minimal_async_struct.barrier_semaphore.has_value(),
-        this->reduce_scatter_minimal_async_struct.using_persistent_buffers,
+        this->reduce_scatter_minimal_async_struct.do_sync,
         this->reduce_scatter_minimal_async_struct.chunks_per_sync,
         this->reduce_scatter_minimal_async_struct.num_workers_per_link,
         this->reduce_scatter_minimal_async_struct.num_buffers_per_channel,
@@ -206,9 +207,9 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     ttnn::Tensor& persistent_intermediate_buffer,
     ttnn::Tensor& persistent_output_buffer,
     const uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
     const CoreCoord reduce_scatter_core_grid_offset,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool do_sync,
     const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_rs,
@@ -262,9 +263,6 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
             /*output_tile=*/std::nullopt,
             /*global_cb=*/std::nullopt});
 
-    // Not using persistent buffers not currently supported by the RSMM API
-    bool using_persistent_buffers = true;
-
     std::vector<std::optional<Tensor>> optional_output_tensors = {
         persistent_intermediate_buffer, persistent_output_buffer};
 
@@ -282,8 +280,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
         topology,
         multi_device_global_semaphore,
-        barrier_semaphore,
-        using_persistent_buffers,
+        do_sync,
         sub_device_id,
         std::nullopt,
         std::nullopt,
