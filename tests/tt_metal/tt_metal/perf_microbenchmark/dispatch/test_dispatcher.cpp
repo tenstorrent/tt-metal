@@ -383,8 +383,6 @@ void gen_cmds(
     CoreRange worker_cores,
     DeviceData& device_data,
     uint32_t page_size) {
-    uint32_t total_size_bytes = 0;
-    uint32_t buffer_size = prefetcher_buffer_size_g - page_size;  // for terminate
     uint32_t cmd_count = 0;
 
     switch (test_type_g) {
@@ -490,7 +488,7 @@ int main(int argc, char** argv) {
         uint32_t dram_data_addr = l1_buf_base;
         uint32_t l1_data_addr = l1_buf_base;
 
-        // Seperate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
+        // Separate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
         if (paged_test) {
             // Seems like 16B alignment is required otherwise mismatches in readback. Linear writes only target 16B
             // aligned transfer sizes too. It's okay for these not to be, the random calc below will align final

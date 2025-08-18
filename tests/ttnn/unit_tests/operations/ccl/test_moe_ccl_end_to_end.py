@@ -128,7 +128,9 @@ def test_integration(mesh_device, mesh_shape):
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     global_semaphore1 = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    init_semaphore1 = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
     global_semaphore2 = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    init_semaphore2 = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     ## INPUTS TO DISPATCH ##
     # [batch(/devices),1,1,hidden]
@@ -171,6 +173,7 @@ def test_integration(mesh_device, mesh_shape):
         cluster_axis=axis,
         memory_config=output_memory_config,
         global_semaphore=global_semaphore1,
+        init_semaphore=init_semaphore1,
         subdevice_id=worker_sub_device_id,
     )
     ttnn.synchronize_device(mesh_device)
@@ -192,6 +195,7 @@ def test_integration(mesh_device, mesh_shape):
         memory_config=output_memory_config,
         global_semaphore=global_semaphore2,
         axis=axis,
+        init_semaphore=init_semaphore2,
         subdevice_id=worker_sub_device_id,
     )
 

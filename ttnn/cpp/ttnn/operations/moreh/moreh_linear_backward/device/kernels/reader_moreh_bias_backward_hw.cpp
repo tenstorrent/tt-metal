@@ -14,7 +14,7 @@ void kernel_main() {
     const bool do_mask_h = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
     const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto src_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_scaler = 1;
@@ -33,9 +33,7 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
     uint32_t src_tile_bytes = get_tile_size(cb_id_in0);
-    auto src_data_format = get_dataformat(cb_id_in0);
-    const InterleavedAddrGenFast<src_is_dram> s0 = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
+    const auto s0 = TensorAccessor(src_args, src_addr, src_tile_bytes);
 
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
