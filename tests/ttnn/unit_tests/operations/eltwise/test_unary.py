@@ -1391,13 +1391,12 @@ def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_threshold_ttnn(input_shapes, device):
+@pytest.mark.parametrize("threshold", [1.0, 10.0, 100.0, -5, -8.0, -100.0])
+@pytest.mark.parametrize("value", [10.0, 100.0, -7.0, -85.8])
+def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    threshold = 1.0
-    value = 10.0
     output_tensor = ttnn.threshold(input_tensor1, threshold, value)
     golden_function = ttnn.get_golden_function(ttnn.threshold)
     golden_tensor = golden_function(in_data1, threshold, value)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor)
