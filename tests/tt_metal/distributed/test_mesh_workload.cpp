@@ -84,19 +84,19 @@ std::vector<CBHandle> initialize_dummy_circular_buffers(
 }
 
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
-    auto dummy_reader_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    auto dummy_writer_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
 std::shared_ptr<Program> initialize_dummy_program(CoreCoord worker_grid_size) {
@@ -220,7 +220,6 @@ TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         /*num_programs=*/2, mesh_device_->compute_with_storage_grid_size(), /*seed=*/0);
-    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     auto mesh_workload = CreateMeshWorkload();
 
     MeshCoordinate zero_coord = MeshCoordinate::zero_coordinate(mesh_device_->shape().dims());
@@ -568,7 +567,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
                  constants::TILE_WIDTH,
                  scaling_sem_idx,
                  scaling_height_toggle});
-            CBHandle cb_src0 = CreateCircularBuffer(program, curr_core, cb_src0_config);
+            CreateCircularBuffer(program, curr_core, cb_src0_config);
         }
     }
     auto program_1 = initialize_dummy_program(worker_grid_size);
