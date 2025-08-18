@@ -203,6 +203,7 @@ def run_all_gather_impl(
         (8, [1, 1, 8, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
         (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
         (8, [1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
         "sd35_spatial",
@@ -215,6 +216,7 @@ def run_all_gather_impl(
         "composite_ag_test_one",
         "composite_ag_test_two",
         "composite_ag_test_three",
+        "composite_ag_test_four",
     ],
 )
 @pytest.mark.parametrize(
