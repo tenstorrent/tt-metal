@@ -107,9 +107,7 @@ class CLIPEncoder:
         return encoder_output, projected_output
 
 
-def _gather_eos(
-    self, seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device
-) -> ttnn.Tensor:
+def _gather_eos(seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device) -> ttnn.Tensor:
     ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
 
     # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
