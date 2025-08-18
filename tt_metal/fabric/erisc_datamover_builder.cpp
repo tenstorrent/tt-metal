@@ -547,7 +547,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         num_remote_sender_buffer_slots.fill(default_num_sender_buffer_slots);
         num_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
         num_remote_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
-        num_downstream_sender_buffer_slots.fill(default_num_sender_buffer_slots);
 
         auto buffer_config = options.edm_buffer_config;
         if (options.edm_type == FabricEriscDatamoverType::Dateline) {
