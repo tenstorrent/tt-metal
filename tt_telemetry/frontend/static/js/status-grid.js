@@ -20,6 +20,12 @@ export class StatusGrid extends LitElement {
         .grid.level-any {
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         }
+
+        /* Constrain individual status boxes to maximum 400px */
+        .grid.level-any status-box {
+            max-width: 400px;
+            max-height: 400px;
+        }
     `;
 
     static properties = {
