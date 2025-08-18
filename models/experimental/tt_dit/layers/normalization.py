@@ -30,8 +30,10 @@ class RMSNorm:
             if self.use_bias:
                 self.bias = bf16_tensor(state_dict["bias"].unsqueeze(0), device=self.mesh_device)
 
-    def __call__(self, x):
-        return ttnn.rms_norm(x, weight=self.weight, bias=self.bias, epsilon=self.norm_eps)
+    def __call__(self, x, compute_kernel_config=None):
+        return ttnn.rms_norm(
+            x, weight=self.weight, bias=self.bias, epsilon=self.norm_eps, compute_kernel_config=compute_kernel_config
+        )
 
 
 class LayerNorm:
