@@ -24,7 +24,7 @@ void MAIN {
     // from computer architecture. Think it like that. Later on we will ensure
     // that registers are free and then we will submit compute to the FPU/SFPU
     // that writes to the register. see:
-    // https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/acquire_dst.html
+    // https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/acquire_dst.html#acquire-dst
     constexpr uint32_t dst_reg = 0;
 
     // Tell the SFPU that we will be using circular buffers c_in0, c_in1 and
