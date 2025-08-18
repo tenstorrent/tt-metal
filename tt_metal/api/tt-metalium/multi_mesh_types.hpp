@@ -57,8 +57,14 @@ struct ASICDescriptor {
     }
 };
 
+struct ComputeNodeDescriptor {
+    std::string host_name;
+    std::string mobo_name;
+    std::vector<ASICDescriptor> asic_descriptors;
+};
+
 struct SystemDescriptor {
-    std::unordered_map<std::string, std::vector<ASICDescriptor>> asic_ids;
+    std::vector<ComputeNodeDescriptor> compute_nodes;
     std::vector<EthConnectivityDescriptor> eth_connectivity_descs;
 };
 

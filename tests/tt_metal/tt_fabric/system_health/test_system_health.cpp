@@ -186,15 +186,28 @@ std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t ch
     return str.str();
 }
 
+std::string get_mobo_name() {
+    std::ifstream file("/sys/class/dmi/id/board_name");
+    std::string motherboard;
+
+    if (file.is_open()) {
+        std::getline(file, motherboard);
+        file.close();
+    }
+
+    return motherboard;
+}
+
 void dump_to_yaml(const SystemDescriptor& descriptor) {
     YAML::Node root;
 
     // Build hosts section
     YAML::Node asic_info_map;
 
-    for (const auto& host_entry : descriptor.asic_ids) {
-        const std::string& hostname = host_entry.first;
-        const std::vector<ASICDescriptor>& asics = host_entry.second;
+    for (const auto& compute_node_desc : descriptor.compute_nodes) {
+        const std::string& hostname = compute_node_desc.host_name;
+        const std::string& mobo_name = compute_node_desc.mobo_name;
+        const std::vector<ASICDescriptor>& asics = compute_node_desc.asic_descriptors;
 
         // Group ASICs by tray_id and board_type
         std::map<uint32_t, std::vector<ASICDescriptor>> grouped_asics;
@@ -204,7 +217,8 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
         }
 
         YAML::Node host_node;
-
+        YAML::Node tray_groups;
+        host_node["motherboard"] = get_mobo_name();
         // Create array of tray groups
         for (const auto& group : grouped_asics) {
             YAML::Node tray_group;
@@ -226,14 +240,13 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
                 asics_array.push_back(asic_node);
             }
             tray_group["asics"] = asics_array;
-
-            host_node.push_back(tray_group);
+            tray_groups.push_back(tray_group);
         }
-
+        host_node["asic_info"] = tray_groups;
         asic_info_map[hostname] = host_node;
     }
 
-    root["asic_info"] = asic_info_map;
+    root["node_specs"] = asic_info_map;
 
     YAML::Node local_eth_connections(YAML::NodeType::Sequence);
 
@@ -260,14 +273,16 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
             src_conn_node["host_name"] = local_host_name;
             dst_conn_node["host_name"] = local_host_name;
 
-            for (const auto& asic_desc : descriptor.asic_ids.at(local_host_name)) {
-                if (asic_desc.unique_id == src.board_id) {
-                    src_conn_node["tray_id"] = asic_desc.tray_id;
-                    src_conn_node["nid"] = asic_desc.n_id;
-                }
-                if (asic_desc.unique_id == dst.board_id) {
-                    dst_conn_node["tray_id"] = asic_desc.tray_id;
-                    dst_conn_node["nid"] = asic_desc.n_id;
+            for (const auto& compute_node_desc : descriptor.compute_nodes) {
+                for (const auto& asic_desc : compute_node_desc.asic_descriptors) {
+                    if (asic_desc.unique_id == src.board_id) {
+                        src_conn_node["tray_id"] = asic_desc.tray_id;
+                        src_conn_node["nid"] = asic_desc.n_id;
+                    }
+                    if (asic_desc.unique_id == dst.board_id) {
+                        dst_conn_node["tray_id"] = asic_desc.tray_id;
+                        dst_conn_node["nid"] = asic_desc.n_id;
+                    }
                 }
             }
             src_conn_node["chan_id"] = src.chan_id;
@@ -308,19 +323,22 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
             YAML::Node dst_conn_node;
             src_conn_node["host_name"] = local_host_name;
             dst_conn_node["host_name"] = dst_desc.first;
-
-            for (const auto& asic_desc : descriptor.asic_ids.at(local_host_name)) {
-                if (asic_desc.unique_id == src.board_id) {
-                    src_conn_node["tray_id"] = asic_desc.tray_id;
-                    src_conn_node["nid"] = asic_desc.n_id;
-                    break;
+            for (const auto& compute_node_desc : descriptor.compute_nodes) {
+                for (const auto& asic_desc : compute_node_desc.asic_descriptors) {
+                    if (asic_desc.unique_id == src.board_id) {
+                        src_conn_node["tray_id"] = asic_desc.tray_id;
+                        src_conn_node["nid"] = asic_desc.n_id;
+                        break;
+                    }
                 }
             }
-            for (const auto& asic_desc : descriptor.asic_ids.at(dst_desc.first)) {
-                if (asic_desc.unique_id == dst_desc.second.board_id) {
-                    dst_conn_node["tray_id"] = asic_desc.tray_id;
-                    dst_conn_node["nid"] = asic_desc.n_id;
-                    break;
+            for (const auto& compute_node_desc : descriptor.compute_nodes) {
+                for (const auto& asic_desc : compute_node_desc.asic_descriptors) {
+                    if (asic_desc.unique_id == dst_desc.second.board_id) {
+                        dst_conn_node["tray_id"] = asic_desc.tray_id;
+                        dst_conn_node["nid"] = asic_desc.n_id;
+                        break;
+                    }
                 }
             }
             src_conn_node["chan_id"] = src.chan_id;
@@ -393,7 +411,8 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     }
 
     tt::tt_fabric::SystemDescriptor system_desc;
-    system_desc.asic_ids[hostname_str] = std::move(asic_descriptors);
+    system_desc.compute_nodes.push_back(
+        tt::tt_fabric::ComputeNodeDescriptor{hostname_str, get_mobo_name(), std::move(asic_descriptors)});
     system_desc.eth_connectivity_descs.push_back(std::move(eth_connectivity_desc));
 
     auto serialized_sys_desc = serialize_system_descriptor_to_bytes(system_desc);
@@ -429,7 +448,8 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
                     Rank{rank},
                     Tag{0});
                 auto peer_desc = deserialize_system_descriptor_from_bytes(serialized_peer_desc);
-                system_desc.asic_ids.insert(peer_desc.asic_ids.begin(), peer_desc.asic_ids.end());
+                system_desc.compute_nodes.insert(
+                    system_desc.compute_nodes.end(), peer_desc.compute_nodes.begin(), peer_desc.compute_nodes.end());
                 system_desc.eth_connectivity_descs.insert(
                     system_desc.eth_connectivity_descs.end(),
                     std::make_move_iterator(peer_desc.eth_connectivity_descs.begin()),

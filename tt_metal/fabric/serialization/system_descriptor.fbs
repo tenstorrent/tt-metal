@@ -21,13 +21,14 @@ table ASICDescriptor {
     board_type: uint32;
 }
 
-table HostASICGroup {
+table ComputeNodeDescriptor {
     host_name: string;
+    mobo_name: string;
     asics: [ASICDescriptor];
 }
 
 table SystemDescriptor {
-    host_asic_groups: [HostASICGroup];  // represents the map<string, vector<ASICDescriptor>>
+    compute_node_descs: [ComputeNodeDescriptor];
     eth_connectivity_descs: [EthConnectivityDescriptor];
 }
 

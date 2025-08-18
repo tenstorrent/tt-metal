@@ -101,19 +101,18 @@ std::vector<uint8_t> serialize_system_descriptor_to_bytes(const tt::tt_fabric::S
             builder, asic_desc.unique_id, asic_desc.tray_id, asic_desc.n_id, asic_desc.board_type);
     };
 
-    // Create HostASICGroup vector
-    std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::HostASICGroup>> host_asic_groups;
-    for (const auto& [host_name, asic_descriptors] : system_descriptor.asic_ids) {
-        // Create ASIC descriptors vector for this host
+    std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::ComputeNodeDescriptor>> compute_nodes;
+    for (const auto& compute_node : system_descriptor.compute_nodes) {
+        const auto& asic_descriptors = compute_node.asic_descriptors;
         std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::ASICDescriptor>> asics;
         for (const auto& asic_desc : asic_descriptors) {
             asics.push_back(create_asic_descriptor(asic_desc));
         }
-
-        auto host_name_fb = builder.CreateString(host_name);
+        auto host_name_fb = builder.CreateString(compute_node.host_name);
+        auto mobo_name_fb = builder.CreateString(compute_node.mobo_name);
         auto asics_vector = builder.CreateVector(asics);
-        auto host_asic_group = CreateHostASICGroup(builder, host_name_fb, asics_vector);
-        host_asic_groups.push_back(host_asic_group);
+        auto compute_node_desc = CreateComputeNodeDescriptor(builder, host_name_fb, mobo_name_fb, asics_vector);
+        compute_nodes.push_back(compute_node_desc);
     }
 
     // Create EthConnectivityDescriptor vector
@@ -148,9 +147,9 @@ std::vector<uint8_t> serialize_system_descriptor_to_bytes(const tt::tt_fabric::S
     }
 
     // Create the root SystemDescriptor
-    auto host_asic_groups_vector = builder.CreateVector(host_asic_groups);
+    auto compute_nodes_vector = builder.CreateVector(compute_nodes);
     auto eth_connectivity_descs_vector = builder.CreateVector(eth_connectivity_descs);
-    auto system_descriptor_fb = CreateSystemDescriptor(builder, host_asic_groups_vector, eth_connectivity_descs_vector);
+    auto system_descriptor_fb = CreateSystemDescriptor(builder, compute_nodes_vector, eth_connectivity_descs_vector);
 
     builder.Finish(system_descriptor_fb);
 
@@ -189,18 +188,19 @@ tt::tt_fabric::SystemDescriptor deserialize_system_descriptor_from_bytes(const s
     };
 
     // Convert host ASIC groups
-    if (system_desc_fb->host_asic_groups()) {
-        for (const auto* host_asic_group_fb : *system_desc_fb->host_asic_groups()) {
-            std::string host_name = host_asic_group_fb->host_name()->str();
+    if (system_desc_fb->compute_node_descs()) {
+        for (const auto* compute_node_desc_fb : *system_desc_fb->compute_node_descs()) {
+            std::string host_name = compute_node_desc_fb->host_name()->str();
+            std::string mobo_name = compute_node_desc_fb->mobo_name()->str();
             std::vector<tt::tt_fabric::ASICDescriptor> asic_descriptors;
 
-            if (host_asic_group_fb->asics()) {
-                for (const auto* asic_desc_fb : *host_asic_group_fb->asics()) {
+            if (compute_node_desc_fb->asics()) {
+                for (const auto* asic_desc_fb : *compute_node_desc_fb->asics()) {
                     asic_descriptors.push_back(convert_asic_descriptor(asic_desc_fb));
                 }
             }
-
-            result.asic_ids[host_name] = std::move(asic_descriptors);
+            result.compute_nodes.push_back(
+                tt::tt_fabric::ComputeNodeDescriptor{host_name, mobo_name, std::move(asic_descriptors)});
         }
     }
 
