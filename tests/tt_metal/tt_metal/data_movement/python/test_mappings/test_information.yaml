@@ -10,7 +10,7 @@ tests:
   3:
     name: "DRAM Directed Ideal"
     comment: |
-      This test shows the ideal read and write bandwidth when transfering multiple 8KB packets.
+      This test shows the ideal read and write bandwidth when transferring multiple 8KB packets.
       The read bandwidth is what is expected, however write bandwidth is expected to be 64
       B/cycle rather than 35 B/cycle. There may be some configuration problem with the dram
       controller/phy or this may be the physical limit of the dram.
@@ -215,17 +215,17 @@ tests:
   200:
     name: "Deinterleave Single Core"
     comment: |
-      With a single core the graphs shows performance increases as the theshold increases.
-      This is because frequent flushes dont hide the round trip latency.
+      With a single core the graphs shows performance increases as the threshold increases.
+      This is because frequent flushes don't hide the round trip latency.
 
   201:
     name: "Deinterleave Multi Core"
     comment: |
-      With multiple cores the graph shows that a small theshold always provides bad performance.
-      This is because frequent flushes dont hide the round trip latency. At larger thesholds,
+      With multiple cores the graph shows that a small threshold always provides bad performance.
+      This is because frequent flushes don't hide the round trip latency. At larger thresholds,
       the performance starts to fluctuate due to head-of-line blocking and unfairness in the NOC.
-      Performance fluctuates because the flush disturbes the steady state and will randomly create
-      traffic that sometimes has head of line blocking, and sometimes not.
+      Performance fluctuates because the flush disturbs the steady state and will randomly create
+      traffic that sometimes has head of line blocking, and sometimes does not.
 
   300:
     name: "All to All Directed Ideal"
