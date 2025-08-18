@@ -78,7 +78,7 @@ Follow these steps to add new tests to this test suite.
 5. Assign your test a unique test id to make sure your test results are grouped together and are plotted separately from other tests.
     - Refer to the "Tests in the Test Suite" section for already taken test ids.
     - Preferably use the next integer available.
-    - Update the `test_id_to_name` and `test_bounds` objects with the test id, test name and test bounds.
+    - Add the test id and test name to this README and to `/python/test_mappings/test_information.yaml`. If test bounds are relevant, add these to `/python/test_mappings/test_bounds.yaml`
 6. Create a README file within the test directory that describes:
     1. What your test does,
     2. What the test parameters are,
