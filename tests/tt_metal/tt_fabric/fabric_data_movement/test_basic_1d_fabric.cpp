@@ -1315,7 +1315,6 @@ void RunTest2DMCastConnAPI(
     auto* sender_device = DevicePool::instance().get_active_device(src_phys_chip_id);
     auto* dst_recv_device = DevicePool::instance().get_active_device(dst_recv_phys_chip_id);
 
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = dst_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
