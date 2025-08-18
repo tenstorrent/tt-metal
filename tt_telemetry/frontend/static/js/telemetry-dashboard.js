@@ -214,9 +214,11 @@ export class TelemetryDashboard extends LitElement {
         const metrics = [];
         for (const metricName of metricNames) {
             const metricPath = [...this.currentPath, metricName].join("/");
+            const hasChildren = this._telemetryStore.getChildNames(metricPath).length > 0;
             metrics.push({
                 name: metricName,
-                value: this._telemetryStore.getValue(metricPath)
+                value: this._telemetryStore.getValue(metricPath),
+                isLeaf: !hasChildren  // True if this is a final node with no children
             });
         }
 
