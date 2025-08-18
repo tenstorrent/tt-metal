@@ -16,21 +16,23 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 
 ## Tests in the Test Suite
 
-| Name                        | ID(s)        | Description                                                                             |
-| --------------------------- | ------------ | --------------------------------------------------------------------------------------- |
-| DRAM Unary                  | 0-3          | Transactions between DRAM and a single Tensix core.                                     |
-| One to One                  | 4, 50        | Write transactions between two Tensix cores.                                            |
-| One From One                | 5, 51        | Read transactions between two Tensix cores.                                             |
-| One to all                  | 6-8          | Writes transaction from one core to all cores.                                          |
-| One to all Multicast        | 9-14, 52     | Writes transaction from one core to all cores using multicast.                          |
-| One From All                | 15, 30       | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
-| Loopback                    | 16           | Does a loopback operation where one cores writes to itself.                             |
-| Reshard Hardcoded           | 17-20        | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
-| Conv Hardcoded              | 21-23        | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
-| All to all                  | 60           | Write transactions from multiple cores to multiple cores.                               |
-| All from all                | 70           | Read transactions from multiple cores to multiple cores.                                |
-| Interleaved Page Read/Write | 61-69, 71-75 | Reads and writes pages between interleaved buffers and a Tensix core.                   |
-| Deinterleave                | 200-201      | Tests deinterleaving **(Slow Dispatch)**                                                |
+| Name                        | ID(s)                | Description                                                                             |
+| ----------                  | -----                | ----------------------------------------------------                                    |
+| DRAM Unary                  | 0-3                  | Transactions between DRAM and a single Tensix core.                                     |
+| One to One                  | 4, 50, 150-151       | Write transactions between two Tensix cores.                                            |
+| One From One                | 5, 51, 152-153       | Read transactions between two Tensix cores.                                             |
+| One to all                  | 6-8, 52, 154-155     | Writes transaction from one core to all cores.                                          |
+| One to all Multicast        | 9-14, 53-54, 100-102 | Writes transaction from one core to all cores using multicast.                          |
+| One From All                | 15, 30, 156-157      | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
+| Loopback                    | 16, 55               | Does a loopback operation where one cores writes to itself.                             |
+| Reshard Hardcoded           | 17-20                | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
+| Conv Hardcoded              | 21-23                | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
+| Interleaved Page Read/Write | 61-69, 71-75         | Reads and writes pages between interleaved buffers and a Tensix core.                   |
+| One Packet Read/Write       | 80-83                | Reads or writes packets between two Tensix cores.                                       |
+| Core Bidrectional           | 140-148              | Tensix core reads from and writes to another Tensix core simultaneously.                |
+| Deinterleave                | 200-201              | Tests deinterleaving. **(Slow Dispatch)**                                               |
+| All to all                  | 300-308              | Write transactions from multiple cores to multiple cores.                               |
+| All from all                | 310-318              | Read transactions from multiple cores to multiple cores.                                |
 
 ## Running Tests
 ### C++ Gtests
