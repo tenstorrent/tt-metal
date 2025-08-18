@@ -356,6 +356,21 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
+  blackhole-20-cores-tests:
+    needs: [build-artifact, generate-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-20-cores-tests.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
   # Multi-card post-commit tests
   blackhole-multi-card-post-commit-tests:
     needs: build-artifact
