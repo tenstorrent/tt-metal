@@ -74,7 +74,7 @@ class CLIPEncoder:
     ) -> torch.Tensor:
         hidden_states = self.embeddings(prompt_tokenized, mesh_device)
 
-        causal_attention_mask = _create_4d_causal_attention_mask(
+        causal_attention_mask = create_4d_causal_attention_mask(
             prompt_tokenized.shape, mesh_device, dtype=hidden_states.get_dtype()
         )
 
@@ -103,7 +103,7 @@ class CLIPEncoder:
         text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
         projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
 
-        # sequence embedding, pooled embedding
+        # sequence embedding, pooled embedding, normalized final state
         return encoder_output, projected_output
 
 
@@ -286,11 +286,6 @@ class CLIPEncoderLayer:
         logger.info(f"CLIPEncoderLayer completed, final shape: {hidden_states.shape}")
 
         return hidden_states
-
-
-class CLIPEncoderLayerMLP:
-    def __init__(self, config: CLIPConfig):
-        self.config = config
 
 
 class EncoderLayerSelfAttention:
@@ -512,7 +507,7 @@ class TextEmbeddings:
 
 
 # adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py
-def _create_4d_causal_attention_mask(
+def create_4d_causal_attention_mask(
     input_shape: tuple[int, int], device: ttnn.Device, dtype: ttnn.DataType
 ) -> ttnn.Tensor:
     """Create a 4D causal attention mask for the given input shape."""
