@@ -40,10 +40,6 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
 
     Program program = Program();
 
-    auto input_buffer = input.buffer();
-    auto output_buffer = output.buffer();
-    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
-
     constexpr uint32_t num_tiles = 2;
     auto in_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t in_dtype_tile_size = tile_size(in_data_format);
@@ -88,9 +84,9 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
         default: break;
     }
 
-    TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
-    TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program, reader_file_path, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
