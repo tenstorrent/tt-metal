@@ -858,6 +858,7 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
         case HalProgrammableCoreType::TENSIX:
             switch (processor_class) {
                 case HalProcessorClassType::DM:
+                    TT_ASSERT(0 <= processor_id && processor_id < 2);
                     unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1) +
                                        processor_id * 256 * sizeof(uint32_t);
                     common_args_addr = unique_args_addr + (3 + processor_id) * 256 * sizeof(uint32_t);
