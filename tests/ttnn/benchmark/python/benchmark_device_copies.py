@@ -28,23 +28,24 @@ def test_benchmark_from_torch_with_format_conversion(benchmark, to_layout, dtype
     benchmark(run)
 
 
-# @pytest.mark.parametrize(
-#     "layout", [(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)]
-# )
-# @pytest.mark.parametrize("dtype", [(ttnn.bfloat16, ttnn.float32), (ttnn.float32, ttnn.bfloat16)])
-# @pytest.mark.parametrize("tensor_size", [(8096, 8096)])
-# def test_benchmark_to_torch(benchmark, layout, dtype, tensor_size):
-#     from_layout, to_layout = layout
-#     from_dtype, to_dtype = dtype
+@pytest.mark.parametrize(
+    # No translation, tileize
+    "from_layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+)
+@pytest.mark.parametrize("dtype", [(ttnn.bfloat16, torch.float32), (ttnn.float32, torch.bfloat16)])
+@pytest.mark.parametrize("tensor_size", [(8096, 8096)])
+def test_benchmark_to_torch(benchmark, from_layout, dtype, tensor_size):
+    from_dtype, to_dtype = dtype
 
-#     device = ttnn.open_device(device_id=0)
-#     ttnn_tensor = ttnn.rand(tensor_size, dtype=from_dtype, layout=from_layout, device=device)
+    device = ttnn.open_device(device_id=0)
+    ttnn_tensor = ttnn.rand(tensor_size, dtype=from_dtype, layout=from_layout, device=device)
 
-#     def run():
-#         _ = ttnn.to_torch(ttnn_tensor, dtype=to_dtype, layout=to_layout, device=device)
-#         ttnn.synchronize_device(device)
+    def run():
+        _ = ttnn.to_torch(ttnn_tensor, dtype=to_dtype, device=device)
+        ttnn.synchronize_device(device)
 
-#     benchmark(run)
+    benchmark(run)
 
 
 @pytest.mark.parametrize("tensor_size", [(8096, 8096)])
