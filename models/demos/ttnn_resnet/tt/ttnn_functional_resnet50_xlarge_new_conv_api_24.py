@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import is_grayskull, is_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
+from models.utility_functions import is_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -239,10 +239,7 @@ class resnet50Bottleneck:
         )
 
         act_block_h_override = 0
-        if is_grayskull():
-            if self.conv2_output_channels == 64 and input_height == 56 and batch_size == 20:
-                act_block_h_override = 320
-        elif is_wormhole_b0():
+        if is_wormhole_b0():
             if (
                 self.conv2_input_channels == 128
                 and self.conv2_output_channels == 128
@@ -372,25 +369,18 @@ class resnet50:
     ) -> None:
         super().__init__()
         layers = [3, 4, 6, 3]
-        num_classes = 1000
         conv_input_face_shape_hw = [896, 896]
         self.device = device
         self.conv_input_face_shape_hw = conv_input_face_shape_hw
         self.batch_size = batch_size
         self.model_config = model_config
         self.inplanes = 64
-        if is_grayskull():
-            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-            )
-        else:
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=model_config["MATH_FIDELITY"],
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
         self.conv1_weight_tensor = parameters.conv1.weight
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
