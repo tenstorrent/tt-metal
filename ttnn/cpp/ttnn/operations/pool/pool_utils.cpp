@@ -9,6 +9,7 @@
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
 
+#include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn::operations::pool {
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
@@ -233,8 +234,8 @@ uint32_t calculate_L1_usage(
 
     // after reduction
     const uint32_t out_cb_pagesize =
-        tt::tile_size(params.data_format);  // there is just one row of channels after each reduction (or 1
-                                            // block of c if its greater than 8 tiles)
+        tt::tile_size(tt::DataFormat::Bfp8_b);  // there is just one row of channels after each reduction (or 1
+                                                // block of c if its greater than 8 tiles)
     const uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] *
                                    output_memory.shard_spec().value().shape[1] / tt::constants::TILE_HW;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
