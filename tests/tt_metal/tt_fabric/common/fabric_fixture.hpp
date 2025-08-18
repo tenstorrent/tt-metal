@@ -202,11 +202,7 @@ void RunTestMCastConnAPI(
     uint32_t bwd_hops = 1);
 
 void RunTest2DMCastConnAPI(
-    BaseFabricFixture* fixture,
-    RoutingDirection trunk_dir,
-    uint32_t trunk_hops,
-    uint32_t branch_east_hops,
-    uint32_t branch_west_hops);
+    BaseFabricFixture* fixture, uint32_t north_hops, uint32_t south_hops, uint32_t east_hops, uint32_t west_hops);
 
 void RunTestChipMCast1D(
     BaseFabricFixture* fixture,
@@ -216,6 +212,16 @@ void RunTestChipMCast1D(
     bool enable_fabric_tracing = false);
 
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
+
+void RunEDMConnectionStressTest(
+    BaseFabricFixture* fixture,
+    const std::vector<size_t>& stall_durations_cycles,
+    const std::vector<size_t>& message_counts,
+    const std::vector<size_t>& packet_sizes,
+    size_t num_iterations,
+    size_t num_times_to_connect,
+    const std::vector<size_t>& workers_count,
+    const std::vector<size_t>& test_rows);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

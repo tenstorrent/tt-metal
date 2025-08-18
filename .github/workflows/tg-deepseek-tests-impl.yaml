@@ -69,7 +69,7 @@ jobs:
           start_time=$(date +%s)
 
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --timeout 10 || fail=1
+          pytest models/demos/deepseek_v3/tests --timeout 10 --durations=0 || fail=1
 
           end_time=$(date +%s)
           duration=$((end_time - start_time))

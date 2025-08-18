@@ -134,16 +134,16 @@ void get_mcast_receivers(
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info) {
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
-    bool system_accomodates_mcast = false;
+    bool system_accommodates_mcast = false;
     for (const auto& mesh : user_meshes) {
         auto mesh_shape = control_plane.get_physical_mesh_shape(mesh);
         // Need at least 8 chips for all mcast tests
         if (mesh_shape.mesh_size() >= 8) {
-            system_accomodates_mcast = true;
+            system_accommodates_mcast = true;
             break;
         }
     }
-    if (!system_accomodates_mcast) {
+    if (!system_accommodates_mcast) {
         GTEST_SKIP() << "No mesh found for line mcast test";
     }
     // Setup mcast path
@@ -1068,11 +1068,12 @@ void RunTestMCastConnAPI(
 }
 
 void RunTest2DMCastConnAPI(
-    BaseFabricFixture* fixture,
-    RoutingDirection trunk_dir,
-    uint32_t trunk_hops,
-    uint32_t branch_east_hops,
-    uint32_t branch_west_hops) {
+    BaseFabricFixture* fixture, uint32_t north_hops, uint32_t south_hops, uint32_t east_hops, uint32_t west_hops) {
+    uint32_t north_branch_east_hops = east_hops;
+    uint32_t north_branch_west_hops = west_hops;
+    uint32_t south_branch_east_hops = east_hops;
+    uint32_t south_branch_west_hops = west_hops;
+
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     std::vector<tt_metal::Program> receiver_programs;
@@ -1096,15 +1097,23 @@ void RunTest2DMCastConnAPI(
     // Find a device num_hops away in specified direction.
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
-    std::unordered_map<RoutingDirection, uint32_t> branch_hops;
 
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
     chip_id_t src_phys_chip_id;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
 
-    fabric_hops[trunk_dir] = trunk_hops;
-    fabric_hops[RoutingDirection::E] = branch_east_hops;
-    fabric_hops[RoutingDirection::W] = branch_west_hops;
+    if (north_hops > 0) {
+        fabric_hops[RoutingDirection::N] = north_hops;
+    }
+    if (south_hops > 0) {
+        fabric_hops[RoutingDirection::S] = south_hops;
+    }
+    if (east_hops > 0) {
+        fabric_hops[RoutingDirection::E] = std::max({north_branch_east_hops, south_branch_east_hops, east_hops});
+    }
+    if (west_hops > 0) {
+        fabric_hops[RoutingDirection::W] = std::max({north_branch_west_hops, south_branch_west_hops, west_hops});
+    }
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
@@ -1124,35 +1133,124 @@ void RunTest2DMCastConnAPI(
             fabric_hops)) {
         log_info(
             tt::LogTest,
-            "No Mcast destinations found for {} hops in trunk direction {} with {} East and {} West branch hops.",
-            trunk_hops,
-            trunk_dir,
-            branch_east_hops,
-            branch_west_hops);
+            "No Mcast destinations found for {} North Hops with {} East and {} West branch hops, {} South Hops with {} "
+            "East and {} West branch hops, and {} East and {} West direct hops.",
+            north_hops,
+            north_branch_east_hops,
+            north_branch_west_hops,
+            south_hops,
+            south_branch_east_hops,
+            south_branch_west_hops,
+            east_hops,
+            west_hops);
         GTEST_SKIP() << "Skipping Test";
     }
 
     mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     uint32_t ew_dim = mesh_shape[1];
-    auto device_offset = trunk_dir == RoutingDirection::N ? -1 : 1;
-    auto east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][branch_east_hops - 1];
-    east_fabric_node_id.chip_id += device_offset * ew_dim;
-    auto left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(east_fabric_node_id);
-    auto west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][branch_west_hops - 1];
-    west_fabric_node_id.chip_id += device_offset * ew_dim;
-    auto right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(west_fabric_node_id);
+    auto north_offset = -1;
+    auto south_offset = 1;
+    auto north_fabric_node_id = src_fabric_node_id;
+    auto south_fabric_node_id = src_fabric_node_id;
+    auto north_east_fabric_node_id = src_fabric_node_id;
+    auto north_west_fabric_node_id = src_fabric_node_id;
+    auto north_recv_phys_chip_id = src_phys_chip_id;
+    auto south_recv_phys_chip_id = src_phys_chip_id;
+    auto right_recv_phys_chip_id = src_phys_chip_id;
+    auto left_recv_phys_chip_id = src_phys_chip_id;
+    auto south_east_fabric_node_id = src_fabric_node_id;
+    auto south_west_fabric_node_id = src_fabric_node_id;
+    auto right_fabric_node_id = src_fabric_node_id;
+    auto left_fabric_node_id = src_fabric_node_id;
+
+    if(south_hops > 0){
+        south_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::S][south_hops - 1];
+        south_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(south_fabric_node_id);
+        if(south_branch_east_hops > 0){
+            south_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][south_branch_east_hops - 1];
+            south_east_fabric_node_id.chip_id += south_offset * ew_dim;
+            right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(south_east_fabric_node_id);
+        }
+        if(south_branch_west_hops > 0){
+            south_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][south_branch_west_hops - 1];
+            south_west_fabric_node_id.chip_id += south_offset * ew_dim;
+            left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(south_west_fabric_node_id);
+        }
+    }
+    if(north_hops > 0){
+        north_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::N].at(0);
+        north_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_fabric_node_id);
+        if(north_branch_east_hops > 0){
+            north_east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][north_branch_east_hops - 1];
+            north_east_fabric_node_id.chip_id += north_offset * ew_dim;
+            right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_east_fabric_node_id);
+        }
+        if(north_branch_west_hops > 0){
+            north_west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][north_branch_west_hops - 1];
+            north_west_fabric_node_id.chip_id += north_offset * ew_dim;
+            left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(north_west_fabric_node_id);
+        }
+    }
+
+    if (east_hops > 0) {
+        right_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][east_hops - 1];
+        right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(right_fabric_node_id);
+    }
+    if (west_hops > 0) {
+        left_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][west_hops - 1];
+        left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(left_fabric_node_id);
+    }
 
     std::vector<uint32_t> rx_physical_device_ids;
-    uint32_t trunk_hop = 1;
-    for (auto trunk_node : end_fabric_node_ids_by_dir[trunk_dir]) {
-        rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(trunk_node));
-        for (auto east_node : end_fabric_node_ids_by_dir[RoutingDirection::E]) {
-            east_node.chip_id += device_offset * trunk_hop * ew_dim;
+    for(size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::E].size(); i++){
+        if (i < east_hops) {
+            auto east_node = end_fabric_node_ids_by_dir[RoutingDirection::E][i];
             rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(east_node));
         }
-        for (auto west_node : end_fabric_node_ids_by_dir[RoutingDirection::W]) {
-            west_node.chip_id += device_offset * trunk_hop * ew_dim;
+    }
+    for(size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::W].size(); i++){
+        if (i < west_hops) {
+            auto west_node = end_fabric_node_ids_by_dir[RoutingDirection::W][i];
             rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(west_node));
+        }
+    }
+    // North branch hops
+    uint32_t trunk_hop = 1;
+    for (auto trunk_node : end_fabric_node_ids_by_dir[RoutingDirection::N]) {
+        rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(trunk_node));
+        for(size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::E].size(); i++) {
+            auto east_node = end_fabric_node_ids_by_dir[RoutingDirection::E][i];
+            if(i < north_branch_east_hops) {
+                east_node.chip_id += north_offset * trunk_hop * ew_dim;
+                rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(east_node));
+            }
+        }
+        for(size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::W].size(); i++) {
+            auto west_node = end_fabric_node_ids_by_dir[RoutingDirection::W][i];
+            if(i < north_branch_west_hops) {
+                west_node.chip_id += north_offset * trunk_hop * ew_dim;
+                rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(west_node));
+            }
+        }
+        trunk_hop++;
+    }
+    //South branch hops
+    trunk_hop = 1;
+    for(auto trunk_node : end_fabric_node_ids_by_dir[RoutingDirection::S]) {
+        rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(trunk_node));
+        for(size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::E].size(); i++) {
+            auto east_node = end_fabric_node_ids_by_dir[RoutingDirection::E][i];
+            if(i < south_branch_east_hops) {
+                east_node.chip_id += south_offset * trunk_hop * ew_dim;
+                rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(east_node));
+            }
+        }
+        for(size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::W].size(); i++) {
+            auto west_node = end_fabric_node_ids_by_dir[RoutingDirection::W][i];
+            if(i < south_branch_west_hops) {
+                west_node.chip_id += south_offset * trunk_hop * ew_dim;
+                rx_physical_device_ids.push_back(control_plane.get_physical_chip_id_from_fabric_node_id(west_node));
+            }
         }
         trunk_hop++;
     }
@@ -1163,36 +1261,111 @@ void RunTest2DMCastConnAPI(
     log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
-        "Mcast East Branch Dst MeshId {} ChipId {}",
-        east_fabric_node_id.mesh_id,
-        east_fabric_node_id.chip_id);
+        "Mcast North East Branch Dst MeshId {} ChipId {}",
+        north_east_fabric_node_id.mesh_id,
+        north_east_fabric_node_id.chip_id);
     log_info(
-        tt::LogTest, "Mcast East Branch Dst Device is {} hops in direction: RoutingDirection::E", branch_east_hops);
+        tt::LogTest, "Mcast East Branch Dst Device is {} hops in direction: RoutingDirection::E", north_branch_east_hops);
     log_info(
         tt::LogTest,
         "Mcast West Branch Dst MeshId {} ChipId {}",
-        west_fabric_node_id.mesh_id,
-        west_fabric_node_id.chip_id);
+        north_west_fabric_node_id.mesh_id,
+        north_west_fabric_node_id.chip_id);
     log_info(
-        tt::LogTest, "Mcast West Branch Dst Device is {} hops in direction: RoutingDirection::W", branch_west_hops);
+        tt::LogTest, "Mcast West Branch Dst Device is {} hops in direction: RoutingDirection::W", north_branch_west_hops);
+    log_info(
+        tt::LogTest,
+        "Mcast North East Branch Dst MeshId {} ChipId {}",
+        south_east_fabric_node_id.mesh_id,
+        south_east_fabric_node_id.chip_id);
+    log_info(
+        tt::LogTest, "Mcast East Branch Dst Device is {} hops in direction: RoutingDirection::E", south_branch_east_hops);
+    log_info(
+        tt::LogTest,
+        "Mcast West Branch Dst MeshId {} ChipId {}",
+        south_west_fabric_node_id.mesh_id,
+        south_west_fabric_node_id.chip_id);
+    log_info(
+        tt::LogTest, "Mcast West Branch Dst Device is {} hops in direction: RoutingDirection::W", south_branch_west_hops);
+    log_info(
+        tt::LogTest,
+        "Mcast Right Direct Dst MeshId {} ChipId {}",
+        right_fabric_node_id.mesh_id,
+        right_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Mcast Right Direct Dst Device is {} hops in direction  : RoutingDirection::E", east_hops);
+    log_info(
+        tt::LogTest,
+        "Mcast Left Direct Dst MeshId {} ChipId {}",
+        left_fabric_node_id.mesh_id,
+        left_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Mcast Left Direct Dst Device is {} hops in direction : RoutingDirection::W", west_hops);
+
+    auto dst_recv_phys_chip_id = left_recv_phys_chip_id;
+    if (dst_recv_phys_chip_id == src_phys_chip_id) {
+        dst_recv_phys_chip_id = right_recv_phys_chip_id;
+    }
+    if (dst_recv_phys_chip_id == src_phys_chip_id) {
+        dst_recv_phys_chip_id = north_recv_phys_chip_id;
+    }
+    if (dst_recv_phys_chip_id == src_phys_chip_id) {
+        dst_recv_phys_chip_id = south_recv_phys_chip_id;
+    }
+    if (dst_recv_phys_chip_id == src_phys_chip_id) {
+        GTEST_SKIP() << "No dst chip id found";
+    }
 
     auto* sender_device = DevicePool::instance().get_active_device(src_phys_chip_id);
-    auto* left_recv_device = DevicePool::instance().get_active_device(left_recv_phys_chip_id);
+    auto* dst_recv_device = DevicePool::instance().get_active_device(dst_recv_phys_chip_id);
 
     CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
+    CoreCoord receiver_virtual_core = dst_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
     // test parameters
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-
-    uint32_t mcast_mode = trunk_dir == RoutingDirection::N ? 1 : 2;
+    uint32_t mcast_mode;
+    auto arbitrary_fabric_node_id = src_fabric_node_id;
+    if(north_hops > 0 && south_hops > 0){
+        mcast_mode = 3;
+        if(north_branch_east_hops > 0){
+            arbitrary_fabric_node_id = north_east_fabric_node_id;
+        } else if (north_branch_west_hops > 0) {
+            arbitrary_fabric_node_id = north_west_fabric_node_id;
+        } else {
+            arbitrary_fabric_node_id = north_fabric_node_id;
+        }
+    }
+    else if(south_hops > 0){
+        mcast_mode = 2;
+        if(south_branch_west_hops > 0){
+            arbitrary_fabric_node_id = south_west_fabric_node_id;
+        } else if (south_branch_east_hops > 0) {
+            arbitrary_fabric_node_id = south_east_fabric_node_id;
+        } else {
+            arbitrary_fabric_node_id = south_fabric_node_id;
+        }
+    } else if (north_hops > 0) {
+        mcast_mode = 1;
+        if(north_branch_east_hops > 0){
+            arbitrary_fabric_node_id = north_east_fabric_node_id;
+        } else if (north_branch_west_hops > 0) {
+            arbitrary_fabric_node_id = north_west_fabric_node_id;
+        } else {
+            arbitrary_fabric_node_id = north_fabric_node_id;
+        }
+    } else {
+        mcast_mode = 0;
+        if (east_hops > 0) {
+            arbitrary_fabric_node_id = right_fabric_node_id;
+        } else {
+            arbitrary_fabric_node_id = left_fabric_node_id;
+        }
+    }
     // common compile time args for sender and receiver
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
@@ -1208,7 +1381,6 @@ void RunTest2DMCastConnAPI(
     std::map<std::string, std::string> defines = {};
     defines["FABRIC_2D"] = "";
 
-    // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -1228,26 +1400,87 @@ void RunTest2DMCastConnAPI(
         time_seed,
         ew_dim,
         src_fabric_node_id.chip_id,
-        east_fabric_node_id.chip_id,
         *mesh_id.value(),
-        trunk_hops,
-        (branch_west_hops << 16) | branch_east_hops,
+        north_hops,
+        (north_branch_west_hops << 16) | north_branch_east_hops,
     };
 
     // append the EDM connection rt args for fwd connection
     uint32_t link_idx;
-
-    link_idx = get_forwarding_link_indices(src_fabric_node_id, east_fabric_node_id)[0];
+    if(north_hops > 0){
+        if(north_branch_east_hops > 0){
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_east_fabric_node_id)[0];
     append_fabric_connection_rt_args(
-        src_fabric_node_id, east_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-    sender_runtime_args.push_back(west_fabric_node_id.chip_id);
-    sender_runtime_args.push_back(trunk_hops);
-    sender_runtime_args.push_back((branch_west_hops << 16) | branch_east_hops);
+        src_fabric_node_id, north_east_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        } else if (north_branch_west_hops) {
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_west_fabric_node_id)[0];
+            append_fabric_connection_rt_args(
+                src_fabric_node_id, north_west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        } else {
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_fabric_node_id)[0];
+            append_fabric_connection_rt_args(
+                src_fabric_node_id,
+                north_fabric_node_id,
+                link_idx,
+                sender_program,
+                {sender_logical_core},
+                sender_runtime_args);
+        }
+    }
+    else{
+        link_idx = 0;
+        append_fabric_connection_rt_args(
+            src_fabric_node_id, arbitrary_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    }
+    sender_runtime_args.push_back(south_hops);
+    sender_runtime_args.push_back((south_branch_west_hops << 16) | south_branch_east_hops);
 
-    link_idx = get_forwarding_link_indices(src_fabric_node_id, west_fabric_node_id)[0];
-    append_fabric_connection_rt_args(
-        src_fabric_node_id, west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-
+    if(south_hops > 0){
+        if(south_branch_west_hops > 0){
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_west_fabric_node_id)[0];
+        append_fabric_connection_rt_args(
+            src_fabric_node_id, south_west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        } else if (south_branch_east_hops > 0) {
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_east_fabric_node_id)[0];
+            append_fabric_connection_rt_args(
+                src_fabric_node_id, south_east_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        } else {
+            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_fabric_node_id)[0];
+            append_fabric_connection_rt_args(
+                src_fabric_node_id,
+                south_fabric_node_id,
+                link_idx,
+                sender_program,
+                {sender_logical_core},
+                sender_runtime_args);
+        }
+    }
+    else{
+        link_idx = 0;
+        append_fabric_connection_rt_args(
+            src_fabric_node_id, arbitrary_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    }
+    sender_runtime_args.push_back(left_fabric_node_id.chip_id);
+    sender_runtime_args.push_back(right_fabric_node_id.chip_id);
+    sender_runtime_args.push_back((west_hops << 16) | east_hops);
+    if (west_hops > 0) {
+        link_idx = get_forwarding_link_indices(src_fabric_node_id, left_fabric_node_id)[0];
+        append_fabric_connection_rt_args(
+        src_fabric_node_id, left_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    } else {
+        link_idx = 0;
+        append_fabric_connection_rt_args(
+        src_fabric_node_id, arbitrary_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    }
+    if (east_hops > 0) {
+        link_idx = get_forwarding_link_indices(src_fabric_node_id, right_fabric_node_id)[0];
+        append_fabric_connection_rt_args(
+        src_fabric_node_id, right_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    } else {
+        link_idx = 0;
+        append_fabric_connection_rt_args(
+        src_fabric_node_id, arbitrary_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    }
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
@@ -1271,7 +1504,6 @@ void RunTest2DMCastConnAPI(
         receiver_programs.push_back(std::move(receiver_program));
         log_info(tt::LogTest, "Rx Launched on physical device {}", physical_end_device_id);
     }
-
     // Launch sender program and wait for sender to finish
     fixture->RunProgramNonblocking(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
@@ -1580,17 +1812,16 @@ TEST_F(Fabric1DFixture, TestChipMCast1DWithTracing2) { RunTestChipMCast1D(this, 
 
 TEST_F(Fabric1DFixture, TestUnicastRawWithTracing) { RunTestUnicastRaw(this, 1, RoutingDirection::E, true); }
 
-TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
-    // Each epoch is a separate program launch with increasing number of workers
-    std::vector<size_t> stall_durations_cycles = {0,    100,  200,  300,   400,   700,   1000,  2000,  3000,  4000,
-                                                  5000, 7000, 8000, 10000, 20000, 30000, 40000, 50000, 60000, 100000};
-
-    std::vector<size_t> message_counts = {8, 100};
-    std::vector<size_t> packet_sizes = {16, 4 * 1088};
-    size_t num_epochs = 5;
-    size_t num_times_to_connect = 20000;  // How many times each worker connects during its turn
-
-    log_debug(tt::LogTest, "Starting EDM connection stress test");
+void RunEDMConnectionStressTest(
+    BaseFabricFixture* fixture,
+    const std::vector<size_t>& stall_durations_cycles,
+    const std::vector<size_t>& message_counts,
+    const std::vector<size_t>& packet_sizes,
+    size_t num_times_to_connect,
+    size_t num_iterations,
+    size_t num_workers,
+    size_t test_rows) {
+    log_info(tt::LogTest, "Starting EDM connection stress test");
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     log_debug(tt::LogTest, "Control plane found");
 
@@ -1627,145 +1858,162 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
     // For each epoch, run with increasing number of workers
     log_debug(tt::LogTest, "Starting EDM connection stress test");
     auto compute_with_storage_grid_size = sender_device->compute_with_storage_grid_size();
-    size_t num_rows = compute_with_storage_grid_size.y;
     size_t num_cols = compute_with_storage_grid_size.x;
-    for (size_t iter = 0; iter < 10; iter++) {
-        log_debug(tt::LogTest, "iter {}", iter);
-        for (size_t num_workers : {1, 3}) {
-            log_debug(tt::LogTest, "num_workers {}", num_workers);
-            for (size_t r : {0, 4, 5, 6}) {
-                for (size_t c = 0; c < num_cols - (num_workers - 1); c++) {
-                    log_debug(tt::LogTest, "r={}, c={}", r, c);
+    for (size_t iter = 0; iter < num_iterations; iter++) {
+        log_info(tt::LogTest, "iter {}", iter);
+        log_debug(tt::LogTest, "num_workers {}", num_workers);
+        for (size_t c = 0; c < num_cols - (num_workers - 1); c++) {
+            log_debug(tt::LogTest, "r={}, c={}", test_rows, c);
 
-                    // Set up worker cores for token ring
-                    auto worker_logical_cores = CoreRangeSet(CoreRange({{c, r}, {c + num_workers - 1, r}}));
-                    auto worker_logical_cores_vec = corerange_to_cores(worker_logical_cores, std::nullopt, false);
+            // Set up worker cores for token ring
+            auto worker_logical_cores = CoreRangeSet(CoreRange({{c, test_rows}, {c + num_workers - 1, test_rows}}));
+            auto worker_logical_cores_vec = corerange_to_cores(worker_logical_cores, std::nullopt, false);
 
-                    // Map logical to virtual cores
-                    std::vector<CoreCoord> worker_virtual_cores;
-                    worker_virtual_cores.reserve(worker_logical_cores_vec.size());
-                    for (const auto& logical_core : worker_logical_cores_vec) {
-                        worker_virtual_cores.push_back(sender_device->worker_core_from_logical_core(logical_core));
-                    }
-
-                    // Create program
-                    auto program = tt_metal::CreateProgram();
-
-                    // Create semaphores for token passing (one per worker)
-                    auto connection_token_semaphore_id =
-                        tt_metal::CreateSemaphore(program, CoreRangeSet(worker_logical_cores), 0);
-
-                    // Create source packet buffer (one per worker)
-                    static constexpr uint32_t source_l1_cb_index = tt::CB::c_in0;
-                    static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
-                    auto max_payload_size = *std::max_element(packet_sizes.begin(), packet_sizes.end());
-                    auto source_l1_cb_config =
-                        tt_metal::CircularBufferConfig(max_payload_size * 2, {{source_l1_cb_index, cb_df}})
-                            .set_page_size(source_l1_cb_index, max_payload_size);
-                    CreateCircularBuffer(program, worker_logical_cores, source_l1_cb_config);
-
-                    // Configure common compile time args for all workers
-                    std::vector<uint32_t> compile_time_args = {
-                        static_cast<uint32_t>(stall_durations_cycles.size()),
-                        static_cast<uint32_t>(packet_sizes.size()),
-                        static_cast<uint32_t>(message_counts.size()),
-                    };
-
-                    // Create a kernel for each worker
-                    std::vector<std::vector<uint32_t>> runtime_args_per_worker(num_workers);
-
-                    for (size_t i = 0; i < num_workers; i++) {
-                        // Compute destination NOC coordinates for this worker
-                        auto dest_virtual_core = worker_virtual_cores[i];
-
-                        // Compute next worker index in the token ring
-                        size_t next_worker_idx = (i + 1) % num_workers;
-                        auto next_worker_virtual_core = worker_virtual_cores[next_worker_idx];
-
-                        // Prepare runtime args for this worker
-                        std::vector<uint32_t>& worker_args = runtime_args_per_worker[i];
-
-                        // Basic configuration
-                        worker_args.push_back(fabric_write_dest_bank_addr);  // Fabric write destination bank address
-                        worker_args.push_back(dest_virtual_core.x);          // Fabric write destination NOC X
-                        worker_args.push_back(dest_virtual_core.y);          // Fabric write destination NOC Y
-
-                        // Token ring configuration
-                        worker_args.push_back(i == 0 ? 1 : 0);              // Is starting worker (first worker starts)
-                        worker_args.push_back(num_times_to_connect);        // How many times to connect during turn
-                        worker_args.push_back(next_worker_virtual_core.x);  // Next worker NOC X
-                        worker_args.push_back(next_worker_virtual_core.y);  // Next worker NOC Y
-                        worker_args.push_back(connection_token_semaphore_id);  // Address of next worker's token
-
-                        // Traffic pattern arrays (rotate starting index by worker ID for variation)
-                        worker_args.push_back(stall_durations_cycles.size());  // Number of stall durations
-
-                        // Rotate starting point for each worker to prevent lock-step behavior
-                        size_t stall_offset = i % stall_durations_cycles.size();
-                        for (size_t j = 0; j < stall_durations_cycles.size(); j++) {
-                            size_t idx = (stall_offset + j) % stall_durations_cycles.size();
-                            worker_args.push_back(stall_durations_cycles[idx]);
-                        }
-
-                        worker_args.push_back(packet_sizes.size());  // Number of packet sizes
-                        size_t packet_size_offset = i % packet_sizes.size();
-                        for (size_t j = 0; j < packet_sizes.size(); j++) {
-                            size_t idx = (packet_size_offset + j) % packet_sizes.size();
-                            worker_args.push_back(packet_sizes[idx]);
-                        }
-
-                        worker_args.push_back(message_counts.size());  // Number of message counts
-                        size_t message_count_offset = i % message_counts.size();
-                        for (size_t j = 0; j < message_counts.size(); j++) {
-                            size_t idx = (message_count_offset + j) % message_counts.size();
-                            worker_args.push_back(message_counts[idx]);
-                        }
-
-                        // Circular buffer indices for source data and packet headers
-                        worker_args.push_back(source_l1_cb_index);  // Source L1 circular buffer index
-
-                        worker_args.push_back(i % stall_durations_cycles.size());
-                        worker_args.push_back(i % packet_sizes.size());
-                        worker_args.push_back(i % message_counts.size());
-
-                        const auto sender_fabric_node_id =
-                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-                        const auto receiver_fabric_node_id =
-                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(receiver_device->id());
-                        append_fabric_connection_rt_args(
-                            sender_fabric_node_id,
-                            receiver_fabric_node_id,
-                            0,
-                            program,
-                            {worker_logical_cores_vec[i]},
-                            worker_args);
-
-                        auto kernel = tt_metal::CreateKernel(
-                            program,
-                            "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/"
-                            "edm_fabric_connection_test_kernel.cpp",
-                            worker_logical_cores_vec[i],
-                            tt_metal::DataMovementConfig{
-                                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                                .noc = tt_metal::NOC::RISCV_0_default,
-                                .compile_args = compile_time_args});
-                        tt_metal::SetRuntimeArgs(
-                            program, kernel, worker_logical_cores_vec[i], runtime_args_per_worker[i]);
-                    }
-
-                    // Launch program and wait for completion
-                    auto start_time = std::chrono::high_resolution_clock::now();
-                    log_debug(tt::LogTest, "Launching program");
-                    this->RunProgramNonblocking(sender_device, program);
-                    this->WaitForSingleProgramDone(sender_device, program);
-                    auto end_time = std::chrono::high_resolution_clock::now();
-                    auto duration_ms =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-
-                    log_debug(
-                        tt::LogTest, "Iter {} with {} workers completed in {} ms", iter, num_workers, duration_ms);
-                }
+            // Map logical to virtual cores
+            std::vector<CoreCoord> worker_virtual_cores;
+            worker_virtual_cores.reserve(worker_logical_cores_vec.size());
+            for (const auto& logical_core : worker_logical_cores_vec) {
+                worker_virtual_cores.push_back(sender_device->worker_core_from_logical_core(logical_core));
             }
+
+            // Create program
+            auto program = tt_metal::CreateProgram();
+
+            // Create semaphores for token passing (one per worker)
+            auto connection_token_semaphore_id =
+                tt_metal::CreateSemaphore(program, CoreRangeSet(worker_logical_cores), 0);
+
+            // Create source packet buffer (one per worker)
+            static constexpr uint32_t source_l1_cb_index = tt::CB::c_in0;
+            static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
+            auto max_payload_size = *std::max_element(packet_sizes.begin(), packet_sizes.end());
+            auto source_l1_cb_config =
+                tt_metal::CircularBufferConfig(max_payload_size * 2, {{source_l1_cb_index, cb_df}})
+                    .set_page_size(source_l1_cb_index, max_payload_size);
+            CreateCircularBuffer(program, worker_logical_cores, source_l1_cb_config);
+
+            // Configure common compile time args for all workers
+            std::vector<uint32_t> compile_time_args = {
+                static_cast<uint32_t>(stall_durations_cycles.size()),
+                static_cast<uint32_t>(packet_sizes.size()),
+                static_cast<uint32_t>(message_counts.size()),
+            };
+
+            // Create a kernel for each worker
+            std::vector<std::vector<uint32_t>> runtime_args_per_worker(num_workers);
+
+            for (size_t i = 0; i < num_workers; i++) {
+                // Compute destination NOC coordinates for this worker
+                auto dest_virtual_core = worker_virtual_cores[i];
+
+                // Compute next worker index in the token ring
+                size_t next_worker_idx = (i + 1) % num_workers;
+                auto next_worker_virtual_core = worker_virtual_cores[next_worker_idx];
+
+                // Prepare runtime args for this worker
+                std::vector<uint32_t>& worker_args = runtime_args_per_worker[i];
+
+                // Basic configuration
+                worker_args.push_back(fabric_write_dest_bank_addr);  // Fabric write destination bank address
+                worker_args.push_back(dest_virtual_core.x);          // Fabric write destination NOC X
+                worker_args.push_back(dest_virtual_core.y);          // Fabric write destination NOC Y
+
+                // Token ring configuration
+                worker_args.push_back(i == 0 ? 1 : 0);                 // Is starting worker (first worker starts)
+                worker_args.push_back(num_times_to_connect);           // How many times to connect during turn
+                worker_args.push_back(next_worker_virtual_core.x);     // Next worker NOC X
+                worker_args.push_back(next_worker_virtual_core.y);     // Next worker NOC Y
+                worker_args.push_back(connection_token_semaphore_id);  // Address of next worker's token
+
+                // Traffic pattern arrays (rotate starting index by worker ID for variation)
+                worker_args.push_back(stall_durations_cycles.size());  // Number of stall durations
+
+                // Rotate starting point for each worker to prevent lock-step behavior
+                size_t stall_offset = i % stall_durations_cycles.size();
+                for (size_t j = 0; j < stall_durations_cycles.size(); j++) {
+                    size_t idx = (stall_offset + j) % stall_durations_cycles.size();
+                    worker_args.push_back(stall_durations_cycles[idx]);
+                }
+
+                worker_args.push_back(packet_sizes.size());  // Number of packet sizes
+                size_t packet_size_offset = i % packet_sizes.size();
+                for (size_t j = 0; j < packet_sizes.size(); j++) {
+                    size_t idx = (packet_size_offset + j) % packet_sizes.size();
+                    worker_args.push_back(packet_sizes[idx]);
+                }
+
+                worker_args.push_back(message_counts.size());  // Number of message counts
+                size_t message_count_offset = i % message_counts.size();
+                for (size_t j = 0; j < message_counts.size(); j++) {
+                    size_t idx = (message_count_offset + j) % message_counts.size();
+                    worker_args.push_back(message_counts[idx]);
+                }
+
+                // Circular buffer indices for source data and packet headers
+                worker_args.push_back(source_l1_cb_index);  // Source L1 circular buffer index
+
+                worker_args.push_back(i % stall_durations_cycles.size());
+                worker_args.push_back(i % packet_sizes.size());
+                worker_args.push_back(i % message_counts.size());
+
+                const auto sender_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                const auto receiver_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(receiver_device->id());
+                append_fabric_connection_rt_args(
+                    sender_fabric_node_id,
+                    receiver_fabric_node_id,
+                    0,
+                    program,
+                    {worker_logical_cores_vec[i]},
+                    worker_args);
+
+                auto kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/"
+                    "edm_fabric_connection_test_kernel.cpp",
+                    worker_logical_cores_vec[i],
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = compile_time_args});
+                tt_metal::SetRuntimeArgs(program, kernel, worker_logical_cores_vec[i], runtime_args_per_worker[i]);
+            }
+
+            // Launch program and wait for completion
+            auto start_time = std::chrono::high_resolution_clock::now();
+            log_debug(tt::LogTest, "Launching program");
+            fixture->RunProgramNonblocking(sender_device, program);
+            fixture->WaitForSingleProgramDone(sender_device, program);
+            auto end_time = std::chrono::high_resolution_clock::now();
+            auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+            log_info(tt::LogTest, "Iter {} with {} workers completed in {} ms", iter, num_workers, duration_ms);
+        }
+    }
+}
+
+TEST_F(NightlyFabric1DFixture, TestEDMConnectionStressTestQuick) {
+    std::vector<size_t> stall_durations_cycles = {0,    100,  200,  300,   400,   700,   1000,  2000,  3000,  4000,
+                                                  5000, 7000, 8000, 10000, 20000, 30000, 40000, 50000, 60000, 100000};
+    std::vector<size_t> message_counts = {8, 100};
+    std::vector<size_t> packet_sizes = {16, 4 * 1088};
+    size_t num_times_to_connect = 20000;
+    size_t num_iterations = 10;
+    std::vector<size_t> worker_counts = {1, 3};
+    std::vector<size_t> test_rows = {0, 4, 5, 6};
+
+    for (auto num_workers : worker_counts) {
+        for (auto r : test_rows) {
+            RunEDMConnectionStressTest(
+                this,
+                stall_durations_cycles,
+                message_counts,
+                packet_sizes,
+                num_times_to_connect,
+                num_iterations,
+                num_workers,
+                r);
         }
     }
 }
