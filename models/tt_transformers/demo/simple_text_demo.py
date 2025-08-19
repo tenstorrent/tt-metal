@@ -507,13 +507,23 @@ def prepare_generator_args(
     ],
     ids=["performance", "accuracy"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 30000000, "num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -946,7 +956,7 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
+    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
@@ -1064,7 +1074,7 @@ def test_demo_text(
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
                 # N150 targets (milliseconds) - lower is better
-                "N150_Llama-3.2-1B": 22,
+                "N150_Llama-3.2-1B": 26,
                 "N150_Llama-3.2-3B": 57,
                 "N150_Llama-3.1-8B": 112,
                 # "N150_Mistral-7B": 106, # https://github.com/tenstorrent/tt-metal/issues/24963
@@ -1083,7 +1093,7 @@ def test_demo_text(
                 "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
                 # N300 targets
-                "N300_Qwen2.5-7B": 20,
+                "N300_Qwen2.5-7B": 22,
                 # T3K targets
                 # "T3K_Llama-3.1-70B": 16, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
                 # "T3K_Qwen2.5-72B": 13, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)

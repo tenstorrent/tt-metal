@@ -6,7 +6,7 @@
 
 void kernel_main() {
     // compile-time args
-    constexpr bool output_is_dram = (get_compile_time_arg_val(0) == 1);
+    constexpr auto output_args = TensorAccessorArgs<0>();
 
     // runtime args
     ArgFetcher arg_fetcher;
@@ -17,10 +17,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_out = 16;
     const uint32_t output_tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat output_data_format = get_dataformat(cb_id_out);
 
-    const InterleavedAddrGenFast<output_is_dram> s = {
-        .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
+    const auto s = TensorAccessor(output_args, output_addr, output_tile_bytes);
 
     uint32_t end_id = start_id + num_output_tiles;
     for (uint32_t i = start_id; i < end_id; i++) {

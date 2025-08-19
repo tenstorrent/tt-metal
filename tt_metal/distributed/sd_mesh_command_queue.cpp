@@ -68,7 +68,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     auto lock = lock_api_function_();
     if (!blocking) {
         log_warning(
-            tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload exection.", __FUNCTION__);
+            tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload execution.", __FUNCTION__);
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
@@ -94,7 +94,8 @@ void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {}
 void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}
 
-void SDMeshCommandQueue::reset_worker_state(bool, uint32_t, const vector_aligned<uint32_t>&) {}
+void SDMeshCommandQueue::reset_worker_state(
+    bool, uint32_t, const vector_aligned<uint32_t>&, const std::vector<std::pair<CoreRangeSet, uint32_t>>&) {}
 
 void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&) {
     TT_THROW("Not supported for slow dispatch");

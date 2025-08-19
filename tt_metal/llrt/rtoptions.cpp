@@ -36,8 +36,9 @@ static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
-static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
 static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES";
+// Env variable to override the core grid configuration
+static const char* TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
 RunTimeOptions::RunTimeOptions() {
     
@@ -82,6 +83,12 @@ RunTimeOptions::RunTimeOptions() {
         this->custom_fabric_mesh_graph_desc_path = std::string(custom_fabric_mesh_graph_desc_path_str);
     }
 
+    const char* core_grid_override_todeprecate_str = std::getenv(TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR);
+    if (core_grid_override_todeprecate_str != nullptr) {
+        this->is_core_grid_override_todeprecate_env_var_set = true;
+        this->core_grid_override_todeprecate = std::string(core_grid_override_todeprecate_str);
+    }
+
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
     ParseWatcherEnv();
@@ -98,6 +105,7 @@ RunTimeOptions::RunTimeOptions() {
     profiler_sync_enabled = false;
     profiler_mid_run_tracy_push = false;
     profiler_buffer_usage_enabled = false;
+    profiler_trace_profiler = false;
 #if defined(TRACY_ENABLE)
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
@@ -107,12 +115,15 @@ RunTimeOptions::RunTimeOptions() {
             profile_dispatch_cores = true;
         }
         const char* profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
-        if (profiler_enabled && profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
+        if (profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
             profiler_sync_enabled = true;
         }
+        const char* profiler_trace_profiler_str = std::getenv("TT_METAL_TRACE_PROFILER");
+        if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
+            profiler_trace_profiler = true;
+        }
         const char* profiler_force_push_enabled_str = std::getenv("TT_METAL_TRACY_MID_RUN_PUSH");
-        if (profiler_enabled && profiler_force_push_enabled_str != nullptr &&
-            profiler_force_push_enabled_str[0] == '1') {
+        if (profiler_force_push_enabled_str != nullptr && profiler_force_push_enabled_str[0] == '1') {
             profiler_mid_run_tracy_push = true;
         }
     }
@@ -278,6 +289,14 @@ const std::string& RunTimeOptions::get_kernel_dir() const {
     }
 
     return this->kernel_dir;
+}
+
+const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
+    if (!this->is_core_grid_override_todeprecate()) {
+        TT_THROW("Env var {} is not set.", TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR);
+    }
+
+    return this->core_grid_override_todeprecate;
 }
 
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }

@@ -891,7 +891,7 @@ void bind_tanh(py::module& module, const unary_operation_t& operation) {
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16, BFLOAT8_B
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE
                  - 2, 3, 4
 
@@ -1739,7 +1739,7 @@ void py_module(py::module& module) {
         ttnn::eqz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
     bind_unary_operation(
         module,
         ttnn::ceil,
@@ -1862,7 +1862,7 @@ void py_module(py::module& module) {
         ttnn::nez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     bind_unary_operation_overload_complex_return_complex(
         module,
@@ -1888,7 +1888,11 @@ void py_module(py::module& module) {
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
-        module, ttnn::signbit, R"doc(\mathrm{{output\_tensor}}_i = \verb|signbit|(\mathrm{{input\_tensor}}_i))doc");
+        module,
+        ttnn::signbit,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|signbit|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, FLOAT32)doc");
     bind_unary_operation(
         module,
         ttnn::silu,

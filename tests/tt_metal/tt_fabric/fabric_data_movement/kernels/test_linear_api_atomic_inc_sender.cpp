@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
@@ -47,13 +48,9 @@ void kernel_main() {
         }
     }
 
-    tt::tt_fabric::WorkerToFabricEdmSender connections[num_send_dir] = {};
     auto route_id = PacketHeaderPool::allocate_header_n(num_send_dir);
-    for (uint32_t i = 0; i < num_send_dir; i++) {
-        connections[i] =
-            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_arg_idx);
-        connections[i].open();
-    }
+    tt::tt_fabric::RoutingPlaneConnectionManager connections;
+    open_connections(connections, route_id, rt_arg_idx);
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
@@ -130,9 +127,7 @@ void kernel_main() {
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-    for (uint32_t i = 0; i < num_send_dir; i++) {
-        connections[i].close();
-    }
+    close_connections(connections);
 
     noc_async_write_barrier();
 
