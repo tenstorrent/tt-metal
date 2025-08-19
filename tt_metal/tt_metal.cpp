@@ -412,17 +412,6 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
         &regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
 }
-bool ReadRegFromDevice(
-    std::shared_ptr<distributed::MeshDevice> device,
-    const CoreCoord& logical_core,
-    uint32_t address,
-    uint32_t& regval) {
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->get_devices()[0]->id());
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
-        &regval, tt_cxy_pair(device->get_devices()[0]->id(), worker_core), address);
-    return true;
-}
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     const std::vector<chip_id_t>& device_ids,
