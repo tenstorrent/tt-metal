@@ -140,13 +140,15 @@ MorehSoftmaxOperation::invoke(
     const MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const bool is_fp32 = input.dtype() == DataType::FLOAT32;
     return {
         operation_attributes_t{
             dim,
             op,
             strategy,
             memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            init_device_compute_kernel_config(
+                input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32)},
         tensor_args_t{input, output}};
 }
 
