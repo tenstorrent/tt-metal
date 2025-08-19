@@ -60,8 +60,8 @@ void MAIN {
     // that will be done
     if constexpr (fuse_pre_add) {
         // Init for x = in + b
-        binary_op_init_common(cb_in, cb_inb, rms_norm ? cb_xmm : cb_interm_pre_add);
-        pack_reconfig_data_format(cb_interm_pre_add);
+        binary_op_init_common(cb_in, cb_inb, rms_norm ? cb_ex2 : cb_interm_pre_add);
+        pack_reconfig_data_format(rms_norm ? cb_ex2 : cb_interm_pre_add);
     } else {
         // Init for transpose (layernorm) or square (rms)
         constexpr auto first_out_cb = layernorm ? cb_ex : cb_ex2;
