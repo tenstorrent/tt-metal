@@ -8,6 +8,16 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include <cstring>
+
+// convert uint16 to fp16b
+static inline float bfloat16_to_float(uint16_t bfloat_val) {
+    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
+    float f;
+    std::memcpy(&f, &uint32_data, sizeof(f));
+    return f;
+}
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -41,6 +51,16 @@ void MAIN {
         cb_wait_front(cb_inp1, per_core_block_size);
         cb_reserve_back(cb_out0, per_core_block_size);
 
+        // read input tile after cb_wait_front, before consuming
+        DPRINT_UNPACK({ DPRINT << "in addr: " << (get_local_cb_interface(cb_inp0).fifo_rd_ptr << 4) << ENDL(); })
+        volatile uint16_t *data_ptr = reinterpret_cast<uint16_t *>(get_local_cb_interface(cb_inp0).fifo_rd_ptr << 4);
+        for (int r = 0; r < 8; r++) {
+            for (int c = 0; c < 16; c++) {
+                DPRINT_UNPACK({ DPRINT << bfloat16_to_float(data_ptr[r*16 + c]) << " "; })
+            }
+            DPRINT_UNPACK({ DPRINT << ENDL(); })
+        }
+
         tile_regs_acquire();
 
 #if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
@@ -64,12 +84,14 @@ void MAIN {
 #ifdef ELTWISE_DEST_REUSE_TYPE
         binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
 #endif
-
+        copy_tile_to_dst_init_short(cb_inp0);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
 #ifdef ELTWISE_DEST_REUSE_TYPE
             binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
 #else
-            ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
+            // ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
+            copy_tile(cb_inp0, i, i);
+
 #endif
 
 #ifdef SFPU_OP_CHAIN_0

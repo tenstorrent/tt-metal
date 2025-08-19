@@ -765,7 +765,11 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
                 noc_x = hal_->noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord.x);
                 noc_y = hal_->noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord.y);
             }
+            log_info(LogDevice, "dram noc_x: {}, noc_y: {}", noc_x, noc_y);
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
+            log_info(LogDevice, "hal_->get_noc_coord_reg_offset(): {}", hal_->get_noc_coord_reg_offset());
+            log_info(LogDevice, "hal_->get_noc_addr_node_id_bits(): {}", hal_->get_noc_addr_node_id_bits());
+            log_info(LogDevice, "xy to insert into dram_bank_to_noc_xy_ for bank_id: {}, xy: 0x{:04x}", bank_id, xy);
             dram_bank_to_noc_xy_[device_id].push_back(xy);
         }
     }
@@ -777,7 +781,9 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
             auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, l1_noc_coord_per_bank[bank_id]);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
+            log_info(LogDevice, "NOC {} l1 noc_x: {}, noc_y: {}", noc, noc_x, noc_y);
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
+            log_info(LogDevice, "xy to insert into l1_bank_to_noc_xy_ for bank_id: {}, xy: 0x{:04x}", bank_id, xy);
             l1_bank_to_noc_xy_[device_id].push_back(xy);
         }
     }
@@ -798,6 +804,7 @@ void MetalContext::initialize_device_bank_to_noc_tables(
             mem_bank_to_noc_size,
         "Size of bank_to_noc table is greater than available space");
 
+    log_info(LogDevice, "Writing dram_bank_to_noc_xy_ to device {} at address 0x{:x}", device_id, mem_bank_to_noc_addr);
     cluster_->write_core(
         &dram_bank_to_noc_xy_[device_id][0],
         dram_to_noc_sz_in_bytes,

@@ -123,12 +123,31 @@ bool SimpleTiledL1WriteCBRead(
             (uint32_t)num_tiles,
         });
 
+    // Print address information
+    log_info(tt::LogTest, "Address info: input_local_address=0x{:08x}, output_local_address=0x{:08x}, bank_id={}, num_tiles={}",
+             input_local_address, output_local_address, bank_id, num_tiles);
+
     writeL1Backdoor(device, core, input_local_address, inputs);
+
+    // Print input buffer before launch
+    log_info(tt::LogTest, "Input buffer before launch (first 8 values):");
+    for (size_t i = 0; i < std::min(inputs.size(), size_t(8)); i++) {
+        log_info(tt::LogTest, "  inputs[{}] = 0x{:08x} ({})", i, inputs[i], inputs[i]);
+    }
+
     tt_metal::detail::LaunchProgram(device, program);
+
     readL1Backdoor(device, core, input_local_address, byte_size, outputs);
-    log_debug(tt::LogTest, "input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
+    log_info(tt::LogTest, "input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
+
     readL1Backdoor(device, core, output_local_address, byte_size, outputs);
-    log_debug(tt::LogTest, "inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
+    log_info(tt::LogTest, "inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
+
+    // Print output buffer after launch
+    log_info(tt::LogTest, "Output buffer after launch (first 8 values):");
+    for (size_t i = 0; i < std::min(outputs.size(), size_t(8)); i++) {
+        log_info(tt::LogTest, "  outputs[{}] = 0x{:08x} ({})", i, outputs[i], outputs[i]);
+    }
     bool pass = (inputs == outputs);
     if (not pass) {
         log_info(

@@ -21,6 +21,12 @@ void kernel_main() {
     // DRAM NOC src address
     std::uint64_t dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(src_dram_bank_id, dram_buffer_src_addr);
 
+    DPRINT << "dram_buffer_src_addr_base: " << dram_buffer_src_addr_base << ENDL();
+    DPRINT << "dram_bank_id: " << src_dram_bank_id << ENDL();
+    DPRINT << "dram_buffer_size: " << dram_buffer_size << ENDL();
+    DPRINT << "l1_buffer_dst_addr_base: " << l1_buffer_dst_addr_base << ENDL();
+    DPRINT << "dram_buffer_src_noc_addr: " << dram_buffer_src_noc_addr << ENDL();
+
     noc_async_read(dram_buffer_src_noc_addr, l1_buffer_dst_addr_base, dram_buffer_size);
     noc_async_read_barrier();
 }

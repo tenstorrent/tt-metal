@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
+
+#define NOC_ADDR_GET_X(noc_addr) (((noc_addr) >> NOC_ADDR_LOCAL_BITS) & ((1ULL << NOC_ADDR_NODE_ID_BITS) - 1))
+#define NOC_ADDR_GET_Y(noc_addr) ((noc_addr) >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS))
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -25,8 +29,18 @@ void kernel_main() {
 
     // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
     for (uint32_t i=0; i<num_tiles; i += ublock_size_tiles) {
+        DPRINT << "src0_addr: " <<  HEX() << "0x" << src0_addr << ", src0_bank_id: " << src0_bank_id << ENDL();
         uint64_t src0_noc_addr = get_noc_addr_from_bank_id<true>(src0_bank_id, src0_addr);
+        DPRINT << "src0_noc_addr: " << HEX() << "0x" << src0_noc_addr << ENDL();
+        DPRINT << "Noc src0 x :" << NOC_ADDR_GET_X(src0_noc_addr) << ", Noc src0 y :" << NOC_ADDR_GET_Y(src0_noc_addr) << ENDL();
+
+
+        DPRINT << "src1_addr: " <<  HEX() << "0x" << src1_addr << ", src1_bank_id: " << src1_bank_id << ENDL();
         uint64_t src1_noc_addr = get_noc_addr_from_bank_id<true>(src1_bank_id, src1_addr);
+        DPRINT << "src1_noc_addr: " << HEX() << "0x" << src1_noc_addr << ENDL();
+        DPRINT << "Noc src1 x :" << NOC_ADDR_GET_X(src1_noc_addr) << ", Noc src1 y :" << NOC_ADDR_GET_Y(src1_noc_addr) << ENDL();
+
+
 
         cb_reserve_back(cb_id_in0, ublock_size_tiles);
         cb_reserve_back(cb_id_in1, ublock_size_tiles);

@@ -623,6 +623,7 @@ void Cluster::write_dram_vec(
 
     CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
+    // log_info(tt::LogMetal, "Writing to DRAM channel {} of device {} at DRAMcoord ({}, {})", dram_view, device_id, dram_core.x, dram_core.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
     write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
 }
@@ -672,6 +673,7 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
             sz_in_bytes);
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    // log_info(tt::LogMetal, "Writing to device {} at UMD coord ({}, {})", core.chip, core_coord.x, core_coord.y);
 
     if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
         // log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);

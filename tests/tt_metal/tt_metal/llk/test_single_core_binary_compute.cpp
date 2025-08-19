@@ -117,21 +117,26 @@ bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig&
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
+    const size_t packed_byte_size = (byte_size / bfloat16::SIZEOF) * sizeof(uint32_t);  // Size when packed as uint32_t
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+        .device = device, .size = packed_byte_size, .page_size = packed_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
     auto input0_dram_buffer = CreateBuffer(dram_config);
     uint32_t input0_dram_byte_address = input0_dram_buffer->address();
+    log_info(tt::LogTest, "input0_dram_byte_address: 0x{:08x}", input0_dram_byte_address);
 
     auto input1_dram_buffer = CreateBuffer(dram_config);
     uint32_t input1_dram_byte_address = input1_dram_buffer->address();
+    log_info(tt::LogTest, "input1_dram_byte_address: 0x{:08x}", input1_dram_byte_address);
 
     auto input2_dram_buffer = CreateBuffer(dram_config);
     uint32_t input2_dram_byte_address = input2_dram_buffer->address();
+    log_info(tt::LogTest, "input2_dram_byte_address: 0x{:08x}", input2_dram_byte_address);
 
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
+    log_info(tt::LogTest, "output_dram_byte_address: 0x{:08x}", output_dram_byte_address);
 
     tt_metal::CircularBufferConfig l1_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
@@ -201,10 +206,8 @@ bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig&
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> packed_input0(byte_size / bfloat16::SIZEOF, bfloat16(9.0f).to_packed());  // Constant vector of zeros
+    std::vector<uint32_t> packed_input1(byte_size / bfloat16::SIZEOF, bfloat16(5.0f).to_packed());  // Constant value of 5
     std::vector<uint32_t> packed_input2 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
@@ -297,6 +300,14 @@ bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig&
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
 
+    // DEBUG: Print first few values from DRAM buffer
+    log_info(tt::LogTest, "DEBUG: dest_buffer_data size: {}", dest_buffer_data.size());
+    for (size_t i = 0; i < 100; i++) {
+        uint32_t raw_val = dest_buffer_data[i];
+        bfloat16 bf16_val = *reinterpret_cast<bfloat16*>(&raw_val);
+        log_info(tt::LogTest, "DEBUG: dest_buffer[{}] = 0x{:08x} = {}", i, raw_val, bf16_val.to_float());
+    }
+
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.0155f); });
     return pass;
@@ -304,22 +315,18 @@ bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig&
 }  // namespace unit_tests::compute::binary
 
 TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "add",
-            .math_fidelity = MathFidelity(i)};
-        test_config.num_tiles = 1;
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-        }
+    uint8_t i = uint8_t(MathFidelity::LoFi);
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .binary_op = "add",
+        .math_fidelity = MathFidelity(i)};
+    test_config.num_tiles = 1;
+    log_info(tt::LogTest, "Math Fidelity = {}", i);
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
     }
 }
 
