@@ -34,7 +34,7 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
         // results are inclusive of the mmio_device_id so they will never be zero
-        TT_ASSERT(tunnels_from_mmio.size() > 0);
+        TT_FATAL(tunnels_from_mmio.size() > 0, "must have at least one mmio device");
         return (tunnels_from_mmio.size() - 1) > 0;
     }();
 
@@ -51,7 +51,12 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
                 continue;
             }
             auto neighbors = control_plane.get_chip_neighbors(fabric_node_id, direction);
-            auto intra_mesh_chip_neighbors = neighbors.find(fabric_node_id.mesh_id);
+
+            // assume same neighbor per direction
+            TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
+            TT_FATAL(
+                std::set<chip_id_t>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
+                "Multiple neighbors per direction is currently unsupported");
 
             FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
             chip_neighbors.emplace(direction, neighbor_fabric_node_id);
@@ -75,8 +80,6 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
 
         max_eth_channels = std::max(max_eth_channels, non_dispatch_active_channels.size());
     }
-
-    log_info(tt::LogTest, "max_eth_channels: {}", max_eth_channels);
 
     return max_eth_channels;
 }
