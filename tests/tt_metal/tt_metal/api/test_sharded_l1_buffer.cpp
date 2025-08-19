@@ -28,6 +28,11 @@
 
 using namespace tt::tt_metal;
 
+class MeshDeviceFixtureWithL1Small : public MeshDeviceFixture {
+public:
+    MeshDeviceFixtureWithL1Small() : MeshDeviceFixture(24 * 1024) {}
+};
+
 namespace basic_tests::l1::sharded {
 
 template <class T>

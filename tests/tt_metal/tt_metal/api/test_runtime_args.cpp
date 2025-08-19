@@ -96,7 +96,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     tt::tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t rta_base_dm = get_runtime_arg_addr(
-        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
         tt::tt_metal::HalProcessorClassType::DM,
         0,
         common_rtas);
@@ -129,12 +129,12 @@ tt::tt_metal::KernelHandle initialize_program_compute(
     uint32_t num_common_rt_args) {
     // Tell kernel how many unique and common RT args to expect. Will increment each.
     uint32_t rta_base_compute = get_runtime_arg_addr(
-        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
         tt::tt_metal::HalProcessorClassType::COMPUTE,
         0,
         false);
     uint32_t common_rta_base_compute = get_runtime_arg_addr(
-        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
         tt::tt_metal::HalProcessorClassType::COMPUTE,
         0,
         true);

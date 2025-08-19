@@ -44,10 +44,22 @@ namespace unit_tests::basic::test_noc {
 
 const uint32_t init_value = 0x1234B33F;
 
+uint32_t ReadRegFromDevice(
+    std::shared_ptr<distributed::MeshDevice> device,
+    const CoreCoord& logical_core,
+    uint32_t address,
+    uint32_t& regval) {
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->get_devices()[0]->id());
+    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
+        &regval, tt_cxy_pair(device->get_devices()[0]->id(), worker_core), address);
+    return regval;
+}
+
 uint32_t read_reg(std::shared_ptr<distributed::MeshDevice> device, CoreCoord logical_node, uint32_t reg_addr) {
     // Read and return reg value form reading
     uint32_t reg_data = unit_tests::basic::test_noc::init_value;
-    tt_metal::detail::ReadRegFromDevice(device, logical_node, reg_addr, reg_data);
+    ReadRegFromDevice(device, logical_node, reg_addr, reg_data);
     return reg_data;
 }
 

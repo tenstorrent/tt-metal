@@ -511,8 +511,10 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     uint32_t page_size = 2 * 32 * 32;
     uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
-    for (const auto& sender_device : devices_) {
-        for (const auto& receiver_device : devices_) {
+    for (const auto& sender_mesh_device : devices_) {
+        const auto sender_device = sender_mesh_device->get_devices()[0];
+        for (const auto& receiver_mesh_device : devices_) {
+            const auto receiver_device = receiver_mesh_device->get_devices()[0];
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
@@ -650,8 +652,10 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     uint32_t page_size = 2 * 32 * 32;
     uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
-    for (const auto& sender_device : devices_) {
-        for (const auto& receiver_device : devices_) {
+    for (const auto& sender_mesh_device : devices_) {
+        const auto sender_device = sender_mesh_device->get_devices()[0];
+        for (const auto& receiver_mesh_device : devices_) {
+            const auto receiver_device = receiver_mesh_device->get_devices()[0];
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
