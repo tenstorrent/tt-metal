@@ -326,12 +326,11 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln.cpp";
     reader_kernel_path =
-        large_tensor_needed
-            ? (use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                             "reader_unary_interleaved_ln_large_tensor.cpp"
-                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow_legacy/"
-                             "reader_unary_interleaved_ln_large_tensor.cpp")
-            : reader_kernel_path;
+        large_tensor_needed ? (use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                             "reader_unary_interleaved_ln_large_tensor_welford.cpp"
+                                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                             "reader_unary_interleaved_ln_large_tensor.cpp")
+                            : reader_kernel_path;
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -358,12 +357,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         program,
         large_tensor_needed and !use_row_major_kernel and !rms_norm
             ? (use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-                             "layernorm_large_tensor.cpp"
-                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute_legacy/"
+                             "layernorm_large_tensor_welford.cpp"
+                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
                              "layernorm_large_tensor.cpp")
             : (use_welford
-                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp"
-                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute_legacy/layernorm.cpp"),
+                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
+                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp"),
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

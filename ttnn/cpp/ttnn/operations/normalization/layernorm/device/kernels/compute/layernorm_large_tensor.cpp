@@ -16,10 +16,6 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/welford.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "layernorm_compute_utils.hpp"
-#include "compute_kernel_api/transpose_wh.h"
 
 namespace NAMESPACE {
 
@@ -30,11 +26,8 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t W = get_compile_time_arg_val(5);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(6);
-    constexpr bool rms_norm = static_cast<bool>(get_compile_time_arg_val(7));
-    constexpr bool fuse_pre_add = static_cast<bool>(get_compile_time_arg_val(8));
 
+    constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
     // TODO(AP): check that if DST is indeed zeroed by release_dst (and initially), we can use it as zeroes
 
@@ -46,167 +39,160 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_16;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
-    uint32_t cb_xmm = tt::CBIndex::c_24;                   // x minus mean (or x^2 for RMS norm)
-    constexpr auto cb_ex = tt::CBIndex::c_18;              // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_19;             // Var[x] = E[(x-E[x])^2] (or (∑x^2)/n for RMS norm)
-    constexpr auto cb_ex2pe = tt::CBIndex::c_21;           // E[(x-E[x])^2]+ε (or (∑x^2)/n+ε for RMS norm)
-    constexpr auto cb_fusion = tt::CBIndex::c_22;          // stream gamma/beta
-    constexpr auto cb_interm_pre_add = tt::CBIndex::c_23;  // intermediate for layernorm fused pre-add
+    uint32_t cb_xmm = tt::CBIndex::c_24;           // x minus mean
+    constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
+    constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
+    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
+    constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
-    constexpr auto layernorm = !rms_norm;
-    constexpr uint32_t onetile = 1;
+#ifdef FUSE_PRE_ADD
+#ifdef RMSNORM
+    constexpr uint32_t cb_x = cb_xmm;
+#else
+    constexpr uint32_t cb_x = tt::CBIndex::c_23;
+#endif
+#else
+    constexpr uint32_t cb_x = cb_in;
+#endif
 
-    // Initialize the hardware based on the first op
-    // that will be done
-    if constexpr (fuse_pre_add) {
-        // Init for x = in + b
-        binary_op_init_common(cb_in, cb_inb, rms_norm ? cb_ex2 : cb_interm_pre_add);
-        pack_reconfig_data_format(rms_norm ? cb_ex2 : cb_interm_pre_add);
-    } else {
-        // Init for transpose (layernorm) or square (rms)
-        constexpr auto first_out_cb = layernorm ? cb_ex : cb_ex2;
-        unary_op_init_common(cb_in, first_out_cb);
-        pack_reconfig_data_format(cb_ex);
-    }
-
+#ifdef FUSE_PRE_ADD
+    binary_op_init_common(cb_in, cb_inb, cb_x);
+#else
+    binary_op_init_common(cb_in, cb_in, cb_xmm2);
+#endif
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
-    constexpr uint32_t dst2 = 2;
-
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        constexpr int onetile = 1;
+        constexpr int dst0 = 0;
+#ifndef RMSNORM
+        // Start of
+        //  E[x]
+        //  aka   ∑(x)
+        //      --------
+        //         n
         tile_regs_acquire();
         tile_regs_wait();
 
-        // =====================================
-        // First pass over the input.
-        // Layernorm: Calculate E[x] and Var[x]
-        // RMS norm: Calculate (∑x^2)/n
-        // =====================================
-        cb_reserve_back(cb_ex2, onetile);
+        reconfig_data_format(cb_in, cb_scaler);
+        pack_reconfig_data_format(cb_ex);
+        cb_reserve_back(cb_ex, onetile);
+        reduce_init(cb_in, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            // Wait for block of input
             cb_wait_front(cb_in, blk);
-            if (fuse_pre_add) {
-                cb_wait_front(cb_inb, blk);
-                cb_reserve_back(cb_interm_pre_add, blk);
+            for (uint32_t j = 0; j < blk; j++) {
+                reduce_tile(cb_in, cb_scaler, j, scaler0, dst0);
             }
-
-            if constexpr (layernorm) {
-                // Layernorm: Calculate E[x] and Var[x] using Welford's algorithm
-                // Go tile-by-tile in the block
-                for (uint32_t j = 0; j < blk; j++) {
-                    if constexpr (fuse_pre_add) {
-                        // Fuse in = in + b in dst0
-                        copy_tile_to_dst_init_short(cb_in);
-                        copy_tile(cb_in, j, dst0);
-
-                        binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-                        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, dst0);
-
-                        // Welford's needs transposed input tile,
-                        // and transpose_wh_dest is currently buggy,
-                        // so we need to use the interm CB
-                        tile_regs_commit();
-                        pack_tile(dst0, cb_interm_pre_add);
-                        cb_push_back(cb_interm_pre_add, onetile);
-                        cb_wait_front(cb_interm_pre_add, j + 1);
-                        tile_regs_release();
-                        tile_regs_acquire();
-                        tile_regs_wait();
-                    }
-
-                    // Transpose
-                    constexpr auto cb_result_or_input = fuse_pre_add ? cb_interm_pre_add : cb_in;
-                    reconfig_data_format_srca(cb_result_or_input);
-                    transpose_wh_init_short(cb_result_or_input);
-                    transpose_wh_tile(cb_result_or_input, j, dst0);
-
-                    // Accumulate mean and variance
-                    welford_init();
-                    welford(
-                        dst0, dst1, dst2, /*start_N*/ (wt + j) * tile_width, /*end_N*/ W, /*last_run*/ wt + j == Wt);
-                }
-            } else {
-                // RMS: Calculate (∑x^2)/n
-                // Copy tiles in block to dst regs
-                copy_tile_init(cb_in);
-                for (uint32_t j = 0; j < blk; j++) {
-                    copy_tile(cb_in, j, j);
-                }
-                cb_pop_front(cb_in, blk);
-
-                if constexpr (fuse_pre_add) {
-                    // Fuse in = in + b
-                    for (uint32_t j = 0; j < blk; j++) {
-                        binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-                        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
-                    }
-                }
-
-                // Square tiles in dst regs
-                square_tile_init();
-                for (uint32_t j = 0; j < blk; j++) {
-                    square_tile(j);
-                }
-
-                // Accumulate squares
-                add_binary_tile_init();
-                for (uint32_t j = 0; j < blk - 1; j++) {
-                    add_binary_tile(j, j + 1);
-                }
-
-                // Multiply by scalar to get (∑x^2)/n
-                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_scaler);
-                binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_scaler, 0, dst0);
-
-                if (wt > 0) {
-                    // This block's result is accumulated in dst0
-                    // Copy the previous block's result to dst1 and
-                    // add to current
-                    cb_wait_front(cb_ex2, onetile);
-                    reconfig_data_format_srca(cb_ex2);
-                    copy_tile_init(cb_ex2);
-                    copy_tile(cb_ex2, 0, dst1);
-
-                    add_binary_tile_init();
-                    add_binary_tile(dst0, dst1);
-                    cb_pop_front(cb_ex2, onetile);
-                }
-                tile_regs_commit();
-
-                // Push to CB
-                pack_tile(dst0, cb_ex2);
-                cb_push_back(cb_ex2, onetile);
-                tile_regs_release();
-            }
-
             cb_pop_front(cb_in, blk);
-            if (fuse_pre_add) {
-                cb_pop_front(cb_inb, blk);
-                cb_pop_front(cb_interm_pre_add, blk);
-            }
         }
+#ifdef FUSE_PRE_ADD
+        reconfig_data_format_srca(cb_in, cb_inb);
+        reduce_init(cb_inb, cb_scaler, cb_ex);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            cb_wait_front(cb_inb, blk);
+            for (uint32_t j = 0; j < blk; j++) {
+                reduce_tile(cb_inb, cb_scaler, j, scaler0, dst0);
+            }
+            cb_pop_front(cb_inb, blk);
+        }
+#endif
+        tile_regs_commit();
+        pack_tile(dst0, cb_ex);
+        reduce_uninit();
+        tile_regs_release();
+        cb_push_back(cb_ex, onetile);
+        // End of
+        // E[x]
+        // aka   ∑(x)
+        //     --------
+        //        n
 
-        if constexpr (layernorm) {
-            // Pack mean and variance to CBs
-            // and transpose back to columns
-            // transpose_wh_dest is currently buggy,
-            // so we transpose through the CB interface
-            layernorm::compute::utils::transpose_pack_mean_and_variance(cb_ex, cb_ex2, dst1, dst2);
+        cb_wait_front(cb_ex, onetile);
+#endif  // !RMS ifdef end
+        // Start of
+        // Var Calculation
+        // Var(X) = ∑(x-E[x])^2
+        //         -----------
+        //              n
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            tile_regs_acquire();
+            tile_regs_wait();
+            cb_wait_front(cb_in, blk);
+#ifdef RMSNORM
+            reconfig_data_format_srca(cb_in);
+            copy_tile_init(cb_in);
+            for (uint32_t j = 0; j < blk; j++) {
+                copy_tile(cb_in, j, j);
+            }
+#else
+            reconfig_data_format(cb_in, cb_ex);
+            sub_bcast_cols_init_short(cb_in, cb_ex);
+            // x-E[x]
+            for (uint32_t j = 0; j < blk; j++) {
+                sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
+            }
+#endif
+            cb_pop_front(cb_in, blk);
+#ifdef FUSE_PRE_ADD
+            cb_wait_front(cb_inb, blk);
+            reconfig_data_format_srca(cb_in, cb_inb);
+            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            for (uint32_t j = 0; j < blk; j++) {
+                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
+            }
+            cb_pop_front(cb_inb, blk);
+#endif
+            square_tile_init();
+            for (uint32_t j = 0; j < blk; j++) {
+                square_tile(j);
+            }
             tile_regs_commit();
+            cb_reserve_back(cb_xmm, blk);
+            for (uint32_t j = 0; j < blk; j++) {
+                pack_tile(j, cb_xmm);
+            }
+            cb_push_back(cb_xmm, blk);
+            tile_regs_release();
+
+            tile_regs_acquire();
+            tile_regs_wait();
+            if (wt > 0) {
+                reconfig_data_format_srca(cb_ex2);
+                cb_wait_front(cb_ex2, onetile);
+                copy_tile_init(cb_ex2);
+                copy_tile(cb_ex2, 0, dst0);
+                cb_pop_front(cb_ex2, onetile);
+            }
+            cb_wait_front(cb_xmm, blk);
+            reconfig_data_format(cb_xmm, cb_scaler);
+            reduce_init(cb_xmm, cb_scaler, cb_ex2);
+            // accumulates squared residual
+            for (uint32_t j = 0; j < blk; j++) {
+                reduce_tile(cb_xmm, cb_scaler, j, scaler0, dst0);
+            }
+            cb_pop_front(cb_xmm, blk);
+            cb_reserve_back(cb_ex2, onetile);
+            reduce_uninit();
+            tile_regs_commit();
+            pack_tile(dst0, cb_ex2);
+            cb_push_back(cb_ex2, onetile);
             tile_regs_release();
         }
 
-        // =====================================
-        // Calculate 1/(√(Var(X) + ε)).
-        // Var[x] for RMS norm is (∑x^2)/n
-        // =====================================
         tile_regs_acquire();
         tile_regs_wait();
+        // End of
+        // Var Calculation
+        // Var(X) = ∑(x-E[x])^2
+        //         -----------
 
+        // Start of
+        // Calculation
+        //                     1
+        //  cb_ex2pe =   -------------
+        //               √(Var(X) + ε)
         cb_wait_front(cb_ex2, onetile);
 
         reconfig_data_format(cb_ex2, cb_eps);
@@ -222,7 +208,6 @@ void MAIN {
 
         tile_regs_commit();
 
-        cb_reserve_back(cb_ex2pe, onetile);
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, onetile);
         tile_regs_release();
@@ -241,57 +226,49 @@ void MAIN {
         pack_tile(dst0, cb_ex2pe);
         tile_regs_release();
         cb_push_back(cb_ex2pe, onetile);
+        // End of
+        // Calculation
+        //                     1
+        //  cb_ex2pe =   -------------
+        //               √(Var(X) + ε)
 
-        // =====================================
-        // Second pass over the input.
-        // Computes the final value.
-        // Layernorm:
-        //    x-E[x]
-        //(---------------*𝛄)+ß
-        //  √(Var(x)+ε)
-        // RMS norm:
-        //    x
+        // Start of
+        // Final Val Calc
+        //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
-        // =====================================
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             tile_regs_wait();
             cb_reserve_back(cb_out, blk);
-            cb_wait_front(cb_ex, onetile);
+            cb_wait_front(cb_ex, 1);
             cb_wait_front(cb_in, blk);
-            if constexpr (layernorm) {
-                // Layernorm: Calculate x-E[x]
-                reconfig_data_format(cb_in, cb_ex);
-                sub_bcast_cols_init_short(cb_in, cb_ex);
-                // x-E[x]
-                for (uint32_t j = 0; j < blk; j++) {
-                    sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
-                }
-            } else {
-                // RMS: Just copy input
-                reconfig_data_format_srca(cb_in);
-                copy_tile_init(cb_in);
-                for (uint32_t j = 0; j < blk; j++) {
-                    copy_tile(cb_in, j, j);
-                }
+#ifdef RMSNORM
+            reconfig_data_format_srca(cb_in);
+            copy_tile_init(cb_in);
+            for (uint32_t j = 0; j < blk; j++) {
+                copy_tile(cb_in, j, j);
             }
+#else
+            reconfig_data_format(cb_in, cb_ex);
+            sub_bcast_cols_init_short(cb_in, cb_ex);
+            // x-E[x]
+            for (uint32_t j = 0; j < blk; j++) {
+                sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
+            }
+#endif
             cb_pop_front(cb_in, blk);
             reconfig_data_format_srca(cb_in, cb_ex2pe);
-
-            if constexpr (fuse_pre_add) {
-                // Fuse in = in + b
-                cb_wait_front(cb_inb, blk);
-                reconfig_data_format_srca(cb_ex2pe, cb_inb);
-                binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-                for (uint32_t j = 0; j < blk; j++) {
-                    binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
-                }
-                cb_pop_front(cb_inb, blk);
-                reconfig_data_format_srca(cb_inb, cb_ex2pe);
+#ifdef FUSE_PRE_ADD
+            cb_wait_front(cb_inb, blk);
+            reconfig_data_format_srca(cb_ex2pe, cb_inb);
+            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            for (uint32_t j = 0; j < blk; j++) {
+                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
             }
-
-            // Multiply by 1/(√(Var(X) + ε))
+            cb_pop_front(cb_inb, blk);
+            reconfig_data_format_srca(cb_inb, cb_ex2pe);
+#endif
             cb_wait_front(cb_ex2pe, 1);
             binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
             for (uint32_t j = 0; j < blk; j++) {
@@ -308,9 +285,7 @@ void MAIN {
             }
             cb_push_back(cb_xmm, blk);
             tile_regs_release();
-
             if constexpr (do_gamma == 1) {
-                // Multiply by gamma
                 tile_regs_acquire();
                 tile_regs_wait();
                 reconfig_data_format(cb_xmm, cb_gamma);
@@ -318,6 +293,9 @@ void MAIN {
                     pack_reconfig_data_format(cb_out);
                 }
                 cb_wait_front(cb_gamma, blk);
+                if (ncht == 1) {
+                    DPRINT << "\n\n\nFINAL VAL Pre Var Value wt: " << wt << ENDL();
+                }
                 cb_wait_front(cb_xmm, blk);
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (uint32_t j = 0; j < blk; j++) {
@@ -343,7 +321,6 @@ void MAIN {
                 tile_regs_release();
             }
             if constexpr (do_beta == 1) {
-                // Add beta
                 tile_regs_acquire();
                 tile_regs_wait();
                 reconfig_data_format(cb_xmm, cb_beta);
@@ -366,10 +343,16 @@ void MAIN {
             }
         }
 
+        UNPACK(DPRINT << "-----NCHt val: " << NCHt << "---------- ncht" << ncht << ENDL());
         cb_xmm = tt::CBIndex::c_24;  // x minus mean
-        if constexpr (rms_norm) {
-            cb_pop_front(cb_ex, 1);
-        }
+#ifdef RMSNORM
+        cb_pop_front(cb_ex, 1);
+#endif
+        // End of
+        // Final Val Calc
+        //    x-E[X]
+        //(---------------*𝛄)+ß
+        //  √(Var(X)+ε)
     }  // NCHt loop
 }
 }  // namespace NAMESPACE
