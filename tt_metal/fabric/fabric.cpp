@@ -215,6 +215,66 @@ void append_fabric_connection_rt_args(
     }
 }
 
+// append runtime parameter for RoutingPlaneConnectionManager
+void append_routing_plane_connection_manager_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& next_hop_destinations,
+    tt::tt_metal::Program& worker_program,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type,
+    const std::vector<uint32_t>& connection_link_indices) {
+    // 1) append tag (like direction) and fabric connection info for each route
+    TT_FATAL(
+        connection_link_indices.empty() || connection_link_indices.size() == next_hop_destinations.size(),
+        "connection_link_indices must be empty or the same size as next_hop_destinations");
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+
+    for (size_t i = 0; i < next_hop_destinations.size(); ++i) {
+        const auto& next_hop_dst = next_hop_destinations[i];
+        auto routing_dir_opt = control_plane.get_forwarding_direction(src_fabric_node_id, next_hop_dst);
+        TT_FATAL(
+            routing_dir_opt.has_value(),
+            "Could not determine forwarding direction from src {} to first hop {}",
+            src_fabric_node_id,
+            next_hop_dst);
+        worker_args.push_back(static_cast<uint32_t>(routing_dir_opt.value()));
+
+        uint32_t link_idx = 0;
+        if (!connection_link_indices.empty()) {
+            link_idx = connection_link_indices[i];
+        } else {
+            const auto links = get_forwarding_link_indices(src_fabric_node_id, next_hop_dst);
+            TT_FATAL(links.size() > 0, "No forwarding links available from {} to {}", src_fabric_node_id, next_hop_dst);
+            link_idx = links[0];
+        }
+
+        append_fabric_connection_rt_args(
+            src_fabric_node_id, next_hop_dst, link_idx, worker_program, worker_core, worker_args, core_type);
+    }
+
+    // 2) Append additional info for 2D Mesh
+    if (fabric_context.is_2D_routing_enabled()) {
+        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+        uint32_t ew_dim = mesh_shape[1];
+        uint32_t my_dev_id = src_fabric_node_id.chip_id;
+        uint32_t dst_mesh_id = *src_fabric_node_id.mesh_id;
+
+        worker_args.push_back(ew_dim);
+        worker_args.push_back(my_dev_id);
+        worker_args.push_back(dst_mesh_id);
+
+        for (const auto& next_hop_dst : next_hop_destinations) {
+            auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, next_hop_dst);
+            TT_ASSERT(dir_opt.has_value());
+            worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
+            worker_args.push_back(static_cast<uint16_t>(next_hop_dst.chip_id));
+        }
+    }
+}
+
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

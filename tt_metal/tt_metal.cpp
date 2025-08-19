@@ -56,6 +56,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
+#include "fabric/fabric_context.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 
@@ -1051,6 +1052,13 @@ KernelHandle CreateDataMovementKernel(
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
     }
+    auto& fabric_context = control_plane.get_fabric_context();
+    if (fabric_context.is_2D_routing_enabled()) {
+        kernel->add_defines({{"FABRIC_2D", "1"}});
+        if (fabric_context.is_dynamic_routing_enabled()) {
+            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
+        }
+    }
     return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1078,6 +1086,13 @@ KernelHandle CreateEthernetKernel(
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+    }
+    auto& fabric_context = control_plane.get_fabric_context();
+    if (fabric_context.is_2D_routing_enabled()) {
+        kernel->add_defines({{"FABRIC_2D", "1"}});
+        if (fabric_context.is_dynamic_routing_enabled()) {
+            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
+        }
     }
 
     TT_FATAL(
