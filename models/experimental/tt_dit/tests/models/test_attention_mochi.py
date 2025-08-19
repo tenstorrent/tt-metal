@@ -57,6 +57,7 @@ def stack_cos_sin(cos, sin):
     ],
     ids=["short_seq", "long_seq"],
 )
+@pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
 @pytest.mark.parametrize("context_pre_only", [True, False], ids=["yes_context_pre", "no_context_pre"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_attention(
@@ -67,6 +68,7 @@ def test_mochi_attention(
     spatial_seq_len: int,
     prompt_seq_len: int,
     context_pre_only: bool,
+    is_fsdp: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -134,6 +136,7 @@ def test_mochi_attention(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
