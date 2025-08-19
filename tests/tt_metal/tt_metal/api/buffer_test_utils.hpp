@@ -11,7 +11,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-using namespace tt::tt_metal;
 namespace tt::test::buffer::detail {
 inline void writeL1Backdoor(
     tt::tt_metal::IDevice* device, CoreCoord coord, uint32_t address, std::vector<uint32_t>& data) {
