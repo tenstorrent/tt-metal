@@ -10,7 +10,7 @@ from tqdm import tqdm
 from models.experimental.vovnet.runner.performant_runner import VovnetPerformantRunner
 from models.demos.utils.common_demo_utils import get_batch, get_data_loader, load_imagenet_dataset
 from models.utility_functions import profiler, run_for_wormhole_b0
-from models.demos.vovnet.common import VOVNET_L1_SMALL_SIZE
+from models.experimental.vovnet.common import VOVNET_L1_SMALL_SIZE
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
@@ -38,7 +38,7 @@ def run_vovnet_imagenet_demo(
             device_batch_size,
             act_dtype,
             weight_dtype,
-            resolution=(224, 224),
+            resolution=(resolution, resolution),
             model_location_generator=model_location_generator,
         )
 
