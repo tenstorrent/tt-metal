@@ -87,7 +87,6 @@ void kernel_main() {
     if constexpr (is_2d_fabric) {
         fabric_set_unicast_route(
             (LowLatencyMeshPacketHeader*)packet_header,
-            outgoing_direction,
             my_device_id,
             dst_device_id,
             dst_mesh_id,  // Ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
