@@ -233,6 +233,7 @@ Starter pytest template (fill in OP specifics):
 
 ```python
 import pytest, torch, ttnn
+from loguru import logger
 from models.utility_functions import comp_pcc
 
 @pytest.mark.timeout(30)
@@ -240,37 +241,50 @@ def test_<op_name>_program_cache_override_rtargs(device):
     torch.manual_seed(0)
 
     # 1) First run compiles and seeds the cache
+    logger.debug("Executing first run")
+    logger.debug("Creating inputs for first run: <shapes/dtypes/layouts/memory configs>")
     a1 = torch.randn(<shape>).bfloat16()
     b1 = torch.randn(<shape_b>).bfloat16()
     tt_a1 = ttnn.Tensor(a1, <in0_dtype>).to(ttnn.TILE_LAYOUT).to(device, <mem_config>)
     tt_b1 = ttnn.Tensor(b1, <in1_dtype>).to(ttnn.TILE_LAYOUT).to(device, <mem_config>)
 
     num_cache_start = device.num_program_cache_entries()
+    logger.debug(f"Number of program cache entries: {num_cache_start}")
+    logger.debug("Launching OP for first run")
     out1 = ttnn.experimental.<op_name>(tt_a1, tt_b1, <other_attrs>)
     num_cache_end = device.num_program_cache_entries()
     assert num_cache_end == num_cache_start + 1, "Expected one new program cache entry on first run"
+    logger.debug("Finished OP for first run")
+    logger.debug(f"Number of program cache entries: {num_cache_start}")
 
     # Validate correctness
     out1_host = out1.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
     golden1 = <compute_golden_from>(a1, b1)
     ok, pcc = comp_pcc(out1_host, golden1)
+    logger.debug(f"First run PCC: ok={ok}, pcc={pcc}")
     assert ok, f"First run PCC failed: {pcc}"
 
     # 2) Second run hits cache and triggers override path
-    # Reallocate inputs to ensure different buffer addresses; keep hashed props identical
+    logger.debug("Executing second run")
+    logger.debug("Creating inputs for second run: <shapes/dtypes/layouts/memory configs>")
     a2 = torch.randn(<shape>).bfloat16()
     b2 = torch.randn(<shape_b>).bfloat16()
     tt_a2 = ttnn.Tensor(a2, <in0_dtype>).to(ttnn.TILE_LAYOUT).to(device, <mem_config>)
     tt_b2 = ttnn.Tensor(b2, <in1_dtype>).to(ttnn.TILE_LAYOUT).to(device, <mem_config>)
 
     # Optionally vary a runtime-only scalar that must be overridden (e.g., seed/offset)
+    logger.debug("Launching OP for second run (cache-hit expected)")
     out2 = ttnn.experimental.<op_name>(tt_a2, tt_b2, <same_other_attrs_but_runtime_value_changed>)
+    logger.debug("Finished OP for second run")
+    logger.debug(f"Number of program cache entries: {num_cache_start}")
 
     # Expect a failure that reveals the bug on cache hit
     out2_host = out2.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
     golden2 = <compute_golden_from>(a2, b2)
     ok, pcc = comp_pcc(out2_host, golden2)
-    assert not ok, "Second run unexpectedly succeeded; override runtime args likely incomplete"
+    logger.debug(f"Second run PCC: ok={ok}, pcc={pcc}")
+    # If expecting PCC mismatch: let this assertion FAIL naturally on cache-hit
+    assert ok, "PCC mismatch on cache-hit path (expected failure if override runtime args are incomplete)"
 ```
 
 Sharded variant hints:
@@ -287,6 +301,16 @@ Sharded variant hints:
   - What you are exposing and why it should fail only on the cache-hit path.
   - Exact locations involved (files and line numbers), e.g., `ttnn/cpp/ttnn/operations/<op>/device/<file>.cpp:L123`, and any kernel arg indices affected.
   - Whether the expected failure is PCC mismatch or a hang.
+  - Let the test fail in the way you expect it to fail instead of catching the failure and asserting "not ok".
+    - PCC mismatch case: assert success (e.g., `assert ok`) and let the assertion fail on the second run.
+    - Hang case: rely on `@pytest.mark.timeout(30)` to fail due to timeout — do not mask the hang with try/except.
+  - Add clear logger prints for the test (step-by-step). Suggested verbosity:
+    - `logger.debug("Executing first run")`
+    - `logger.debug("Creating inputs for first run: <tensor shapes/dtypes/layouts>")`
+    - `logger.debug("Launching OP for first run")`
+    - Print PCC and indicate pass for first run
+    - Repeat for second run with `logger.debug("Launching OP for second run (cache-hit expected)")` and PCC print
+- Only write one test per file. If you suspect multiple issues that require separate tests, write it in a separate file. In each file, clearly indicate what program factory you are testing for.
 
 3) Run with pytest
 - Use `pytest -q tests/<path_to_test>::<test_name>` (optionally add `-s` for logs). Consider `@pytest.mark.timeout(30)` to classify hangs.
@@ -303,8 +327,37 @@ Sharded variant hints:
 Placement and naming
 - Place newly generated tests under the top-level `program_cache/<OP>/failures/` or `program_cache/<OP>/unknown_failures/` directories.
 - Use descriptive names that reflect the suspected override issue (e.g., `test_<op>_cachehit_missing_output_addr.py`).
+- For <OP> path, drop ttnn/cpp/ttnn/operations and keep the rest of the file path.
 
 Hang recovery
 - If a test hang occurs (runtime >30s/timeout), recover the device(s) before continuing:
   - Run: `tt-smi -r` and wait until it completes.
   - Only resume testing once recovery finishes successfully.
+
+### Results reporting per test
+
+- For each generated test under `program_cache/<OP>/...`, create a sibling `README.md` that summarizes the findings for that specific test:
+  - Issue title and short description
+  - Suspected root cause with precise references (files and line numbers), e.g., `<OP>/device/<file>.cpp:L123` or kernel arg index mapping
+  - Failure mode observed (PCC mismatch vs hang), and the exact assertion/line or timeout point
+  - Reproduction command
+  - Any environment or device notes that are relevant (device ID, grid size, sharding)
+  - Suggested fix (one or two actionable bullets)
+
+- If there are multiple tests for the same OP, also author a `program_cache/<OP>/README.md` that aggregates and clearly separates findings per test:
+  - Use a subsection per test file: include links to the test and its sibling README, and a quick status (failing on cache-hit / unknown failure)
+
+- Example pytest commands:
+
+```bash
+# Run a single test
+pytest -q program_cache/<OP>/failures/test_<name>.py::test_<case> -s --disable-warnings
+
+# Run all failure tests for an OP
+pytest -q program_cache/<OP>/failures -s --disable-warnings
+
+# Run unknown failures for an OP
+pytest -q program_cache/<OP>/unknown_failures -s --disable-warnings
+```
+
+- If no issues are found with the OP, create a `program_cache/<OP>/README.md` that summarizes findings and indicate that the OP was reviewed.
