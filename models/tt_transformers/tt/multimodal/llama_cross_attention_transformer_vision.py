@@ -24,7 +24,6 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.model_config = configuration.get_model_config()
@@ -46,10 +45,8 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
             return_intermediate=return_intermediate,
         )
 
-        torch_weight = lambda name, suffix: torch.transpose(
-            self.state_dict[f"{state_dict_prefix}{name}.{suffix}"], -2, -1
-        )
-        torch_bias = lambda name, suffix: self.state_dict[f"{state_dict_prefix}{name}.{suffix}"]
+        torch_weight = lambda name, suffix: torch.transpose(state_dict[f"{state_dict_prefix}{name}.{suffix}"], -2, -1)
+        torch_bias = lambda name, suffix: state_dict[f"{state_dict_prefix}{name}.{suffix}"]
 
         cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f"{name}.{suffix}")
 
