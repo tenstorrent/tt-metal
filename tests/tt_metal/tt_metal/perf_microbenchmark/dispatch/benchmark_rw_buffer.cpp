@@ -127,9 +127,8 @@ static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_de
 int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
 
-    auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
-    auto host_buffer_max = create_random_vector_of_bfloat16(max_transfer_size, 1000, random_buffer_seed);
-
+    // no need to initialize for bandwidth measurement, saves test initialization time
+    std::vector<uint32_t> host_buffer_max(max_transfer_size);
     auto available_device_ids = MetalContext::instance().get_cluster().all_chip_ids();
 
     TT_ASSERT(available_device_ids.contains(0));
