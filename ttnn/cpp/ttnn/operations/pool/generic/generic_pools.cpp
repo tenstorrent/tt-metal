@@ -38,9 +38,28 @@ static Tensor pool2d_invoke(
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     bool in_place_halo = false) {
+    log_debug(
+        tt::LogOp,
+        "[pool2d_invoke] ENTRY: pool_type={}, input_tensor.dtype={}, input_tensor.layout={}",
+        static_cast<int>(pool_type),
+        static_cast<int>(input_tensor.dtype()),
+        static_cast<int>(input_tensor.layout()));
+    log_debug(
+        tt::LogOp,
+        "[pool2d_invoke] PARAMS: batch={}, input_h={}, input_w={}, channels={}, kernel=[{}, {}], stride=[{}, {}]",
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1]);
+
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     bool is_out_tiled = false;  // pool output is row major
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    log_debug(tt::LogOp, "[pool2d_invoke] LAYOUT FLAGS: is_in_tiled={}, is_out_tiled={}", is_in_tiled, is_out_tiled);
     validate_input_params(
         input_tensor,
         batch_size,
@@ -307,6 +326,21 @@ Tensor AdaptiveAvgPool2DOp::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool in_place_halo) {
+    log_debug(
+        tt::LogOp,
+        "[AdaptiveAvgPool2D] ENTRY: input_tensor.dtype={}, input_tensor.layout={}",
+        static_cast<int>(input_tensor.dtype()),
+        static_cast<int>(input_tensor.layout()));
+    log_debug(
+        tt::LogOp,
+        "[AdaptiveAvgPool2D] PARAMS: batch={}, input_h={}, input_w={}, channels={}, output_size=[{}, {}]",
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        output_size[0],
+        output_size[1]);
+
     // Calculate adaptive kernel size and stride
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
@@ -322,6 +356,17 @@ Tensor AdaptiveAvgPool2DOp::invoke(
     std::array<uint32_t, 2> adaptive_kernel_size = {kernel_h, kernel_w};
     std::array<uint32_t, 2> adaptive_stride = {stride_h, stride_w};
     std::array<uint32_t, 2> adaptive_padding = {0, 0};  // No padding for adaptive pooling
+
+    log_debug(
+        tt::LogOp,
+        "[AdaptiveAvgPool2D] CALCULATED: kernel=[{}, {}], stride=[{}, {}], padding=[{}, {}]",
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        adaptive_padding[0],
+        adaptive_padding[1]);
+    log_debug(tt::LogOp, "[AdaptiveAvgPool2D] CALLING pool2d_invoke with Pool2DType::AVG_POOL2D");
 
     return pool2d_invoke(
         queue_id,
@@ -354,6 +399,21 @@ Tensor AdaptiveMaxPool2DOp::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool in_place_halo) {
+    log_debug(
+        tt::LogOp,
+        "[AdaptiveMaxPool2D] ENTRY: input_tensor.dtype={}, input_tensor.layout={}",
+        static_cast<int>(input_tensor.dtype()),
+        static_cast<int>(input_tensor.layout()));
+    log_debug(
+        tt::LogOp,
+        "[AdaptiveMaxPool2D] PARAMS: batch={}, input_h={}, input_w={}, channels={}, output_size=[{}, {}]",
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        output_size[0],
+        output_size[1]);
+
     // Calculate adaptive kernel size and stride
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
@@ -370,6 +430,17 @@ Tensor AdaptiveMaxPool2DOp::invoke(
     std::array<uint32_t, 2> adaptive_stride = {stride_h, stride_w};
     std::array<uint32_t, 2> adaptive_padding = {0, 0};  // No padding for adaptive pooling
     std::array<uint32_t, 2> dilation = {1, 1};
+
+    log_debug(
+        tt::LogOp,
+        "[AdaptiveMaxPool2D] CALCULATED: kernel=[{}, {}], stride=[{}, {}], padding=[{}, {}]",
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        adaptive_padding[0],
+        adaptive_padding[1]);
+    log_debug(tt::LogOp, "[AdaptiveMaxPool2D] CALLING pool2d_invoke with Pool2DType::MAX_POOL2D");
 
     return pool2d_invoke(
         queue_id,

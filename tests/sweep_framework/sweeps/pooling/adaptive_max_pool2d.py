@@ -3,15 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple
-from functools import partial
 
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -92,11 +89,10 @@ def run(
     if input_a_layout == ttnn.ROW_MAJOR_LAYOUT and input_shape[-3] % 2 == 1:
         input_shape[-3] += 1
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
+    # Generate input tensor directly in bfloat16
+    torch_input_tensor_a = torch_random(input_shape, low=-100, high=100, dtype=torch.bfloat16)
 
-    # PyTorch adaptive max pooling expects NCHW format
+    # PyTorch adaptive max pooling expects NCHW format (use bfloat16)
     if output_size is None:
         # Global adaptive pooling - use (1, 1) as output size
         torch_output_tensor = torch.nn.functional.adaptive_max_pool2d(torch_input_tensor_a, (1, 1))
@@ -104,6 +100,13 @@ def run(
     else:
         torch_output_tensor = torch.nn.functional.adaptive_max_pool2d(torch_input_tensor_a, output_size)
         effective_output_size = output_size
+
+    # For bfloat8_b, we need to go through ttnn conversion
+    if input_a_dtype == ttnn.bfloat8_b:
+        temp_tt_tensor = ttnn.from_torch(
+            torch_input_tensor_a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
+        )
+        torch_input_tensor_a = ttnn.to_torch(temp_tt_tensor)
 
     # Convert input tensor to tt-metal format [1, 1, NHW, C]
     [N, C, H, W] = input_shape
@@ -134,8 +137,33 @@ def run(
     result = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
+    # ttnn outputs flattened tensor [1, 1, N*output_h*output_w, C], reshape to [N, output_h, output_w, C]
+    [N, C, H, W] = input_shape
+    output_h, output_w = effective_output_size[0], effective_output_size[1]
+    result = result.reshape(N, output_h, output_w, C)
+
     # ttnn operates on channels-last tensors, convert back to NCHW for comparison
     output_tensor = torch.permute(result, (0, 3, 1, 2))
+
+    # Test for numerical accuracy with bfloat16 tolerances
+    atol, _ = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    if input_a_dtype == ttnn.bfloat8_b:
+        atol = 0.35
+
+    allclose = torch.allclose(output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16), atol=atol)
+    assert (
+        allclose
+    ), f"Reference and output tensor are not close. Input shape: {input_shape}, Output size: {effective_output_size}"
+
+    if input_a_dtype == ttnn.bfloat16:
+        isequal = torch.equal(output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16))
+        assert (
+            isequal
+        ), f"Reference and output tensor are not equal for bfloat16. Input shape: {input_shape}, Output size: {effective_output_size}"
+
+    # PCC assertion with higher threshold matching max_pool2d
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.998)
+    assert pcc_passed, pcc_message
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     print(f"PCC: {pcc}, Input shape: {input_shape}, Output size: {effective_output_size}")
