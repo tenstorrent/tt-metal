@@ -79,7 +79,7 @@ def test_sdxl_unet_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_perf_device():
-    expected_device_perf_cycles_per_iteration = 2_131_006_456
+    expected_device_perf_cycles_per_iteration = 1_614_292_067
     command = (
         f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae"
     )
