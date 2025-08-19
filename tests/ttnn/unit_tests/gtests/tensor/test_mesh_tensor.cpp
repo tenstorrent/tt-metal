@@ -31,7 +31,7 @@ using ::testing::ThrowsMessage;
 using MeshTensorTest = GenericMeshDeviceFixture;
 using MeshTensorTest2x4 = MeshDevice2x4Fixture;
 
-TEST(MeshTensorHostTest, ToHostNonMeshTensor) {
+TEST(MeshTensorHostTest, ToHostAlreadyOnHost) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -147,6 +147,26 @@ TEST_F(MeshTensorTest, Lifecycle) {
 
     input_tensor.deallocate();
     EXPECT_FALSE(input_tensor.is_allocated());
+}
+
+TEST_F(MeshTensorTest, ToDeviceMemoryConfigOverride) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const TensorSpec tensor_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{BufferType::L1}));
+
+    std::vector<float> host_data(shape.volume());
+    std::iota(host_data.begin(), host_data.end(), 0);
+
+    Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
+    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
+    EXPECT_EQ(input_host_tensor.tensor_spec().memory_config().buffer_type(), BufferType::L1);
+
+    Tensor device_tensor_default = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get());
+    EXPECT_EQ(device_tensor_default.tensor_spec().memory_config().buffer_type(), BufferType::L1);
+
+    Tensor device_tensor_dram =
+        tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{BufferType::DRAM});
+    EXPECT_EQ(device_tensor_dram.tensor_spec().memory_config().buffer_type(), BufferType::DRAM);
 }
 
 TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
