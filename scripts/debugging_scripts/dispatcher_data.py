@@ -206,6 +206,7 @@ class DispatcherData:
             kernel = None
             go_message_index = -1
             go_data = -1
+            preload = False
 
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
             firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
