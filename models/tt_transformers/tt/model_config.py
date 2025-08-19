@@ -145,7 +145,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name == "Qwen2.5-7B":
+        if base_model_name in ["Qwen2.5-7B"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -239,7 +239,7 @@ class ModelOptimizations:
                 TensorGroup.WO: PrecisionSetting.BFP8,
                 TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
                 # Activation across whole model
-                TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
+                TensorGroup.ACTIVATION: None,
             },
             "OpFidelity": {
                 # MLP linear operators - BFP8 with FP16 accumulation to save L1
@@ -555,7 +555,7 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "gemma-3-4b": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -1275,6 +1275,10 @@ class ModelArgs:
                 ),
             )
 
+            self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = (
+                ttnn.DRAM_MEMORY_CONFIG if self.model_name == "gemma-3-27b-it" else ttnn.L1_MEMORY_CONFIG
+            )
+            self.lm_head_dtype = ttnn.bfloat16 if self.model_name == "gemma-3-27b-it" else None
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
@@ -1453,6 +1457,7 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.rope_local_theta = text_config.get("rope_local_base_freq", None)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1640,6 +1645,18 @@ class ModelArgs:
         self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
 
     def _set_hf_params(self, checkpoint_dir):
+        def merge_text_config(base_config):
+            text_config = base_config.get("text_config", {})
+            # Merge non-nested keys into text_config
+            text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return text_config
+
+        def merge_vision_config(base_config):
+            vision_config = base_config.get("vision_config", {})
+            # Merge non-nested keys into vision_config
+            vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return vision_config
+
         if self.from_hf_url:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
@@ -1651,7 +1668,7 @@ class ModelArgs:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
-                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
             else:
                 self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
             config = self.hf_config.to_dict()
@@ -1660,7 +1677,7 @@ class ModelArgs:
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config, is_hf=True)
+            self._set_params_from_dict(config, is_hf=True)
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -2243,11 +2260,8 @@ class ModelArgs:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
                 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
             else:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                from transformers import AutoConfig, AutoModel
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
@@ -2303,7 +2317,7 @@ class ModelArgs:
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.norm
+            layer = model.model.layers[i].self_attn.q_norm
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
@@ -2439,11 +2453,11 @@ class ModelArgs:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
 
-    def reference_decoder(self):
+    def reference_decoder(self, i=0):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 
-            return TransformerBlock(layer_id=0, args=self)
+            return TransformerBlock(layer_id=i, args=self)
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
@@ -2632,7 +2646,12 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        position_embeddings = self.rotary_emb(x, position_ids)
+        model_name_env = os.getenv("HF_MODEL")
+        if "gemma-3-27b" in model_name_env.lower():
+            position_embeddings = self.rotary_emb(x, position_ids)
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
+        else:
+            position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:

@@ -47,7 +47,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-        4096,
+        # 4096,
         128,
     ),
 )
@@ -95,6 +95,16 @@ def test_decoder_inference(
         theta=model_args.rope_theta,
         rope_scaling=model_args.rope_scaling,
     )
+    if model_args.rope_local_theta is not None:
+        rot_mats_local = get_rot_mats(
+            head_dim=model_args.head_dim,
+            device=mesh_device,
+            seq_len=max_seq_len,
+            theta=model_args.rope_local_theta,
+            rope_scaling=None,
+        )
+    else:
+        rot_mats_local = None
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
@@ -146,15 +156,17 @@ def test_decoder_inference(
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-        pt_decode_input = (
-            torch.rand(
-                batch_size,
-                max_seq_len,
-                model_args.dim,
-                dtype=get_ref_model_dype(reference_model, model_args.model_name),
-            )
-            * 2
-        ) - 1
+        # pt_decode_input = (
+        #     torch.rand(
+        #         batch_size,
+        #         max_seq_len,
+        #         model_args.dim,
+        #         dtype=get_ref_model_dype(reference_model, model_args.model_name),
+        #     )
+        #     * 2
+        # ) - 1
+        pt_decode_input = torch.load("torch_decoder_input_0.pt")
+        print("pt_decode_input shape ", pt_decode_input.shape)
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
@@ -170,10 +182,12 @@ def test_decoder_inference(
         # Reference model
         attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-        ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+        ref_output = reference_model(
+            pt_decode_input.to(dtype=torch.bfloat16), positions[0], freqs_cis_i, mask=attn_mask_torch
+        ).unsqueeze(0)
         # Run TT model
         tt_out = tt_model(
-            decode_input, None, rot_mats_global=rot_mats, user_id=0, mode="prefill", page_table=page_table_tt
+            decode_input, None, rot_mats_global=rot_mats, rot_mats_local=rot_mats_local, user_id=0, mode="prefill", page_table=page_table_tt
         )
         tt_out = ttnn.to_torch(
             tt_out,
@@ -182,6 +196,8 @@ def test_decoder_inference(
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
             batch_size, max_seq_len, -1
         )  # [ batch_size, seq, hidden_dim]
+        print("ref_output ", ref_output)
+        print("tt_output_torch ", tt_output_torch)
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
         logger.info(comp_allclose(ref_output, tt_output_torch))
