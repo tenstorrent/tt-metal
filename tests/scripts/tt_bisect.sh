@@ -74,7 +74,7 @@ if ([ ! -z "$patch" ]); then
 fi
 
 ./create_venv.sh
-source python_env/bin/activate
+source $PYTHON_ENV_DIR/bin/activate
 pip install -r models/tt_transformers/requirements.txt
 
 
