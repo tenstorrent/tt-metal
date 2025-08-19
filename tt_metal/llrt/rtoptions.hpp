@@ -110,9 +110,6 @@ class RunTimeOptions {
     bool is_core_grid_override_todeprecate_env_var_set = false;
     std::string core_grid_override_todeprecate;
 
-    bool is_visible_devices_env_var_set = false;
-    std::vector<uint32_t> visible_devices;
-
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
 
@@ -226,9 +223,6 @@ public:
         return this->is_core_grid_override_todeprecate_env_var_set;
     }
     const std::string& get_core_grid_override_todeprecate() const;
-
-    inline bool is_visible_devices_specified() const { return this->is_visible_devices_env_var_set; }
-    inline const std::vector<uint32_t>& get_visible_devices() const { return this->visible_devices; }
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
