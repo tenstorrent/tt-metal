@@ -4,6 +4,7 @@ on:
   schedule:
     # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # releases for beginning of work week
+    # Do we need this with apc nightly?
     - cron: "0 0 * * *"
 
 permissions:
