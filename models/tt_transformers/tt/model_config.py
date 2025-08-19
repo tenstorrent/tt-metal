@@ -625,6 +625,7 @@ class ModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
+        self.processor = None if dummy_weights else self.create_processor()
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -2252,6 +2253,19 @@ class ModelArgs:
             if not "stop_tokens" in tokenizer.__dict__:
                 tokenizer.stop_tokens = self.eos_token_id if self.eos_token_id is not None else [tokenizer.eos_token_id]
             return tokenizer
+
+    def create_processor(self):
+        processor = None
+        if self.checkpoint_type == CheckpointType.HuggingFace:
+            from transformers import AutoProcessor
+
+            try:
+                processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH)
+                logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
+            except Exception as e:
+                logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
+
+        return processor
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if self.checkpoint_type == CheckpointType.Meta:

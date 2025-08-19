@@ -224,14 +224,6 @@ def preprocess_inputs_prefill(
     )
 
 
-def encode_multimodal_prompt_hf(tokenizer, model_id, prompt_text, system_prompt_text=None):
-    """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
-    from transformers import AutoProcessor
-
-    processor = AutoProcessor.from_pretrained(model_id)
-    return processor.apply_chat_template([prompt_text], add_generation_prompt=True, tokenize=True)[0]
-
-
 def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
     chat = []
@@ -241,6 +233,8 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
         if prompt_text:
             chat.append({"role": "user", "content": prompt_text})
         return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+    else:
+        return tokenizer.apply_chat_template([prompt_text], add_generation_prompt=True, tokenize=True)
 
 
 def freqs_to_rotation_matrix(cos_freqs, sin_freqs):

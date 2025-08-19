@@ -473,7 +473,8 @@ class Gemma3_4BTransformer(LightweightModule):
             ttnn.copy(tt_logits.reshape(x.shape), x)
         elif not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+            # tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+            pass
 
         return tt_logits
 
