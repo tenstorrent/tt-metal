@@ -32,7 +32,7 @@ protected:
         // Some CI machines have lots of cards, running all tests on all cards is slow
         // Coverage for multidevices is decent if we just confirm 2 work
         this->num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (arch_ == tt::ARCH::GRAYSKULL && num_devices_ > 2) {
+        if (num_devices_ > 2) {
             this->num_devices_ = 2;
         }
         std::vector<chip_id_t> ids;
@@ -74,7 +74,7 @@ protected:
         this->num_devices_ = this->devices_.size();
     }
 
-    MeshDeviceFixture(
+    explicit MeshDeviceFixture(
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
         MeshDispatchFixture(l1_small_size, trace_region_size) {}
 
@@ -91,11 +91,6 @@ public:
         }
         return min_dims;
     }
-};
-
-class MeshDeviceFixtureWithL1Small : public MeshDeviceFixture {
-public:
-    MeshDeviceFixtureWithL1Small() : MeshDeviceFixture(24 * 1024) {}
 };
 
 class DeviceFixture : public DispatchFixture {
