@@ -59,7 +59,6 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            packet_payload_size_bytes,
                             tt::tt_fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)});
                     } else {
@@ -76,11 +75,10 @@ void kernel_main() {
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
                     if constexpr (with_state) {
+                        tt::tt_fabric::NocUnicastInlineWriteCommandHeader ih{};
+                        ih.noc_address = get_noc_addr(noc_x_start, noc_y_start, target_address);
                         fabric_multicast_noc_unicast_inline_write_with_state<UnicastInlineWriteUpdateMask::DstAddr>(
-                            connections,
-                            route_id,
-                            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF});
+                            connections, route_id, ih);
                     } else {
                         fabric_multicast_noc_unicast_inline_write(
                             connections,
@@ -94,15 +92,11 @@ void kernel_main() {
                 case NOC_UNICAST_SCATTER_WRITE: {
                     if constexpr (with_state) {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
+                        tt::tt_fabric::NocUnicastScatterCommandHeader sh{};
+                        sh.noc_address[0] = get_noc_addr(noc_x_start, noc_y_start, target_address);
+                        sh.noc_address[1] = get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size);
                         fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                            connections,
-                            route_id,
-                            source_l1_buffer_address,
-                            packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                                {get_noc_addr(noc_x_start, noc_y_start, target_address),
-                                 get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
-                                first_chunk_size});
+                            connections, route_id, source_l1_buffer_address, sh);
                     } else {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
                         fabric_multicast_noc_scatter_write(
@@ -130,9 +124,9 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            packet_payload_size_bytes,
                             tt::tt_fabric::NocUnicastCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, target_address)});
+                                get_noc_addr(noc_x_start, noc_y_start, target_address)},
+                            packet_payload_size_bytes);
                     } else {
                         fabric_unicast_noc_unicast_write(
                             connections,
@@ -146,11 +140,10 @@ void kernel_main() {
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
                     if constexpr (with_state) {
+                        tt::tt_fabric::NocUnicastInlineWriteCommandHeader ih{};
+                        ih.noc_address = get_noc_addr(noc_x_start, noc_y_start, target_address);
                         fabric_unicast_noc_unicast_inline_write_with_state<UnicastInlineWriteUpdateMask::DstAddr>(
-                            connections,
-                            route_id,
-                            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF});
+                            connections, route_id, ih);
                     } else {
                         fabric_unicast_noc_unicast_inline_write(
                             connections,
@@ -163,16 +156,11 @@ void kernel_main() {
                 case NOC_UNICAST_SCATTER_WRITE: {
                     if constexpr (with_state) {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
-                        fabric_unicast_noc_scatter_write_with_state<
-                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes>(
-                            connections,
-                            route_id,
-                            source_l1_buffer_address,
-                            packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                                {get_noc_addr(noc_x_start, noc_y_start, target_address),
-                                 get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
-                                first_chunk_size});
+                        tt::tt_fabric::NocUnicastScatterCommandHeader sh{};
+                        sh.noc_address[0] = get_noc_addr(noc_x_start, noc_y_start, target_address);
+                        sh.noc_address[1] = get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size);
+                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                            connections, route_id, source_l1_buffer_address, sh);
                     } else {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
                         fabric_unicast_noc_scatter_write(

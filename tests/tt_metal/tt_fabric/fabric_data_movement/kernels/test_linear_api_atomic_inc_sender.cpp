@@ -54,11 +54,8 @@ void kernel_main() {
                         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-                                1,
-                                std::numeric_limits<uint16_t>::max(),
-                                true});
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, 0, false));
                     } else {
                         fabric_multicast_noc_unicast_atomic_inc(
                             connections,
@@ -80,13 +77,12 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-                                1,
-                                std::numeric_limits<uint16_t>::max(),
-                                true});
+                                0,
+                                0,
+                                false));
                     } else {
                         fabric_multicast_noc_fused_unicast_with_atomic_inc(
                             connections,
@@ -114,11 +110,8 @@ void kernel_main() {
                         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-                                1,
-                                std::numeric_limits<uint16_t>::max(),
-                                true});
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, 0, false));
                     } else {
                         fabric_unicast_noc_unicast_atomic_inc(
                             connections,
@@ -139,13 +132,12 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-                                1,
-                                std::numeric_limits<uint16_t>::max(),
-                                true});
+                                0,
+                                0,
+                                false));
                     } else {
                         fabric_unicast_noc_fused_unicast_with_atomic_inc(
                             connections,
