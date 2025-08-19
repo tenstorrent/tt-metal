@@ -11,7 +11,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-using namespace tt::tt_metal;
 namespace tt::test::buffer::detail {
 inline void writeL1Backdoor(
     tt::tt_metal::IDevice* device, CoreCoord coord, uint32_t address, std::vector<uint32_t>& data) {
@@ -19,7 +18,7 @@ inline void writeL1Backdoor(
     tt_metal::detail::WriteToDeviceL1(device, coord, address, data);
 }
 inline void writeL1Backdoor(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
     CoreCoord coord,
     uint32_t address,
     std::vector<uint32_t>& data) {
@@ -32,7 +31,7 @@ inline void readL1Backdoor(
     tt_metal::detail::ReadFromDeviceL1(device, coord, address, byte_size, data);
 }
 inline void readL1Backdoor(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
     CoreCoord coord,
     uint32_t address,
     uint32_t byte_size,
@@ -46,7 +45,7 @@ inline void writeDramBackdoor(
     tt_metal::detail::WriteToDeviceDRAMChannel(device, channel, address, data);
 }
 inline void writeDramBackdoor(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
     uint32_t channel,
     uint32_t address,
     std::vector<uint32_t>& data) {
@@ -59,7 +58,7 @@ inline void readDramBackdoor(
     tt_metal::detail::ReadFromDeviceDRAMChannel(device, channel, address, byte_size, data);
 }
 inline void readDramBackdoor(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
     uint32_t channel,
     uint32_t address,
     uint32_t byte_size,
