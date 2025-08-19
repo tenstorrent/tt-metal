@@ -1,4 +1,4 @@
-""" End-to-end test for Gemma-3-4B-it vision-text pipeline."""
+"""End-to-end test for Gemma-3-4B-it vision-text pipeline."""
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
@@ -8,7 +8,7 @@ from loguru import logger
 import os
 import ttnn
 from models.tt_transformers.tt.common import (
-    encode_multimodal_prompt_hf,
+    encode_prompt_hf,
     sample_host,
     PagedAttentionConfig,
     preprocess_inputs_prefill,
@@ -64,12 +64,11 @@ def setup_model_args(weights, max_seq_len, batch_size, mesh_device, optimization
 
 def setup_prompts_and_tokenizer(model_args, instruct):
     """Setup prompts and tokenizer for the test."""
-    model_id = "google/gemma-3-4b-it"
     prompts = ["Write a essay about Lion"] * model_args.max_batch_size
-    tokenizer = model_args.tokenizer
+    tokenizer = model_args.processor if model_args.is_multimodal else model_args.tokenizer
 
     if instruct:
-        encoded_prompts = encode_multimodal_prompt_hf(tokenizer=tokenizer, model_id=model_id, prompt_text=prompts[0])
+        encoded_prompts = encode_prompt_hf(tokenizer, prompt_text=prompts[0])
     else:
         encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
@@ -491,9 +490,9 @@ def validate_outputs(run_ref_pt, ref_output, tt_output_torch, pcc, all_outputs, 
 
         # Decode the output tokens back to text
         decoded_texts = [tokenizer.decode(output, skip_special_tokens=True) for output in all_outputs]
-        logger.info(f'TTNN Decoded Outputs: {"".join(decoded_texts)}')
+        logger.info(f"TTNN Decoded Outputs: {''.join(decoded_texts)}")
         decoded_texts = [tokenizer.decode(output, skip_special_tokens=True) for output in all_outputs_ref]
-        logger.info(f'Torch Decoded Outputs: {"".join(decoded_texts)}')
+        logger.info(f"Torch Decoded Outputs: {''.join(decoded_texts)}")
 
         logger.info(comp_allclose(ref_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
