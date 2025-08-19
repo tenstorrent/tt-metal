@@ -106,7 +106,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             break;
         }
     }
-    TT_ASSERT(cluster_desc->get_all_chips().size() > 0, "No chips detected in the cluster");
+    const auto num_chips = cluster_desc->get_all_chips().size();
+    TT_ASSERT(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
     bool all_same_board = true;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
@@ -118,7 +119,6 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
 
     if (all_same_board) {
         if (board_type == BoardType::N300) {
-            const auto num_chips = cluster_desc->get_all_chips().size();
             if (num_chips == 8) {
                 cluster_type = tt::tt_metal::ClusterType::T3K;
                 // Basic check to determine if the cluster is a T3K cluster
@@ -161,19 +161,23 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         } else if (board_type == BoardType::N150) {
             cluster_type = tt::tt_metal::ClusterType::N150;
         } else if (board_type == BoardType::P100) {
-            if (cluster_desc->get_all_chips().size() == 1) {
-                cluster_type = tt::tt_metal::ClusterType::P100;
-            }
+            TT_FATAL(num_chips == 1, "Unknown cluster type for P100 board with {}", num_chips);
+            cluster_type = tt::tt_metal::ClusterType::P100;
         } else if (board_type == BoardType::P150) {
-            if (cluster_desc->get_all_chips().size() == 1) {
+            if (num_chips == 1) {
                 cluster_type = tt::tt_metal::ClusterType::P150;
-            } else if (cluster_desc->get_all_chips().size() == 2) {
+            } else if (num_chips == 2) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X2;
-            } else if (cluster_desc->get_all_chips().size() == 4) {
+            } else if (num_chips == 4) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X4;
-            } else if (cluster_desc->get_all_chips().size() == 8) {
+            } else if (num_chips == 8) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X8;
+            } else {
+                TT_THROW("Unknown cluster type for P150 board with {} chips", num_chips);
             }
+        } else if (board_type == BoardType::P300) {
+            TT_FATAL(num_chips == 2, "Unknown cluster type for P300 board with {}", num_chips);
+            cluster_type = tt::tt_metal::ClusterType::P300;
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
         }
