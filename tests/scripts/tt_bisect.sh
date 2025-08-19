@@ -92,6 +92,12 @@ while [[ "$found" = "false" ]]; do
       git cherry-pick $patch
    fi
    git submodule update --recursive
+
+   if [ -f rust/Cargo.lock ]; then
+      grep 'name = "tokenizers"' -A 1 rust/Cargo.lock
+   fi
+
+
    build_rc=0
 
    rm -rf /tmp/ccache
