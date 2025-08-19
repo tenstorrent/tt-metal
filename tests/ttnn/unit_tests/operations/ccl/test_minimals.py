@@ -451,6 +451,8 @@ def test_bh_trace_ag(
         pytest.skip("Ring configuration requires the entire row or column so it loops around")
     if p150_mesh_device.shape[0] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
+    if ttnn.get_num_devices() == 8:
+        pytest.skip("Test requires a torus but rackbox is a mesh")
     profiler = BenchmarkProfiler()
     run_all_gather_impl(
         p150_mesh_device,
