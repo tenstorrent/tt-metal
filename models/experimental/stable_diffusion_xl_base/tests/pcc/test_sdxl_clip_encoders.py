@@ -6,65 +6,49 @@ import time
 
 import pytest
 import torch
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 import ttnn
 from loguru import logger
-from transformers import CLIPTextModelWithProjection, CLIPTokenizer
+from transformers import CLIPTextModelWithProjection, CLIPTokenizer, CLIPTextModel
 
-from ..tt.clip_encoder import TtCLIPTextTransformer, TtCLIPTextTransformerParameters, TtCLIPConfig
-from ..tt.utils import assert_quality
-from ..tt.parallel_config import EncoderParallelManager
-
-
-@pytest.mark.parametrize(
-    "model_name",
-    [
-        "large",
-    ],
+from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
+    TtCLIPTextTransformer,
+    TtCLIPTextTransformerParameters,
+    TtCLIPConfig,
 )
+from models.experimental.stable_diffusion_35_large.tt.utils import assert_quality
+
+
 @pytest.mark.parametrize(
     "clip_path, tokenizer_path, expected_pcc",
     [
         ("text_encoder", "tokenizer", 0.99),
-        ("text_encoder_2", "tokenizer_2", 0.985),
+        ("text_encoder_2", "tokenizer_2", 0.98),
     ],
     ids=["encoder_1", "encoder_2"],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4), (1, 1)], ids=["t3k", "tg", "n150"], indirect=True)
-@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2), (4, 4), (1, 1)], ids=["1x4", "2x2", "4x4", "1x1"])
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["n150"], indirect=True)
 @pytest.mark.parametrize(
-    "device_params, topology",
-    [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
+    "device_params",
+    [{"l1_small_size": SDXL_L1_SMALL_SIZE}],
     indirect=["device_params"],
 )
 def test_clip_encoder(
-    *,
-    mesh_device: ttnn.Device,
-    submesh_shape: ttnn.MeshShape,
-    model_name: str,
-    clip_path: str,
-    tokenizer_path: str,
-    expected_pcc: float,
-    topology: ttnn.Topology,
+    *, mesh_device: ttnn.Device, clip_path: str, tokenizer_path: str, expected_pcc: float, is_ci_env
 ) -> None:
-    parent_mesh_shape = tuple(mesh_device.shape)
-    if submesh_shape == (1, 1):
-        if parent_mesh_shape != (1, 1):
-            pytest.skip("n150 mesh does not support submesh shapes other than 1x1, skipping")
-    if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
-        pytest.skip("submesh shape is larger than parent mesh shape, skipping")
-    encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
-    if parent_mesh_shape == (1, 1):
-        print(f"Not running parallel manager for n150 mesh")
-        parallel_manager = None
-    else:
-        parallel_manager = EncoderParallelManager(encoder_submesh, topology, mesh_axis=1, num_links=1)
-    model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
+    model_name_checkpoint = f"stabilityai/stable-diffusion-xl-base-1.0"
 
-    hf_model = CLIPTextModelWithProjection.from_pretrained(
-        model_name_checkpoint, subfolder=clip_path, local_files_only=True
+    has_projection = clip_path == "text_encoder_2"  # text encoder 2 has text projection, text encoder 1 does not
+
+    if has_projection:
+        hf_model = CLIPTextModelWithProjection.from_pretrained(
+            model_name_checkpoint, subfolder=clip_path, local_files_only=is_ci_env
+        )
+    else:
+        hf_model = CLIPTextModel.from_pretrained(model_name_checkpoint, subfolder=clip_path, local_files_only=is_ci_env)
+    tokenizer = CLIPTokenizer.from_pretrained(
+        model_name_checkpoint, subfolder=tokenizer_path, local_files_only=is_ci_env
     )
-    tokenizer = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder=tokenizer_path, local_files_only=True)
 
     hf_model.eval()
 
@@ -85,9 +69,10 @@ def test_clip_encoder(
     start_time = time.time()
     parameters = TtCLIPTextTransformerParameters.from_torch(
         hf_model.state_dict(),
-        device=encoder_submesh,
+        device=mesh_device,
         dtype=ttnn.bfloat16,
-        parallel_manager=parallel_manager,
+        parallel_manager=None,
+        has_text_projection=has_projection,
     )
 
     config = TtCLIPConfig(
@@ -113,15 +98,15 @@ def test_clip_encoder(
         hf_inputs.input_ids,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
-        device=encoder_submesh,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     start_time = time.time()
     with torch.no_grad():
         hf_output = hf_model(**hf_inputs, output_hidden_states=True)
         sequence_output = hf_output.hidden_states[-2]
-        pooled_output = hf_output.text_embeds
+        pooled_output = hf_output.text_embeds if has_projection else hf_output.pooler_output
     logger.info(f"text encoder 1 CPU runtime: {time.time() - start_time}")
 
     # debug
@@ -133,15 +118,13 @@ def test_clip_encoder(
     logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
 
     logger.info("compiling text encoder...")
-    tt_model(tt_tokens, encoder_submesh, parallel_manager=parallel_manager)
+    tt_model(tt_tokens, mesh_device, parallel_manager=None)
 
     logger.info("executing text encoder...")
     start_time = time.time()
     eos_token_id = hf_model.config.eos_token_id
 
-    tt_sequence_output, tt_projected_output = tt_model(
-        tt_tokens, encoder_submesh, eos_token_id, parallel_manager=parallel_manager
-    )
+    tt_sequence_output, tt_projected_output = tt_model(tt_tokens, mesh_device, eos_token_id, parallel_manager=None)
 
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder done...")
@@ -162,5 +145,6 @@ def test_clip_encoder(
     assert sequence_output.shape == tt_sequence_output_torch.shape
     assert pooled_output.shape == tt_projected_output_torch.shape
 
+    # For some reason, this has pcc 10 both here and in sd3.5 large when max_length padding is used
     assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
     assert_quality(pooled_output, tt_projected_output_torch, pcc=expected_pcc)

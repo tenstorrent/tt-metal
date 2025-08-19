@@ -43,6 +43,14 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
     ],
     ids=("with_trace", "no_trace"),
 )
+@pytest.mark.parametrize(
+    "encoders_on_device",
+    [
+        (True),
+        (False),
+    ],
+    ids=("device_encoders", "host_encoders"),
+)
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
@@ -51,6 +59,7 @@ def test_accuracy_sdxl(
     num_inference_steps,
     vae_on_device,
     capture_trace,
+    encoders_on_device,
     captions_path,
     coco_statistics_path,
     evaluation_range,
@@ -71,6 +80,7 @@ def test_accuracy_sdxl(
         prompts,
         num_inference_steps,
         vae_on_device,
+        encoders_on_device,
         capture_trace,
         evaluation_range,
     )
