@@ -38,19 +38,39 @@ class RMSNorm:
 
 class LayerNorm:
     def __init__(
-        self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None, init=False
+        self,
+        embedding_dim,
+        norm_eps=1e-5,
+        norm_elementwise_affine=True,
+        bias=True,
+        mesh_device=None,
+        init=False,
+        use_row_major_workaround=False,
     ):
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
         self.mesh_device = mesh_device
         self.use_bias = bias
+        self.use_row_major_workaround = use_row_major_workaround
         self.weight = None
         self.bias = None
         if norm_elementwise_affine and init:
-            self.weight = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
+            if use_row_major_workaround:
+                self.weight = bf16_tensor(
+                    torch.randn(1, embedding_dim).reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+            else:
+                self.weight = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
             if bias:
-                self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
+                if use_row_major_workaround:
+                    self.bias = bf16_tensor(
+                        torch.randn(1, embedding_dim).reshape(-1, 32),
+                        device=self.mesh_device,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                else:
+                    self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -62,9 +82,19 @@ class LayerNorm:
 
     def load_state_dict(self, state_dict):
         if self.norm_elementwise_affine:
-            self.weight = bf16_tensor(state_dict["weight"].unsqueeze(0), device=self.mesh_device)
+            if self.use_row_major_workaround:
+                self.weight = bf16_tensor(
+                    state_dict["weight"].reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+            else:
+                self.weight = bf16_tensor(state_dict["weight"].unsqueeze(0), device=self.mesh_device)
             if self.use_bias:
-                self.bias = bf16_tensor(state_dict["bias"].unsqueeze(0), device=self.mesh_device)
+                if self.use_row_major_workaround:
+                    self.bias = bf16_tensor(
+                        state_dict["bias"].reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+                    )
+                else:
+                    self.bias = bf16_tensor(state_dict["bias"].unsqueeze(0), device=self.mesh_device)
 
     def __call__(self, x):
         return ttnn.layer_norm(
