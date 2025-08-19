@@ -4,8 +4,6 @@
 
 #include "shape.hpp"
 
-#include <boost/container/vector.hpp>
-#include <boost/move/utility_core.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <functional>
