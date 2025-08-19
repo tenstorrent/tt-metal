@@ -832,13 +832,13 @@ void MetalContext::generate_logical_to_translated_map(chip_id_t device_id) {
     logical_col_to_translated_col_[device_id].reserve(tensix_grid_size.x);
     logical_row_to_translated_row_[device_id].reserve(tensix_grid_size.y);
 
-    for (uint8_t x = 0; x < tensix_grid_size.x; x++) {
+    for (size_t x = 0; x < tensix_grid_size.x; x++) {
         logical_col_to_translated_col_[device_id].push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .x);
     }
-    for (uint8_t y = 0; y < tensix_grid_size.y; y++) {
+    for (size_t y = 0; y < tensix_grid_size.y; y++) {
         logical_row_to_translated_row_[device_id].push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
