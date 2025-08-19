@@ -12,6 +12,7 @@ target_sources(
         test_slotmap.cpp
         test_span.cpp
         test_strong_type.cpp
+        test_small_vector.cpp
 )
 target_link_libraries(
     unit_tests_stl_smoke

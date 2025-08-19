@@ -255,7 +255,7 @@ Tensor all_gather_impl(
 
     Tensor input_tensor_padded = input_tensor;
     if (needs_padding) {
-        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, h_pad}, {0, w_pad}};
+        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, h_pad}, {0, w_pad}};
         DataType original_dtype = input_tensor.dtype();
         if (input_tensor.dtype() != DataType::BFLOAT16 && input_tensor.dtype() != DataType::FLOAT32) {
             input_tensor_padded = ttnn::typecast(input_tensor_padded, DataType::BFLOAT16);

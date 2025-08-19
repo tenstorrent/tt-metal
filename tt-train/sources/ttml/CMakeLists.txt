@@ -269,6 +269,22 @@ if(NOT TARGET Metalium::Metal)
     find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+    find_library(TT_STL_LIBRARY NAMES "libtt_stl.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+
+    if(TT_STL_LIBRARY)
+        add_library(Metalium::TT_STL SHARED IMPORTED)
+        set_target_properties(
+            Metalium::TT_STL
+            PROPERTIES
+                IMPORTED_LOCATION
+                    "${TT_STL_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES
+                    "$ENV{TT_METAL_HOME}/tt_stl"
+        )
+        message(STATUS "Successfully found libtt_stl.so at ${TT_STL_LIBRARY}")
+    else()
+        message(FATAL_ERROR "libtt_stl.so not found in ${METALIUM_LIB_PATH}")
+    endif()
 
     if(TT_METAL_LIBRARY)
         add_library(Metalium::Metal SHARED IMPORTED)
@@ -284,6 +300,7 @@ if(NOT TARGET Metalium::Metal)
             Metalium::Metal
             INTERFACE
                 ${DEVICE_LIBRARY}
+                Metalium::TT_STL
                 nlohmann_json::nlohmann_json
         )
         message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
@@ -300,6 +317,7 @@ if(NOT TARGET Metalium::Metal)
                 INTERFACE_INCLUDE_DIRECTORIES
                     "${METALIUM_INCLUDE_DIRS}"
         )
+        target_link_libraries(Metalium::TTNN INTERFACE Metalium::TT_STL)
         message(STATUS "Successfully found _ttnn.so at ${TTNN_LIBRARY}")
     else()
         message(FATAL_ERROR "_ttnn.so not found in ${METALIUM_LIB_PATH}")
