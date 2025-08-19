@@ -10,7 +10,7 @@ import math
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 # Short sweep for adaptive pooling operations - focused on commonly used configurations
@@ -56,17 +56,23 @@ def run_adaptive_pool2d(in_n, in_c, in_h, in_w, out_h, out_w, pool_type, dtype, 
     # Generate input tensor
     torch.manual_seed(0)
     input_shape = [in_n, in_c, in_h, in_w]
-    torch_input_tensor = torch_random(input_shape, low=-100, high=100, dtype=torch.float32)
 
-    if dtype == ttnn.bfloat8_b:
-        torch_input_tensor = torch_input_tensor.to(torch.bfloat16)
+    # Generate input tensor directly in bfloat16
+    torch_input_tensor = torch_random(input_shape, low=-100, high=100, dtype=torch.bfloat16)
 
-    # PyTorch reference
+    # PyTorch reference (use bfloat16)
     output_size = (out_h, out_w)
     if pool_type == "avg":
         torch_output_tensor = torch.nn.functional.adaptive_avg_pool2d(torch_input_tensor, output_size)
     else:  # max
         torch_output_tensor = torch.nn.functional.adaptive_max_pool2d(torch_input_tensor, output_size)
+
+    # For bfloat8_b, we need to go through ttnn conversion
+    if dtype == ttnn.bfloat8_b:
+        temp_tt_tensor = ttnn.from_torch(
+            torch_input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
+        )
+        torch_input_tensor = ttnn.to_torch(temp_tt_tensor)
 
     # Convert to tt-metal format [1, 1, NHW, C]
     torch_input_tensor_ttnn = torch.permute(torch_input_tensor, (0, 2, 3, 1))
@@ -108,8 +114,31 @@ def run_adaptive_pool2d(in_n, in_c, in_h, in_w, out_h, out_w, pool_type, dtype, 
     result = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
+    # ttnn outputs flattened tensor [1, 1, N*output_h*output_w, C], reshape to [N, output_h, output_w, C]
+    result = result.reshape(in_n, out_h, out_w, in_c)
+
     # Convert back to NCHW format for comparison
     output_tensor = torch.permute(result, (0, 3, 1, 2))
+
+    # Test for numerical accuracy with bfloat16 tolerances
+    atol, _ = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    if dtype == ttnn.bfloat8_b:
+        atol = 0.35
+
+    allclose = torch.allclose(output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16), atol=atol)
+    assert (
+        allclose
+    ), f"Reference and output tensor are not close. Input: {input_shape}, Output size: {output_size}, Pool type: {pool_type}"
+
+    if dtype == ttnn.bfloat16:
+        isequal = torch.equal(output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16))
+        assert (
+            isequal
+        ), f"Reference and output tensor are not equal for bfloat16. Input: {input_shape}, Output size: {output_size}, Pool type: {pool_type}"
+
+    # PCC assertion with higher threshold matching max_pool2d
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.998)
+    assert pcc_passed, pcc_message
 
     # Check results
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
