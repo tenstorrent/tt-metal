@@ -100,15 +100,25 @@ class Pipeline:
                 raise ValueError(
                     f"Number of inputs ({len(host_inputs)}) exceeds the number of pre-allocated output tensors ({len(self.output_tensors)})."
                 )
-            for i, output_tensor in enumerate(self.executor.execute(host_inputs)):
-                ttnn.copy_device_to_host_tensor(
-                    output_tensor, self.output_tensors[i], blocking=False, cq_id=self.executor.get_read_cq()
-                )
+            # For multi-output models, we need to handle the case where each input produces multiple outputs
+            # For preallocated tensors, we copy directly from device to preallocated host tensors
+            output_index = 0
+            for output_tensors in self.executor.execute(host_inputs):
+                for output_tensor in output_tensors:
+                    if output_index < len(self.output_tensors):
+                        ttnn.copy_device_to_host_tensor(
+                            output_tensor,
+                            self.output_tensors[output_index],
+                            blocking=False,
+                            cq_id=self.executor.get_read_cq(),
+                        )
+                        output_index += 1
         else:
             self.output_tensors = []
-            for t in self.executor.execute(host_inputs):
-                host_tensor = t.cpu(blocking=False, cq_id=self.executor.get_read_cq())
-                self.output_tensors.append(host_tensor)
+            for output_tensors in self.executor.execute(host_inputs):
+                for output_tensor in output_tensors:
+                    host_tensor = output_tensor.cpu(blocking=False, cq_id=self.executor.get_read_cq())
+                    self.output_tensors.append(host_tensor)
         return self
 
     def preallocate_output_tensors_on_host(

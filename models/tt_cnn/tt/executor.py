@@ -3,9 +3,89 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable, List
 
 import ttnn
+
+
+def wrap_model_for_pipeline(model: Callable) -> Callable:
+    """
+    Wraps a model function to ensure it always returns a list of tensors.
+
+    Args:
+        model: The original model function
+
+    Returns:
+        Wrapped model function that always returns a list of tensors
+
+    Raises:
+        ValueError: If the model returns an unsupported output type
+    """
+
+    def wrapped_model(*args, **kwargs):
+        result = model(*args, **kwargs)
+
+        # Handle single tensor
+        if isinstance(result, ttnn.Tensor):
+            return [result]
+
+        # Handle list of tensors
+        if isinstance(result, list):
+            # Validate all elements are tensors
+            for i, item in enumerate(result):
+                if not isinstance(item, ttnn.Tensor):
+                    raise ValueError(f"List output element {i} is not a tensor: {type(item)}")
+            return result
+
+        # Handle tuple of tensors
+        if isinstance(result, tuple):
+            # Validate all elements are tensors
+            for i, item in enumerate(result):
+                if not isinstance(item, ttnn.Tensor):
+                    raise ValueError(f"Tuple output element {i} is not a tensor: {type(item)}")
+            return list(result)
+
+        # Handle nested structures recursively
+        if isinstance(result, (dict, set)):
+            flattened = _flatten_nested_structure(result)
+            # Validate all elements are tensors
+            for i, item in enumerate(flattened):
+                if not isinstance(item, ttnn.Tensor):
+                    raise ValueError(f"Flattened output element {i} is not a tensor: {type(item)}")
+            return flattened
+
+        raise ValueError(f"Unsupported model output type: {type(result)}")
+
+    return wrapped_model
+
+
+def _flatten_nested_structure(obj: Any) -> List[ttnn.Tensor]:
+    """
+    Recursively flattens nested structures into a flat list of tensors.
+
+    Args:
+        obj: The object to flatten
+
+    Returns:
+        Flat list of tensors
+    """
+    result = []
+
+    if isinstance(obj, ttnn.Tensor):
+        result.append(obj)
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            result.extend(_flatten_nested_structure(item))
+    elif isinstance(obj, dict):
+        for value in obj.values():
+            result.extend(_flatten_nested_structure(value))
+    elif isinstance(obj, set):
+        for item in obj:
+            result.extend(_flatten_nested_structure(item))
+    else:
+        raise ValueError(f"Cannot flatten object of type: {type(obj)}")
+
+    return result
 
 
 class Executor(ABC):
@@ -14,7 +94,7 @@ class Executor(ABC):
         pass
 
     @abstractmethod
-    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+    def execute(self, host_inputs: list) -> Iterable[List[ttnn.Tensor]]:
         pass
 
     @abstractmethod
@@ -31,7 +111,7 @@ class ModelExecutor(Executor):
         """
         Executor that runs a model on a single command-queue.
         """
-        self.model = model
+        self.model = wrap_model_for_pipeline(model)
         self.device = device
         self.cq_id = cq_id
         self.l1_input_memory_config = l1_input_memory_config
@@ -53,12 +133,12 @@ class ModelExecutor(Executor):
 
     def _execute_single(self, input_tensor):
         l1_input_tensor = ttnn.to_device(input_tensor, device=self.device, memory_config=self.l1_input_memory_config)
-        output_tensor = self.model(l1_input_tensor)
+        output_tensors = self.model(l1_input_tensor)
         if l1_input_tensor.is_allocated():
             ttnn.deallocate(l1_input_tensor, force=True)
-        return output_tensor
+        return output_tensors
 
-    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+    def execute(self, host_inputs: list) -> Iterable[List[ttnn.Tensor]]:
         for host_input in host_inputs:
             yield self._execute_single(host_input)
 
@@ -78,7 +158,7 @@ class TracedModelExecutor(Executor):
     """
 
     def __init__(self, model: Callable, device, dram_input_memory_config, l1_input_memory_config, cq_id=0):
-        self.model = model
+        self.model = wrap_model_for_pipeline(model)
         self.device = device
         self.cq_id = cq_id
 
@@ -87,8 +167,8 @@ class TracedModelExecutor(Executor):
 
         self.dram_input_tensor = None
         self.l1_input_tensor = None
-        self.output_tensor = None
-        self._compilation_output_tensor = None
+        self.output_tensors = None
+        self._compilation_output_tensors = None
 
         self.trace_id = None
         self.input_trace_addr = None
@@ -117,7 +197,7 @@ class TracedModelExecutor(Executor):
 
     def _run_model_for_compilation(self, host_input):
         l1_input_for_compile = self._prepare_l1_input(host_input)
-        self._compilation_output_tensor = self.model(l1_input_for_compile)
+        self._compilation_output_tensors = self.model(l1_input_for_compile)
         ttnn.deallocate(l1_input_for_compile)
 
     def _capture_execution_trace(self, host_input):
@@ -125,7 +205,7 @@ class TracedModelExecutor(Executor):
 
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.cq_id)
 
-        self.output_tensor = self.model(l1_input_for_trace)
+        self.output_tensors = self.model(l1_input_for_trace)
         ttnn.deallocate(l1_input_for_trace)
 
         self._validate_trace_address_consistency(spec)
@@ -136,7 +216,8 @@ class TracedModelExecutor(Executor):
         self.input_trace_addr = l1_input_for_trace.buffer_address()
         spec = l1_input_for_trace.spec
 
-        self._compilation_output_tensor.deallocate(force=True)
+        for tensor in self._compilation_output_tensors:
+            tensor.deallocate(force=True)
 
         return l1_input_for_trace, spec
 
@@ -189,9 +270,9 @@ class TracedModelExecutor(Executor):
             )
 
         ttnn.execute_trace(self.device, self.trace_id, cq_id=self.cq_id, blocking=False)
-        return self.output_tensor
+        return self.output_tensors
 
-    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+    def execute(self, host_inputs: list) -> Iterable[List[ttnn.Tensor]]:
         """
         Executes the traced model for a batch of input tensors.
         """
@@ -226,7 +307,7 @@ class MultiCQModelOverlappedInputExecutor(Executor):
         dram_input_memory_config,
         l1_input_memory_config,
     ):
-        self.model = model
+        self.model = wrap_model_for_pipeline(model)
         self.device = device
         self.dram_input_memory_config = dram_input_memory_config
         self.l1_input_memory_config = l1_input_memory_config
@@ -265,17 +346,18 @@ class MultiCQModelOverlappedInputExecutor(Executor):
         # Reshard to L1 and run model
         ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
         l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
-        output_tensor = self.model(l1_input_tensor)
+        output_tensors = self.model(l1_input_tensor)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
         if l1_input_tensor.is_allocated():
             ttnn.deallocate(l1_input_tensor, force=True)
-        if output_tensor.is_allocated():
-            ttnn.deallocate(output_tensor, force=True)
+        for tensor in output_tensors:
+            if tensor.is_allocated():
+                ttnn.deallocate(tensor, force=True)
 
     def _execute_single(self, input_tensor):
         """
         Executes the model for a single input tensor using multi-CQ synchronization.
-        Returns the output tensor (result available after synchronization).
+        Returns the output tensors (result available after synchronization).
         """
         # Transfer input to device DRAM
         ttnn.wait_for_event(self.CQ_INPUT_WRITE, self.op_event)
@@ -285,14 +367,14 @@ class MultiCQModelOverlappedInputExecutor(Executor):
         # Execute model
         ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
         l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
-        output_tensor = self.model(l1_input_tensor)
+        output_tensors = self.model(l1_input_tensor)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
         if l1_input_tensor.is_allocated():
             ttnn.deallocate(l1_input_tensor, force=True)
 
-        return output_tensor
+        return output_tensors
 
-    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+    def execute(self, host_inputs: list) -> Iterable[List[ttnn.Tensor]]:
         """Executes the model for a batch of input tensors."""
         for host_input in host_inputs:
             yield self._execute_single(host_input)
@@ -324,15 +406,15 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         dram_input_memory_config,
         l1_input_memory_config,
     ):
-        self.model = model
+        self.model = wrap_model_for_pipeline(model)
         self.device = device
         self.dram_input_memory_config = dram_input_memory_config
         self.l1_input_memory_config = l1_input_memory_config
 
         self.dram_input_tensor = None
         self.l1_input_tensor = None
-        self.output_tensor = None
-        self._compilation_output_tensor = None
+        self.output_tensors = None
+        self._compilation_output_tensors = None
 
         self.trace_id = None
         self.op_event = None
@@ -372,7 +454,7 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
 
-        self._compilation_output_tensor = self.model(l1_input_tensor)
+        self._compilation_output_tensors = self.model(l1_input_tensor)
 
         # Cleanup L1 input tensor only
         ttnn.deallocate(l1_input_tensor)
@@ -396,15 +478,16 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         input_trace_addr = l1_input_tensor.buffer_address()
         spec = l1_input_tensor.spec
 
-        # Force cleanup of the compilation output tensor to ensure that the subsequent allocation
+        # Force cleanup of the compilation output tensors to ensure that the subsequent allocation
         # of the persistent L1 input tensor occurs at the expected device memory address. This is
         # necessary because trace capture relies on the L1 input tensor being allocated at the same
         # address as during the initial trace.
-        self._compilation_output_tensor.deallocate(force=True)
+        for tensor in self._compilation_output_tensors:
+            tensor.deallocate(force=True)
 
         # Capture trace
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.CQ_OPS_AND_OUTPUT_READ)
-        self.output_tensor = self.model(l1_input_tensor)
+        self.output_tensors = self.model(l1_input_tensor)
         if l1_input_tensor.is_allocated():
             ttnn.deallocate(l1_input_tensor, force=True)
 
@@ -420,7 +503,7 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
     def _execute_single(self, input_tensor):
         """
         Executes the traced model for a single input tensor using multi-CQ synchronization.
-        Returns the output tensor (result available after synchronization).
+        Returns the output tensors (result available after synchronization).
         """
         # Transfer input to device DRAM
         ttnn.wait_for_event(self.CQ_INPUT_WRITE, self.op_event)
@@ -433,9 +516,9 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
         ttnn.execute_trace(self.device, self.trace_id, cq_id=self.CQ_OPS_AND_OUTPUT_READ, blocking=False)
 
-        return self.output_tensor
+        return self.output_tensors
 
-    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+    def execute(self, host_inputs: list) -> Iterable[List[ttnn.Tensor]]:
         """Executes the traced model for a batch of input tensors."""
         for host_input in host_inputs:
             yield self._execute_single(host_input)
@@ -470,7 +553,7 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         l1_input_memory_config,
         dram_output_memory_config,
     ):
-        self.model = model
+        self.model = wrap_model_for_pipeline(model)
         self.device = device
 
         self.dram_input_memory_config = dram_input_memory_config
@@ -478,10 +561,10 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         self.dram_output_memory_config = dram_output_memory_config
 
         self.dram_input_tensor = None
-        self.dram_output_tensor = None
+        self.dram_output_tensors = None
         self.l1_input_tensor = None
-        self.output_tensor = None
-        self._compilation_output_tensor = None
+        self.output_tensors = None
+        self._compilation_output_tensors = None
 
         self.trace_id = None
         self.first_op_event = None
@@ -508,45 +591,49 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         self.first_op_event = ttnn.record_event(self.device, self.CQ_OPS)
         self.read_event = ttnn.record_event(self.device, self.CQ_IO)
 
-        output_shape, output_dtype = self._compile_model(host_input)
+        output_shapes, output_dtypes = self._compile_model(host_input)
 
-        self.dram_output_tensor = ttnn.allocate_tensor_on_device(
-            output_shape, output_dtype, ttnn.ROW_MAJOR_LAYOUT, self.device, self.dram_output_memory_config
-        )
+        # For multi-output models, we need to allocate multiple DRAM output tensors
+        # For now, we'll use the first output's shape/dtype for all outputs
+        # This is a limitation that could be improved in the future
+        self.dram_output_tensors = []
+        for shape, dtype in zip(output_shapes, output_dtypes):
+            dram_output_tensor = ttnn.allocate_tensor_on_device(
+                shape, dtype, ttnn.ROW_MAJOR_LAYOUT, self.device, self.dram_output_memory_config
+            )
+            self.dram_output_tensors.append(dram_output_tensor)
 
         self._capture_trace(host_input)
         ttnn.synchronize_device(self.device)
 
     def _compile_model(self, host_input):
         """
-        Runs the model once to compile kernels and determine output shape/dtype.
-        Returns: (output_shape, output_dtype)
+        Runs the model once to compile kernels and determine output shapes/dtypes.
+        Returns: (output_shapes, output_dtypes)
         """
         # Transfer input to DRAM
         ttnn.wait_for_event(self.CQ_IO, self.first_op_event)
         ttnn.copy_host_to_device_tensor(host_input, self.dram_input_tensor, cq_id=self.CQ_IO)
         self.write_event = ttnn.record_event(self.device, self.CQ_IO)
 
-        # Execute model and get output shape/dtype
+        # Execute model and get output shapes/dtypes
         ttnn.wait_for_event(self.CQ_OPS, self.write_event)
         l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         self.first_op_event = ttnn.record_event(self.device, self.CQ_OPS)
-        self._compilation_output_tensor = self.model(l1_input_tensor)
-        output_shape = self._compilation_output_tensor.shape
-        output_dtype = self._compilation_output_tensor.dtype
+        self._compilation_output_tensors = self.model(l1_input_tensor)
+        output_shapes = [tensor.shape for tensor in self._compilation_output_tensors]
+        output_dtypes = [tensor.dtype for tensor in self._compilation_output_tensors]
 
-        # Transfer output to DRAM
-        ttnn.wait_for_event(self.CQ_OPS, self.read_event)
-        ttnn.reshard(
-            self._compilation_output_tensor, self.dram_output_memory_config, output_tensor=self.dram_output_tensor
-        )
+        # Transfer outputs to DRAM (for now, we'll skip this in compilation phase)
+        # The actual transfer will happen during trace capture
         self.last_op_event = ttnn.record_event(self.device, self.CQ_OPS)
 
         # Cleanup compilation tensors
         ttnn.deallocate(l1_input_tensor)
-        ttnn.deallocate(self._compilation_output_tensor)
+        for tensor in self._compilation_output_tensors:
+            ttnn.deallocate(tensor)
 
-        return output_shape, output_dtype
+        return output_shapes, output_dtypes
 
     def _capture_trace(self, host_input):
         """
@@ -563,14 +650,15 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         input_trace_addr = l1_input_tensor.buffer_address()
         spec = l1_input_tensor.spec
 
-        # Force cleanup of the compilation output tensor to ensure that the subsequent allocation
+        # Force cleanup of the compilation output tensors to ensure that the subsequent allocation
         # of the persistent L1 input tensor occurs at the expected device memory address. This is
         # necessary because trace capture relies on the L1 input tensor being allocated at the same
         # address as during the initial trace.
-        self._compilation_output_tensor.deallocate(force=True)
+        for tensor in self._compilation_output_tensors:
+            tensor.deallocate(force=True)
 
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.CQ_OPS)
-        self.output_tensor = self.model(l1_input_tensor)
+        self.output_tensors = self.model(l1_input_tensor)
         if l1_input_tensor.is_allocated():
             ttnn.deallocate(l1_input_tensor, force=True)
 
@@ -584,7 +672,7 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
 
     def _execute_model_and_transfer_output(self):
         """
-        Executes the traced model on current input and transfers output to DRAM.
+        Executes the traced model on current input and transfers outputs to DRAM.
         This is the core execution step that gets pipelined with I/O operations.
         """
         ttnn.wait_for_event(self.CQ_OPS, self.write_event)
@@ -593,7 +681,9 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         ttnn.execute_trace(self.device, self.trace_id, cq_id=self.CQ_OPS, blocking=False)
 
         ttnn.wait_for_event(self.CQ_OPS, self.read_event)
-        ttnn.reshard(self.output_tensor, self.dram_output_memory_config, output_tensor=self.dram_output_tensor)
+        # Transfer all outputs to DRAM
+        for i, (output_tensor, dram_output_tensor) in enumerate(zip(self.output_tensors, self.dram_output_tensors)):
+            ttnn.reshard(output_tensor, self.dram_output_memory_config, output_tensor=dram_output_tensor)
         self.last_op_event = ttnn.record_event(self.device, self.CQ_OPS)
 
     def _transfer_input_to_device(self, input_tensor):
@@ -603,13 +693,13 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         self.write_event = ttnn.record_event(self.device, self.CQ_IO)
 
     def _read_output_from_device(self):
-        """Reads output tensor from device DRAM using I/O queue."""
+        """Reads output tensors from device DRAM using I/O queue."""
         ttnn.wait_for_event(self.CQ_IO, self.last_op_event)
-        output = self.dram_output_tensor
+        outputs = self.dram_output_tensors
         self.read_event = ttnn.record_event(self.device, self.CQ_IO)
-        return output
+        return outputs
 
-    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+    def execute(self, host_inputs: list) -> Iterable[List[ttnn.Tensor]]:
         """
         Executes the traced model for a batch of input tensors using pipelined I/O.
 
