@@ -1,7 +1,7 @@
 # Swin-S
 
 ## Platforms:
-Wormhole N150, N300
+Wormhole (n150, n300)
 
 ## Introduction:
 The Swin-S (Small) model is a hierarchical Vision Transformer that serves as a general-purpose backbone for various computer vision tasks. It introduces a shifted window mechanism to efficiently compute self-attention within local regions while enabling cross-window connections, maintaining linear computational complexity with respect to image size. With its scalable and flexible architecture, Swin-S achieves strong performance on tasks like image classification, object detection, and semantic segmentation, offering a balanced trade-off between accuracy and efficiency.

@@ -288,7 +288,6 @@ run_mobilenetv2_perf(){
 #  mobilenetv2 demo
  pytest models/demos/mobilenetv2/demo/demo.py
 
-
 }
 
 run_yolov8s_world_perf() {

@@ -599,8 +599,8 @@ def run_vanilla_unet(device, model_type, res, model_location_generator, reset_se
         model_location_generator=model_location_generator,
     )
 
-    if not os.path.exists("models/experimental/segmentation_evaluation/imageset"):
-        os.system("python models/experimental/segmentation_evaluation/dataset_download.py vanilla_unet")
+    if not os.path.exists("models/demos/segmentation_evaluation/imageset"):
+        os.system("python models/demos/segmentation_evaluation/dataset_download.py vanilla_unet")
 
     model_name = "vgg_unet"
     input_dtype = ttnn.bfloat16
@@ -614,6 +614,45 @@ def run_vanilla_unet(device, model_type, res, model_location_generator, reset_se
         input_memory_config=input_memory_config,
         model_name=model_name,
         batch_size=total_batch_size,
+    )
+
+
+def run_vgg_unet(
+    device, model_type, use_pretrained_weight, res, model_location_generator, reset_seeds, device_batch_size
+):
+    from models.demos.vgg_unet.common import load_torch_model
+    from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
+    from models.demos.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
+
+    disable_persistent_kernel_cache()
+
+    model_seg = UNetVGG19()
+    if use_pretrained_weight:
+        model_seg = load_torch_model(model_seg, model_location_generator)
+    model_seg.eval()
+    batch_size = device_batch_size * device.get_num_devices()
+    if model_type == "tt_model":
+        vgg_unet_trace_2cq = VggUnetTrace2CQ()
+
+        vgg_unet_trace_2cq.initialize_vgg_unet_trace_2cqs_inference(
+            device,
+            model_location_generator=model_location_generator,
+            use_pretrained_weight=use_pretrained_weight,
+            device_batch_size=device_batch_size,
+        )
+
+    model_name = "vgg_unet"
+    input_dtype = ttnn.bfloat16
+    input_memory_config = ttnn.L1_MEMORY_CONFIG
+    evaluation(
+        device=device,
+        res=res,
+        model_type=model_type,
+        model=vgg_unet_trace_2cq if model_type == "tt_model" else model_seg,
+        input_dtype=input_dtype,
+        input_memory_config=input_memory_config,
+        model_name=model_name,
+        batch_size=batch_size,
     )
 
 

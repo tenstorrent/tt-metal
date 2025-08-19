@@ -65,7 +65,7 @@ Use the following command to run the inference pipeline:
     ```
 
 **Note:** If vanilla unet evaluation test fails with the error: `ValueError: Sample larger than population or is negative`
-Try deleting the "imageset" folder in "models/experimental/segmentation_evaluation" directory and try running again.
+Try deleting the "imageset" folder in "models/demos/segmentation_evaluation" directory and try running again.
 
 
 ## Details

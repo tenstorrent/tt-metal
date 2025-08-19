@@ -13,9 +13,9 @@ import pytest
 import torch
 from loguru import logger
 from sklearn.metrics import average_precision_score, precision_recall_curve
-from torch import nn
 
 import ttnn
+from models.demos.utils.common_demo_utils import save_yolo_predictions_by_model
 from models.demos.yolo_eval.utils import LoadImages, postprocess, preprocess
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
 from models.utility_functions import disable_persistent_kernel_cache
@@ -85,72 +85,6 @@ def calculate_map(predictions, ground_truths, iou_threshold=0.5, num_classes=3):
     return mAP
 
 
-class Ensemble(nn.ModuleList):
-    def __init__(self):
-        super(Ensemble, self).__init__()
-
-    def forward(self, x, augment=False):
-        y = []
-        for module in self:
-            y.append(module(x, augment)[0])
-        y = torch.cat(y, 1)
-        return y, None
-
-
-def attempt_load(weights, model_path, map_location=None):
-    model = Ensemble()
-    for w in weights if isinstance(weights, list) else [weights]:
-        w = model_path  # depends on model which we take
-        ckpt = torch.load(w, map_location=map_location)
-        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
-    for m in model.modules():
-        if type(m) in [nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU]:
-            m.inplace = True
-        elif type(m) is nn.Upsample:
-            m.recompute_scale_factor = None
-
-    if len(model) == 1:
-        return model[-1]
-    else:
-        for k in ["names", "stride"]:
-            setattr(model, k, getattr(model[-1], k))
-        return model
-
-
-def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
-    model_save_dir = os.path.join(save_dir, model_name)
-    os.makedirs(model_save_dir, exist_ok=True)
-
-    image = cv2.imread(image_path)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    if model_name == "torch_model":
-        bounding_box_color, label_color = (0, 255, 0), (0, 255, 0)
-    else:
-        bounding_box_color, label_color = (255, 0, 0), (255, 255, 0)
-
-    boxes = result["boxes"]["xyxy"]
-    scores = result["boxes"]["conf"]
-    classes = result["boxes"]["cls"]
-    names = result["names"]
-
-    for box, score, cls in zip(boxes, scores, classes):
-        x1, y1, x2, y2 = map(int, box)
-        label = f"{names[int(cls)]} {score.item():.2f}"
-        cv2.rectangle(image, (x1, y1), (x2, y2), bounding_box_color, 3)
-        cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2)
-
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
-    filename = os.path.basename(image_path)
-    output_name = f"prediction_{filename}"
-    output_path = os.path.join(model_save_dir, output_name)
-
-    cv2.imwrite(output_path, image)
-
-    logger.info(f"Predictions saved to {output_path}")
-
-
 def evaluation(
     device,
     res,
@@ -186,9 +120,9 @@ def evaluation(
 
     source_list = [i["filepath"] for i in dataset]
     if model_name == "YOLOv7":
-        from models.demos.yolov7.demo.demo_utils import LoadImages as LoadImages_yolov7
+        from models.demos.utils.common_demo_utils import LoadImages as LoadImages_yolov7
 
-        data_set = LoadImages_yolov7(path=[i["filepath"] for i in dataset], img_size=640, stride=32)
+        data_set = LoadImages_yolov7(path=[i["filepath"] for i in dataset], img_size=640, vid_stride=32)
     else:
         data_set = LoadImages(path=[i["filepath"] for i in dataset])
 
@@ -219,7 +153,7 @@ def evaluation(
             else:
                 exit()
         elif model_name == "YOLOv7":
-            from models.demos.yolov7.demo.demo_utils import preprocess as preprocess_yolov7
+            from models.demos.utils.common_demo_utils import preprocess as preprocess_yolov7
 
             im = preprocess_yolov7(im0s, res=res)
         else:
