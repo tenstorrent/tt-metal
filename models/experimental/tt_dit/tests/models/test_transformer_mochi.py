@@ -10,10 +10,10 @@ from loguru import logger
 
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ...utils.check import assert_quality
-from ...models.transformers.transformer_mochi import MochiTransformerBlock
+from ...models.transformers.transformer_mochi import MochiTransformerBlock, MochiTransformer3DModel
 from ...parallel.manager import CCLManager
 from ...utils.padding import pad_vision_seq_parallel
-from diffusers import MochiTransformer3DModel
+from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 
@@ -92,7 +92,7 @@ def test_mochi_transformer_block(
         MIN_PCC = 0.991_600 if spatial_seq_len == 4000 else 0.990_400
         MIN_RMSE = 0.14 if spatial_seq_len == 4000 else 0.14
 
-    parent_torch_model = MochiTransformer3DModel.from_pretrained(
+    parent_torch_model = TorchMochiTransformer3DModel.from_pretrained(
         f"genmo/mochi-1-preview", subfolder="transformer", torch_dtype=torch_dtype
     )
     torch_model = parent_torch_model.transformer_blocks[layer_id]
@@ -225,3 +225,136 @@ def test_mochi_transformer_block(
         logger.info(f"Checking prompt outputs")
         for i in range(tt_prompt_out.shape[0]):
             assert_quality(torch_prompt_out, tt_prompt_out[i], pcc=MIN_PCC, relative_rmse=MIN_RMSE)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, tp_axis",
+    [
+        [(2, 2), 0, 1],
+        [(2, 2), 1, 0],
+        [(2, 4), 0, 1],
+        [(2, 4), 1, 0],
+    ],
+    ids=[
+        "2x2sp0tp1",
+        "2x2sp1tp0",
+        "2x4sp0tp1",
+        "2x4sp1tp0",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    ("B, T, H, W, prompt_seq"),
+    [
+        (1, 8, 40, 50, 118),  # small input
+        (1, 28, 60, 106, 118),  # large input
+    ],
+    ids=["short_seq", "long_seq"],
+)
+# TODO: Remove worker_l1_size when not running with watcher
+# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "worker_l1_size": 1344544}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_mochi_transformer_model(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    B: int,
+    T: int,
+    H: int,
+    W: int,
+    prompt_seq: int,
+) -> None:
+    torch_dtype = torch.float32
+
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    # Model configuration
+    patch_size = 2
+    num_attention_heads = 24
+    attention_head_dim = 128
+    num_layers = 48
+    pooled_projection_dim = 1536
+    in_channels = 12
+    text_embed_dim = 4096
+    time_embed_dim = 256
+    activation_fn = "swiglu"
+
+    # Tight error bounds based on test config
+    MIN_PCC = 0.992_500
+    MIN_RMSE = 0.14
+
+    torch_model = TorchMochiTransformer3DModel.from_pretrained(
+        f"genmo/mochi-1-preview", subfolder="transformer", torch_dtype=torch_dtype
+    )
+    torch_model.eval()
+
+    # Create CCL manager
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
+
+    # Create a simple parallel config mock for the transformer module
+    class SimpleParallelConfig:
+        def __init__(self, mesh_axis, factor):
+            self.mesh_axis = mesh_axis
+            self.factor = factor
+
+    class MockParallelConfig:
+        def __init__(self, tp_axis, tp_factor, sp_axis, sp_factor):
+            self.tensor_parallel = SimpleParallelConfig(tp_axis, tp_factor)
+            self.sequence_parallel = SimpleParallelConfig(sp_axis, sp_factor)
+
+    parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
+
+    torch.manual_seed(0)
+    # Create input tensors
+    spatial_input = torch.randn((B, in_channels, T, H, W), dtype=torch_dtype)
+    prompt_input = torch.randn((B, prompt_seq, text_embed_dim), dtype=torch_dtype)
+    timestep_input = torch.randint(0, 1000, (B,), dtype=torch_dtype)
+    attention_mask = torch.ones((B, prompt_seq), dtype=torch_dtype)
+
+    # Create TT model
+    tt_model = MochiTransformer3DModel(
+        patch_size=patch_size,
+        num_attention_heads=num_attention_heads,
+        attention_head_dim=attention_head_dim,
+        num_layers=num_layers,
+        pooled_projection_dim=pooled_projection_dim,
+        in_channels=in_channels,
+        text_embed_dim=text_embed_dim,
+        time_embed_dim=time_embed_dim,
+        activation_fn=activation_fn,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=True,
+    )
+    tt_model.load_state_dict(torch_model.state_dict())
+
+    # Run TT model
+    logger.info(
+        f"Running TT model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}, timestep shape {timestep_input.shape}"
+    )
+    tt_spatial_out = tt_model(
+        spatial=spatial_input,
+        prompt=prompt_input,
+        timestep=timestep_input,
+        prompt_attention_mask=attention_mask,
+    )
+
+    # Run torch model
+    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+    torch_spatial_out = torch_model(
+        hidden_states=spatial_input,
+        encoder_hidden_states=prompt_input,
+        timestep=timestep_input,
+        encoder_attention_mask=attention_mask,
+        return_dict=False,
+    )
+    torch_spatial_out = torch_spatial_out[0]
+
+    logger.info(f"Checking spatial outputs")
+    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MIN_RMSE)

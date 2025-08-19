@@ -2,12 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
-from ...layers.normalization import RMSNorm
-from ...layers.linear import ColParallelLinear
-from ...utils.substate import substate
-from ...layers.feedforward import ParallelFeedForward
 from .attention_mochi import MochiAttention
+from ...layers.normalization import RMSNorm, LayerNorm
+from ...layers.linear import ColParallelLinear, Linear
+from ...layers.feedforward import ParallelFeedForward
+from ...layers.embeddings import MochiPatchEmbed
+from ...utils.mochi import stack_cos_sin, get_rot_transformation_mat
+from ...utils.substate import substate
+from ...utils.padding import pad_vision_seq_parallel
+from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from loguru import logger
+
+from diffusers.models.embeddings import (
+    MochiCombinedTimestepCaptionEmbedding as TorchMochiCombinedTimestepCaptionEmbedding,
+)
+from diffusers.models.transformers.transformer_mochi import MochiRoPE
 
 
 class MochiTransformerBlock:
@@ -348,3 +359,289 @@ class MochiTransformerBlock:
             prompt_1BLP = prompt_1BLP + prompt_ff_mod_1BLP
 
         return spatial_1BND, prompt_1BLP
+
+
+class MochiTransformer3DModel:
+    def __init__(
+        self,
+        patch_size: int = 2,
+        num_attention_heads: int = 24,
+        attention_head_dim: int = 128,
+        num_layers: int = 48,
+        pooled_projection_dim: int = 1536,
+        in_channels: int = 12,
+        out_channels=None,
+        qk_norm: str = "rms_norm",
+        text_embed_dim: int = 4096,
+        time_embed_dim: int = 256,
+        activation_fn: str = "swiglu",
+        max_sequence_length: int = 256,
+        mesh_device=None,
+        init=False,
+        ccl_manager=None,
+        parallel_config=None,
+        is_fsdp=False,
+    ):
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+        self.is_fsdp = is_fsdp
+
+        self.patch_size = patch_size
+
+        inner_dim = num_attention_heads * attention_head_dim
+        self.out_channels = out_channels or in_channels
+
+        self.patch_embed = MochiPatchEmbed(
+            patch_size=patch_size,
+            in_channels=in_channels,
+            embed_dim=inner_dim,
+            mesh_device=mesh_device,
+            init=init,
+        )
+
+        # NOTE: Torch fallback until we support MochiCombinedTimestepCaptionEmbedding
+        self.time_embed = TorchMochiCombinedTimestepCaptionEmbedding(
+            embedding_dim=inner_dim,
+            pooled_projection_dim=pooled_projection_dim,
+            text_embed_dim=text_embed_dim,
+            time_embed_dim=time_embed_dim,
+            num_attention_heads=8,
+        )
+
+        # NOTE: Fallback
+        self.pos_frequencies = torch.nn.Parameter(torch.full((3, num_attention_heads, attention_head_dim // 2), 0.0))
+        self.rope = MochiRoPE()
+
+        self.transformer_blocks = [
+            MochiTransformerBlock(
+                dim=inner_dim,
+                num_attention_heads=num_attention_heads,
+                attention_head_dim=attention_head_dim,
+                pooled_projection_dim=pooled_projection_dim,
+                activation_fn=activation_fn,
+                context_pre_only=(i == num_layers - 1),
+                mesh_device=mesh_device,
+                init=init,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                is_fsdp=is_fsdp,
+            )
+            for i in range(num_layers)
+        ]
+
+        self.norm_out_norm = LayerNorm(
+            embedding_dim=inner_dim,
+            norm_eps=1e-6,
+            norm_elementwise_affine=False,
+            mesh_device=mesh_device,
+            init=init,
+            use_row_major_workaround=True,
+        )
+        self.norm_out_linear = Linear(
+            in_features=inner_dim,
+            out_features=inner_dim * 2,
+            bias=True,
+            mesh_device=mesh_device,
+            init=init,
+        )
+        self.proj_out = Linear(
+            in_features=inner_dim,
+            out_features=patch_size * patch_size * self.out_channels,
+            bias=True,
+            mesh_device=mesh_device,
+            init=init,
+        )
+
+        self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
+    def load_state_dict(self, state_dict):
+        self.patch_embed.load_state_dict(substate(state_dict, "patch_embed"))
+        self.time_embed.load_state_dict(substate(state_dict, "time_embed"))
+        self.pos_frequencies.data = state_dict["pos_frequencies"]
+        for i, block in enumerate(self.transformer_blocks):
+            block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
+        self.norm_out_norm.load_state_dict(substate(state_dict, "norm_out.norm"))
+        self.norm_out_linear.load_state_dict(substate(state_dict, "norm_out.linear"))
+        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+
+    def prepare_rope_features(self, T, H, W):
+        pH, pW = H // self.patch_size, W // self.patch_size
+        N = T * pH * pW
+        rope_cos_NHD, rope_sin_NHD = self.rope(self.pos_frequencies, T, pH, pW, device="cpu", dtype=torch.float32)
+        rope_cos_1HND, rope_sin_1HND = stack_cos_sin(
+            rope_cos_NHD.unsqueeze(0).permute(0, 2, 1, 3), rope_sin_NHD.unsqueeze(0).permute(0, 2, 1, 3)
+        )
+
+        rope_cos_1HND = pad_vision_seq_parallel(
+            rope_cos_1HND, chunk_size_lcm=512, num_devices=self.parallel_config.sequence_parallel.factor
+        )
+        rope_sin_1HND = pad_vision_seq_parallel(
+            rope_sin_1HND, chunk_size_lcm=512, num_devices=self.parallel_config.sequence_parallel.factor
+        )
+
+        trans_mat = get_rot_transformation_mat()
+
+        tt_rope_cos_1HND = bf16_tensor_2dshard(
+            rope_cos_1HND,
+            device=self.mesh_device,
+            shard_mapping={
+                self.parallel_config.sequence_parallel.mesh_axis: 2,
+                self.parallel_config.tensor_parallel.mesh_axis: 1,
+            },
+        )
+        tt_rope_sin_1HND = bf16_tensor_2dshard(
+            rope_sin_1HND,
+            device=self.mesh_device,
+            shard_mapping={
+                self.parallel_config.sequence_parallel.mesh_axis: 2,
+                self.parallel_config.tensor_parallel.mesh_axis: 1,
+            },
+        )
+        tt_trans_mat = bf16_tensor(trans_mat, device=self.mesh_device)
+
+        logger.info(f"TT rope cos shape: {tt_rope_cos_1HND.shape}")
+        logger.info(f"TT rope sin shape: {tt_rope_sin_1HND.shape}")
+        logger.info(f"TT trans mat shape: {tt_trans_mat.shape}")
+
+        return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
+
+    def prepare_timestep_text_features(self, timestep, text_embeds, encoder_attention_mask):
+        """
+        Given torch inputs, execute the combined timestep and text embedding.
+        Return tensors on device.
+        """
+        temb, encoder_hidden_states = self.time_embed(
+            timestep, text_embeds, encoder_attention_mask, hidden_dtype=torch.float32
+        )
+
+        logger.info(f"temb shape: {temb.shape}")
+        logger.info(f"encoder_hidden_states shape: {encoder_hidden_states.shape}")
+
+        tt_temb_11BD = bf16_tensor(temb.unsqueeze(0).unsqueeze(0), device=self.mesh_device)
+        tt_prompt_1BLP = bf16_tensor(encoder_hidden_states.unsqueeze(0), device=self.mesh_device)
+
+        logger.warning(
+            "Preparing timestep and text features - attention mask not taken into account for the shape of the prompt. May lead to poor outputs"
+        )
+        if not torch.all(encoder_attention_mask == 1):
+            logger.warning("Attention mask is not all ones. May lead to poor outputs!!!")
+
+        logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
+        logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
+        return tt_temb_11BD, tt_prompt_1BLP
+
+    def preprocess_spatial_input(self, spatial):
+        B, C, T, H, W = spatial.shape
+        logger.info(f"Preprocessing spatial input with shape {spatial.shape}")
+        assert B == 1, "Batch size must be 1"
+        pH, pW = H // self.patch_size, W // self.patch_size
+        N = T * pH * pW
+        spatial = spatial.reshape(B, C, T, pH, self.patch_size, pW, self.patch_size)
+        spatial = spatial.permute(0, 2, 3, 5, 4, 6, 1).reshape(1, B, N, self.patch_size * self.patch_size * C)
+        logger.info(f"spatial input after patchifying: {spatial.shape}")
+        spatial = pad_vision_seq_parallel(
+            spatial, chunk_size_lcm=512, num_devices=self.parallel_config.sequence_parallel.factor
+        )
+        logger.info(f"spatial input after padding: {spatial.shape}")
+        spatial = bf16_tensor(
+            spatial, device=self.mesh_device, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis, shard_dim=-2
+        )
+        logger.info(f"TT spatial shape: {spatial.shape}")
+        return spatial, N
+
+    def postprocess_spatial_output(self, spatial_1BND, T, H, W, N):
+        """
+        This is the reverse of preprocess_spatial_input
+        Input is of shape: 1 B (T pH pW) (p p C)
+        returns shape: B C T (pH p) (pW p)
+        """
+        assert len(spatial_1BND.shape) == 4
+        assert spatial_1BND.shape[0] == 1
+        B = spatial_1BND.shape[1]
+        pH, pW = H // self.patch_size, W // self.patch_size
+        logger.info(f"Postprocessing spatial output with shape {spatial_1BND.shape}")
+
+        # AllGather hanging for large seqlen
+        # # Gather sequence-parallel output
+        # spatial_1BND = ttnn.experimental.all_gather_async(
+        #     spatial_1BND,
+        #     persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+        #         spatial_1BND.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+        #     ),
+        #     dim=2,
+        #     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+        #     num_links=self.ccl_manager.num_links,
+        #     topology=self.ccl_manager.topology,
+        #     cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
+        # )
+        # logger.info(f'Spatial output after gathering: {spatial_1BND.shape}')
+        # spatial_BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).squeeze(0)
+
+        concat_dims = [None, None]
+        concat_dims[self.parallel_config.sequence_parallel.mesh_axis] = 2
+        concat_dims[self.parallel_config.tensor_parallel.mesh_axis] = 0
+        spatial_BND = ttnn.to_torch(
+            spatial_1BND,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, dims=concat_dims, mesh_shape=tuple(self.mesh_device.shape)
+            ),
+        )
+        spatial_BND = spatial_BND[0]
+        logger.info(f"Spatial output after concatenating: {spatial_BND.shape}")
+
+        spatial_BND = spatial_BND[:, :N]  # Slice out sequence-parallel padding tokens
+        logger.info(f"Spatial output after slicing: {spatial_BND.shape}")
+        spatial_patches = spatial_BND.reshape(B, T, pH, pW, self.patch_size, self.patch_size, self.out_channels)
+        logger.info(f"Spatial output after reshaping: {spatial_patches.shape}")
+        spatial_BCTHW = spatial_patches.permute(0, 6, 1, 2, 4, 3, 5).reshape(B, self.out_channels, T, H, W)
+        logger.info(f"Spatial output after permuting: {spatial_BCTHW.shape}")
+        return spatial_BCTHW
+
+    def __call__(self, spatial, prompt, timestep, prompt_attention_mask):
+        """
+        Inputs are all torch tensors
+        Output is torch tensor
+        """
+
+        B, C, T, H, W = spatial.shape
+        pH, pW = H // self.patch_size, W // self.patch_size
+        N = T * pH * pW
+
+        rope_cos_1HND, rope_sin_1HND, trans_mat = self.prepare_rope_features(T, H, W)
+
+        temb_11BD, prompt_1BLP = self.prepare_timestep_text_features(timestep, prompt, prompt_attention_mask)
+
+        spatial_1BNI, N = self.preprocess_spatial_input(spatial)
+        spatial_1BND = self.patch_embed(spatial_1BNI)
+
+        for idx, block in enumerate(self.transformer_blocks):
+            logger.info(f"Running transformer block {idx}")
+            spatial_1BND, prompt_1BLP = block(
+                spatial_1BND, prompt_1BLP, temb_11BD, N, rope_cos_1HND, rope_sin_1HND, trans_mat
+            )
+
+        # Modulate the spatial output
+        mod = self.norm_out_linear(
+            ttnn.silu(temb_11BD), core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
+        )
+        scale, shift = ttnn.chunk(mod, 2, -1)
+
+        spatial_norm_1BND = self.norm_out_norm(spatial_1BND) * (1 + scale) + shift
+
+        proj_out_1BNI = self.proj_out(
+            spatial_norm_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
+        )
+
+        spatial_out = self.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
+
+        return spatial_out
