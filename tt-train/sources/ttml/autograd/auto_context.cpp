@@ -111,4 +111,11 @@ core::TTProfiler& AutoContext::get_profiler() {
     return *m_profiler;
 }
 
+[[nodiscard]] core::distributed::CCLResources& AutoContext::get_ccl_resources() {
+    if (!m_ccl_resources) {
+        m_ccl_resources = std::make_unique<core::distributed::CCLResources>();
+    }
+    return *m_ccl_resources;
+}
+
 }  // namespace ttml::autograd
