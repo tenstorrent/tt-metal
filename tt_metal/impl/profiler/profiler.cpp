@@ -121,13 +121,14 @@ std::unordered_map<uint16_t, ZoneDetails> generateZoneSourceLocationsHashes() {
 tracy::Color::ColorType getDeviceEventColor(
     uint32_t risc_num,
     const std::array<bool, static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::COUNT)>& zone_name_keyword_flags) {
-    constexpr std::array<tracy::Color::ColorType, 6> colors = {
+    constexpr std::array<tracy::Color::ColorType, 7> colors = {
         tracy::Color::Orange2,
         tracy::Color::SeaGreen3,
         tracy::Color::SkyBlue3,
         tracy::Color::Turquoise2,
         tracy::Color::CadetBlue1,
-        tracy::Color::Yellow3};
+        tracy::Color::Yellow3,
+        tracy::Color::DarkSlateGray3};
     return (zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::PROFILER)])
                ? tracy::Color::Tomato3
                : colors[risc_num % colors.size()];
@@ -1097,14 +1098,24 @@ void DeviceProfiler::readRiscProfilerResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
     ZoneScoped;
 
+    if (data_source == ProfilerDataBufferSource::DRAM_AND_L1) {
+        readRiscProfilerResults(device, worker_core, ProfilerDataBufferSource::DRAM, metadata);
+        readRiscProfilerResults(device, worker_core, ProfilerDataBufferSource::L1, metadata);
+        return;
+    }
+
     const std::vector<uint32_t>& control_buffer = core_control_buffers.at(worker_core);
 
     const std::vector<uint32_t>& data_buffer =
         (data_source == ProfilerDataBufferSource::DRAM) ? profile_buffer : core_l1_data_buffers.at(worker_core);
 
-    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
-        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
-        return;
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
+    if (!rtoptions.get_profiler_trace_only()) {
+        if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
+            (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
+            return;
+        }
     }
 
     const uint32_t coreFlatID =
@@ -1123,7 +1134,7 @@ void DeviceProfiler::readRiscProfilerResults(
     HalProgrammableCoreType CoreType = tt::llrt::get_core_type(device_id, worker_core);
     int riscCount = 1;
 
-    if (CoreType == HalProgrammableCoreType::TENSIX) {
+    if (!rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
         riscCount = 5;
     }
 
@@ -1134,10 +1145,12 @@ void DeviceProfiler::readRiscProfilerResults(
             bufferEndIndex = control_buffer[riscEndIndex + kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER];
         }
         uint32_t riscType;
-        if (CoreType == HalProgrammableCoreType::TENSIX) {
+        if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
+            riscType = TRACE_RISC_ID;
+        } else if (CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = riscEndIndex;
         } else {
-            riscType = 5;
+            riscType = ERISC_RISC_ID;
         }
         if (bufferEndIndex > 0) {
             uint32_t bufferRiscShift = riscEndIndex * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
@@ -1165,6 +1178,7 @@ void DeviceProfiler::readRiscProfilerResults(
             uint32_t runHostCounterRead = 0;
 
             bool newRunStart = false;
+            bool oneStartFound = false;
 
             uint32_t opTime_H = 0;
             uint32_t opTime_L = 0;
@@ -1174,6 +1188,7 @@ void DeviceProfiler::readRiscProfilerResults(
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
                     newRunStart = true;
+                    oneStartFound = true;
                     opTime_H = 0;
                     opTime_L = 0;
                 } else if (newRunStart) {
@@ -1188,7 +1203,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
                     opname = getOpNameIfAvailable(device_id, base_program_id);
 
-                } else {
+                } else if (oneStartFound) {
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
                     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
@@ -1322,7 +1337,7 @@ void DeviceProfiler::readPacketData(
     uint32_t t_id = timer_id & 0xFFFF;
     nlohmann::json meta_data;
 
-    const ZoneDetails zone_details = getZoneDetails(timer_id);
+    ZoneDetails zone_details = getZoneDetails(timer_id);
 
     if ((packet_type == kernel_profiler::ZONE_START) || (packet_type == kernel_profiler::ZONE_END)) {
         tracy::TTDeviceEventPhase zone_phase = tracy::TTDeviceEventPhase::begin;
@@ -1336,6 +1351,26 @@ void DeviceProfiler::readPacketData(
         if (!zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::BRISC_FW)] &&
             !zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::ERISC_FW)]) {
             tracy_run_host_id = 0;
+        }
+
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        if (rtoptions.get_profiler_trace_only() && risc_num == TRACE_RISC_ID) {
+            if (zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::BRISC_FW)] ||
+                zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::NCRISC_FW)] ||
+                zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::TRISC_FW)] ||
+                zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::ERISC_FW)]) {
+                zone_details.zone_name = "TRACE-FW";
+            }
+            if (zone_details
+                    .zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::BRISC_KERNEL)] ||
+                zone_details
+                    .zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::NCRISC_KERNEL)] ||
+                zone_details
+                    .zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::TRISC_KERNEL)] ||
+                zone_details
+                    .zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::ERISC_KERNEL)]) {
+                zone_details.zone_name = "TRACE-KERNEL";
+            }
         }
 
         auto ret = device_events.emplace(
@@ -1542,13 +1577,21 @@ void DeviceProfiler::readResults(
         readProfilerBuffer(device);
 
         resetControlBuffers(device, virtual_cores);
-    } else {
-        TT_ASSERT(data_source == ProfilerDataBufferSource::L1);
+    } else if (data_source == ProfilerDataBufferSource::L1) {
         readControlBuffers(device, virtual_cores);
 
         resetControlBuffers(device, virtual_cores);
 
         readL1DataBuffers(device, virtual_cores);
+    } else {
+        TT_ASSERT(data_source == ProfilerDataBufferSource::DRAM_AND_L1);
+        readControlBuffers(device, virtual_cores);
+
+        readProfilerBuffer(device);
+
+        readL1DataBuffers(device, virtual_cores);
+
+        resetControlBuffers(device, virtual_cores);
     }
 #endif
 }

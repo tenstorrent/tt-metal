@@ -12,10 +12,8 @@ import safetensors.torch
 import torch
 from loguru import logger
 
-import ttnn
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE, dequantize
 from models.utility_functions import comp_pcc
 
 # Constant for testing
@@ -64,19 +62,8 @@ def add_inv_scale_to_state_dict(
             output_state_dict[name] = tensor
             continue
 
-        dequant_scale = torch.randn(
-            (
-                *tensor.shape[: -len(block_shape)],
-                *(
-                    (tensor.shape[-len(block_shape) + idx] + block_dim - 1) // block_dim
-                    for idx, block_dim in enumerate(block_shape)
-                ),
-            ),
-            dtype=torch.float32,
-        )
-
-        tensor_quant = dequantize(tensor.to(torch.float8_e4m3fn), 1.0 / dequant_scale, block_shape)
-        output_state_dict[name] = tensor_quant.to(torch.float8_e4m3fn)
+        tensor_quant, dequant_scale = quantize_fp8_blockwise(tensor, block_shape)
+        output_state_dict[name] = tensor_quant
         output_state_dict[name + "_scale_inv"] = dequant_scale
 
     return output_state_dict
@@ -169,7 +156,7 @@ def load_reference_io_tensors_for_module(
         reference_output = torch.concat(reference_outputs, dim=concat_dim)
     torch_input.unsqueeze_(0)
     reference_output.unsqueeze_(0)
-    return pad_tensor(torch_input, mode, seq_len).expand(
+    return pad_or_trim_seq_len(torch_input, mode, seq_len).expand(
         num_expand_rows, *(-1 for _ in range(torch_input.ndim - 1))
     ), reference_output.expand(num_expand_rows, *(-1 for _ in range(reference_output.ndim - 1)))
 
@@ -186,20 +173,26 @@ def load_reference_io(mode: Literal["prefill", "decode"], module_range: str):
     return torch.load(path)
 
 
-def pad_tensor(tensor: torch.Tensor, mode: Literal["prefill", "decode"], seq_len: int) -> torch.Tensor:
+SEQ_LEN_DIM_IDX = 2
+
+
+def pad_or_trim_seq_len(tensor: torch.Tensor, mode: Literal["prefill", "decode"], seq_len: int) -> torch.Tensor:
+    """Changes the tensor's sequence length to match the given seq_len, adding padding if necessary."""
     assert mode in ["prefill", "decode"], f"Unsupported mode: {mode}"
 
-    tensor_seq_len = tensor.shape[-2]
-    seq_len = min(seq_len, tensor_seq_len)
-    if mode == "decode" or seq_len < SEQ_LEN_CHUNK_SIZE:
-        return tensor[..., :seq_len, :].clone()
+    tensor_seq_len = tensor.shape[SEQ_LEN_DIM_IDX]
+    if tensor_seq_len == seq_len:
+        return tensor.clone()
 
-    padded_seq_len = ttnn.core.roundup(seq_len, SEQ_LEN_CHUNK_SIZE)
     padded_tensor_shape = list(tensor.shape)
-    padded_tensor_shape[-2] = padded_seq_len
-
+    padded_tensor_shape[SEQ_LEN_DIM_IDX] = seq_len
     padded_tensor = torch.zeros(padded_tensor_shape, dtype=tensor.dtype, device=tensor.device)
-    padded_tensor[..., : min(padded_seq_len, tensor_seq_len), :] = tensor
+
+    padded_tensor_ranges = tuple(
+        slice(None) if idx != SEQ_LEN_DIM_IDX else slice(None, min(seq_len, tensor_seq_len))
+        for idx in range(tensor.ndim)
+    )
+    padded_tensor[padded_tensor_ranges] = tensor[padded_tensor_ranges]
 
     return padded_tensor
 
