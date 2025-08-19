@@ -383,8 +383,7 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 
 // Test to verify that logical to translated coordinate mapping is correct.
 // Reads mapping from L1 memory and compares it to the host mapping.
-TEST_F(DeviceFixture, VerifyLogicalToTranslatedMap)
-{
+TEST_F(DeviceFixture, VerifyLogicalToTranslatedMap) {
     std::map<CoreCoord, CoreCoord> logical_to_translated_map;
 
     for (auto device : devices_) {
@@ -428,8 +427,8 @@ TEST_F(DeviceFixture, VerifyLogicalToTranslatedMap)
         }
 
         for (auto test_coords : logical_to_translated_map) {
-            auto translated_coord = tt_xy_pair{logical_col_to_translated_col[test_coords.first.x],
-                                                logical_row_to_translated_row[test_coords.first.y]};
+            auto translated_coord = tt_xy_pair{
+                logical_col_to_translated_col[test_coords.first.x], logical_row_to_translated_row[test_coords.first.y]};
             EXPECT_EQ(test_coords.second, translated_coord)
                 << "Logical coord: " << test_coords.first.str()
                 << " does not match translated coord: " << translated_coord.str()
