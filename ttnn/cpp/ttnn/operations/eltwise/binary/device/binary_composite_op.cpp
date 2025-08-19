@@ -446,8 +446,8 @@ Tensor run_remainder(
             false),
         result);
     result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    result = ttnn::where(ttnn::eqz(input_a), 0.0f, ttnn::where(ttnn::eqz(input_b), t_nan, result));
-    result = ttnn::where(ttnn::logical_and(ttnn::eqz(input_a), ttnn::eqz(input_b)), t_nan, result);
+    result = ttnn::where(ttnn::eqz(input_a), 0.0f, ttnn::where(ttnn::eqz(input_b), t_nan, result), output_mem_config);
+    result = ttnn::where(ttnn::logical_and(ttnn::eqz(input_a), ttnn::eqz(input_b)), t_nan, result, output_mem_config);
     return result;
 }
 // Binary remainder will be overloaded by unary remainder in another PR
