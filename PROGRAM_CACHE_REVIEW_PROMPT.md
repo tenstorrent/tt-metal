@@ -119,6 +119,93 @@ There are two OP infrastructures in this repo, with slightly different APIs for 
 
 Reviewer note: When checking caching correctness, account for both styles. In the old infra, ensure the callback-based override is wired and invoked on cache hits; in the new infra, verify the factory’s `override_runtime_arguments(...)` and `shared_variables_t` semantics are correct and that hashing matches factory selection.
 
+### Guidelines for updating runtime arguments on cache hit
+
+This section is critical for correctness when a cached program is reused.
+
+- **Do not update hashed properties**
+  - Tensor and OP properties that participate in the program hash are safe to leave unchanged in `override_runtime_arguments`. They can be compile-time or runtime kernel args. Any variables derived solely from hashed inputs are also safe to skip.
+
+- **Always update tensor buffer addresses**
+  - Buffer base addresses are not hashed and are allocated at runtime; they must be updated on every cache hit.
+  - Non-sharded tensors: update the single buffer base address (and any dynamic size/offset) in all reader/writer/compute kernels that reference it.
+  - Sharded tensors: update per-shard base addresses and any per-shard offsets/strides for each core/range that consumes the shard. Ensure the override iterates the same ranges used during program creation.
+
+#### Examples: updating tensor buffer addresses in overrides
+
+- Sharded input tensors: adjust circular buffer sizes and page sizes, and update per-core addresses.
+
+```cpp
+// In override_runtime_arguments(...): update CB layout and per-core args for a sharded input
+void SomeOp::ProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& attrs,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& program = cached_program.program;
+    const auto& cores = cached_program.shared_variables.cores;
+
+    // CB handle and buffer index captured during create(...)
+    CBHandle cb_src0 = cached_program.shared_variables.cb_src0;
+    uint8_t src0_cb_index = cached_program.shared_variables.src0_cb_index;
+    auto reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+
+    const auto& in0 = tensor_args.input_tensor_a; // sharded tensor
+    const uint32_t tile_bytes = tt::tt_metal::tile_size(
+        tt::tt_metal::datatype_to_dataformat_converter(in0.dtype()));
+
+    for (const auto& core : cores) {
+        // Derive per-core shard tile count/offset from the sharding spec
+        uint32_t tiles_for_core = /* derive from in0.shard_spec for this core */;
+
+        // Ensure CB capacity and page size match current run requirements
+        UpdateCircularBufferTotalSize(program, cb_src0, tiles_for_core * tile_bytes);
+        UpdateCircularBufferPageSize(program, cb_src0, src0_cb_index, tile_bytes);
+
+        // Update per-core runtime args that include base address/offsets
+        auto& reader_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        reader_args[0] = in0.buffer()->address();
+        // reader_args[1] = per_core_offset_tiles; // if applicable
+        // reader_args[2] = per_core_stride_tiles; // if applicable
+    }
+}
+```
+
+- Interleaved tensor buffer addresses: update DRAM base addresses directly per core.
+
+```cpp
+// In override callback: update interleaved buffer base addresses
+auto override_runtime_arguments_callback = [reader_kernel_id, cores](
+    const void* /*operation*/, tt::tt_metal::Program& program,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
+    const std::vector<Tensor>& output_tensors) {
+    auto index_dram_buffer = input_tensors.at(0).buffer();
+    auto grad_dram_buffer = input_tensors.at(1).buffer();
+    auto output_dram_buffer = output_tensors.at(0).buffer();
+
+    auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+    for (const auto& core : cores) {
+        auto& runtime_args = runtime_args_by_core[core.x][core.y];
+        runtime_args[0] = grad_dram_buffer->address();
+        runtime_args[1] = index_dram_buffer->address();
+        runtime_args[2] = output_dram_buffer->address();
+    }
+};
+```
+
+- **Update any property not in the hash**
+  - Tensor/OP properties not included in the hash must be set via runtime arguments in `override_runtime_arguments`.
+  - Such properties should not be compiled in as constants. If they are used as compile-time constants, that is a potential bug: either add them to the hash or convert them to runtime arguments.
+
+- **Maintain exact runtime-argument ordering**
+  - The order and indices of runtime arguments passed to kernels in `override_runtime_arguments` must match the order used during program creation. Mismatches lead to silent corruption or kernel faults on cache hits.
+  - Typical failure mode: OP writer changes kernel arg order or adds new args in `create(...)` but forgets to update the override.
+  - Mitigations:
+    - Centralize argument indices (e.g., enums/constants) shared by both `create(...)` and override code paths.
+    - Keep per-kernel helper functions that push args in one place, reused by both paths.
+    - Add targeted tests that launch the same cached program with varied runtime-only values to catch mis-ordered args.
+
 ### Your task
 
 Review code (or a diff) for potential program cache issues.
