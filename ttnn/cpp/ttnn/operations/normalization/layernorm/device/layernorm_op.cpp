@@ -176,7 +176,11 @@ void LayerNorm::validate(
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
+                if (this->norm_type == LayerNormType::RMSNORM) {
+                    TT_FATAL(program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
+                }
+            } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
                 if (program_config.inplace) {
                     TT_FATAL(
                         this->output_mem_config.is_sharded(),
@@ -421,7 +425,15 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     "ERROR - LayerNormMultiCoreProgramConfig is being used with sharded input. Please use "
                     "LayerNormShardedMultiCoreProgramConfig, or interleave the tensors.");
                 return layernorm_multi_core(
-                    a, b, gamma, beta, output_tensor, this->norm_type, this->eps, this->compute_kernel_config);
+                    a,
+                    b,
+                    gamma,
+                    beta,
+                    output_tensor,
+                    this->norm_type,
+                    this->eps,
+                    this->compute_kernel_config,
+                    program_config.use_welford);
             }
         },
         this->program_config);

@@ -13,7 +13,9 @@ namespace py = pybind11;
 void bind_normalization_layernorm_program_config(py::module& module) {
     py::class_<LayerNormProgramConfig>(module, "LayerNormProgramConfig").def(py::init<>());
 
-    py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig").def(py::init<>());
+    py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig")
+        .def(py::init<bool>(), py::kw_only(), py::arg("use_welford").noconvert())
+        .def("__repr__", [](const LayerNormDefaultProgramConfig& config) { return fmt::format("{}", config); });
 
     py::class_<LayerNormShardedMultiCoreProgramConfig>(module, "LayerNormShardedMultiCoreProgramConfig")
         .def(
