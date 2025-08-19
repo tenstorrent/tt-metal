@@ -4,24 +4,8 @@
 
 #pragma once
 
-#include <chrono>
-#include <fstream>
-#include <memory>
-#include <filesystem>
-#include <unordered_map>
-
-#include "impl/program/program_impl.hpp"
+#include "impl/debug/inspector/types.hpp"
 #include "mesh_coord.hpp"
-
-namespace tt::tt_metal {
-    class Inspector;
-    class MetalContext;
-
-    namespace distributed {
-        class MeshDevice;
-        class MeshWorkloadImpl;
-    }
-}
 
 #define TT_INSPECTOR_THROW(...) \
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_initialization_is_important()) { \
@@ -37,38 +21,6 @@ namespace tt::tt_metal {
     }
 
 namespace tt::tt_metal::inspector {
-
-using time_point = std::chrono::time_point<std::chrono::high_resolution_clock>;
-
-struct KernelData {
-    std::weak_ptr<Kernel> kernel;
-    std::string name;
-    std::string path;
-    std::string source;
-    int watcher_kernel_id;
-};
-
-struct ProgramData {
-    std::weak_ptr<const detail::ProgramImpl> program;
-    uint64_t program_id;
-    time_point compile_started_timestamp;
-    time_point compile_finished_timestamp;
-    std::unordered_map<int, KernelData> kernels;
-    std::unordered_map<std::size_t, ProgramBinaryStatus> binary_status_per_device;
-};
-
-struct MeshDeviceData {
-    const distributed::MeshDevice* mesh_device;
-    int mesh_id;
-    std::optional<int> parent_mesh_id;
-    bool initialized = false;
-};
-
-struct MeshWorkloadData {
-    const distributed::MeshWorkloadImpl* mesh_workload;
-    uint64_t mesh_workload_id;
-    std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
-};
 
 class Logger {
 private:
@@ -101,21 +53,6 @@ public:
     void log_mesh_workload_destroyed(const MeshWorkloadData& mesh_workload_data) noexcept;
     void log_mesh_workload_add_program(const MeshWorkloadData& mesh_workload_data, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept;
     void log_mesh_workload_set_program_binary_status(const MeshWorkloadData& mesh_workload_data, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
-};
-
-class Data {
-private:
-    Data(); // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
-
-    inspector::Logger logger;
-    std::mutex programs_mutex;
-    std::mutex mesh_devices_mutex;
-    std::mutex mesh_workloads_mutex;
-    std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
-    std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
-    std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
-
-    friend class tt::tt_metal::Inspector;
 };
 
 }  // namespace tt::tt_metal::inspector

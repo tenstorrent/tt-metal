@@ -309,3 +309,22 @@ CPMAddPackage(
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
 )
+
+####################################################################################################################
+# Cap'n Proto : https://github.com/capnproto/capnproto
+####################################################################################################################
+# Cap'n Proto requires CMAKE_CXX_EXTENSIONS to be ON, so temporarily enable it
+set(SAVED_CMAKE_CXX_EXTENSIONS ${CMAKE_CXX_EXTENSIONS})
+set(CMAKE_CXX_EXTENSIONS ON)
+
+CPMAddPackage(
+    NAME capnproto
+    GITHUB_REPOSITORY capnproto/capnproto
+    GIT_TAG v1.2.0
+    OPTIONS
+        "BUILD_TESTING OFF"
+        "CAPNP_LITE OFF"
+)
+
+# Restore original CMAKE_CXX_EXTENSIONS setting
+set(CMAKE_CXX_EXTENSIONS ${SAVED_CMAKE_CXX_EXTENSIONS})

@@ -14,7 +14,7 @@
 #include "tt_metal/impl/debug/debug_helpers.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
-#include "tt_metal/impl/debug/inspector_impl.hpp"
+#include "tt_metal/impl/debug/inspector/data.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"

@@ -17,6 +17,7 @@ class MeshWorkloadImpl;
 
 namespace inspector {
 class Data;
+class RpcServer;
 }
 
 class Inspector {
@@ -71,6 +72,8 @@ public:
         const distributed::MeshWorkloadImpl* mesh_workload,
         std::size_t mesh_id,
         ProgramBinaryStatus status) noexcept;
+
+    static inspector::RpcServer& get_rpc_server();
 
 };
 
